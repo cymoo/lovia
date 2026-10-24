@@ -38,7 +38,7 @@ from ..store import ChatMeta
 from ..supervisor import RunController, forward
 from ..titles import provisional_title
 from .deps import RouterDeps
-from .serialization import segments_runs
+from .serialization import Run, segments_runs
 
 
 def build_chat_router(deps: RouterDeps) -> APIRouter:
@@ -375,7 +375,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # the snapshot it re-renders matches rather than fights it.
         runs = [
             *segments_runs(await session.segments(session_id)),
-            (None, list(snapshot.entries)),  # named by its refs frame once done
+            Run(None, list(snapshot.entries)),  # named by its refs frame once done
         ]
 
         try:

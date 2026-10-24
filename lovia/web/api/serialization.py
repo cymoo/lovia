@@ -13,11 +13,11 @@ change the wire format.
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from ...messages import Message
 from ...parts import ImagePart
-from ...session import NOTICE_META_KEY, Segment
+from ...session import NOTICE_META_KEY, TIMING_META_KEY, Segment
 from ...transcript import (
     InputEntry,
     ToolResultEntry,
@@ -152,22 +152,92 @@ def message_to_out(m: Message, *, timestamp: float | None = None) -> MessageOut:
     )
 
 
-def messages_to_out(
-    msgs: list[Message], *, created_at: float, updated_at: float
-) -> list[MessageOut]:
-    """Convert messages to ``MessageOut``, spreading synthetic per-message
-    timestamps evenly across the session's ``[created_at, updated_at]`` span."""
-    n = len(msgs)
-    spacing = 0.0 if n <= 1 else max(0.0, updated_at - created_at) / (n - 1)
-    return [
-        message_to_out(m, timestamp=created_at + i * spacing)
-        for i, m in enumerate(msgs)
-    ]
+class Run(NamedTuple):
+    """One run a view covers. ``run_id`` is None while it is in flight (its
+    turns get no ref yet); ``timing`` is its segment's recorded ``(started_at,
+    finished_at)``, None when unrecorded."""
+
+    run_id: str | None
+    entries: list[TranscriptEntry]
+    timing: tuple[float, float] | None = None
 
 
-#: The runs a view covers, in transcript order: (run_id, that run's entries).
-#: A run still in flight goes in as None: its turns get no ref yet.
-Runs = list[tuple[str | None, list[TranscriptEntry]]]
+#: The runs a view covers, in transcript order.
+Runs = list[Run]
+
+
+def _fill_gaps(times: list[float | None], first: float, last: float) -> list[float]:
+    """``times`` with each stretch of unknowns spread evenly between its known
+    neighbours, exclusive — or ``first``/``last``, inclusive, at either end,
+    though never past a known neighbour: the result stays in order."""
+    out = list(times)
+    i, n = 0, len(out)
+    while i < n:
+        if out[i] is not None:
+            i += 1
+            continue
+        j = i
+        while j < n and out[j] is None:
+            j += 1
+        lo = out[i - 1] if i > 0 else None
+        hi = out[j] if j < n else None
+        a = first if lo is None else lo
+        if hi is not None:
+            a = min(a, hi)
+        b = max(a, last if hi is None else hi)
+        steps = (j - i - 1) + (lo is not None) + (hi is not None)
+        for k in range(j - i):
+            pos = k + (lo is not None)
+            out[i + k] = a + (b - a) * pos / steps if steps else a
+        i = j
+    return cast(list[float], out)
+
+
+def _runs_to_out(
+    runs: Runs, *, created_at: float, updated_at: float
+) -> tuple[list[MessageOut], list[int]]:
+    """Each run's messages, and the index where each run's messages end.
+
+    A timed run's messages span its start (its opening user turn) to its finish
+    (its last answer, which carries its ``duration``), evenly between. An untimed run's — written before timing was, or still in
+    flight — spread between their known neighbours, the session's
+    ``created_at``/``updated_at`` standing in at the ends. Runs never merge
+    (each opens with a fresh user turn), so projecting run by run matches
+    projecting the whole transcript.
+    """
+    outs: list[MessageOut] = []
+    entries: list[TranscriptEntry] = []
+    times: list[float | None] = []
+    ends: list[int] = []
+    for run in runs:
+        kept = drop_system_entries(run.entries)
+        entries.extend(kept)
+        msgs = [message_to_out(m) for m in entries_to_messages(kept)]
+        if run.timing is not None and msgs:
+            start, finish = run.timing
+            # The answer is where the finish shows: anything after it (a
+            # stopped run's trailing tool result) finished then too.
+            end = next(
+                (
+                    i
+                    for i in range(len(msgs) - 1, -1, -1)
+                    if msgs[i].role == "assistant"
+                ),
+                len(msgs) - 1,
+            )
+            span = max(end, 1)
+            times.extend(
+                start + (finish - start) * min(i, end) / span for i in range(len(msgs))
+            )
+            if msgs[end].role == "assistant":
+                msgs[end].duration = max(0.0, finish - start)
+        else:
+            times.extend([None] * len(msgs))
+        outs.extend(msgs)
+        ends.append(len(outs))
+    for out, ts in zip(outs, _fill_gaps(times, created_at, updated_at)):
+        out.timestamp = ts
+    return _apply_tool_flags(outs, entries), ends
 
 
 def user_turn_refs(runs: Runs) -> list[str | None]:
@@ -180,11 +250,11 @@ def user_turn_refs(runs: Runs) -> list[str | None]:
     retry reuse.
     """
     refs: list[str | None] = []
-    for run_id, entries in runs:
+    for run in runs:
         n = 0
-        for e in entries:
+        for e in run.entries:
             if isinstance(e, InputEntry) and e.role == "user":
-                refs.append(f"{run_id}:{n}" if run_id else None)
+                refs.append(f"{run.run_id}:{n}" if run.run_id else None)
                 n += 1
     return refs
 
@@ -200,70 +270,54 @@ def stamp_refs(outs: list[MessageOut], runs: Runs) -> list[MessageOut]:
     return outs
 
 
+def segment_timing(meta: dict[str, Any] | None) -> tuple[float, float] | None:
+    """A segment's recorded ``(started_at, finished_at)``, or None."""
+    timing = (meta or {}).get(TIMING_META_KEY)
+    if isinstance(timing, dict):
+        start, finish = timing.get("started_at"), timing.get("finished_at")
+        if isinstance(start, (int, float)) and isinstance(finish, (int, float)):
+            return float(start), float(finish)
+    return None
+
+
 def segments_runs(segments: list[Segment]) -> Runs:
-    return [(seg.run_id, seg.entries) for seg in segments]
+    return [Run(seg.run_id, seg.entries, segment_timing(seg.meta)) for seg in segments]
 
 
 def segments_to_out(
     segments: list[Segment], *, created_at: float, updated_at: float
 ) -> list[MessageOut]:
-    """Project run ``segments`` to the session-detail message shape, splicing one
-    synthetic ``context_compacted`` entry after each run that recorded a
-    compaction notice in its ``meta``.
-
-    Real messages keep the same evenly-spread timestamps as the flat ``load``
-    path (run boundaries never merge — each run opens with a fresh user turn — so
-    per-segment grouping matches whole-transcript grouping). Notices are inserted
-    at run boundaries; each borrows the timestamp of the message it follows.
-    """
-    all_msgs: list[Message] = []
-    all_entries: list[TranscriptEntry] = []
-    boundaries: list[tuple[int, dict[str, Any]]] = []  # (msg index, notice)
-    for seg in segments:
-        kept = drop_system_entries(seg.entries)
-        all_entries.extend(kept)
-        all_msgs.extend(entries_to_messages(kept))
+    """Project run ``segments`` to the session-detail message shape (see
+    :func:`_runs_to_out`), splicing one synthetic ``context_compacted`` entry
+    after each run that recorded a compaction notice in its ``meta``; each
+    borrows the timestamp of the message it follows."""
+    runs = segments_runs(segments)
+    outs, ends = _runs_to_out(runs, created_at=created_at, updated_at=updated_at)
+    # Insert from last to first so earlier boundary indices stay valid.
+    for seg, end in reversed(list(zip(segments, ends))):
         notice = (seg.meta or {}).get(NOTICE_META_KEY)
         if isinstance(notice, dict):
-            boundaries.append((len(all_msgs), notice))
-    outs = _apply_tool_flags(
-        messages_to_out(all_msgs, created_at=created_at, updated_at=updated_at),
-        all_entries,
-    )
-    # Insert from last to first so earlier boundary indices stay valid.
-    for idx, notice in reversed(boundaries):
-        ts = outs[idx - 1].timestamp if idx > 0 else created_at
-        outs.insert(
-            idx,
-            MessageOut(
-                role="context_compacted",
-                content=None,
-                compaction=notice,
-                timestamp=ts,
-            ),
-        )
-    return stamp_refs(outs, segments_runs(segments))
+            outs.insert(
+                end,
+                MessageOut(
+                    role="context_compacted",
+                    content=None,
+                    compaction=notice,
+                    timestamp=outs[end - 1].timestamp if end > 0 else created_at,
+                ),
+            )
+    return stamp_refs(outs, runs)
 
 
 def view_messages(
-    entries: list[TranscriptEntry],
-    *,
-    created_at: float,
-    updated_at: float,
-    runs: Runs | None = None,
+    runs: Runs, *, created_at: float, updated_at: float
 ) -> list[MessageOut]:
-    """Project a transcript (session history + a run's own entries) to the
-    session-detail message shape. Shared by ``GET /api/sessions/{id}`` and the
-    live re-attach snapshot so both render byte-identically. ``runs`` — the
-    same entries grouped by run — stamps the user turns' refs."""
-    kept = drop_system_entries(entries)
-    outs = _apply_tool_flags(
-        messages_to_out(
-            entries_to_messages(kept), created_at=created_at, updated_at=updated_at
-        ),
-        kept,
-    )
-    return stamp_refs(outs, runs) if runs is not None else outs
+    """Project session history + a run in flight to the session-detail message
+    shape (see :func:`_runs_to_out`), refs stamped. Shared by ``GET
+    /api/sessions/{id}`` and the live re-attach snapshot so both render
+    byte-identically."""
+    outs, _ = _runs_to_out(runs, created_at=created_at, updated_at=updated_at)
+    return stamp_refs(outs, runs)
 
 
 def message_to_json_dict(

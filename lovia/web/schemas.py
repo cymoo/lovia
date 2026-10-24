@@ -237,6 +237,9 @@ class MessageOut(BaseModel):
     name: str | None = None
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     timestamp: float | None = None
+    # Seconds its run took, on a run's last answer — set when the run's segment
+    # recorded its timing (``Segment.meta["timing"]``), else None.
+    duration: float | None = None
     # True for a ``tool`` message whose stored result was an error, so replayed
     # sessions keep the red error styling the live SSE stream applies.
     is_error: bool = False

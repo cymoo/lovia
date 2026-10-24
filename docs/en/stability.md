@@ -77,6 +77,7 @@ A newer lovia reads what an older one wrote:
 | `TranscriptEntry` JSON (`entry_to_dict` / `entry_from_dict`) | Unknown fields are ignored; an unknown `type` raises `ValueError` |
 | SQLite stores (sessions, checkpoints, the web chat store, the memory indexes) | Each store's schema version is kept in a `lovia_schema` table and migrations are append-only. A database a newer lovia migrated is refused, not misread |
 | `Segment.meta["context_state"]` | Carries its own `version`; state from another version is dropped and recomputed |
+| `Segment.meta["timing"]` | `{"started_at", "finished_at"}` in epoch seconds; absent on older segments |
 | The `lovia_ui` envelope in tool output | `{"lovia_ui": {"kind", "props" or "from_args", "data"?}}` (see [UI components](web-server.md#ui-components)) |
 | Message refs | `"<run_id>:<n>"` |
 | Built-in tool names | As above |

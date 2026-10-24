@@ -1683,7 +1683,8 @@ function finalizeCurrentAssistantTurn() {
       node.remove();
     } else {
       node.classList.remove('streaming');
-      setTurnTimestamp(node);
+      // The server's finish (the `timing` frame) outranks the teardown's clock.
+      if (!node.dataset.finished) setTurnTimestamp(node);
       sealActivity(store.bubble);
       addMessageActions(store.bubble);
     }
@@ -2012,6 +2013,10 @@ function renderHistoryWindow({ stickBottom }) {
         }
       }
       addMessageActions(currentBubble);
+      // A reply reads as of its last message — a timed run's is its finish,
+      // as the live view stamps it at `done`.
+      if (it.timestamp) setTurnTimestamp(currentBubble.closest('.turn'), it.timestamp);
+      if (it.duration != null) stampDuration(currentBubble, it.duration);
     } else if (it.role === 'context_compacted') {
       // Persisted run-boundary notice — render into the run's bubble (matching
       // the live placement), or the transcript if the run had no assistant turn.
@@ -2435,6 +2440,15 @@ async function applyEvent({ event, data }) {
       stampRefs(data?.refs);
       break;
 
+    case 'timing':
+      // The finished leg's timing as its segment recorded it: the answer reads
+      // as on replay — as of its finish, with how long its run took.
+      const turn = /** @type {HTMLElement | null | undefined} */ (store.bubble?.closest('.turn'));
+      setTurnTimestamp(turn, data.finished_at);
+      if (turn) turn.dataset.finished = '1';
+      stampDuration(store.bubble, data.duration);
+      break;
+
     case 'done': {
       _sawDone = true;
       if (_shownRun) _shownRun.usage = data?.usage ?? null;
@@ -2669,12 +2683,31 @@ let _stopOnceAdmitted = false;
 // button's tooltip: how long it's gone on, there when wanted, never on screen.
 let _runStartedAt = 0;
 
+// Below this a run's duration is noise, not worth a footer whisper.
+const DURATION_MIN_S = 10;
+
 /** @param {number} sec */
 function formatDuration(sec) {
   const s = Math.max(0, Math.round(sec));
   if (s < 60) return t('dur.s', { s });
   if (s < 3600) return t('dur.ms', { m: Math.floor(s / 60), s: s % 60 });
   return t('dur.hm', { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60) });
+}
+
+/**
+ * Whisper how long the run took in its answer's footer, after the timestamp.
+ * @param {Element | null} bubble
+ * @param {number} sec
+ */
+function stampDuration(bubble, sec) {
+  if (!bubble || sec < DURATION_MIN_S) return;
+  const footer = ensureFooter(bubble);
+  if (!footer || footer.querySelector(':scope > .duration')) return;
+  const span = document.createElement('span');
+  span.className = 'duration';
+  span.textContent = formatDuration(sec);
+  span.title = t('chat.took', { d: span.textContent });
+  footer.querySelector(':scope > .timestamp')?.after(span);
 }
 
 // ---- Dropped-stream recovery ---------------------------------------------

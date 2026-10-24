@@ -109,6 +109,10 @@ class RunState:
     # decisions + calibration. Round-tripped through the checkpoint (resume) and
     # the session-segment ``meta`` (next run) under the same name, ``context_state``.
     context_state: dict[str, Any] = field(default_factory=dict)
+    # When the run first started (epoch seconds) — persisted to RunSnapshot so a
+    # resumed run keeps it — for the finished segment's ``timing`` meta. ``None``
+    # when resumed from a snapshot that predates it: the segment goes untimed.
+    started_at: float | None = None
     # The run's most recent compaction, as a typed
     # :class:`~lovia.events.CompactionNotice`. Stowed (as a dict) under
     # ``context_notice`` in the finished segment's ``meta`` by ``_persist_session``

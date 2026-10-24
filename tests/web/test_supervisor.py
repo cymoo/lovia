@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 
 import pytest
 
@@ -21,6 +22,7 @@ from lovia.checkpointer import RunHead  # noqa: E402
 from lovia.exceptions import ProviderError  # noqa: E402
 from lovia.messages import Usage  # noqa: E402
 from lovia.reliability import RetryPolicy, RunBudget  # noqa: E402
+from lovia.session import TIMING_META_KEY  # noqa: E402
 from lovia.transcript import InputEntry, ToolResultEntry  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -73,16 +75,6 @@ async def _wait_run(ac, sid, *, status=None, gone=False):
     raise AssertionError(
         f"run condition not met (sid={sid}, status={status}, gone={gone})"
     )
-
-
-async def _wait_first_call(provider: ScriptedProvider) -> None:
-    """Wait for the run's first model call. A run is listed live as soon as it
-    is registered, so a stop sent then can land before turn 1 even starts."""
-    for _ in range(250):
-        if provider.calls:
-            return
-        await asyncio.sleep(0.02)
-    raise AssertionError("the run never called the model")
 
 
 async def _kill(task) -> None:
@@ -176,6 +168,93 @@ async def test_reattach_and_co_watch() -> None:
         kinds = [e for e, _ in _parse_sse("\n".join(lines))]
         assert "snapshot" in kinds  # authoritative re-attach snapshot
         assert kinds[-1] == "done"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_timing_read_back_still_completes_the_run(monkeypatch) -> None:
+    """The timing read-back runs after the answer is saved: failing it costs the
+    live footer its duration, never the run its success."""
+    store = ChatStore.in_memory()
+    append, segments = store.session.append, store.session.segments
+    saved = failed = False
+
+    async def appending(*args, **kwargs):
+        nonlocal saved
+        await append(*args, **kwargs)
+        saved = True
+
+    async def flaky(session_id: str):
+        nonlocal failed
+        if saved and not failed:  # the first read once the answer is saved
+            failed = True
+            raise OSError("disk hiccup")
+        return await segments(session_id)
+
+    monkeypatch.setattr(store.session, "append", appending)
+    monkeypatch.setattr(store.session, "segments", flaky)
+    provider = ScriptedProvider([text("answer")])
+    app = _app(Agent(name="bot", model=provider), store=store)
+    async with _client(app) as ac:
+        async with ac.stream(
+            "POST", "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        ) as res:
+            lines = [line async for line in res.aiter_lines()]
+    kinds = [e for e, _ in _parse_sse("\n".join(lines))]
+    assert failed and kinds[-1] == "done" and "timing" not in kinds
+    (rec,) = await store.list_runs(session_id="s1")
+    rec = await _wait_record(store, rec.id)
+    assert rec.status == "completed" and rec.usage is not None
+
+
+@pytest.mark.asyncio
+async def test_reattach_snapshot_reads_in_order_over_mixed_history() -> None:
+    """A segment from before timing ahead of a timed one: the snapshot spreads
+    it from the chat's creation, never "now" ahead of the timed run."""
+    from lovia.transcript import AssistantTextEntry
+
+    release = asyncio.Event()
+    provider = ScriptedProvider([call("block", {}, call_id="c1"), text("done")])
+    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
+    store = ChatStore.in_memory()
+    await store.upsert("s1", agent="bot")
+    meta = await store.get("s1")
+    assert meta is not None
+    t0 = meta.created_at
+    for n, timing in ((0, None), (1, (t0 + 1, t0 + 2))):
+        await store.session.append(
+            "s1",
+            [
+                InputEntry(role="user", content=f"q{n}"),
+                AssistantTextEntry(content=f"a{n}"),
+            ],
+            meta=None
+            if timing is None
+            else {TIMING_META_KEY: {"started_at": timing[0], "finished_at": timing[1]}},
+        )
+    started_at = time.time()
+    app = _app(agent, store=store)
+    async with _client(app) as ac:
+        t, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_calls(provider, 1)
+        r, lines = _spawn(ac, "/api/chat/reconnect", params={"session_id": "s1"})
+        await asyncio.sleep(0.1)  # let it attach
+        release.set()
+        await asyncio.wait_for(asyncio.gather(t, r), timeout=5)
+    evs = _parse_sse("\n".join(lines))
+    (snap,) = [d for e, d in evs if e == "snapshot"]
+    stamps = [m["timestamp"] for m in snap["entries"]]
+    assert stamps == sorted(stamps) and t0 <= stamps[0] < t0 + 1
+    # The re-attached view gets the finished run's timing — the segment's own.
+    (timing,) = [d for e, d in evs if e == "timing"]
+    seg = (await store.session.segments("s1"))[-1]
+    recorded = (seg.meta or {})[TIMING_META_KEY]
+    assert timing == {
+        "finished_at": recorded["finished_at"],
+        "duration": recorded["finished_at"] - recorded["started_at"],
+    }
+    assert recorded["started_at"] >= started_at
 
 
 @pytest.mark.asyncio
@@ -276,7 +355,8 @@ async def test_cancel_a_detached_run() -> None:
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
-        await _wait_first_call(provider)
+        # Listed live once registered, before turn 1: stop it only once it ran.
+        await _wait_calls(provider, 1)
         await ac.post("/api/chat/cancel", params={"session_id": "s1"})
         release.set()
         await _wait_run(ac, "s1", gone=True)  # cancelled run is gone
@@ -385,16 +465,33 @@ async def test_restart_reconnect_resumes_from_checkpoint() -> None:
     store = ChatStore.in_memory()
     sid = "s1"
     # Prior history + an interrupted run in the checkpoint (no live controller —
-    # as if the process restarted with an empty supervisor).
+    # as if the process restarted with an empty supervisor). The history mixes
+    # a segment from before timing with a timed one after it.
+    await store.upsert(sid, agent="bot")
+    # Created 100 s ago, so every time below is in the past.
+    t0 = time.time() - 100
+    await store._write(
+        "UPDATE chat_sessions SET created_at = ? WHERE id = ?", (t0, sid)
+    )
+    await store.session.append(
+        sid,
+        [InputEntry(role="user", content="q0"), AssistantTextEntry(content="a0")],
+    )
     await store.session.append(
         sid,
         [InputEntry(role="user", content="q1"), AssistantTextEntry(content="a1")],
+        meta={TIMING_META_KEY: {"started_at": t0 + 60, "finished_at": t0 + 70}},
     )
-    await store.upsert(sid, agent="bot")
     await store.checkpointer.append(
         "run-1",
         [InputEntry(role="user", content="q2")],
-        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+        RunHead(
+            agent_name="bot",
+            usage=Usage(),
+            turns=1,
+            status="interrupted",
+            started_at=t0 + 80,
+        ),
     )
     await store.set_active_run_id(sid, "run-1")
 
@@ -420,10 +517,19 @@ async def test_restart_reconnect_resumes_from_checkpoint() -> None:
     snaps = [d for (e, d) in evs if e == "snapshot"]
     assert kinds[1] == "snapshot", kinds  # after `session`, before any run event
     assert [(m["role"], m["content"]) for m in snaps[0]["entries"]] == [
+        ("user", "q0"),
+        ("assistant", "a0"),
         ("user", "q1"),
         ("assistant", "a1"),
         ("user", "q2"),
     ]
+    # Times read in order: the untimed history from the chat's creation up to
+    # the timed run, not "now" ahead of it.
+    stamps = [m["timestamp"] for m in snaps[0]["entries"]]
+    assert stamps == sorted(stamps) and t0 <= stamps[0] < t0 + 60
+    # The resumed run is timed live from its original start, as on reload.
+    (timing,) = [d for (e, d) in evs if e == "timing"]
+    assert timing["duration"] == timing["finished_at"] - (t0 + 80)
     # The record is keyed by the snapshot's run_id (via resolved_run_id), so the
     # resumed run finalizes ONE row under the original id — no duplicate.
     rec = await _wait_record(store, "run-1")
@@ -619,6 +725,7 @@ async def test_cancel_persists_partial_transcript() -> None:
     agent = Agent(name="bot", model=provider, tools=[ping, _blocking_tool(release)])
     store = ChatStore.in_memory()
     app = _app(agent, store=store)
+    started_at = time.time()
     async with _client(app) as ac:
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
@@ -639,6 +746,10 @@ async def test_cancel_persists_partial_transcript() -> None:
         detail = (await ac.get("/api/sessions/s1")).json()
     assert detail["active_run_id"] is None
     assert detail["entries"]  # the chat is no longer empty on reload
+    # Timed like a finished run's segment, from the run's own start.
+    (seg,) = await store.session.segments("s1")
+    timing = (seg.meta or {})[TIMING_META_KEY]
+    assert started_at <= timing["started_at"] <= timing["finished_at"]
 
 
 @pytest.mark.asyncio
@@ -713,7 +824,7 @@ async def test_persist_partial_trims_dangling_resumed_tool_call() -> None:
         AssistantTextEntry(content="on it"),
         ToolCallEntry(call_id="c1", name="block", arguments="{}"),
     ]
-    await ctrl._persist_partial("run-x")
+    await ctrl._persist_partial("run-x", None)
 
     entries = await store.session.load("s1")
     assert entries  # the partial chat survived the stop
@@ -961,7 +1072,8 @@ async def test_delete_session_stops_live_run_without_orphan_transcript() -> None
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
-        await _wait_first_call(provider)
+        # Listed live once registered, before turn 1: stop it only once it ran.
+        await _wait_calls(provider, 1)
         # The delete waits out the parked tool's wind-down.
         delete = asyncio.create_task(ac.delete("/api/sessions/s1"))
         await _wait_run(ac, "s1", gone=True)

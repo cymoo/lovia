@@ -161,7 +161,7 @@ normalizes all three.
 | `GET /api/runs` | live supervised runs |
 | `GET /api/runs/history?session_id=&source=&since=&limit=&offset=` | persisted run records (outcome, error, duration, token usage); `since` filters to runs finished after that timestamp |
 | `GET /api/events` | **SSE**: subscribe to process-wide lifecycle events (no history replay) |
-| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete (with its subagent tasks and the schedules bound to it). Each user message carries a `ref` — `"<run_id>:<n>"`, stable across reloads and rewinds; `null` until its run has finished |
+| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete (with its subagent tasks and the schedules bound to it). Each user message carries a `ref` — `"<run_id>:<n>"`, stable across reloads and rewinds; `null` until its run has finished. The answer that ends a run carries its `duration` in seconds, and timestamps are real where the run recorded its timing |
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
 | `POST /api/sessions/{id}/followups` | `{followups: [...]}` — questions the user might ask next; `[]` when the feature is off or nothing fits. POST because it spends model tokens |
 | `POST /api/sessions/{id}/rewind` | drop everything from a user message onward, named by its `ref` or by `user_turn`, its zero-based index among the user messages; 404 for a `ref` no longer in the chat, 409 while a run is live, 501 if the store lacks `rewind` |
@@ -252,6 +252,7 @@ of `event:` / `data:` pairs: the Runner's
 | `context_compacted` | `{session_id, reason, reactive, summary, tokens_before, tokens_after, detail}` — a [compaction notice](context.md) |
 | `error` | `{type, message, code, status_code?, retryable?, hint?}` — tool-scoped, or terminal when the stream then ends |
 | `refs` | `{refs}` — the `ref`s of the user messages the run just finished holds, in order; precedes `done`. Absent without a checkpointer, or when the run holds a user entry the stream never showed (a structured-output repair prompt): the next load of the chat names them |
+| `timing` | `{finished_at, duration}` — the run just finished, as its segment recorded it (epoch seconds; seconds), so a live answer reads as on reload; precedes `done`. Absent when the segment went untimed |
 | `done` | `{output, usage}` — terminal success |
 
 An `error` event's `code` classifies the failure; `status_code` and

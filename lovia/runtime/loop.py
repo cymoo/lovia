@@ -96,7 +96,13 @@ from ..providers.base import (
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
-from ..session import STATE_META_KEY, NOTICE_META_KEY, Segment, Session
+from ..session import (
+    NOTICE_META_KEY,
+    STATE_META_KEY,
+    TIMING_META_KEY,
+    Segment,
+    Session,
+)
 from ..tools import Tool
 from ..tracing import NoopTracer, Span, Tracer, handoff_span, record_run_end, run_span
 
@@ -237,6 +243,9 @@ class RunLoop:
     # ------------------------------------------------------------------ #
 
     async def stream(self) -> AsyncIterator[events.Event]:
+        # A fresh run starts when it is called: slow setup (plugins, history,
+        # the system prompt) is part of the time it took.
+        self._invoked_at = time.time()
         agent = self.initial_agent
         tracer: Tracer = self.tracer or NoopTracer()
 
@@ -293,6 +302,8 @@ class RunLoop:
                         normalize_replayed_entries(list(completed.entries)),
                         context_state=dict(completed.context_state),
                         notice=None,  # not persisted in snapshots
+                        # It finished when its completion was checkpointed.
+                        timing=(completed.started_at, completed.updated_at),
                     )
                 assert self._resume_agent is not None  # set by _resolve_resume
                 try:
@@ -674,6 +685,9 @@ class RunLoop:
                 snapshot.last_input_tokens if snapshot is not None else None
             ),
             context_state=context_state,
+            started_at=(
+                snapshot.started_at if snapshot is not None else self._invoked_at
+            ),
             pending_handoff=(
                 resolve_pending_handoff(agent, snapshot)
                 if snapshot is not None
@@ -1596,6 +1610,7 @@ class RunLoop:
             state.run_entries,
             context_state=state.context_state,
             notice=state.context_notice,
+            timing=(state.started_at, time.time()),
         )
 
     async def _append_session_segment(
@@ -1604,6 +1619,7 @@ class RunLoop:
         *,
         context_state: dict[str, Any],
         notice: events.CompactionNotice | None,
+        timing: tuple[float | None, float],
     ) -> None:
         """Append one run's ``entries`` to the Session as a segment.
 
@@ -1611,13 +1627,15 @@ class RunLoop:
         completed-snapshot replay path, which re-applies persistence to heal
         the crash window between checkpoint finalization and session append.
 
-        ``meta`` hosts two independent co-tenants (either may be absent):
+        ``meta`` hosts independent co-tenants (any may be absent):
 
         * the policy's carried state — the same opaque scratch the checkpoint
           stores — so the next run on this session resumes its decisions
           without re-deriving them;
         * the run's last compaction notice, for the web UI to replay on
-          reload (the replay path passes ``None``: not persisted in snapshots).
+          reload (the replay path passes ``None``: not persisted in snapshots);
+        * its ``timing`` — ``(started_at, finished_at)``, untimed when the
+          start is unknown (a resume from a snapshot that predates it).
         """
         assert self.session is not None and self.session_id is not None
         if not entries:
@@ -1631,6 +1649,12 @@ class RunLoop:
             meta[STATE_META_KEY] = to_json_safe(context_state)
         if notice is not None:
             meta[NOTICE_META_KEY] = asdict(notice)
+        started_at, finished_at = timing
+        if started_at is not None:
+            meta[TIMING_META_KEY] = {
+                "started_at": started_at,
+                "finished_at": finished_at,
+            }
         # Key the segment by the run's ``run_id`` (passed as the ``run_id=``
         # argument; ``None`` when not checkpointing -> the store generates
         # one). Append is idempotent on it, so a completed run's entries land

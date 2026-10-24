@@ -177,6 +177,7 @@ class CheckpointWriter:
             last_input_tokens=state.last_input_tokens,
             context_state=state.context_state,
             pending_handoff=pending.handoff.target.name if pending else None,
+            started_at=state.started_at,
         )
         await self.checkpointer.append(self.run_id, delta, head)
         self._persisted = len(run_entries)

@@ -32,6 +32,7 @@ from ..reliability import CancelToken
 from ..parts import coerce_parts
 from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
+from ..session import TIMING_META_KEY
 from ..steering import Mailbox
 from ..transcript import (
     InputEntry,
@@ -41,8 +42,10 @@ from ..transcript import (
     input_to_entries,
 )
 from .api.serialization import (
+    Run,
     Runs,
     drop_system_entries,
+    segment_timing,
     segments_runs,
     user_turn_refs,
     view_messages,
@@ -54,6 +57,8 @@ from .sse import (
     RunFinishedData,
     RunStartedData,
     SessionData,
+    LegFrame,
+    LegTiming,
     SnapshotData,
     UserTurnRefs,
     event_to_sse,
@@ -223,7 +228,7 @@ class _Attachment:
     completed turns, the current turn's events to replay, and the live tail."""
 
     snapshot: list[MessageOut]
-    buffered: list[events.Event | UserTurnRefs]
+    buffered: list[events.Event | LegFrame]
     subscription: _Subscription
     status: str
 
@@ -232,7 +237,7 @@ class RunController:
     """Owns a run's supervised task, cancel token, mailbox, event hub, and the
     snapshot mirror used to serve late subscribers.
 
-    The snapshot state (``history_baseline``/``completed_mirror``/
+    The snapshot state (``history_runs``/``completed_mirror``/
     ``in_flight_buffer``/``pending_approval``) is mutated **only** inside the
     task, synchronously, immediately before each ``hub.publish`` — so
     :meth:`attach` can read a consistent snapshot against the hub's ``seq``.
@@ -255,6 +260,7 @@ class RunController:
         client: JsonObject | None = None,
         run_deps: Any = None,
         await_approvals: bool = True,
+        chat_created_at: float | None = None,
     ) -> None:
         self.deps = deps
         self.supervisor = supervisor
@@ -290,18 +296,20 @@ class RunController:
         # The exception behind ``final_error``, when one ended the run.
         self.final_exception: Exception | None = None
         self.started_at = time.time()
+        # Where a snapshot's untimed (pre-timing) history starts from.
+        self.chat_created_at = chat_created_at or self.started_at
         # Cumulative usage across auto-chained legs, for the durable run record.
         self.usage = Usage()
         # Final model call's prompt size (context fill), from the last leg that
         # reported one — rides in the run record next to the cumulative usage.
         self.last_input_tokens: int | None = None
         # snapshot mirror (task-private until read synchronously by attach)
-        self.history_baseline: list[TranscriptEntry] = []
-        # The same history grouped by run, so a snapshot can name user turns.
+        # The session history, by run: a snapshot names its user turns and
+        # times its messages from it.
         self.history_runs: Runs = []
         self.completed_mirror: list[TranscriptEntry] = []
         self.current_turn_entries: list[TranscriptEntry] = []
-        self.in_flight_buffer: list[events.Event | UserTurnRefs] = []
+        self.in_flight_buffer: list[events.Event | LegFrame] = []
         self.pending_approval: events.ApprovalRequired | None = None
         # first-run spec
         self._first_input = first_input
@@ -348,10 +356,10 @@ class RunController:
         begun. Subscribe first, then begin, so no early event is missed.
         """
         sub = self.hub.subscribe()
-        now = time.time()
-        entries = [e for _, run in runs for e in run]
         attachment = _Attachment(
-            snapshot=view_messages(entries, created_at=now, updated_at=now, runs=runs),
+            snapshot=view_messages(
+                runs, created_at=self.chat_created_at, updated_at=time.time()
+            ),
             buffered=[],  # nothing has been published yet — the tail IS the run
             subscription=sub,
             status=self.status,
@@ -365,12 +373,12 @@ class RunController:
         sub = self.hub.subscribe()
         buffered = list(self.in_flight_buffer)
         if with_snapshot:
-            entries = [*self.history_baseline, *self.completed_mirror]
             # This run's turns get their refs when it finishes (the refs
             # frame), not before.
-            runs = [*self.history_runs, (None, self.completed_mirror)]
-            now = time.time()
-            snapshot = view_messages(entries, created_at=now, updated_at=now, runs=runs)
+            runs = [*self.history_runs, Run(None, self.completed_mirror)]
+            snapshot = view_messages(
+                runs, created_at=self.chat_created_at, updated_at=time.time()
+            )
         else:
             snapshot = []
         # Belt-and-suspenders: a parked approval is in the buffer, but re-add it
@@ -430,7 +438,7 @@ class RunController:
                 self.deps.approval_timeout,
             )
 
-    async def _persist_partial(self, run_id: str) -> None:
+    async def _persist_partial(self, run_id: str, started_at: float | None) -> None:
         """Fold this run's completed turns into the durable Session.
 
         Called when a run ends without success and its checkpoint is about to be
@@ -445,11 +453,19 @@ class RunController:
         Keyed by ``run_id`` -> idempotent; with the checkpoint deleted next, the
         run lives in exactly one place (the resume path concatenates session
         history + snapshot, so a run present in both would double-count).
+
+        Timed like a segment the loop writes (``TIMING_META_KEY``) when the
+        checkpoint knew the run's start.
         """
         session = self.deps.session
         entries = drop_dangling_tool_calls(list(self.completed_mirror))
+        meta: JsonObject | None = None
+        if started_at is not None:
+            meta = {
+                TIMING_META_KEY: {"started_at": started_at, "finished_at": time.time()}
+            }
         if session is not None and entries:
-            await session.append(self.session_id, entries, run_id=run_id)
+            await session.append(self.session_id, entries, run_id=run_id, meta=meta)
 
     # -- snapshot mirror ------------------------------------------------- #
 
@@ -529,7 +545,7 @@ class RunController:
         client stamps the frame onto its bubbles by position, so it is sent
         only when those are the turns the mirror — what streamed — shows.
         """
-        refs = user_turn_refs([(self.run_id, entries)])
+        refs = user_turn_refs([Run(self.run_id, entries)])
         shown = sum(
             1
             for e in self.completed_mirror
@@ -541,6 +557,37 @@ class RunController:
             # leg is cleared away: its snapshot leaves these turns unnamed.
             self.in_flight_buffer.append(frame)
             self.hub.publish(frame)
+
+    async def _publish_timing(self) -> None:
+        """Send the just-finished leg's timing, read back from the segment the
+        loop wrote before its ``RunCompleted`` — the very figures a replay
+        shows, so a live answer and a reloaded one agree. Nothing when that
+        segment went untimed (resumed from a checkpoint that predates timing).
+
+        Best-effort: the answer is already saved, so a failed read-back only
+        costs the live footer its duration — never the run its success.
+        """
+        session = self.deps.session
+        if session is None:
+            return
+        try:
+            segments = await session.segments(self.session_id)
+        except Exception as exc:
+            log.warning("timing read failed for session %s: %s", self.session_id, exc)
+            return
+        # Keyed by run_id when checkpointing; else the store minted one, and
+        # this leg's segment is the newest.
+        seg = next(
+            (s for s in reversed(segments) if s.run_id == self.run_id),
+            None if self.run_id else (segments[-1] if segments else None),
+        )
+        timing = segment_timing(seg.meta) if seg is not None else None
+        if timing is None:
+            return
+        start, finish = timing
+        frame = LegTiming(finished_at=finish, duration=max(0.0, finish - start))
+        self.in_flight_buffer.append(frame)  # as for refs: a reconnect replays it
+        self.hub.publish(frame)
 
     # -- the supervised task --------------------------------------------- #
 
@@ -604,7 +651,6 @@ class RunController:
                     break
                 segments = await session.segments(sid) if session is not None else []
                 self.history_runs = segments_runs(segments)
-                self.history_baseline = [e for seg in segments for e in seg.entries]
                 self.completed_mirror = list(seed)
                 self.current_turn_entries = []
                 self.in_flight_buffer = []
@@ -638,6 +684,8 @@ class RunController:
                         error_seen = True
                     if isinstance(ev, events.RunCompleted) and self.run_id:
                         self._publish_refs(ev.result.entries)
+                    if isinstance(ev, events.RunCompleted):
+                        await self._publish_timing()
                     self._publish(ev)
                     if isinstance(ev, events.RunCompleted):
                         succeeded = True
@@ -722,10 +770,12 @@ class RunController:
             # spend lives only in the checkpoint head — fold it in before the
             # snapshot is (possibly) deleted below. Best effort, like the rest
             # of the run record.
+            started_at: float | None = None  # the stopped leg's, for its segment
             if not succeeded and rid and store.checkpointer is not None:
                 try:
                     snapshot = await store.checkpointer.load(rid)
                     if snapshot is not None:
+                        started_at = snapshot.started_at
                         self.usage.add(snapshot.usage)
                         if snapshot.last_input_tokens is not None:
                             self.last_input_tokens = snapshot.last_input_tokens
@@ -741,7 +791,7 @@ class RunController:
                 # not-yet-started next leg and the mirror is the prior, saved one).
                 # ``_discard_partial`` skips it when the session is being deleted.
                 if not succeeded and not self._discard_partial:
-                    await self._persist_partial(rid)
+                    await self._persist_partial(rid, started_at)
                 await store.checkpointer.delete(rid)
                 await store.clear_active_run_id(sid, expected=rid)
             await deps.approvals.release(sid)
@@ -872,6 +922,7 @@ class RunSupervisor:
         agent's ``approval_handler`` decides, else the call is denied.
         """
         self._check_slot(session_id)
+        meta = await self.deps.store.get(session_id)
         # Every run of one web session shares that session's workspace session
         # (lazily opened here), so background processes survive across runs —
         # they die with the *chat* (deletion/shutdown), not with the turn.
@@ -905,6 +956,7 @@ class RunSupervisor:
             client=client,
             run_deps=run_deps,
             await_approvals=await_approvals,
+            chat_created_at=meta.created_at if meta else None,
         )
         # Reserve the session slot BEFORE the checkpoint await: two concurrent
         # starts (e.g. two tabs submitting at once) would otherwise both pass the
@@ -941,6 +993,7 @@ class RunSupervisor:
     ) -> RunController:
         """Register a resume of ``snapshot``; ``run_deps`` as for :meth:`start`."""
         self._check_slot(session_id, cap=False)
+        meta = await self.deps.store.get(session_id)
         # Same chat-scoped workspace binding as start(): the resumed leg's
         # background processes are gone (they never survive a restart), but
         # its shell/file tools must land on the chat's one live session.
@@ -968,6 +1021,7 @@ class RunSupervisor:
             source="user",
             client=client,
             run_deps=run_deps,
+            chat_created_at=meta.created_at if meta else None,
         )
         self._controllers[session_id] = ctrl
         self.last_client[session_id] = client

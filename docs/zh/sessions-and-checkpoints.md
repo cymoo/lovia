@@ -36,6 +36,10 @@ Runner 在运行开始时加载历史记录；运行**完成**后，将本次运
   也让运行边界和每次运行 `meta`（例如携带的[压缩状态](context.md)）保持一致。
 - **按 `run_id` 幂等。** 对已保存的 `run_id` 再次 append 不会做任何事，所以重放运行不会重复写入 entries。
 
+Runner 写入每个 segment 时都会记录用时：`meta["timing"]` 为 `{"started_at", "finished_at"}`
+（epoch 秒），从运行最初开始（恢复的运行通过 checkpoint 的 `RunHead.started_at` 保留原始开始时间）
+到写入为止。因此 Session 同时也是一份带时间的运行记录；记录用时之前写入的 segment 没有这一项。
+
 中断的运行**不会**自动写入 Session，而是保留在 checkpoint 中。是否将放弃的部分结果作为
 已完成 segment 写入，由**调用方**决定；内置 Web UI 会在用户停止运行时这样处理。写入前必须
 移除没有对应结果的工具调用，保持 transcript 完整，可使用

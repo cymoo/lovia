@@ -1820,9 +1820,45 @@ export function renderHistory(entries) {
   renderHistoryWindow({ stickBottom: true });
 }
 
-function loadEarlierHistory() {
+/** The "load earlier" button waits out a run: its redraw would wipe the live answer. */
+function syncLoadEarlier() {
+  const btn = /** @type {HTMLButtonElement | null} */ (
+    document.querySelector('#transcript .load-earlier')
+  );
+  if (!btn) return;
+  btn.disabled = !!store.streaming;
+  btn.title = store.streaming ? t('chat.loadEarlierBusy') : '';
+}
+
+// Bumped whenever the transcript gains turns or is redrawn (a run starts, a
+// history window renders), so a fetch made for the view before can tell it's
+// stale — even if a whole run began and ended while it was out.
+let _viewVersion = 0;
+
+// "Load earlier" redraws the whole window from _historyEntries, so it first
+// refetches them: turns streamed live since the history loaded aren't in the
+// snapshot and would vanish. History only grows at the tail, so the window's
+// start index holds across the refetch. A redraw mid-stream would wipe the
+// live answer, so the button waits out a run (syncLoadEarlier).
+async function loadEarlierHistory() {
   const el = document.getElementById('transcript');
-  if (!el) return;
+  const sessionId = store.sessionId;
+  if (!el || !sessionId || store.streaming) return;
+  const epoch = store.chatEpoch;
+  const version = _viewVersion;
+  let data;
+  try {
+    data = await api.getSession(sessionId);
+  } catch {
+    toast(t('toast.loadChatsFailed'), { type: 'error' });
+    return;
+  }
+  // Superseded: another chat, or this one changed (a run, a redraw) meanwhile —
+  // the fetched history may predate what's on screen now.
+  if (store.chatEpoch !== epoch || store.sessionId !== sessionId || _viewVersion !== version) {
+    return;
+  }
+  _historyEntries = Array.isArray(data.entries) ? data.entries : [];
   const prevHeight = el.scrollHeight;
   const prevTop = el.scrollTop;
   _historyStart = alignHistoryStart(_historyStart - HISTORY_PAGE);
@@ -1837,6 +1873,7 @@ function loadEarlierHistory() {
 function renderHistoryWindow({ stickBottom }) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return;
+  _viewVersion++;
   const entries = _historyEntries;
   // Swapping the transcript collapses scrollHeight and snaps scrollTop to 0,
   // firing a 'scroll' event the handler would misread as the user scrolling up
@@ -1882,6 +1919,7 @@ function renderHistoryWindow({ stickBottom }) {
     more.textContent = t('chat.loadEarlier', { n: _historyStart });
     more.addEventListener('click', loadEarlierHistory);
     transcriptEl.appendChild(more);
+    syncLoadEarlier(); // a re-attach snapshot draws it mid-run
   }
 
   let currentBubble = null;
@@ -2766,7 +2804,9 @@ async function* readStream(res, flags) {
 // makes queuing discoverable.
 function enterStreamingUI() {
   store.streaming = true;
+  _viewVersion++; // the run draws new turns
   syncAttachButton();
+  syncLoadEarlier();
   document.getElementById('reconnect-row')?.remove(); // superseded by a live stream
   if (stopBtn) {
     stopBtn.style.display = '';
@@ -2790,6 +2830,7 @@ function exitStreamingUI(status = 'detached') {
   scrollBtn?.classList.remove('live');
   _runStartedAt = 0;
   syncAttachButton();
+  syncLoadEarlier();
   if (stopBtn) stopBtn.style.display = 'none';
   if (promptEl) {
     promptEl.placeholder = t('composer.placeholder');

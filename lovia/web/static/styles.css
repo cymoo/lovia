@@ -5216,6 +5216,11 @@ body.files-splitting {
   display: block;
   margin: 4px auto 14px;
 }
+.load-earlier:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: none;
+}
 
 /* ---- Edit & regenerate ------------------------------------------------------------------------------ */
 /* Same whisper-visibility as the copy action. */

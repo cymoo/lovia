@@ -236,7 +236,7 @@ of `event:` / `data:` pairs: the Runner's
 | SSE event | Payload |
 | --- | --- |
 | `session` | `{session_id}` — first frame of a new stream |
-| `snapshot` | `{session_id, status, entries, leg_started_at}` — re-attach prologue: the completed turns so far, and when the run's current leg began (epoch seconds; what its answer's duration counts from) |
+| `snapshot` | `{session_id, status, entries}` — re-attach prologue: the completed turns so far |
 | `text_delta` | `{delta}` |
 | `reasoning_delta` | `{delta}` |
 | `output_discarded` | `{}` — clear the current turn's rendered deltas |
@@ -252,6 +252,7 @@ of `event:` / `data:` pairs: the Runner's
 | `context_compacted` | `{session_id, reason, reactive, summary, tokens_before, tokens_after, detail}` — a [compaction notice](context.md) |
 | `error` | `{type, message, code, status_code?, retryable?, hint?}` — tool-scoped, or terminal when the stream then ends |
 | `refs` | `{refs}` — the `ref`s of the user messages the run just finished holds, in order; precedes `done`. Absent without a checkpointer, or when the run holds a user entry the stream never showed (a structured-output repair prompt): the next load of the chat names them |
+| `timing` | `{finished_at, duration}` — the run just finished, as its segment recorded it (epoch seconds; seconds), so a live answer reads as on reload; precedes `done`. Absent when the segment went untimed |
 | `done` | `{output, usage}` — terminal success |
 
 An `error` event's `code` classifies the failure; `status_code` and

@@ -41,9 +41,6 @@ class SnapshotData(TypedDict):
     session_id: str
     status: str
     entries: list[JsonObject]
-    # Epoch seconds the run's current leg began: what its answer's duration
-    # counts from (an auto-chained run has one leg per segment).
-    leg_started_at: float
 
 
 class DeltaData(TypedDict):
@@ -147,6 +144,25 @@ class UserTurnRefs:
     refs: list[str]
 
 
+class TimingData(TypedDict):
+    finished_at: float
+    duration: float
+
+
+@dataclass(frozen=True)
+class LegTiming:
+    """A just-finished leg's timing, as its segment recorded it
+    (``Segment.meta["timing"]``): published by the supervisor just before the
+    leg's ``RunCompleted``, so a live answer reads exactly as on replay."""
+
+    finished_at: float
+    duration: float
+
+
+#: What the supervisor publishes besides the run's own events.
+LegFrame = UserTurnRefs | LegTiming
+
+
 CHAT_EVENTS: dict[str, type] = {
     "session": SessionData,
     "snapshot": SnapshotData,
@@ -165,6 +181,7 @@ CHAT_EVENTS: dict[str, type] = {
     "context_compacted": ContextCompactedData,
     "error": ErrorData,
     "refs": RefsData,
+    "timing": TimingData,
     "done": DoneData,
 }
 
@@ -304,10 +321,14 @@ def _coerce(value: object) -> JsonValue:
     return str(value)
 
 
-def event_to_sse(ev: events.Event | UserTurnRefs) -> dict[str, str] | None:
+def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
     """Return a ``{"event": ..., "data": json}`` dict, or ``None`` to skip."""
     if isinstance(ev, UserTurnRefs):
         return frame("refs", RefsData(refs=ev.refs))
+    if isinstance(ev, LegTiming):
+        return frame(
+            "timing", TimingData(finished_at=ev.finished_at, duration=ev.duration)
+        )
     if isinstance(ev, events.TextDelta):
         return frame("text_delta", DeltaData(delta=ev.delta))
     if isinstance(ev, events.ReasoningDelta):

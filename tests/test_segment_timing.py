@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from typing import Any
 
 from lovia import Agent, CheckpointOptions, InMemoryCheckpointer, Runner
 from lovia.checkpointer import RunHead, RunSnapshot
+from lovia.plugins.base import PluginInstance
 from lovia.messages import Usage
 from lovia.session import TIMING_META_KEY
 from lovia.stores import InMemorySession
@@ -26,6 +29,28 @@ async def test_a_finished_run_times_its_segment() -> None:
     (seg,) = await session.segments("s")
     timing = (seg.meta or {})[TIMING_META_KEY]
     assert before <= timing["started_at"] <= timing["finished_at"] <= time.time()
+
+
+async def test_slow_setup_counts_toward_the_run() -> None:
+    # A plugin that takes a while to set up (an MCP connect, say) is part of
+    # what the user waited for.
+    class SlowSetup:
+        name = "slow"
+
+        async def setup(self, ctx: Any) -> PluginInstance:
+            await asyncio.sleep(0.2)
+            return PluginInstance()
+
+    session = InMemorySession()
+    await Runner.run(
+        Agent(name="a", model=ScriptedProvider([text("hi")]), plugins=[SlowSetup()]),
+        "go",
+        session=session,
+        session_id="s",
+    )
+    (seg,) = await session.segments("s")
+    timing = (seg.meta or {})[TIMING_META_KEY]
+    assert timing["finished_at"] - timing["started_at"] >= 0.2
 
 
 async def test_a_resumed_run_keeps_its_original_start() -> None:

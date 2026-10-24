@@ -2276,8 +2276,6 @@ async function applyEvent({ event, data }) {
       // a bubble of its own.
       renderHistory(data.entries || []);
       if (!resumeTailAssistantTurn()) startAssistantTurn();
-      // A reconnect or resume joins a leg it didn't see start.
-      _legStartedAt = data.leg_started_at || _legStartedAt;
       break;
 
     case 'text_delta':
@@ -2441,6 +2439,13 @@ async function applyEvent({ event, data }) {
       stampRefs(data?.refs);
       break;
 
+    case 'timing':
+      // The finished leg's timing as its segment recorded it: the answer reads
+      // as on replay — as of its finish, with how long its run took.
+      setTurnTimestamp(store.bubble?.closest('.turn'), data.finished_at);
+      stampDuration(store.bubble, data.duration);
+      break;
+
     case 'done': {
       _sawDone = true;
       if (_shownRun) _shownRun.usage = data?.usage ?? null;
@@ -2460,12 +2465,6 @@ async function applyEvent({ event, data }) {
           footer.appendChild(span);
         }
       }
-      // This leg is over — its answer reads as of now, as a replay shows it
-      // at its run's finish — and an auto-chained next one starts now.
-      const now = Date.now();
-      setTurnTimestamp(store.bubble?.closest('.turn'), now);
-      if (_legStartedAt) stampDuration(store.bubble, now / 1000 - _legStartedAt);
-      _legStartedAt = now / 1000;
       break;
     }
   }
@@ -2681,10 +2680,6 @@ let _stopOnceAdmitted = false;
 // button's tooltip: how long it's gone on, there when wanted, never on screen.
 let _runStartedAt = 0;
 
-// When the leg on screen started (epoch seconds; 0: unknown) — an auto-chained
-// run says `done` once per leg, and each leg's answer is timed on its own, as
-// the server times each segment on replay.
-let _legStartedAt = 0;
 // Below this a run's duration is noise, not worth a footer whisper.
 const DURATION_MIN_S = 10;
 
@@ -2864,7 +2859,6 @@ function exitStreamingUI(status = 'detached') {
   syncAwaiting();
   scrollBtn?.classList.remove('live');
   _runStartedAt = 0;
-  _legStartedAt = 0;
   syncAttachButton();
   syncLoadEarlier();
   if (stopBtn) stopBtn.style.display = 'none';
@@ -2898,7 +2892,6 @@ export async function runStream(message, attachments = null) {
   syncAwaiting();
   _lastErrorCode = '';
   _runStartedAt = Date.now() / 1000;
-  _legStartedAt = _runStartedAt;
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;

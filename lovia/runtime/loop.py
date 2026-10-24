@@ -243,6 +243,9 @@ class RunLoop:
     # ------------------------------------------------------------------ #
 
     async def stream(self) -> AsyncIterator[events.Event]:
+        # A fresh run starts when it is called: slow setup (plugins, history,
+        # the system prompt) is part of the time it took.
+        self._invoked_at = time.time()
         agent = self.initial_agent
         tracer: Tracer = self.tracer or NoopTracer()
 
@@ -682,7 +685,9 @@ class RunLoop:
                 snapshot.last_input_tokens if snapshot is not None else None
             ),
             context_state=context_state,
-            started_at=snapshot.started_at if snapshot is not None else time.time(),
+            started_at=(
+                snapshot.started_at if snapshot is not None else self._invoked_at
+            ),
             pending_handoff=(
                 resolve_pending_handoff(agent, snapshot)
                 if snapshot is not None

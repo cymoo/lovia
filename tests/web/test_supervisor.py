@@ -206,10 +206,19 @@ async def test_reattach_snapshot_reads_in_order_over_mixed_history() -> None:
         await asyncio.sleep(0.1)  # let it attach
         release.set()
         await asyncio.wait_for(asyncio.gather(t, r), timeout=5)
-    (snap,) = [d for e, d in _parse_sse("\n".join(lines)) if e == "snapshot"]
+    evs = _parse_sse("\n".join(lines))
+    (snap,) = [d for e, d in evs if e == "snapshot"]
     stamps = [m["timestamp"] for m in snap["entries"]]
     assert stamps == sorted(stamps) and t0 <= stamps[0] < t0 + 1
-    assert started_at <= snap["leg_started_at"] <= time.time()
+    # The re-attached view gets the finished run's timing — the segment's own.
+    (timing,) = [d for e, d in evs if e == "timing"]
+    seg = (await store.session.segments("s1"))[-1]
+    recorded = (seg.meta or {})[TIMING_META_KEY]
+    assert timing == {
+        "finished_at": recorded["finished_at"],
+        "duration": recorded["finished_at"] - recorded["started_at"],
+    }
+    assert recorded["started_at"] >= started_at
 
 
 @pytest.mark.asyncio
@@ -423,9 +432,11 @@ async def test_restart_reconnect_resumes_from_checkpoint() -> None:
     # as if the process restarted with an empty supervisor). The history mixes
     # a segment from before timing with a timed one after it.
     await store.upsert(sid, agent="bot")
-    meta = await store.get(sid)
-    assert meta is not None
-    t0 = meta.created_at
+    # Created 100 s ago, so every time below is in the past.
+    t0 = time.time() - 100
+    await store._write(
+        "UPDATE chat_sessions SET created_at = ? WHERE id = ?", (t0, sid)
+    )
     await store.session.append(
         sid,
         [InputEntry(role="user", content="q0"), AssistantTextEntry(content="a0")],
@@ -480,8 +491,9 @@ async def test_restart_reconnect_resumes_from_checkpoint() -> None:
     # the timed run, not "now" ahead of it.
     stamps = [m["timestamp"] for m in snaps[0]["entries"]]
     assert stamps == sorted(stamps) and t0 <= stamps[0] < t0 + 60
-    # A resumed leg is timed from the run's original start.
-    assert snaps[0]["leg_started_at"] == t0 + 80
+    # The resumed run is timed live from its original start, as on reload.
+    (timing,) = [d for (e, d) in evs if e == "timing"]
+    assert timing["duration"] == timing["finished_at"] - (t0 + 80)
     # The record is keyed by the snapshot's run_id (via resolved_run_id), so the
     # resumed run finalizes ONE row under the original id — no duplicate.
     rec = await _wait_record(store, "run-1")

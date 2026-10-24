@@ -47,7 +47,8 @@ async def test_a_run_names_its_turn_just_before_done() -> None:
     async with _client(app) as ac:
         first = await _stream(ac, {"message": "one"})
         kinds = [e for e, _ in first]
-        assert kinds.index("refs") == kinds.index("done") - 1
+        # The leg's own frames close the stream: its refs, its timing, done.
+        assert kinds[-3:] == ["refs", "timing", "done"]
         sid = _frame(first, "session")["session_id"]
         second = await _stream(ac, {"message": "two", "session_id": sid})
         refs = _frame(first, "refs")["refs"] + _frame(second, "refs")["refs"]

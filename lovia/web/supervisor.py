@@ -45,6 +45,7 @@ from .api.serialization import (
     Run,
     Runs,
     drop_system_entries,
+    segment_timing,
     segments_runs,
     user_turn_refs,
     view_messages,
@@ -56,6 +57,8 @@ from .sse import (
     RunFinishedData,
     RunStartedData,
     SessionData,
+    LegFrame,
+    LegTiming,
     SnapshotData,
     UserTurnRefs,
     event_to_sse,
@@ -225,10 +228,9 @@ class _Attachment:
     completed turns, the current turn's events to replay, and the live tail."""
 
     snapshot: list[MessageOut]
-    buffered: list[events.Event | UserTurnRefs]
+    buffered: list[events.Event | LegFrame]
     subscription: _Subscription
     status: str
-    leg_started_at: float
 
 
 class RunController:
@@ -294,16 +296,6 @@ class RunController:
         # The exception behind ``final_error``, when one ended the run.
         self.final_exception: Exception | None = None
         self.started_at = time.time()
-        # When the current leg began (an auto-chained run has one per segment),
-        # sent with every snapshot so a reconnect times the leg's answer; set
-        # as each leg starts — here already for a resume, whose snapshot goes
-        # out before its task begins, from the run's original start.
-        resumed = first_checkpoint.resume_from if first_checkpoint else None
-        self.leg_started_at = (
-            resumed.started_at
-            if resumed is not None and resumed.started_at is not None
-            else self.started_at
-        )
         # Where a snapshot's untimed (pre-timing) history starts from.
         self.chat_created_at = chat_created_at or self.started_at
         # Cumulative usage across auto-chained legs, for the durable run record.
@@ -317,7 +309,7 @@ class RunController:
         self.history_runs: Runs = []
         self.completed_mirror: list[TranscriptEntry] = []
         self.current_turn_entries: list[TranscriptEntry] = []
-        self.in_flight_buffer: list[events.Event | UserTurnRefs] = []
+        self.in_flight_buffer: list[events.Event | LegFrame] = []
         self.pending_approval: events.ApprovalRequired | None = None
         # first-run spec
         self._first_input = first_input
@@ -371,7 +363,6 @@ class RunController:
             buffered=[],  # nothing has been published yet — the tail IS the run
             subscription=sub,
             status=self.status,
-            leg_started_at=self.leg_started_at,
         )
         self._ensure_begun()
         return attachment
@@ -395,11 +386,7 @@ class RunController:
         if self.pending_approval is not None and self.pending_approval not in buffered:
             buffered = [*buffered, self.pending_approval]
         return _Attachment(
-            snapshot=snapshot,
-            buffered=buffered,
-            subscription=sub,
-            status=self.status,
-            leg_started_at=self.leg_started_at,
+            snapshot=snapshot, buffered=buffered, subscription=sub, status=self.status
         )
 
     def inject(self, message: str) -> int:
@@ -571,6 +558,29 @@ class RunController:
             self.in_flight_buffer.append(frame)
             self.hub.publish(frame)
 
+    async def _publish_timing(self) -> None:
+        """Send the just-finished leg's timing, read back from the segment the
+        loop wrote before its ``RunCompleted`` — the very figures a replay
+        shows, so a live answer and a reloaded one agree. Nothing when that
+        segment went untimed (resumed from a checkpoint that predates timing)."""
+        session = self.deps.session
+        if session is None:
+            return
+        segments = await session.segments(self.session_id)
+        # Keyed by run_id when checkpointing; else the store minted one, and
+        # this leg's segment is the newest.
+        seg = next(
+            (s for s in reversed(segments) if s.run_id == self.run_id),
+            None if self.run_id else (segments[-1] if segments else None),
+        )
+        timing = segment_timing(seg.meta) if seg is not None else None
+        if timing is None:
+            return
+        start, finish = timing
+        frame = LegTiming(finished_at=finish, duration=max(0.0, finish - start))
+        self.in_flight_buffer.append(frame)  # as for refs: a reconnect replays it
+        self.hub.publish(frame)
+
     # -- the supervised task --------------------------------------------- #
 
     async def _run(self) -> None:
@@ -636,14 +646,6 @@ class RunController:
                 self.completed_mirror = list(seed)
                 self.current_turn_entries = []
                 self.in_flight_buffer = []
-                # What the leg's segment ``timing`` will start from: a resumed
-                # leg keeps its original start.
-                resumed = ckpt.resume_from if ckpt is not None else None
-                self.leg_started_at = (
-                    resumed.started_at
-                    if resumed is not None and resumed.started_at is not None
-                    else time.time()
-                )
                 budget = deps.fresh_budget()
                 handle = Runner.stream(
                     self.agent,
@@ -674,6 +676,8 @@ class RunController:
                         error_seen = True
                     if isinstance(ev, events.RunCompleted) and self.run_id:
                         self._publish_refs(ev.result.entries)
+                    if isinstance(ev, events.RunCompleted):
+                        await self._publish_timing()
                     self._publish(ev)
                     if isinstance(ev, events.RunCompleted):
                         succeeded = True
@@ -1132,7 +1136,6 @@ async def forward(
                 session_id=sid,
                 status=source.status,
                 entries=[m.model_dump() for m in source.snapshot],
-                leg_started_at=source.leg_started_at,
             ),
         )
         for ev in source.buffered:

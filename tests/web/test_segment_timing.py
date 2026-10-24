@@ -19,7 +19,7 @@ from lovia.transcript import (  # noqa: E402
 from lovia.web import ChatStore, create_app  # noqa: E402
 from lovia.web.api.serialization import segments_to_out  # noqa: E402
 
-from ..scripted_provider import ScriptedProvider  # noqa: E402
+from ..scripted_provider import ScriptedProvider, text  # noqa: E402
 
 
 def _timing(start: float, finish: float) -> dict:
@@ -99,6 +99,37 @@ def test_with_no_timing_the_spread_is_as_before() -> None:
     outs = segments_to_out(segments, created_at=0.0, updated_at=30.0)
     assert [o.timestamp for o in outs] == [0.0, 10.0, 20.0, 30.0]
     assert all(o.duration is None for o in outs)
+
+
+async def test_a_resume_from_before_timing_sends_no_timing() -> None:
+    # Nothing recorded the run's start, so nothing claims a duration — live as
+    # on reload, where its segment is untimed.
+    import httpx
+
+    from lovia.checkpointer import RunHead
+
+    from .test_web import _parse_sse
+
+    store = ChatStore.in_memory()
+    await store.upsert("s", agent="bot")
+    head = RunHead.from_dict({"agent_name": "bot", "status": "interrupted", "turns": 0})
+    await store.checkpointer.append("r1", [InputEntry(role="user", content="go")], head)
+    await store.set_active_run_id("s", "r1")
+    app = create_app(
+        Agent(name="bot", model=ScriptedProvider([text("hi")])),
+        store=store,
+        titles=False,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with ac.stream(
+            "POST", "/api/chat/reconnect", params={"session_id": "s"}
+        ) as res:
+            lines = [line async for line in res.aiter_lines()]
+    kinds = [e for e, _ in _parse_sse("\n".join(lines))]
+    assert kinds[-1] == "done" and "timing" not in kinds
+    (seg,) = await store.session.segments("s")
+    assert TIMING_META_KEY not in (seg.meta or {})
 
 
 def test_session_detail_carries_the_duration() -> None:

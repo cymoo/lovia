@@ -270,7 +270,8 @@ def stamp_refs(outs: list[MessageOut], runs: Runs) -> list[MessageOut]:
     return outs
 
 
-def _segment_timing(meta: dict[str, Any] | None) -> tuple[float, float] | None:
+def segment_timing(meta: dict[str, Any] | None) -> tuple[float, float] | None:
+    """A segment's recorded ``(started_at, finished_at)``, or None."""
     timing = (meta or {}).get(TIMING_META_KEY)
     if isinstance(timing, dict):
         start, finish = timing.get("started_at"), timing.get("finished_at")
@@ -280,7 +281,7 @@ def _segment_timing(meta: dict[str, Any] | None) -> tuple[float, float] | None:
 
 
 def segments_runs(segments: list[Segment]) -> Runs:
-    return [Run(seg.run_id, seg.entries, _segment_timing(seg.meta)) for seg in segments]
+    return [Run(seg.run_id, seg.entries, segment_timing(seg.meta)) for seg in segments]
 
 
 def segments_to_out(

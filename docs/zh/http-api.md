@@ -221,7 +221,7 @@ API 路由抛出的错误都使用同一种响应体：
 | SSE 事件 | 数据 |
 | --- | --- |
 | `session` | `{session_id}`：新聊天流的第一条事件 |
-| `snapshot` | `{session_id, status, entries, leg_started_at}`：重连时的当前状态，包含已完成的 Turn，以及 Run 当前这一段的开始时间（epoch 秒，回答用时从此算起） |
+| `snapshot` | `{session_id, status, entries}`：重连时的当前状态，包含已完成的 Turn |
 | `text_delta` | `{delta}` |
 | `reasoning_delta` | `{delta}` |
 | `output_discarded` | `{}`：清除当前 Turn 已显示的增量内容 |
@@ -237,6 +237,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `context_compacted` | `{session_id, reason, reactive, summary, tokens_before, tokens_after, detail}`：[上下文压缩](context.md)通知 |
 | `error` | `{type, message, code, status_code?, retryable?, hint?}`：Tool 错误，或聊天流终止前的运行错误 |
 | `refs` | `{refs}`：刚结束的 Run 中各条用户消息的 `ref`，按顺序排列；在 `done` 之前发送。未配置 checkpointer 时不发送；Run 中含有流里从未显示过的用户条目（结构化输出的修复提示）时也不发送，下次加载对话时会补上 |
+| `timing` | `{finished_at, duration}`：刚结束的 Run 在其 segment 中记录的完成时间（epoch 秒）和用时（秒），实时显示因此与刷新后一致；在 `done` 之前发送。segment 未记录用时时不发送 |
 | `done` | `{output, usage}`：Run 成功结束 |
 
 `error` 事件的 `code` 标明错误类别；`status_code` 和 `retryable` 来自 Provider 错误，

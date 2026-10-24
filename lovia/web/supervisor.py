@@ -562,11 +562,19 @@ class RunController:
         """Send the just-finished leg's timing, read back from the segment the
         loop wrote before its ``RunCompleted`` — the very figures a replay
         shows, so a live answer and a reloaded one agree. Nothing when that
-        segment went untimed (resumed from a checkpoint that predates timing)."""
+        segment went untimed (resumed from a checkpoint that predates timing).
+
+        Best-effort: the answer is already saved, so a failed read-back only
+        costs the live footer its duration — never the run its success.
+        """
         session = self.deps.session
         if session is None:
             return
-        segments = await session.segments(self.session_id)
+        try:
+            segments = await session.segments(self.session_id)
+        except Exception as exc:
+            log.warning("timing read failed for session %s: %s", self.session_id, exc)
+            return
         # Keyed by run_id when checkpointing; else the store minted one, and
         # this leg's segment is the newest.
         seg = next(

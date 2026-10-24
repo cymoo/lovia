@@ -171,6 +171,42 @@ async def test_reattach_and_co_watch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_failed_timing_read_back_still_completes_the_run(monkeypatch) -> None:
+    """The timing read-back runs after the answer is saved: failing it costs the
+    live footer its duration, never the run its success."""
+    store = ChatStore.in_memory()
+    append, segments = store.session.append, store.session.segments
+    saved = failed = False
+
+    async def appending(*args, **kwargs):
+        nonlocal saved
+        await append(*args, **kwargs)
+        saved = True
+
+    async def flaky(session_id: str):
+        nonlocal failed
+        if saved and not failed:  # the first read once the answer is saved
+            failed = True
+            raise OSError("disk hiccup")
+        return await segments(session_id)
+
+    monkeypatch.setattr(store.session, "append", appending)
+    monkeypatch.setattr(store.session, "segments", flaky)
+    provider = ScriptedProvider([text("answer")])
+    app = _app(Agent(name="bot", model=provider), store=store)
+    async with _client(app) as ac:
+        async with ac.stream(
+            "POST", "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        ) as res:
+            lines = [line async for line in res.aiter_lines()]
+    kinds = [e for e, _ in _parse_sse("\n".join(lines))]
+    assert failed and kinds[-1] == "done" and "timing" not in kinds
+    (rec,) = await store.list_runs(session_id="s1")
+    rec = await _wait_record(store, rec.id)
+    assert rec.status == "completed" and rec.usage is not None
+
+
+@pytest.mark.asyncio
 async def test_reattach_snapshot_reads_in_order_over_mixed_history() -> None:
     """A segment from before timing ahead of a timed one: the snapshot spreads
     it from the chat's creation, never "now" ahead of the timed run."""

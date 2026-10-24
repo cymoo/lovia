@@ -1683,7 +1683,8 @@ function finalizeCurrentAssistantTurn() {
       node.remove();
     } else {
       node.classList.remove('streaming');
-      setTurnTimestamp(node);
+      // The server's finish (the `timing` frame) outranks the teardown's clock.
+      if (!node.dataset.finished) setTurnTimestamp(node);
       sealActivity(store.bubble);
       addMessageActions(store.bubble);
     }
@@ -2442,7 +2443,9 @@ async function applyEvent({ event, data }) {
     case 'timing':
       // The finished leg's timing as its segment recorded it: the answer reads
       // as on replay — as of its finish, with how long its run took.
-      setTurnTimestamp(store.bubble?.closest('.turn'), data.finished_at);
+      const turn = /** @type {HTMLElement | null | undefined} */ (store.bubble?.closest('.turn'));
+      setTurnTimestamp(turn, data.finished_at);
+      if (turn) turn.dataset.finished = '1';
       stampDuration(store.bubble, data.duration);
       break;
 

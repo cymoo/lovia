@@ -15,6 +15,7 @@ import {
   formatTimeSmart,
   highlightIn,
   isImagePath,
+  lastAnswerOfRun,
   renderMarkdownInto,
   sanitizedFragment,
   toDate,
@@ -306,11 +307,18 @@ function ensureFooter(bubble) {
 }
 
 // ---- Run durations -------------------------------------------------------
-// How long a run took: a footer whisper on its last answer (10 s and up; below
-// that it's noise), and the Stop button's tooltip while it runs. Live, timed
-// from the leg's start; on replay, from the run records the server keeps.
+// How long an answered run took: a footer whisper on its last answer (10 s
+// and up; below that it's noise), and the Stop button's tooltip while it runs.
+// One unit live and on replay: the server keeps one record per supervised run,
+// auto-chained legs included, so a chain is timed whole from the send.
 const DURATION_MIN_S = 10;
-let _legStartedAt = 0; // epoch seconds; 0: no leg's start known
+let _runStartedAt = 0; // epoch seconds; 0: the run's start isn't known
+/**
+ * The last `done`'s answer and the run's elapsed time then — stamped once the
+ * stream ends answered (an auto-chained run says `done` once per leg).
+ * @type {{ bubble: Element, sec: number } | null}
+ */
+let _pendingTook = null;
 
 /** @param {number} sec */
 function formatDuration(sec) {
@@ -336,26 +344,36 @@ function stampDuration(bubble, sec) {
 }
 
 /**
- * Replay: each finished run's last answer gets its recorded duration, and its
- * real finish time in place of the evenly spread one the history carries. A
- * user turn's ref is `<run_id>:<n>`, so the answers after it are that run's.
- * @param {Array<{ run_id: string, started_at: number, finished_at: number | null }>} records
+ * @typedef {{ run_id: string, status: string, started_at: number, finished_at: number | null }} RunRecord
+ * The session's run records (restoreFromRunHistory), kept so every rebuild of
+ * the transcript (an earlier page, a re-attach snapshot) can stamp again.
+ * @type {{ sessionId: string, records: RunRecord[] } | null}
  */
-function stampRunDurations(records) {
-  const finished = new Map(records.filter((r) => r.finished_at).map((r) => [r.run_id, r]));
-  /** @type {Map<string, Element>} */
-  const lastAnswer = new Map();
-  let run = null;
-  for (const turn of document.querySelectorAll('#transcript .turn')) {
-    const ref = /** @type {HTMLElement} */ (turn).dataset.ref;
-    if (turn.classList.contains('user')) run = ref ? ref.slice(0, ref.lastIndexOf(':')) : null;
-    else if (run && turn.classList.contains('assistant')) lastAnswer.set(run, turn);
-  }
-  for (const [id, turn] of lastAnswer) {
-    const r = finished.get(id);
-    if (!r?.finished_at) continue;
-    setTurnTimestamp(/** @type {HTMLElement} */ (turn), r.finished_at * 1000);
-    stampDuration(turn.querySelector('.bubble'), r.finished_at - r.started_at);
+let _runRecords = null;
+
+/**
+ * Replay: each finished run's last answer (lastAnswerOfRun) gets its recorded
+ * duration, and its real finish time in place of the evenly spread one the
+ * history carries.
+ */
+function stampRunDurations() {
+  if (!_runRecords || _runRecords.sessionId !== store.sessionId) return;
+  const byId = new Map(_runRecords.records.map((r) => [r.run_id, r]));
+  const turns = /** @type {HTMLElement[]} */ ([...document.querySelectorAll('#transcript .turn')]);
+  const runOf = (/** @type {HTMLElement} */ t) => {
+    const ref = t.dataset.ref;
+    return ref ? ref.slice(0, ref.lastIndexOf(':')) : null;
+  };
+  const last = lastAnswerOfRun(
+    turns.map((t) => ({ user: t.classList.contains('user'), run: runOf(t) })),
+    new Set(byId.keys()),
+  );
+  for (const [id, i] of last) {
+    const r = byId.get(id);
+    // Answered runs only, as live stamps only a stream that ended on `done`.
+    if (r?.status !== 'completed' || !r.finished_at) continue;
+    setTurnTimestamp(turns[i], r.finished_at * 1000);
+    stampDuration(turns[i].querySelector('.bubble'), r.finished_at - r.started_at);
   }
 }
 
@@ -1341,7 +1359,8 @@ async function restoreFromRunHistory(sessionId) {
     return; // cosmetic — a failed restore just leaves the ring and durations out
   }
   if (store.sessionId !== sessionId) return; // the user switched on
-  stampRunDurations(records);
+  _runRecords = { sessionId, records };
+  stampRunDurations();
   const usage = records.find((r) => r.usage)?.usage; // bad fires store none
   // Bail when a live `done` beat us, or the latest record is stale.
   if (!usage || _lastUsage || _staleMeterSessions.has(sessionId)) return;
@@ -2042,6 +2061,7 @@ function renderHistoryWindow({ stickBottom }) {
   // Remove streaming markers
   transcriptEl.querySelectorAll('.turn.streaming').forEach(n => n.classList.remove('streaming'));
   renderAllMessageActions(); // the replies were still marked streaming above
+  stampRunDurations(); // every rebuild: an earlier page, a snapshot, a rewind
   store.bubble = null;
   store.body = null;
   store.rawText = '';
@@ -2474,9 +2494,9 @@ async function applyEvent({ event, data }) {
           footer.appendChild(span);
         }
       }
-      const now = Date.now() / 1000;
-      if (_legStartedAt) stampDuration(store.bubble, now - _legStartedAt);
-      _legStartedAt = now; // an auto-chained next leg starts here
+      if (_runStartedAt && store.bubble) {
+        _pendingTook = { bubble: store.bubble, sec: Date.now() / 1000 - _runStartedAt };
+      }
       break;
     }
   }
@@ -2838,7 +2858,9 @@ function exitStreamingUI(status = 'detached') {
   _awaiting = null;
   syncAwaiting();
   scrollBtn?.classList.remove('live');
-  _legStartedAt = 0;
+  if (status === 'done' && _pendingTook) stampDuration(_pendingTook.bubble, _pendingTook.sec);
+  _pendingTook = null;
+  _runStartedAt = 0;
   syncAttachButton();
   if (stopBtn) stopBtn.style.display = 'none';
   if (promptEl) {
@@ -2870,7 +2892,8 @@ export async function runStream(message, attachments = null) {
   _awaiting = { retry: null }; // dots from the send, not from the first frame
   syncAwaiting();
   _lastErrorCode = '';
-  _legStartedAt = Date.now() / 1000;
+  _runStartedAt = Date.now() / 1000;
+  _pendingTook = null;
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
@@ -3000,7 +3023,8 @@ export async function runReconnect(sessionId) {
   enterStreamingUI();
   startAssistantTurn();
   // The run began before this page did: its start is on the live-run row.
-  _legStartedAt = store.runsBySession?.get(sessionId)?.started_at ?? 0;
+  _runStartedAt = store.runsBySession?.get(sessionId)?.started_at ?? 0;
+  _pendingTook = null;
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
@@ -3688,8 +3712,8 @@ export function initComposer() {
   const refreshStopTip = () => {
     if (!stopBtn) return;
     const tip = t('composer.stopTip');
-    stopBtn.title = _legStartedAt
-      ? `${t('chat.runningFor', { d: formatDuration(Date.now() / 1000 - _legStartedAt) })} · ${tip}`
+    stopBtn.title = _runStartedAt
+      ? `${t('chat.runningFor', { d: formatDuration(Date.now() / 1000 - _runStartedAt) })} · ${tip}`
       : tip;
   };
   stopBtn?.addEventListener('mouseenter', refreshStopTip);

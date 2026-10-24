@@ -328,6 +328,33 @@ export function formatTimeSmart(ts) {
 }
 
 /**
+ * The answer each recorded run ends on, which is where its duration goes. `turns`
+ * is the transcript in order; a user turn names its segment (`run`, from its
+ * `<run_id>:<n>` ref; null without one). The server keeps one record per
+ * supervised run, keyed by its first leg's segment, so an auto-chained leg's
+ * segment (no record of its own) continues the recorded run before it, and
+ * the whole chain is timed as one. Segments before any record (older than the
+ * records fetched, or than records at all) belong to none.
+ * @param {Array<{ user: boolean, run?: string | null }>} turns
+ * @param {Set<string>} recorded The run ids that have a record.
+ * @returns {Map<string, number>} Record id → index of its last answer in `turns`.
+ */
+export function lastAnswerOfRun(turns, recorded) {
+  const last = new Map();
+  let run = null;
+  turns.forEach((turn, i) => {
+    if (!turn.user) {
+      if (run) last.set(run, i);
+    } else if (!turn.run) {
+      run = null; // no ref (no checkpointer, or a run still live): unattributable
+    } else if (recorded.has(turn.run)) {
+      run = turn.run;
+    } // else: a chained leg — it continues `run`
+  });
+  return last;
+}
+
+/**
  * The sidebar's date group for a chat last active at `ts`, in local calendar
  * days (DST-safe): today, yesterday, the 7 / 30 days before, or older. A
  * future stamp (clock skew) counts as today.

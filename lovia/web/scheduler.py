@@ -256,20 +256,17 @@ class Scheduler:
             await self._miss(sched, now, agent_name, f"run refused: {exc}")
             return None
 
-        # A fire into a fixed chat registers through the delete gate (see
-        # RouterDeps._chat_alive): deleting the chat while run_deps ran deletes
-        # this schedule too, and the fire must not bring the chat back. The
-        # chat need not be stored — a schedule may name one it creates.
-        gate: contextlib.AbstractAsyncContextManager[bool] = (
-            self.deps._chat_alive(target, stored=False)
-            if sched.session_id is not None
-            else contextlib.nullcontext(True)
-        )
+        # Every fire registers through the delete gate (see
+        # RouterDeps._chat_alive): a fixed chat deleted while run_deps ran takes
+        # this schedule with it, and the fire must not bring the chat back; a
+        # delete-all in progress turns away even a fresh chat. The chat need
+        # not be stored — a fire may create it. A refused fire leaves next_fire
+        # due, so a schedule that outlives the delete fires on a later poll.
         title = provisional_title(sched.input) if is_new else None
         try:
-            async with gate as alive:
+            async with self.deps._chat_alive(target, stored=False) as alive:
                 if not alive or await self.store.get_schedule(sched.id) is None:
-                    log.info("schedule %s: deleted while firing; skipped", sched.id)
+                    log.info("schedule %s: a delete is under way; skipped", sched.id)
                     return None
                 await self.store.upsert(
                     target,

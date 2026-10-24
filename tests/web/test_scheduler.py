@@ -1185,15 +1185,18 @@ async def test_a_schedule_may_name_a_chat_its_first_fire_creates() -> None:
     assert await store.get("reports") is not None
 
 
+@pytest.mark.parametrize("bound", ["conv", None])
 async def test_a_fire_during_delete_all_does_not_repopulate_its_chat(
-    monkeypatch,
+    monkeypatch, bound
 ) -> None:
     import httpx
 
     fire_entered, fire_release = asyncio.Event(), asyncio.Event()
     clear_entered, clear_release = asyncio.Event(), asyncio.Event()
+    targets: list[str] = []
 
     async def run_deps(trigger) -> None:
+        targets.append(trigger.session_id)
         fire_entered.set()
         await fire_release.wait()
 
@@ -1202,9 +1205,7 @@ async def test_a_fire_during_delete_all_does_not_repopulate_its_chat(
     deps = app.state.deps
     now = time.time()
     await store.upsert("conv", agent="bot")
-    await store.add_schedule(
-        _row(id="s", session_id="conv", next_fire=now - 1, now=now)
-    )
+    await store.add_schedule(_row(id="s", session_id=bound, next_fire=now - 1, now=now))
     clear = store.session.clear
 
     async def slow_clear(session_id: str) -> None:
@@ -1225,8 +1226,17 @@ async def test_a_fire_during_delete_all_does_not_repopulate_its_chat(
         assert list(deps.supervisor) == []
         clear_release.set()
         assert (await asyncio.wait_for(delete, 5)).status_code == 200
-    assert await store.session.load("conv") == []
-    assert await store.list_schedules() == []
+    assert await store.session.load(targets[0]) == []
+    assert await store.list() == []
+    if bound:
+        assert await store.list_schedules() == []  # deleted with its chat
+        return
+    # An unbound schedule outlives delete-all, still due: it fires next poll.
+    sched = await store.get_schedule("s")
+    assert sched is not None and sched.next_fire == now - 1
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+    assert len(await store.list()) == 1
 
 
 async def test_pre_0_8_34_db_gains_stop_condition_columns(tmp_path) -> None:

@@ -16,7 +16,6 @@ import {
   highlightIn,
   isImagePath,
   renderMarkdownInto,
-  runStamps,
   sanitizedFragment,
   toDate,
 } from './util.js';
@@ -304,51 +303,6 @@ function ensureFooter(bubble) {
   }
   bubble.appendChild(footer);
   return footer;
-}
-
-// ---- Run durations -------------------------------------------------------
-// How long an answered run took: a footer whisper on its last answer (10 s
-// and up; below that it's noise), and the Stop button's tooltip while it runs.
-// One unit live and on replay: the server keeps one record per supervised run,
-// auto-chained legs included, so a chain is timed whole from the send.
-const DURATION_MIN_S = 10;
-let _runStartedAt = 0; // epoch seconds; 0: the run's start isn't known
-/**
- * The last `done`'s answer and the run's elapsed time then — stamped once the
- * stream ends answered (an auto-chained run says `done` once per leg).
- * @type {{ bubble: Element, sec: number } | null}
- */
-let _pendingTook = null;
-
-/** @param {number} sec */
-function formatDuration(sec) {
-  const s = Math.max(0, Math.round(sec));
-  if (s < 60) return t('dur.s', { s });
-  if (s < 3600) return t('dur.ms', { m: Math.floor(s / 60), s: s % 60 });
-  return t('dur.hm', { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60) });
-}
-
-/**
- * Set (or replace — a later stamp is the truer one) a bubble's duration.
- * @param {Element | null} bubble
- * @param {number} sec
- */
-function stampDuration(bubble, sec) {
-  if (!bubble) return;
-  const old = /** @type {HTMLElement | null} */ (
-    bubble.querySelector(':scope > .turn-footer .duration')
-  );
-  if (sec < DURATION_MIN_S) {
-    old?.remove();
-    return;
-  }
-  const footer = ensureFooter(bubble);
-  if (!footer) return;
-  const span = old ?? document.createElement('span');
-  span.className = 'duration';
-  span.textContent = formatDuration(sec);
-  span.title = t('chat.took', { d: span.textContent });
-  if (!old) footer.querySelector('.timestamp')?.after(span);
 }
 
 function appendBubbleContent(bubble, node) {
@@ -1316,54 +1270,28 @@ export function initContextRing() {
 
 // Usage is a property of the conversation on screen — switching away clears
 // it, and entering a chat restores it from the durable run record (so the
-// ring survives reloads). The restore runs at the end of every transcript
-// rebuild (renderHistoryWindow); a session's first one comes from
-// 'render-history', which fires after 'sync-agent', so the window lookup has
-// the chat's own agent in place. Sessions rewound this page-view are skipped:
-// their latest record describes a transcript that's gone; the next completed
-// run un-marks them. The same records give the replayed answers their run
-// durations — hence fetched anew per rebuild: never older than what's on screen.
+// ring survives reloads). Restore hooks 'render-history', which fires after
+// 'sync-agent' — the window lookup needs the chat's own agent in place.
+// Sessions rewound this page-view are skipped: their latest record describes
+// a transcript that's gone; the next completed run un-marks them.
 const _staleMeterSessions = new Set();
-let _restoreSeq = 0; // only the latest restore applies
 
-async function restoreFromRunHistory(sessionId) {
-  if (!sessionId) return;
-  const seq = ++_restoreSeq;
-  // The view the records will cover: the transcript as it stands now. Turns
-  // drawn while the fetch is out are none of this response's business.
-  const turns = /** @type {HTMLElement[]} */ ([...document.querySelectorAll('#transcript .turn')]);
-  const runOf = (/** @type {HTMLElement} */ t) => {
-    const ref = t.dataset.ref;
-    return ref ? ref.slice(0, ref.lastIndexOf(':')) : null;
-  };
-  /** @type {Awaited<ReturnType<typeof runStamps<any>>>} */
-  let result;
+async function restoreContextMeter(sessionId) {
+  if (!sessionId || _staleMeterSessions.has(sessionId)) return;
+  let records = [];
   try {
-    result = await runStamps(
-      turns.map((t) => ({ user: t.classList.contains('user'), run: runOf(t) })),
-      // Newest first; a chat with more runs leaves its oldest answers unstamped.
-      () => api.runHistory({ session_id: sessionId, limit: 200 }),
-    );
+    records = await api.runHistory({ session_id: sessionId, limit: 5 });
   } catch {
-    return; // cosmetic — a failed restore just leaves the ring and durations out
+    return; // cosmetic — a failed restore just leaves the ring hidden
   }
-  // Superseded: the user switched on, or a later rebuild fetched again.
-  if (seq !== _restoreSeq || store.sessionId !== sessionId) return;
-  // Replay's evenly spread time gives way to the run's real finish.
-  for (const { index, record: r } of result.stamps) {
-    const turn = turns[index];
-    if (!turn.isConnected || !r.finished_at) continue;
-    setTurnTimestamp(turn, r.finished_at * 1000);
-    stampDuration(turn.querySelector('.bubble'), r.finished_at - r.started_at);
-  }
-  const records = result.records;
   const usage = records.find((r) => r.usage)?.usage; // bad fires store none
-  // Bail when a live `done` beat us, or the latest record is stale.
-  if (!usage || _lastUsage || _staleMeterSessions.has(sessionId)) return;
+  // Bail when superseded: the user switched on, or a live `done` beat us.
+  if (!usage || store.sessionId !== sessionId || _lastUsage) return;
   updateContextMeter(usage);
 }
 
 store.on('session-switched', hideContextMeter);
+store.on('render-history', () => restoreContextMeter(store.sessionId));
 
 // Surface why compaction fired and how much it saved. Policy-agnostic: the
 // numeric fields (tokens_before/after) ride at the top level and the policy
@@ -2056,9 +1984,6 @@ function renderHistoryWindow({ stickBottom }) {
   // Remove streaming markers
   transcriptEl.querySelectorAll('.turn.streaming').forEach(n => n.classList.remove('streaming'));
   renderAllMessageActions(); // the replies were still marked streaming above
-  // Every rebuild (a session's history, an earlier page, a snapshot, a
-  // rewind): stamp from records fetched now, so never older than the DOM.
-  restoreFromRunHistory(store.sessionId);
   store.bubble = null;
   store.body = null;
   store.rawText = '';
@@ -2491,9 +2416,6 @@ async function applyEvent({ event, data }) {
           footer.appendChild(span);
         }
       }
-      if (_runStartedAt && store.bubble) {
-        _pendingTook = { bubble: store.bubble, sec: Date.now() / 1000 - _runStartedAt };
-      }
       break;
     }
   }
@@ -2705,6 +2627,17 @@ let _streamAbortController = null;
 // run, and a stop waits for it (see cancelStream).
 let _admitting = false;
 let _stopOnceAdmitted = false;
+// When the run on screen started (epoch seconds; 0: unknown), for the Stop
+// button's tooltip: how long it's gone on, there when wanted, never on screen.
+let _runStartedAt = 0;
+
+/** @param {number} sec */
+function formatDuration(sec) {
+  const s = Math.max(0, Math.round(sec));
+  if (s < 60) return t('dur.s', { s });
+  if (s < 3600) return t('dur.ms', { m: Math.floor(s / 60), s: s % 60 });
+  return t('dur.hm', { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60) });
+}
 
 // ---- Dropped-stream recovery ---------------------------------------------
 // A clean SSE EOF without a `done` (and no error event) means the connection
@@ -2855,8 +2788,6 @@ function exitStreamingUI(status = 'detached') {
   _awaiting = null;
   syncAwaiting();
   scrollBtn?.classList.remove('live');
-  if (status === 'done' && _pendingTook) stampDuration(_pendingTook.bubble, _pendingTook.sec);
-  _pendingTook = null;
   _runStartedAt = 0;
   syncAttachButton();
   if (stopBtn) stopBtn.style.display = 'none';
@@ -2890,7 +2821,6 @@ export async function runStream(message, attachments = null) {
   syncAwaiting();
   _lastErrorCode = '';
   _runStartedAt = Date.now() / 1000;
-  _pendingTook = null;
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
@@ -3021,7 +2951,6 @@ export async function runReconnect(sessionId) {
   startAssistantTurn();
   // The run began before this page did: its start is on the live-run row.
   _runStartedAt = store.runsBySession?.get(sessionId)?.started_at ?? 0;
-  _pendingTook = null;
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
@@ -3705,7 +3634,7 @@ export function initComposer() {
   });
 
   stopBtn?.addEventListener('click', () => cancelStream());
-  // How long the run has gone on, for whoever wonders: on hover, not on screen.
+  // Computed on hover/focus: no ticking timer for a figure few look at.
   const refreshStopTip = () => {
     if (!stopBtn) return;
     const tip = t('composer.stopTip');

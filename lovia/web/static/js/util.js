@@ -328,63 +328,6 @@ export function formatTimeSmart(ts) {
 }
 
 /**
- * The answer each recorded run ends on, which is where its duration goes. `turns`
- * is the transcript in order; a user turn names its segment (`run`, from its
- * `<run_id>:<n>` ref; null without one). The server keeps one record per
- * supervised run, keyed by its first leg's segment, so an auto-chained leg's
- * segment (no record of its own) continues the recorded run before it, and
- * the whole chain is timed as one. Segments before any record (older than the
- * records fetched, or than records at all) belong to none.
- * @param {Array<{ user: boolean, run?: string | null }>} turns
- * @param {Set<string>} recorded The run ids that have a record.
- * @returns {Map<string, number>} Record id → index of its last answer in `turns`.
- */
-export function lastAnswerOfRun(turns, recorded) {
-  const last = new Map();
-  let run = null;
-  turns.forEach((turn, i) => {
-    if (!turn.user) {
-      if (run) last.set(run, i);
-    } else if (!turn.run) {
-      run = null; // no ref (no checkpointer, or a run still live): unattributable
-    } else if (recorded.has(turn.run)) {
-      run = turn.run;
-    } // else: a chained leg — it continues `run`
-  });
-  return last;
-}
-
-/**
- * @typedef {{ run_id: string, status: string, started_at: number, finished_at: number | null }} RunRecord
- */
-
-/**
- * A transcript view's duration stamps: fetch its run records, then put each
- * answered run on the answer it ends on (lastAnswerOfRun). The view is copied
- * before the fetch, because that's the view the records are bound to cover (a
- * record exists from its run's start). A turn drawn while the fetch is out,
- * such as a run that finished meanwhile, isn't in it, so a response that
- * predates that run can't misread it as a chained leg.
- * @template {RunRecord} R
- * @param {Array<{ user: boolean, run?: string | null }>} turns
- * @param {() => Promise<R[]>} fetchRecords
- * @returns {Promise<{ records: R[], stamps: Array<{ index: number, record: R }> }>}
- */
-export async function runStamps(turns, fetchRecords) {
-  const view = turns.map((t) => ({ user: t.user, run: t.run ?? null }));
-  const records = await fetchRecords();
-  const byId = new Map(records.map((r) => [r.run_id, r]));
-  /** @type {Array<{ index: number, record: R }>} */
-  const stamps = [];
-  for (const [id, index] of lastAnswerOfRun(view, new Set(byId.keys()))) {
-    const record = byId.get(id);
-    // Answered runs only, as live stamps only a stream that ended on `done`.
-    if (record?.status === 'completed' && record.finished_at) stamps.push({ index, record });
-  }
-  return { records, stamps };
-}
-
-/**
  * The sidebar's date group for a chat last active at `ts`, in local calendar
  * days (DST-safe): today, yesterday, the 7 / 30 days before, or older. A
  * future stamp (clock skew) counts as today.

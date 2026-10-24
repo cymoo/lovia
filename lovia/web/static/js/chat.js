@@ -15,8 +15,8 @@ import {
   formatTimeSmart,
   highlightIn,
   isImagePath,
-  lastAnswerOfRun,
   renderMarkdownInto,
+  runStamps,
   sanitizedFragment,
   toDate,
 } from './util.js';
@@ -349,34 +349,6 @@ function stampDuration(bubble, sec) {
   span.textContent = formatDuration(sec);
   span.title = t('chat.took', { d: span.textContent });
   if (!old) footer.querySelector('.timestamp')?.after(span);
-}
-
-/**
- * Replay: each finished run's last answer (lastAnswerOfRun) gets its recorded
- * duration, and its real finish time in place of the evenly spread one the
- * history carries. `records` must be fetched after the transcript was drawn:
- * a record exists from its run's start, so every segment on screen then has
- * one or is a chained leg — the premise lastAnswerOfRun stands on.
- * @param {Array<{ run_id: string, status: string, started_at: number, finished_at: number | null }>} records
- */
-function stampRunDurations(records) {
-  const byId = new Map(records.map((r) => [r.run_id, r]));
-  const turns = /** @type {HTMLElement[]} */ ([...document.querySelectorAll('#transcript .turn')]);
-  const runOf = (/** @type {HTMLElement} */ t) => {
-    const ref = t.dataset.ref;
-    return ref ? ref.slice(0, ref.lastIndexOf(':')) : null;
-  };
-  const last = lastAnswerOfRun(
-    turns.map((t) => ({ user: t.classList.contains('user'), run: runOf(t) })),
-    new Set(byId.keys()),
-  );
-  for (const [id, i] of last) {
-    const r = byId.get(id);
-    // Answered runs only, as live stamps only a stream that ended on `done`.
-    if (r?.status !== 'completed' || !r.finished_at) continue;
-    setTurnTimestamp(turns[i], r.finished_at * 1000);
-    stampDuration(turns[i].querySelector('.bubble'), r.finished_at - r.started_at);
-  }
 }
 
 function appendBubbleContent(bubble, node) {
@@ -1357,16 +1329,34 @@ let _restoreSeq = 0; // only the latest restore applies
 async function restoreFromRunHistory(sessionId) {
   if (!sessionId) return;
   const seq = ++_restoreSeq;
-  let records = [];
+  // The view the records will cover: the transcript as it stands now. Turns
+  // drawn while the fetch is out are none of this response's business.
+  const turns = /** @type {HTMLElement[]} */ ([...document.querySelectorAll('#transcript .turn')]);
+  const runOf = (/** @type {HTMLElement} */ t) => {
+    const ref = t.dataset.ref;
+    return ref ? ref.slice(0, ref.lastIndexOf(':')) : null;
+  };
+  /** @type {Awaited<ReturnType<typeof runStamps<any>>>} */
+  let result;
   try {
-    // Newest first; a chat with more runs leaves its oldest answers unstamped.
-    records = await api.runHistory({ session_id: sessionId, limit: 200 });
+    result = await runStamps(
+      turns.map((t) => ({ user: t.classList.contains('user'), run: runOf(t) })),
+      // Newest first; a chat with more runs leaves its oldest answers unstamped.
+      () => api.runHistory({ session_id: sessionId, limit: 200 }),
+    );
   } catch {
     return; // cosmetic — a failed restore just leaves the ring and durations out
   }
   // Superseded: the user switched on, or a later rebuild fetched again.
   if (seq !== _restoreSeq || store.sessionId !== sessionId) return;
-  stampRunDurations(records);
+  // Replay's evenly spread time gives way to the run's real finish.
+  for (const { index, record: r } of result.stamps) {
+    const turn = turns[index];
+    if (!turn.isConnected || !r.finished_at) continue;
+    setTurnTimestamp(turn, r.finished_at * 1000);
+    stampDuration(turn.querySelector('.bubble'), r.finished_at - r.started_at);
+  }
+  const records = result.records;
   const usage = records.find((r) => r.usage)?.usage; // bad fires store none
   // Bail when a live `done` beat us, or the latest record is stale.
   if (!usage || _lastUsage || _staleMeterSessions.has(sessionId)) return;

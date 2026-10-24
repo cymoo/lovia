@@ -355,6 +355,36 @@ export function lastAnswerOfRun(turns, recorded) {
 }
 
 /**
+ * @typedef {{ run_id: string, status: string, started_at: number, finished_at: number | null }} RunRecord
+ */
+
+/**
+ * A transcript view's duration stamps: fetch its run records, then put each
+ * answered run on the answer it ends on (lastAnswerOfRun). The view is copied
+ * before the fetch, because that's the view the records are bound to cover (a
+ * record exists from its run's start). A turn drawn while the fetch is out,
+ * such as a run that finished meanwhile, isn't in it, so a response that
+ * predates that run can't misread it as a chained leg.
+ * @template {RunRecord} R
+ * @param {Array<{ user: boolean, run?: string | null }>} turns
+ * @param {() => Promise<R[]>} fetchRecords
+ * @returns {Promise<{ records: R[], stamps: Array<{ index: number, record: R }> }>}
+ */
+export async function runStamps(turns, fetchRecords) {
+  const view = turns.map((t) => ({ user: t.user, run: t.run ?? null }));
+  const records = await fetchRecords();
+  const byId = new Map(records.map((r) => [r.run_id, r]));
+  /** @type {Array<{ index: number, record: R }>} */
+  const stamps = [];
+  for (const [id, index] of lastAnswerOfRun(view, new Set(byId.keys()))) {
+    const record = byId.get(id);
+    // Answered runs only, as live stamps only a stream that ended on `done`.
+    if (record?.status === 'completed' && record.finished_at) stamps.push({ index, record });
+  }
+  return { records, stamps };
+}
+
+/**
  * The sidebar's date group for a chat last active at `ts`, in local calendar
  * days (DST-safe): today, yesterday, the 7 / 30 days before, or older. A
  * future stamp (clock skew) counts as today.

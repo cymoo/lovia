@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import time
 from pathlib import Path
@@ -148,6 +149,82 @@ async def test_delete_drops_the_sessions_checkpoint(tmp_path: Path) -> None:
 
     await store.delete("s1")
     assert (await store.checkpointer.load("run-1")) is None  # no orphan left behind
+
+
+async def test_delete_takes_its_task_sessions_at_any_depth(tmp_path: Path) -> None:
+    """Task sessions are listed only under their chat, so one outliving it
+    would be unreachable rows forever."""
+    from lovia.checkpointer import RunHead
+    from lovia.messages import Usage
+
+    store = ChatStore.sqlite(tmp_path / "x.db")
+    assert store.checkpointer is not None
+    tree = {"chat": None, "task": "chat", "subtask": "task", "other": None}
+    for sid, parent in tree.items():
+        await store.upsert(sid, parent_id=parent)
+        await store.session.append(sid, [AssistantTextEntry(content=sid)])
+        await store.start_run(_run_row(id=f"run-{sid}", session_id=sid))
+        assert await store.put_ui_data(sid, b"{}") is not None
+    await store.checkpointer.append(
+        "cp-subtask",
+        [AssistantTextEntry(content="partial")],
+        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+    )
+    await store.set_active_run_id("subtask", "cp-subtask")
+    assert sorted(await store.task_tree("chat")) == ["chat", "subtask", "task"]
+
+    await store.delete("chat")
+    for sid in ("chat", "task", "subtask"):
+        assert await store.get(sid) is None
+        assert await store.session.load(sid) == []
+    assert await store.checkpointer.load("cp-subtask") is None
+    assert [r.session_id for r in await store.list_runs()] == ["other"]
+    assert await store.task_tree("other") == ["other"]  # a bystander is untouched
+    assert await store.session.load("other") != []
+
+
+async def test_delete_removes_one_snapshot_of_the_tree(monkeypatch) -> None:
+    # A task added while the delete runs is left whole — never stripped of its
+    # metadata while its transcript stays behind, unreachable.
+    store = ChatStore.in_memory()
+    await store.upsert("chat")
+    entered, release = asyncio.Event(), asyncio.Event()
+    clear = store.session.clear
+
+    async def slow_clear(session_id: str) -> None:
+        await clear(session_id)
+        if session_id == "chat":
+            entered.set()
+            await release.wait()
+
+    monkeypatch.setattr(store.session, "clear", slow_clear)
+    deleting = asyncio.create_task(store.delete("chat"))
+    await asyncio.wait_for(entered.wait(), 5)
+    await store.upsert("late", parent_id="chat")
+    await store.session.append("late", [AssistantTextEntry(content="kept")])
+    release.set()
+    await deleting
+    assert await store.get("chat") is None
+    assert await store.get("late") is not None
+    assert await store.session.load("late") != []
+
+
+async def test_a_failed_delete_leaves_every_chat_row(tmp_path: Path) -> None:
+    # The chat tables share one transaction: a failure part way keeps the
+    # chat listed, so the delete can be retried rather than half-done.
+    path = tmp_path / "x.db"
+    store = ChatStore.sqlite(path)
+    await store.upsert("s1")
+    await store.start_run(_run_row(id="a", session_id="s1"))
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE chat_ui_data")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(sqlite3.OperationalError):
+        await store.delete("s1")
+    assert await store.get("s1") is not None
+    assert [r.id for r in await store.list_runs()] == ["a"]
 
 
 async def test_delete_all_drops_checkpoints(tmp_path: Path) -> None:

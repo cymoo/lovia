@@ -75,6 +75,16 @@ async def _wait_run(ac, sid, *, status=None, gone=False):
     )
 
 
+async def _wait_first_call(provider: ScriptedProvider) -> None:
+    """Wait for the run's first model call. A run is listed live as soon as it
+    is registered, so a stop sent then can land before turn 1 even starts."""
+    for _ in range(250):
+        if provider.calls:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("the run never called the model")
+
+
 async def _kill(task) -> None:
     task.cancel()
     # Only swallow the expected cancellation — a timeout (hung task) or an
@@ -266,7 +276,7 @@ async def test_cancel_a_detached_run() -> None:
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
-        await _wait_run(ac, "s1")
+        await _wait_first_call(provider)
         await ac.post("/api/chat/cancel", params={"session_id": "s1"})
         release.set()
         await _wait_run(ac, "s1", gone=True)  # cancelled run is gone
@@ -951,7 +961,7 @@ async def test_delete_session_stops_live_run_without_orphan_transcript() -> None
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
-        await _wait_run(ac, "s1")
+        await _wait_first_call(provider)
         # The delete waits out the parked tool's wind-down.
         delete = asyncio.create_task(ac.delete("/api/sessions/s1"))
         await _wait_run(ac, "s1", gone=True)

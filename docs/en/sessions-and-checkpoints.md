@@ -42,6 +42,12 @@ the heavy lifting:
 - **Idempotent by `run_id`.** Appending again under an already-stored
   `run_id` is a no-op, so a replayed run never duplicates its entries.
 
+The runner times each segment it appends: `meta["timing"]` is
+`{"started_at", "finished_at"}` in epoch seconds, from the run's first start (a
+resumed run keeps it, through the checkpoint's `RunHead.started_at`) to the
+append. A session is thus also a timed run log; segments written before lovia
+recorded timing have none.
+
 Interrupted runs are *not* auto-appended — they live in their checkpoint.
 Whether to record an abandoned partial as a finished segment is a **caller**
 decision (the bundled web UI does this when a user stops a run); a finalized

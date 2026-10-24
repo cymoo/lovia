@@ -2012,6 +2012,10 @@ function renderHistoryWindow({ stickBottom }) {
         }
       }
       addMessageActions(currentBubble);
+      // A reply reads as of its last message — a timed run's is its finish,
+      // as the live view stamps it at `done`.
+      if (it.timestamp) setTurnTimestamp(currentBubble.closest('.turn'), it.timestamp);
+      if (it.duration != null) stampDuration(currentBubble, it.duration);
     } else if (it.role === 'context_compacted') {
       // Persisted run-boundary notice — render into the run's bubble (matching
       // the live placement), or the transcript if the run had no assistant turn.
@@ -2454,6 +2458,12 @@ async function applyEvent({ event, data }) {
           footer.appendChild(span);
         }
       }
+      // This leg is over — its answer reads as of now, as a replay shows it
+      // at its run's finish — and an auto-chained next one starts now.
+      const now = Date.now();
+      setTurnTimestamp(store.bubble?.closest('.turn'), now);
+      if (_legStartedAt) stampDuration(store.bubble, now / 1000 - _legStartedAt);
+      _legStartedAt = now / 1000;
       break;
     }
   }
@@ -2669,12 +2679,35 @@ let _stopOnceAdmitted = false;
 // button's tooltip: how long it's gone on, there when wanted, never on screen.
 let _runStartedAt = 0;
 
+// When the leg on screen started (epoch seconds; 0: unknown) — an auto-chained
+// run says `done` once per leg, and each leg's answer is timed on its own, as
+// the server times each segment on replay.
+let _legStartedAt = 0;
+// Below this a run's duration is noise, not worth a footer whisper.
+const DURATION_MIN_S = 10;
+
 /** @param {number} sec */
 function formatDuration(sec) {
   const s = Math.max(0, Math.round(sec));
   if (s < 60) return t('dur.s', { s });
   if (s < 3600) return t('dur.ms', { m: Math.floor(s / 60), s: s % 60 });
   return t('dur.hm', { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60) });
+}
+
+/**
+ * Whisper how long the run took in its answer's footer, after the timestamp.
+ * @param {Element | null} bubble
+ * @param {number} sec
+ */
+function stampDuration(bubble, sec) {
+  if (!bubble || sec < DURATION_MIN_S) return;
+  const footer = ensureFooter(bubble);
+  if (!footer || footer.querySelector(':scope > .duration')) return;
+  const span = document.createElement('span');
+  span.className = 'duration';
+  span.textContent = formatDuration(sec);
+  span.title = t('chat.took', { d: span.textContent });
+  footer.querySelector(':scope > .timestamp')?.after(span);
 }
 
 // ---- Dropped-stream recovery ---------------------------------------------
@@ -2829,6 +2862,7 @@ function exitStreamingUI(status = 'detached') {
   syncAwaiting();
   scrollBtn?.classList.remove('live');
   _runStartedAt = 0;
+  _legStartedAt = 0;
   syncAttachButton();
   syncLoadEarlier();
   if (stopBtn) stopBtn.style.display = 'none';
@@ -2862,6 +2896,7 @@ export async function runStream(message, attachments = null) {
   syncAwaiting();
   _lastErrorCode = '';
   _runStartedAt = Date.now() / 1000;
+  _legStartedAt = _runStartedAt;
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
@@ -2991,7 +3026,9 @@ export async function runReconnect(sessionId) {
   enterStreamingUI();
   startAssistantTurn();
   // The run began before this page did: its start is on the live-run row.
-  _runStartedAt = store.runsBySession?.get(sessionId)?.started_at ?? 0;
+  const row = store.runsBySession?.get(sessionId);
+  _runStartedAt = row?.started_at ?? 0;
+  _legStartedAt = row?.leg_started_at ?? 0;
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;

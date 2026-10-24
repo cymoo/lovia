@@ -61,8 +61,12 @@ class Segment:
 #   stores; opaque to the loop.
 # * ``context_notice`` — a JSON-safe snapshot of the run's last compaction that
 #   the web UI replays when a finished session is reloaded.
+# * ``timing`` — ``{"started_at", "finished_at"}`` in epoch seconds: when the
+#   run first started (a resumed run keeps its original start) and when its
+#   segment was written. Absent on segments from before it was recorded.
 STATE_META_KEY = "context_state"
 NOTICE_META_KEY = "context_notice"
+TIMING_META_KEY = "timing"
 
 
 class Session(Protocol):

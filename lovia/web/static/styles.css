@@ -1152,6 +1152,7 @@ body.sidebar-collapsed .sidebar-expand-btn {
   display: none;
 }
 .turn .timestamp,
+.turn-footer .duration,
 .turn-footer .usage {
   font-size: 11px;
   color: var(--muted-2);
@@ -1159,18 +1160,22 @@ body.sidebar-collapsed .sidebar-expand-btn {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.turn-footer .duration::before,
 .turn-footer .usage::before {
   content: "\00b7";
   margin-right: 6px;
 }
 /* Metadata whispers: visible on hover/focus, silent otherwise. */
 .turn .timestamp,
+.turn-footer .duration,
 .turn-footer .usage {
   opacity: 0;
   transition: opacity var(--t-med) var(--ease);
 }
 .turn .bubble:hover .timestamp,
 .turn .bubble:focus-within .timestamp,
+.turn .bubble:hover .duration,
+.turn .bubble:focus-within .duration,
 .turn .bubble:hover .usage,
 .turn .bubble:focus-within .usage {
   opacity: 1;
@@ -4460,6 +4465,7 @@ body.files-splitting {
   }
   /* metadata always visible where there is no hover */
   .turn .timestamp,
+  .turn-footer .duration,
   .turn-footer .usage {
     opacity: 1;
   }
@@ -4609,6 +4615,7 @@ body.files-splitting {
     pointer-events: auto;
   }
   .turn .timestamp,
+  .turn-footer .duration,
   .turn-footer .usage {
     opacity: 1;
   }

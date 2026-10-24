@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 
 import pytest
 
@@ -21,6 +22,7 @@ from lovia.checkpointer import RunHead  # noqa: E402
 from lovia.exceptions import ProviderError  # noqa: E402
 from lovia.messages import Usage  # noqa: E402
 from lovia.reliability import RetryPolicy, RunBudget  # noqa: E402
+from lovia.session import TIMING_META_KEY  # noqa: E402
 from lovia.transcript import InputEntry, ToolResultEntry  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -73,16 +75,6 @@ async def _wait_run(ac, sid, *, status=None, gone=False):
     raise AssertionError(
         f"run condition not met (sid={sid}, status={status}, gone={gone})"
     )
-
-
-async def _wait_first_call(provider: ScriptedProvider) -> None:
-    """Wait for the run's first model call. A run is listed live as soon as it
-    is registered, so a stop sent then can land before turn 1 even starts."""
-    for _ in range(250):
-        if provider.calls:
-            return
-        await asyncio.sleep(0.02)
-    raise AssertionError("the run never called the model")
 
 
 async def _kill(task) -> None:
@@ -276,7 +268,8 @@ async def test_cancel_a_detached_run() -> None:
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
-        await _wait_first_call(provider)
+        # Listed live once registered, before turn 1: stop it only once it ran.
+        await _wait_calls(provider, 1)
         await ac.post("/api/chat/cancel", params={"session_id": "s1"})
         release.set()
         await _wait_run(ac, "s1", gone=True)  # cancelled run is gone
@@ -619,11 +612,15 @@ async def test_cancel_persists_partial_transcript() -> None:
     agent = Agent(name="bot", model=provider, tools=[ping, _blocking_tool(release)])
     store = ChatStore.in_memory()
     app = _app(agent, store=store)
+    started_at = time.time()
     async with _client(app) as ac:
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
         await _wait_calls(provider, 2)  # ping turn done; block turn now parked
+        # The live row says when the run's current leg began.
+        (row,) = (await ac.get("/api/runs")).json()
+        assert started_at <= row["leg_started_at"] <= time.time()
         await ac.post("/api/chat/cancel", params={"session_id": "s1"})
         release.set()  # let the parked tool unwind so the run task can finish
         await _wait_run(ac, "s1", gone=True)
@@ -639,6 +636,10 @@ async def test_cancel_persists_partial_transcript() -> None:
         detail = (await ac.get("/api/sessions/s1")).json()
     assert detail["active_run_id"] is None
     assert detail["entries"]  # the chat is no longer empty on reload
+    # Timed like a finished run's segment, from the run's own start.
+    (seg,) = await store.session.segments("s1")
+    timing = (seg.meta or {})[TIMING_META_KEY]
+    assert started_at <= timing["started_at"] <= timing["finished_at"]
 
 
 @pytest.mark.asyncio
@@ -713,7 +714,7 @@ async def test_persist_partial_trims_dangling_resumed_tool_call() -> None:
         AssistantTextEntry(content="on it"),
         ToolCallEntry(call_id="c1", name="block", arguments="{}"),
     ]
-    await ctrl._persist_partial("run-x")
+    await ctrl._persist_partial("run-x", None)
 
     entries = await store.session.load("s1")
     assert entries  # the partial chat survived the stop
@@ -961,7 +962,8 @@ async def test_delete_session_stops_live_run_without_orphan_transcript() -> None
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
-        await _wait_first_call(provider)
+        # Listed live once registered, before turn 1: stop it only once it ran.
+        await _wait_calls(provider, 1)
         # The delete waits out the parked tool's wind-down.
         delete = asyncio.create_task(ac.delete("/api/sessions/s1"))
         await _wait_run(ac, "s1", gone=True)

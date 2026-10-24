@@ -64,6 +64,7 @@ transcript，工具视图、审批规则和评测也按名字匹配，所以给�
 | `TranscriptEntry` JSON（`entry_to_dict` / `entry_from_dict`） | 忽略未知字段；遇到未知 `type` 抛出 `ValueError` |
 | SQLite 存储（session、checkpoint、Web 聊天库、记忆索引） | 每个存储的 schema 版本记录在 `lovia_schema` 表中，迁移只追加。被更新版本迁移过的数据库会被拒绝打开，而不是按错误的结构读取 |
 | `Segment.meta["context_state"]` | 自带 `version`；版本不符的状态会被丢弃并重新计算 |
+| `Segment.meta["timing"]` | `{"started_at", "finished_at"}`，单位为 epoch 秒；较早的 segment 没有这一项 |
 | 工具输出中的 `lovia_ui` 信封 | `{"lovia_ui": {"kind", "props" 或 "from_args", "data"?}}`（见 [UI 组件](web-server.md#ui-组件)） |
 | 消息 ref | `"<run_id>:<n>"` |
 | 内置工具名 | 见上文 |

@@ -13,7 +13,7 @@ from lovia import Agent  # noqa: E402
 from lovia.checkpointer import RunHead  # noqa: E402
 from lovia.messages import Usage  # noqa: E402
 from lovia.transcript import AssistantTextEntry, InputEntry  # noqa: E402
-from lovia.web.api.serialization import stamp_refs, user_turn_refs  # noqa: E402
+from lovia.web.api.serialization import Run, stamp_refs, user_turn_refs  # noqa: E402
 from lovia.web.schemas import MessageOut  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -276,14 +276,14 @@ def test_turns_are_numbered_within_their_run() -> None:
         return InputEntry(role="user", content=text)
 
     runs = [
-        ("r1", [user("a"), AssistantTextEntry(content="x"), user("b")]),
-        (None, [user("c")]),  # in flight without a checkpoint
-        ("r2", [InputEntry(role="system", content="s"), user("d")]),
+        Run("r1", [user("a"), AssistantTextEntry(content="x"), user("b")]),
+        Run(None, [user("c")]),  # in flight without a checkpoint
+        Run("r2", [InputEntry(role="system", content="s"), user("d")]),
     ]
     assert user_turn_refs(runs) == ["r1:0", "r1:1", None, "r2:0"]
 
 
 def test_a_view_that_disagrees_with_its_runs_gets_no_refs() -> None:
     outs = [MessageOut(role="user", content="a"), MessageOut(role="user", content="b")]
-    stamped = stamp_refs(outs, [("r1", [InputEntry(role="user", content="a")])])
+    stamped = stamp_refs(outs, [Run("r1", [InputEntry(role="user", content="a")])])
     assert [o.ref for o in stamped] == [None, None]

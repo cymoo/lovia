@@ -237,6 +237,9 @@ class MessageOut(BaseModel):
     name: str | None = None
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     timestamp: float | None = None
+    # Seconds its run took, on a run's last answer — set when the run's segment
+    # recorded its timing (``Segment.meta["timing"]``), else None.
+    duration: float | None = None
     # True for a ``tool`` message whose stored result was an error, so replayed
     # sessions keep the red error styling the live SSE stream applies.
     is_error: bool = False
@@ -291,6 +294,9 @@ class RunInfo(BaseModel):
     source: str = "user"
     # Epoch seconds when the run began — the sidebar's elapsed ticker.
     started_at: float | None = None
+    # Epoch seconds when its current leg began (an auto-chained run has one leg
+    # per segment): what that leg's answer duration counts from.
+    leg_started_at: float | None = None
 
 
 class RunRecordInfo(BaseModel):

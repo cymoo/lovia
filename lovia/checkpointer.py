@@ -77,6 +77,10 @@ class RunHead:
     # would otherwise resume as ``agent_name`` with "Transferred to …" in
     # its own history. Last so positional construction keeps its meaning.
     pending_handoff: str | None = None
+    # When the run first started (epoch seconds), so a resumed run keeps its
+    # original start — the session segment's ``timing`` records it. ``None``
+    # in snapshots from before it was recorded.
+    started_at: float | None = None
 
     def to_dict(self) -> JsonObject:
         return {
@@ -90,6 +94,7 @@ class RunHead:
             "context_state": to_json_safe(self.context_state) or {},
             "pending_handoff": self.pending_handoff,
             "updated_at": self.updated_at,
+            "started_at": self.started_at,
         }
 
     @classmethod
@@ -105,6 +110,7 @@ class RunHead:
             context_state=data.get("context_state", {}),
             pending_handoff=data.get("pending_handoff"),
             updated_at=data.get("updated_at", time.time()),
+            started_at=data.get("started_at"),
         )
 
     def to_json(self) -> str:
@@ -137,6 +143,7 @@ class RunSnapshot:
     context_state: JsonObject = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
     pending_handoff: str | None = None
+    started_at: float | None = None
 
     # ----- head <-> snapshot, used by store implementations -----
 
@@ -154,6 +161,7 @@ class RunSnapshot:
             context_state=self.context_state,
             pending_handoff=self.pending_handoff,
             updated_at=self.updated_at,
+            started_at=self.started_at,
         )
 
     @classmethod
@@ -174,6 +182,7 @@ class RunSnapshot:
             context_state=head.context_state,
             pending_handoff=head.pending_handoff,
             updated_at=head.updated_at,
+            started_at=head.started_at,
         )
 
     # ----- whole-snapshot (de)serialization (tests / direct callers) -----

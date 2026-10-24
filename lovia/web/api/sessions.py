@@ -17,6 +17,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
+from ...checkpointer import RunSnapshot
 from ...parts import ImagePart
 from ...plugins import todos_from_entries
 from ...transcript import InputEntry, ToolResultEntry, entries_to_messages
@@ -38,7 +39,7 @@ from ..schemas import (
 )
 from .deps import RouterDeps
 from .serialization import (
-    Runs,
+    Run,
     export_md,
     export_txt,
     message_to_json_dict,
@@ -54,15 +55,11 @@ from .serialization import (
 _RESUMABLE = ("interrupted", "running")
 
 
-def _runs_view(runs: Runs, *, created_at: float, updated_at: float) -> list[MessageOut]:
-    """The session view over finished runs plus one in flight, refs stamped —
-    none on the in-flight run's turns, whose run_id the caller passes as None:
-    they are named when it finishes (the stream's refs frame), so a ref never
-    names a turn its run has not written yet."""
-    entries = [e for _, run in runs for e in run]
-    return view_messages(
-        entries, created_at=created_at, updated_at=updated_at, runs=runs
-    )
+def _in_flight(snapshot: RunSnapshot) -> Run:
+    """A checkpointed run still going, as the last of a view's runs: no run_id,
+    so its turns get no ref until it finishes (the stream's refs frame) — a ref
+    never names a turn its run has not written yet."""
+    return Run(None, list(snapshot.entries))
 
 
 async def _session_view(
@@ -86,9 +83,8 @@ async def _session_view(
         if store.checkpointer is not None and live.run_id is not None:
             snapshot = await store.checkpointer.load(live.run_id)
             if snapshot is not None and snapshot.status in _RESUMABLE:
-                # Not named before it finishes (see _runs_view).
-                runs.append((None, list(snapshot.entries)))
-        view = _runs_view(runs, created_at=created_at, updated_at=updated_at)
+                runs.append(_in_flight(snapshot))
+        view = view_messages(runs, created_at=created_at, updated_at=updated_at)
         return view, live.run_id
 
     candidate = (
@@ -100,8 +96,8 @@ async def _session_view(
         snapshot = await store.checkpointer.load(candidate)
         if snapshot is not None and snapshot.status in _RESUMABLE:
             runs = segments_runs(await session.segments(session_id))
-            runs.append((None, list(snapshot.entries)))
-            view = _runs_view(runs, created_at=created_at, updated_at=updated_at)
+            runs.append(_in_flight(snapshot))
+            view = view_messages(runs, created_at=created_at, updated_at=updated_at)
             return view, candidate
         # Stale pointer — clean it up so a reload doesn't offer a dead reconnect.
         await store.clear_active_run_id(session_id)
@@ -153,6 +149,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 turns=c.turns,
                 source=c.source,
                 started_at=c.started_at,
+                leg_started_at=c.leg_started_at,
             )
             for sid, c in deps.supervisor
         ]
@@ -394,7 +391,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         # nothing is destroyed until the ordinal validates.
         ckpt_user_turns = 0
         runs = segments_runs(await session.segments(session_id))
-        entries = [e for _, run in runs for e in run]
+        entries = [e for run in runs for e in run.entries]
         stale = await store.get_active_run_id(session_id)
         if stale and store.checkpointer is not None:
             snapshot = await store.checkpointer.load(stale)
@@ -404,7 +401,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                     for e in snapshot.entries
                     if isinstance(e, InputEntry) and e.role == "user"
                 )
-                runs.append((None, list(snapshot.entries)))  # unnamed till done
+                runs.append(_in_flight(snapshot))
         user_turn = req.user_turn
         if req.ref is not None:
             refs = user_turn_refs(runs)

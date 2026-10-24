@@ -41,6 +41,16 @@ _T = TypeVar("_T")
 # Column order shared by every ``ChatMeta`` SELECT (and ``ChatMeta.from_row``).
 _META_COLS = "id, title, agent, created_at, updated_at, pinned, parent_id"
 
+# The ids of a chat and its subagent task sessions at any depth, with the chat's
+# id bound to the one ``?``. UNION (not UNION ALL) ends a parent cycle. A
+# subquery rather than a leading WITH: sqlite3 opens its implicit transaction
+# only before a statement that starts with DML, so a WITH ... DELETE autocommits.
+_TASK_TREE = (
+    "(WITH RECURSIVE tree(id) AS (SELECT ? UNION "
+    "SELECT s.id FROM chat_sessions s JOIN tree ON s.parent_id = tree.id) "
+    "SELECT id FROM tree)"
+)
+
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
 _SCHED_COLS = (
     "id, agent, input, session_id, trigger_kind, trigger_expr, "
@@ -522,19 +532,34 @@ class ChatStore:
         )
 
     async def delete(self, session_id: str) -> None:
-        """Remove transcript, checkpoint, AND metadata for ``session_id``.
+        """Remove transcript, checkpoint, AND metadata for ``session_id`` and
+        its subagent task sessions — listed only under their chat, a task left
+        behind would be unreachable.
 
-        The checkpoint is dropped first: once the metadata row is gone its
+        Checkpoints are dropped first: once a metadata row is gone its
         ``active_run_id`` is unreadable, so an interrupted run's snapshot would
         otherwise be stranded (unreachable, never resumable, never cleaned up).
+        The metadata goes last, in one transaction, so a delete that fails part
+        way leaves every chat in place for a retry.
         """
-        await self._drop_checkpoint(session_id)
-        await self.session.clear(session_id)
-        await self._write("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
-        await self._write("DELETE FROM chat_runs WHERE session_id = ?", (session_id,))
-        await self._write(
-            "DELETE FROM chat_ui_data WHERE session_id = ?", (session_id,)
-        )
+        for sid in await self.task_tree(session_id):
+            await self._drop_checkpoint(sid)
+            await self.session.clear(sid)
+
+        def _impl() -> None:
+            with self._meta._tx() as conn:
+                # chat_sessions last: the tree is read from it.
+                for table, column in (
+                    ("chat_runs", "session_id"),
+                    ("chat_ui_data", "session_id"),
+                    ("chat_sessions", "id"),
+                ):
+                    conn.execute(
+                        f"DELETE FROM {table} WHERE {column} IN {_TASK_TREE}",
+                        (session_id,),
+                    )
+
+        await self._meta._run(_impl)
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, and metadata."""
@@ -908,6 +933,12 @@ class ChatStore:
             "ORDER BY created_at",
             (parent_id,),
             ChatMeta.from_row,
+        )
+
+    async def task_tree(self, session_id: str) -> Sequence[str]:
+        """``session_id`` and its task sessions at any depth — what ``delete`` removes."""
+        return await self._read_all(
+            f"SELECT id FROM {_TASK_TREE}", (session_id,), lambda row: row[0]
         )
 
     async def latest_run_statuses(self, session_ids: Sequence[str]) -> dict[str, str]:

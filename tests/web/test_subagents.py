@@ -334,6 +334,41 @@ async def test_cancel_subagent_cancels_supervised_child() -> None:
     assert await deps.store.latest_run_for("subagent-report:t1") is None
 
 
+async def test_deleting_a_chat_stops_and_deletes_its_tasks() -> None:
+    import httpx
+
+    gate = asyncio.Event()  # never set: the child stays parked
+    child = Agent(name="slow", model=GatedProvider(ScriptedProvider([text("x")]), gate))
+    provider = ScriptedProvider([call("spawn_subagent", {"prompt": "dig"}), text("ok")])
+    agent = Agent(name="bot", model=provider, plugins=[Subagents(child)])
+    app = _app(agent)
+    deps = app.state.deps
+    await deps.store.upsert("s6", agent="bot", title="chat")
+    await deps.supervisor.start(
+        session_id="s6",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="user",
+    )
+    await _poll(lambda: _none(deps.supervisor.get("s6")))
+    (task,) = await deps.store.list_children("s6")
+    assert deps.supervisor.get(task.id) is not None  # outlived its parent's run
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        assert (await ac.delete("/api/sessions/s6")).status_code == 200
+    assert deps.supervisor.get(task.id) is None
+    assert await deps.store.get(task.id) is None
+    assert await deps.session.load(task.id) == []
+    assert await deps.store.list_runs() == []
+    # A task stopped by the delete reports nothing to the deleted chat.
+    await asyncio.sleep(0.1)
+    assert await deps.store.latest_run_for("subagent-report:t1") is None
+
+
 async def test_failed_child_delivers_failure_report() -> None:
     child = Agent(name="doomed", model=ScriptedProvider([call("missing_tool", {})]))
     provider = ScriptedProvider(

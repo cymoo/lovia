@@ -24,7 +24,7 @@ any served ``Subagents`` still on core defaults (opt out with
 ``create_app(..., wire_subagents=False)``). Wired children keep running
 after their spawning run ends and after a user stop of the parent (the
 model can still ``cancel_subagent`` them; the task's own stop button works
-too).
+too). Deleting the parent chat stops its tasks and deletes them with it.
 """
 
 from __future__ import annotations

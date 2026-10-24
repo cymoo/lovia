@@ -316,18 +316,27 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
 
     @router.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, bool]:
-        # Stop a live run first (discarding its partial transcript) — otherwise
-        # it keeps burning tokens and re-persists entries for the deleted chat
-        # when it winds down.
-        deps.supervisor.cancel(session_id, discard=True)
-        # Stopping is cooperative: a final model call already in flight still
-        # completes, and the run then appends itself to the Session. Wait out
-        # the wind-down before deleting the rows (on a timeout, delete anyway).
-        await deps.supervisor.drain(session_id)
-        deps.supervisor.last_client.pop(session_id, None)
-        # Deleting the chat is what ends its workspace session — background
-        # processes deliberately survive run ends, so this is where they die.
-        await deps.workspaces.close(session_id)
+        # Its subagent tasks go with it (``store.delete``), so they stop too —
+        # re-reading the tree, as a task winding down may have spawned another.
+        stopped: set[str] = set()
+        while fresh := set(await store.task_tree(session_id)) - stopped:
+            # Stop live runs first (discarding their partial transcripts) —
+            # otherwise they keep burning tokens and re-persist entries for the
+            # deleted chats when they wind down.
+            for sid in fresh:
+                deps.supervisor.cancel(sid, discard=True)
+            for sid in fresh:
+                # Stopping is cooperative: a final model call already in flight
+                # still completes, and the run then appends itself to the
+                # Session. Wait out the wind-down before deleting the rows (on
+                # a timeout, delete anyway).
+                await deps.supervisor.drain(sid)
+                deps.supervisor.last_client.pop(sid, None)
+                # Deleting the chat is what ends its workspace session —
+                # background processes deliberately survive run ends, so this
+                # is where they die.
+                await deps.workspaces.close(sid)
+            stopped.update(fresh)
         await store.delete(session_id)
         return {"ok": True}
 

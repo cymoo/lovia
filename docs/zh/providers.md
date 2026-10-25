@@ -296,9 +296,9 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
 
 构造器参数（`timeout=`、`trust_env=`）优先于环境变量。TLS 校验按顺序解析：
 `LOVIA_HTTP_INSECURE` → CA bundle → 安装了可选 `truststore` 包时使用 OS trust store
-（`lovia[web]` 会带上）→ `certifi`。网页读取和 HTTP 请求工具也使用同一套配置，因此
+（`lovia[web]` 会带上）→ `certifi`。URL 读取和网页搜索工具也使用同一套配置，因此
 一处内网 CA 设置即可覆盖 lovia 的内置出站请求。详见
-[内置工具](built-in-tools.md#读取网页)。
+[内置工具](built-in-tools.md#读取-url)。
 
 **错误分类**会进入[重试机制](retries.md)：HTTP 408/429/5xx 以及传输层超时/断连是
 可重试的 `ProviderError`；上下文长度错误会按供应商识别（状态 + 消息关键词），并抛

@@ -196,7 +196,7 @@ you, and a `usage` accumulator: add the spend of any model call the policy
 makes itself and the runner folds it into the run's usage and budget.
 Return the view plus `changed`/`compacted` flags and optional token
 counts. An optional `tools()` method contributes tools —
-`make_recall_tool(store)` from `lovia.tools` is the factory
+`recall_tool_result(store)` from `lovia.tools` is the factory
 `Compaction` uses to ship recall, reusable by any policy that drops
 content. `lovia/context/policy.py` is a one-screen read.
 

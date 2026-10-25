@@ -357,9 +357,9 @@ class Compaction:
         The runner injects it whenever this policy is active, so the markers
         this policy renders always have a tool to back them.
         """
-        from ..tools.recall import make_recall_tool
+        from ..tools.recall import recall_tool_result
 
-        return [make_recall_tool(self.store)]
+        return [recall_tool_result(self.store)]
 
     # ------------------------------------------------------------------ #
     # Helpers

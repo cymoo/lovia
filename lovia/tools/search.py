@@ -30,7 +30,7 @@ import httpx
 
 from ..exceptions import ToolError, UserError
 from ..http_config import resolve_verify
-from .base import Tool, default_result_renderer, tool
+from .base import Tool, result_to_text, tool
 from .fence import FENCE_NOTE, fence
 
 __all__ = [
@@ -211,7 +211,7 @@ def _render_search_results(result: Any, ctx: Any) -> str:
     arrive from a direct caller and falls back to the default rendering.
     """
     if not isinstance(result, list):
-        return result if isinstance(result, str) else default_result_renderer(result)
+        return result_to_text(result)
     if not result:
         return "No results."
     blocks: list[str] = []

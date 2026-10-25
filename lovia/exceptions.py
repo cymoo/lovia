@@ -75,7 +75,7 @@ class ToolError(LoviaError):
 class InvalidToolArguments(ToolError):
     """Raised when a tool call's arguments fail schema validation.
 
-    Deterministic for the given arguments, so :func:`lovia.tools.run_tool`
+    Deterministic for the given arguments, so :func:`lovia.tools.base.run_tool`
     does not retry it — the same args would fail the same way. It surfaces to
     the model as a tool-error result carrying the validation message it needs
     to correct the call.

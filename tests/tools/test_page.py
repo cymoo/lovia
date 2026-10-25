@@ -1,4 +1,4 @@
-"""Tests for ``lovia.tools.page`` — the read_page tool and its HTML conversion."""
+"""Tests for ``lovia.tools.page`` — the web_fetch tool and its HTML conversion."""
 
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ from lovia.tools.page import (
     Page,
     PageImage,
     html_to_markdown,
-    page_reader,
-    read_page,
+    web_fetch,
 )
+from lovia.tools.base import run_tool
 from lovia.tools.page import _render_page
 
 
@@ -27,12 +27,8 @@ def _ctx() -> RunContext:
 
 @pytest.fixture
 def page_tool() -> Tool:
-    """A tool with a fresh, cache-free reader.
-
-    The exported ``read_page`` deliberately shares one process-wide response
-    cache, so tests must not route through it or they see each other's pages.
-    """
-    return page_reader(HttpReader(cache_ttl=0))
+    """A tool with a cache-free reader, so mocked responses are never stale."""
+    return web_fetch(HttpReader(cache_ttl=0))
 
 
 def _mock_http(
@@ -45,7 +41,7 @@ def _mock_http(
         kwargs["transport"] = httpx.MockTransport(handler)
         return real_client(**kwargs)
 
-    monkeypatch.setattr("lovia.tools.http.httpx.AsyncClient", factory)
+    monkeypatch.setattr("lovia.tools._http.httpx.AsyncClient", factory)
 
 
 def _html_page(monkeypatch: pytest.MonkeyPatch, html: str, **kwargs: Any) -> None:
@@ -217,11 +213,11 @@ def test_markdown_relative_urls_need_a_base() -> None:
     assert html_to_markdown("<a href='/g'>g</a>") == "g"
 
 
-# ------------------------------------------------------------- read_page
+# ------------------------------------------------------------- web_fetch
 
 
 @pytest.mark.asyncio
-async def test_read_page_reports_title_and_final_url(
+async def test_web_fetch_reports_title_and_final_url(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -243,7 +239,7 @@ async def test_read_page_reports_title_and_final_url(
 
 
 @pytest.mark.asyncio
-async def test_read_page_resolves_relative_urls_against_the_final_url(
+async def test_web_fetch_resolves_relative_urls_against_the_final_url(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     _html_page(monkeypatch, "<a href='sibling'>s</a><img src='/i.png' alt='i'>")
@@ -253,7 +249,7 @@ async def test_read_page_resolves_relative_urls_against_the_final_url(
 
 
 @pytest.mark.asyncio
-async def test_read_page_honors_base_href(
+async def test_web_fetch_honors_base_href(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     _html_page(
@@ -266,7 +262,7 @@ async def test_read_page_honors_base_href(
 
 
 @pytest.mark.asyncio
-async def test_read_page_images_are_opt_in(
+async def test_web_fetch_images_are_opt_in(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     _html_page(monkeypatch, "<img src='a.png' alt='A'>")
@@ -282,7 +278,7 @@ async def test_read_page_images_are_opt_in(
 
 
 @pytest.mark.asyncio
-async def test_read_page_collects_images_markdown_cannot_show(
+async def test_web_fetch_collects_images_markdown_cannot_show(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     _html_page(
@@ -312,12 +308,12 @@ async def test_read_page_collects_images_markdown_cannot_show(
 
 
 @pytest.mark.asyncio
-async def test_read_page_continues_from_next_offset(
+async def test_web_fetch_continues_from_next_offset(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     body = "".join(f"<p>line {i:04d}</p>" for i in range(400))
     _html_page(monkeypatch, body)
-    tool = page_reader(max_chars=500)
+    tool = web_fetch(max_chars=500)
 
     first = await tool.invoke({"url": "https://example.com/long"}, _ctx())
     assert first.next_offset is not None
@@ -335,7 +331,7 @@ async def test_read_page_continues_from_next_offset(
 
 
 @pytest.mark.asyncio
-async def test_read_page_offset_past_the_end_is_empty_not_an_error(
+async def test_web_fetch_offset_past_the_end_is_empty_not_an_error(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     _html_page(monkeypatch, "<p>short</p>")
@@ -347,7 +343,7 @@ async def test_read_page_offset_past_the_end_is_empty_not_an_error(
 
 
 @pytest.mark.asyncio
-async def test_read_page_caps_error_pages_hard(
+async def test_web_fetch_caps_error_pages_hard(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     # A 500's HTML template is never worth a full character budget.
@@ -358,11 +354,11 @@ async def test_read_page_caps_error_pages_hard(
 
 
 @pytest.mark.asyncio
-async def test_read_page_surfaces_a_capped_download(
+async def test_web_fetch_surfaces_a_capped_download(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     _html_page(monkeypatch, "<p>" + "x" * 5_000 + "</p>")
-    tool = page_reader(HttpReader(max_bytes=1_000, cache_ttl=0))
+    tool = web_fetch(HttpReader(max_bytes=1_000, cache_ttl=0))
     page = await tool.invoke({"url": "https://example.com/huge"}, _ctx())
     # size_capped says the tail was never fetched, so no offset will reach it —
     # a different situation from "clipped, ask for more".
@@ -371,7 +367,7 @@ async def test_read_page_surfaces_a_capped_download(
 
 
 @pytest.mark.asyncio
-async def test_read_page_sniffs_meta_charset(
+async def test_web_fetch_sniffs_meta_charset(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     # A GBK page whose header omits the charset used to arrive as mojibake.
@@ -387,7 +383,7 @@ async def test_read_page_sniffs_meta_charset(
 
 
 @pytest.mark.asyncio
-async def test_read_page_handles_non_html_content(
+async def test_web_fetch_handles_non_html_content(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     responses = iter(
@@ -399,6 +395,11 @@ async def test_read_page_handles_non_html_content(
                 headers={"content-type": "application/octet-stream"},
             ),
             httpx.Response(200, content=b"<html><p>sniffed</p></html>"),
+            httpx.Response(
+                200,
+                text="<rss><item>hi</item></rss>",
+                headers={"content-type": "application/rss+xml"},
+            ),
         ]
     )
     _mock_http(monkeypatch, lambda request: next(responses))
@@ -410,10 +411,13 @@ async def test_read_page_handles_non_html_content(
     # No content-type at all: sniff the markup rather than dumping it raw.
     sniffed = await page_tool.invoke({"url": "https://example.com/c"}, _ctx())
     assert sniffed.text == "sniffed"
+    # XML is not HTML: it passes through as text.
+    feed = await page_tool.invoke({"url": "https://example.com/d"}, _ctx())
+    assert feed.text == "<rss><item>hi</item></rss>"
 
 
 @pytest.mark.asyncio
-async def test_read_page_falls_back_to_markup_when_extraction_is_empty(
+async def test_web_fetch_falls_back_to_markup_when_extraction_is_empty(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
     # An app shell has no text at all; the markup is more useful than nothing.
@@ -423,18 +427,16 @@ async def test_read_page_falls_back_to_markup_when_extraction_is_empty(
 
 
 @pytest.mark.asyncio
-async def test_read_page_rejects_non_http_schemes(page_tool: Tool) -> None:
+async def test_web_fetch_rejects_non_http_schemes(page_tool: Tool) -> None:
     with pytest.raises(ToolError, match="scheme"):
         await page_tool.invoke({"url": "file:///etc/passwd"}, _ctx())
 
 
 @pytest.mark.asyncio
-async def test_read_page_retries_a_dropped_connection(
+async def test_web_fetch_retries_a_dropped_connection(
     monkeypatch: pytest.MonkeyPatch, page_tool: Tool
 ) -> None:
-    """Retrying is safe now that this tool only ever issues GETs."""
-    from lovia.tools import run_tool
-
+    """Retrying is safe: this tool only ever issues GETs."""
     attempts = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -558,7 +560,7 @@ async def test_reader_cache_expires(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_page_reader_accepts_a_custom_backend() -> None:
+async def test_web_fetch_accepts_a_custom_backend() -> None:
     """How JavaScript rendering gets solved without lovia shipping a browser."""
     seen: dict[str, Any] = {}
 
@@ -574,7 +576,7 @@ async def test_page_reader_accepts_a_custom_backend() -> None:
                 images=[PageImage(url="https://x/i.png", alt="i")],
             )
 
-    tool = page_reader(Stub())
+    tool = web_fetch(Stub())
     page = await tool.invoke({"url": "https://example.com/spa", "images": True}, _ctx())
     assert seen == {"url": "https://example.com/spa", "images": True}
     assert page.title == "Rendered"
@@ -582,7 +584,7 @@ async def test_page_reader_accepts_a_custom_backend() -> None:
 
 
 @pytest.mark.asyncio
-async def test_page_reader_does_not_mutate_the_backends_page() -> None:
+async def test_web_fetch_does_not_mutate_the_backends_page() -> None:
     # A backend may cache and reuse the Page it returns; clipping must not
     # scribble on it.
     original = Page(
@@ -596,7 +598,7 @@ async def test_page_reader_does_not_mutate_the_backends_page() -> None:
         async def read(self, url: str, *, images: bool = False) -> Page:
             return original
 
-    tool = page_reader(Reusing(), max_chars=10)
+    tool = web_fetch(Reusing(), max_chars=10)
     clipped = await tool.invoke({"url": "https://x/"}, _ctx())
     assert len(clipped.text) == 10
     assert clipped.next_offset == 10
@@ -605,23 +607,22 @@ async def test_page_reader_does_not_mutate_the_backends_page() -> None:
 
 
 @pytest.mark.asyncio
-async def test_exported_read_page_works_without_assembly(
+async def test_web_fetch_works_without_a_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # tools=[read_page] must just work: no factory call, no backend to pick.
+    # tools=[web_fetch()] must just work: no backend to pick.
     _html_page(monkeypatch, "<h1>Ready</h1>")
-    page = await read_page.invoke({"url": "https://singleton.example/ready"}, _ctx())
-    assert read_page.name == "read_page"
+    page = await web_fetch().invoke({"url": "https://example.com/ready"}, _ctx())
     assert page.text == "# Ready"
 
 
-def test_page_reader_names_the_tool_and_keeps_the_schema_small() -> None:
-    tool = page_reader()
-    assert tool.name == "read_page"
+def test_web_fetch_names_the_tool_and_keeps_the_schema_small() -> None:
+    tool = web_fetch()
+    assert tool.name == "web_fetch"
     # Timeouts and byte caps are operator decisions, not model decisions: the
     # model pays tokens for this schema on every single call.
     assert set(tool.parameters["properties"]) == {"url", "images", "offset"}
-    assert page_reader(name="browse").name == "browse"
+    assert web_fetch(name="browse").name == "browse"
 
 
 # --------------------------------------------------------------- render

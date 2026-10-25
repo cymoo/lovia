@@ -8,9 +8,7 @@ import pytest
 
 from lovia.exceptions import ToolError
 from lovia.run_context import RunContext
-from lovia.tools import (
-    render_tool_result,
-)
+from lovia.tools.base import render_tool_result
 from lovia.workspace import LocalWorkspaceSession, WorkspaceLimits
 from lovia.workspace.types import (
     CommandResult,

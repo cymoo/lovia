@@ -1,28 +1,28 @@
-"""Read a web page as Markdown the model can act on.
+"""Fetch a URL and return its content in a form the model can act on.
 
-``read_page`` fetches one URL and returns a :class:`Page`: the final URL, the
-title, and the body as Markdown. Markdown rather than plain text because
-headings, lists, links and images are exactly the structure a model needs —
-``[docs](/guide)`` tells it where to go next, where flattened text tells it
-nothing. Set ``images=True`` and the page's images come back as a deduplicated
-list too, including the ones inline Markdown cannot show (``srcset``,
-``<picture><source>``, ``og:image``).
+``web_fetch`` fetches one URL and returns a :class:`Page`: the final URL, the
+title, and the body — HTML as Markdown, JSON compacted, text as-is. Markdown
+rather than plain text because headings, lists, links and images are exactly
+the structure a model needs — ``[docs](/guide)`` tells it where to go next,
+where flattened text tells it nothing. Set ``images=True`` and the page's
+images come back as a deduplicated list too, including the ones inline
+Markdown cannot show (``srcset``, ``<picture><source>``, ``og:image``).
 
 The model-facing surface is three arguments — ``url``, ``images``, ``offset``.
 Budgets (timeout, byte cap, character cap, cache TTL) are operator decisions,
-so they live on the :func:`page_reader` factory instead of costing tokens in
+so they live on the :func:`web_fetch` factory instead of costing tokens in
 the schema on every call.
 
 Swapping the backend is how you get JavaScript rendering: implement
 :class:`PageReader` over Jina Reader, Firecrawl, Playwright or anything else
-and hand it to :func:`page_reader`. The bundled :class:`HttpReader` makes one
+and hand it to :func:`web_fetch`. The bundled :class:`HttpReader` makes one
 plain HTTP request and parses with the standard library — no extra dependency,
 no browser, and therefore no client-side rendering::
 
     class JinaReader:  # ~15 lines; see docs/en/built-in-tools.md
         async def read(self, url: str, *, images: bool = False) -> Page: ...
 
-    agent = Agent(name="x", tools=[page_reader(JinaReader())])
+    agent = Agent(name="x", tools=[web_fetch(JinaReader())])
 """
 
 from __future__ import annotations
@@ -38,9 +38,7 @@ from urllib.parse import urljoin, urlparse
 
 from pydantic import Field
 
-from .base import Tool, default_result_renderer, tool
-from .fence import FENCE_NOTE, fence
-from .http import (
+from ._http import (
     MAX_RESPONSE_BYTES,
     RawResponse,
     compact_json,
@@ -51,6 +49,8 @@ from .http import (
     render_payload,
     validate_url,
 )
+from .base import Tool, result_to_text, tool
+from .fence import FENCE_NOTE, fence
 
 __all__ = [
     "HttpReader",
@@ -59,8 +59,7 @@ __all__ = [
     "PageReader",
     "html_to_markdown",
     "page_from_response",
-    "page_reader",
-    "read_page",
+    "web_fetch",
 ]
 
 
@@ -603,10 +602,7 @@ class HttpReader:
     ) -> None:
         self._timeout = timeout
         self._max_bytes = max_bytes
-        # Resolved per request, not here: the module-level ``read_page`` builds
-        # an HttpReader while ``lovia/__init__`` is still executing, so
-        # ``lovia.__version__`` does not exist yet.
-        self._user_agent = user_agent
+        self._user_agent = user_agent or default_user_agent()
         self._cache_ttl = cache_ttl
         self._cache_size = max(1, cache_size)
         self._cache: OrderedDict[str, tuple[float, RawResponse]] = OrderedDict()
@@ -622,7 +618,7 @@ class HttpReader:
             headers={"Accept": _ACCEPT},
             timeout=self._timeout,
             max_bytes=self._max_bytes,
-            user_agent=self._user_agent or default_user_agent(),
+            user_agent=self._user_agent,
         )
         self._cache_put(url, raw)
         return raw
@@ -662,9 +658,9 @@ def _clip(text: str, offset: int, limit: int) -> tuple[str, int | None]:
 
 
 def _render_page(result: Any, ctx: Any) -> str:
-    """The text both the model and the web UI see for a ``read_page`` result."""
+    """The text both the model and the web UI see for a ``web_fetch`` result."""
     if not isinstance(result, Page):
-        return result if isinstance(result, str) else default_result_renderer(result)
+        return result_to_text(result)
 
     lines = [f"URL: {result.url}"]
     status = f"HTTP {result.status_code} · {display_media_type(result.media_type)}"
@@ -700,39 +696,40 @@ def _render_page(result: Any, ctx: Any) -> str:
     return "\n".join(lines)
 
 
-def page_reader(
+def web_fetch(
     impl: PageReader | None = None,
     *,
-    name: str = "read_page",
+    name: str = "web_fetch",
     max_chars: int = 20_000,
 ) -> Tool:
-    """Build a ``read_page`` :class:`Tool`, optionally over a custom backend.
+    """Build a ``web_fetch`` :class:`Tool`, optionally over a custom backend.
 
-    ``impl`` defaults to :class:`HttpReader`; pass your own to get JavaScript
-    rendering or a hosted extraction service. ``max_chars`` bounds the text
-    handed to the model per call — the rest stays reachable via ``offset``.
+    ``impl`` defaults to a fresh :class:`HttpReader`; pass your own to get
+    JavaScript rendering or a hosted extraction service. ``max_chars`` bounds
+    the text handed to the model per call — the rest stays reachable via
+    ``offset``.
     """
     reader: PageReader = impl if impl is not None else HttpReader()
 
-    # Reading crosses the open internet, where a dropped connection is a
-    # normal event. Retrying is safe here in a way it never was for the old
-    # combined tool: this issues GETs only.
+    # Fetching crosses the open internet, where a dropped connection is a
+    # normal event. Retrying is safe: this issues GETs only.
     @tool(
         name=name,
         result_renderer=_render_page,
         retries=2,
         description=(
-            "Read a web page and return its content as Markdown.\n"
+            "Fetch a URL and return its content: web pages as Markdown, JSON "
+            "compacted, plain text as-is.\n"
             "- Headings, lists, links and images survive the conversion, so "
-            "[text](url) in the result holds real URLs you can read next.\n"
+            "[text](url) in the result holds real URLs you can fetch next.\n"
             "- images=true also returns a deduplicated list of every image "
             "the page references, including ones inline Markdown cannot show "
             "(srcset, <picture>, og:image).\n"
-            "- Long pages are cut short; the notice tells you which offset to "
-            "continue from.\n"
-            "- No JavaScript is executed, so a page that builds its content "
-            "in the browser may come back nearly empty.\n"
-            "- For REST APIs and non-HTML endpoints, use http_request.\n"
+            "- Long content is cut short; the notice tells you which offset "
+            "to continue from.\n"
+            "- GET only, no custom headers. No JavaScript is executed, so a "
+            "page that builds its content in the browser may come back nearly "
+            "empty.\n"
             f"- {FENCE_NOTE}"
         ),
     )
@@ -762,7 +759,3 @@ def page_reader(
         return dataclasses.replace(page, text=text, next_offset=next_offset)
 
     return _read
-
-
-read_page = page_reader()
-"""Ready-to-use ``read_page`` tool over the default :class:`HttpReader`."""

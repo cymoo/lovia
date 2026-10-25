@@ -29,6 +29,9 @@ const TOOLS = {
   read_process_output: ['toolview.processOutput', (a) => str(a.process_id)],
   kill_process: ['toolview.killProcess', (a) => str(a.process_id)],
   web_search: ['toolview.webSearch', (a) => quoted(a.query)],
+  web_fetch: ['toolview.webFetch', (a) => str(a.url)],
+  // Retired tool names: older chats still hold their calls.
+  read_page: ['toolview.webFetch', (a) => str(a.url)],
   http_request: ['toolview.http', (a) => str(a.url) && `${str(a.method) ?? 'GET'} ${str(a.url)}`],
   recall: ['toolview.recall', (a) => quoted(a.query)],
   remember: ['toolview.remember', (a) => quoted(a.fact)],

@@ -1,6 +1,6 @@
 """Environment-driven configuration for lovia's outbound ``httpx`` clients.
 
-The model providers and the fetching tools (``http_request``, ``read_page``)
+The model providers and the fetching tools (``web_fetch``, ``web_search``)
 all make HTTPS requests through ``httpx``. This module centralizes how their
 outbound behavior is resolved from the environment (handy behind an intranet CA
 or proxy). TLS trust (:func:`resolve_verify`) is shared by the providers and the

@@ -1,14 +1,13 @@
-"""Time and sleep utility tools.
+"""Time: the ``now`` tool and the ``current_date`` instruction fragment.
 
-Both are stateless module-level :class:`Tool` instances::
+``now`` is a stateless module-level :class:`Tool` instance::
 
-    from lovia.tools import now, sleep
-    agent = Agent(name="x", tools=[now, sleep])
+    from lovia.tools import now
+    agent = Agent(name="x", tools=[now])
 """
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -20,7 +19,7 @@ if TYPE_CHECKING:
     from ..agent import InstructionsFn
     from ..run_context import RunContext
 
-__all__ = ["current_date", "now", "sleep"]
+__all__ = ["current_date", "now"]
 
 
 @tool
@@ -88,13 +87,3 @@ def current_date(tz: str | None = None) -> "InstructionsFn":
         return f"Today's date is {dt:%Y-%m-%d} ({dt:%A})."
 
     return fragment
-
-
-@tool
-async def sleep(
-    seconds: Annotated[float, "How long to sleep, max 60s."],
-) -> str:
-    """Sleep for ``seconds`` (capped at 60 to avoid runaway calls)."""
-    capped = min(max(seconds, 0.0), 60.0)
-    await asyncio.sleep(capped)
-    return f"slept {capped}s"

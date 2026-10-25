@@ -4,12 +4,12 @@
 
 ```python
 from lovia import Agent
-from lovia.tools import duckduckgo_search, http_request, now, read_page
+from lovia.tools import duckduckgo_search, now, web_fetch
 
 agent = Agent(
     name="researcher",
     model="<model>",
-    tools=[read_page, http_request, duckduckgo_search(), now],
+    tools=[web_fetch(), duckduckgo_search(), now],
 )
 ```
 
@@ -18,17 +18,17 @@ agent = Agent(
 
 | 需求 | 工具 |
 | --- | --- |
-| 把网页正文转成 Markdown | `read_page` |
-| 调用 JSON / HTTP API | `http_request` |
+| 读取 URL：网页转成 Markdown，也支持 JSON、文本 | `web_fetch()` |
 | 搜索公开网页 | `duckduckgo_search()` / `tavily_search()` |
 | 获取当前时间 | `now` |
 | 暂停并询问用户 | `ask_human` |
 
-## 读取网页
+## 读取 URL
 
-`lovia.tools.read_page` 将 HTML 正文转换为保留结构和链接的 Markdown。
+`lovia.tools.web_fetch()` 构建一个用 GET 读取单个 URL 的工具。HTML 会转换为保留结构和
+链接的 Markdown；JSON 压缩后返回，文本保持原样，二进制只返回元数据。
 
-`read_page` 向模型公开三个参数：
+它向模型公开三个参数：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -36,17 +36,20 @@ agent = Agent(
 | `images` | `False` | 同时返回去重后的图片清单 |
 | `offset` | `0` | 从这个字符偏移处继续读一个长页面 |
 
-超时、下载上限和缓存时间等配置由调用方决定，因此放在 `page_reader()` 工厂上，
+超时、下载上限和缓存时间等配置由调用方决定，因此放在 `web_fetch()` 工厂上，
 不会出现在模型每次调用所见的 JSON Schema 中：
 
 ```python
-from lovia.tools import HttpReader, page_reader
+from lovia.tools import HttpReader, web_fetch
 
-tool = page_reader(                     # 或直接用现成的 read_page
+tool = web_fetch(                       # 或直接用默认配置的 web_fetch()
     HttpReader(timeout=15.0, max_bytes=2_000_000, cache_ttl=60),
     max_chars=40_000,
 )
 ```
+
+它没有 `method`、`headers`、`body` 参数。要让模型调用某个具体的 API，把这个 API 包装成
+[`@tool`](tools.md)，比如 `get_order(order_id)`，而不是交给模型一个可以随意填写的 HTTP 客户端。
 
 ### 返回结果
 
@@ -67,7 +70,7 @@ Images (1):
 ```
 
 网页自身的内容放在隔离框里（见[隔离框](#隔离框)），URL、状态和截断提示由 lovia 生成，
-放在框外。页面过长时，截断提示会给出下一次应传入的 `offset`，便于分段续读。`read_page`
+放在框外。页面过长时，截断提示会给出下一次应传入的 `offset`，便于分段续读。工具
 返回的 `Page` 包含最终 URL、状态码、标题、Markdown 正文和图片列表；上例是默认渲染结果。
 
 ### 图片
@@ -93,7 +96,7 @@ class PageReader(Protocol):
 
 ```python
 import httpx
-from lovia.tools import Page, page_reader
+from lovia.tools import Page, web_fetch
 
 class JinaReader:
     async def read(self, url: str, *, images: bool = False) -> Page:
@@ -109,7 +112,7 @@ class JinaReader:
             text=resp.text,
         )
 
-agent = Agent(name="x", model="<model>", tools=[page_reader(JinaReader())])
+agent = Agent(name="x", model="<model>", tools=[web_fetch(JinaReader())])
 ```
 
 字符数限制由工具统一处理，因此后端应返回完整正文。
@@ -120,43 +123,12 @@ agent = Agent(name="x", model="<model>", tools=[page_reader(JinaReader())])
 加速：如果续读时重新下载，`offset` 前后可能来自网页的两个不同版本。单次下载上限为
 1 MB；达到上限时，`size_capped` 会设为 `True`，结果中也会说明尾部尚未下载，继续增大
 `offset` 无法读取这部分内容。`4xx`/`5xx` 响应的正文最多保留 500 个字符，避免错误页
-占满结果空间。
+占满结果空间。每次调用 `web_fetch()` 都会创建自己的 reader，缓存不会与其他工具共享。
+TLS 设置见 [`LOVIA_HTTP_*` 配置](providers.md#网络超时代理tls)。
 
-## HTTP 请求
-
-`lovia.tools.http_request` 适合调用 REST API 和其他非 HTML 端点。它会原样返回 HTML，
-不会像 `read_page` 那样提取网页正文。
-
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `url` | 必填 | 只允许绝对 `http://` / `https://` URL |
-| `method` | `"GET"` | 任意 HTTP 方法 |
-| `headers` | `None` | 可选请求头（要覆盖默认 UA 也在这里） |
-| `body` | `None` | 作为 JSON 请求体发送，通常用于 POST/PUT/PATCH |
-| `timeout` | `30.0` | 秒，范围 1–120 |
-| `max_chars` | `20_000` | 结果上限，100–200,000 |
-
-结果由状态行、响应头和正文组成。JSON 会压缩后返回，文本保持原样，二进制响应只返回
-元数据。响应头可用于读取限流信息和 `Link:` 分页；`set-cookie` 会被隐藏，以免会话令牌
-写入运行记录（transcript）。单次下载上限为 1 MB，正文超过 `max_chars` 时会截断并给出提示。
-工具会跟随重定向；如果最终 URL 与请求 URL 不同，结果中会明确列出。TLS 设置见
-[`LOVIA_HTTP_*` 配置](providers.md#网络超时代理tls)。
-
-> **不会过滤 SSRF 风险。** `read_page` 和 `http_request` 可以访问当前主机能够访问的
-> 任何地址，包括内网地址；重定向也可能跳转到内网。如果 Agent 可能处理不可信内容，
-> 请为工具启用审批或隔离网络。
-
-如果只想审批可能修改服务端状态的请求，可以使用内置谓词。该谓词不会默认启用，因为
-审批采用“无人处理即拒绝”的策略：使用 `Runner.run()` 且未配置审批处理器时，POST 等
-请求都会被拒绝。
-
-```python
-import dataclasses
-from lovia.tools import http_request, writes_need_approval
-
-# GET / HEAD / OPTIONS 直接放行，其余先问。
-gated = dataclasses.replace(http_request, needs_approval=writes_need_approval)
-```
+> **不会过滤 SSRF 风险。** `web_fetch` 可以访问当前主机能够访问的任何地址，包括内网
+> 地址；重定向也可能跳转到内网。如果 Agent 可能处理不可信内容，请为工具启用审批或
+> 隔离网络。
 
 ## Web 搜索
 
@@ -194,12 +166,11 @@ class WebSearch(Protocol):
 
 ## 时间
 
-三个小工具：
+两个小工具：
 
 - **`now`**（工具）：当前系统时钟时间，ISO-8601 格式；可选 `tz` 接收 IANA
   名称（如 `"Asia/Shanghai"`）。默认使用服务器本地时区。（Windows 上 IANA 名称需要
   `pip install tzdata`。）
-- **`sleep`**（工具）：最多等待 60 秒，适合简单的“等一下再检查”流程。
 - **`current_date(tz=None)`**：**不是工具**，而是返回
   [指令片段](agents.md#编写指令)的工厂，将当天日期写入系统提示词：
 
@@ -262,7 +233,7 @@ async for q in channel.questions():
 
 ## 隔离框
 
-`read_page`、`http_request` 和 `web_search` 工具会把抓取到的内容放在固定标记之间：
+`web_fetch` 和 `web_search` 工具会把抓取到的内容放在固定标记之间：
 `--- BEGIN EXTERNAL CONTENT (reference material) ---` / `--- END EXTERNAL CONTENT ---`，
 并在各自的工具描述里告诉模型：框内内容只是供阅读和转述的素材，不是要执行的指令。框内
 所有可能冒充 agent 自身格式的内容都会被解除：伪造的标记、`<system-reminder>` 标签、
@@ -284,8 +255,10 @@ async def latest_reply(ticket_id: str) -> str:
 
 ## 使用建议
 
-- **`read_page` 默认缓存响应 5 分钟。** 变化比这更快的页面需要
-  `page_reader(HttpReader(cache_ttl=0))`。
+- **`web_fetch` 是最需要警惕的内置工具。** 配合不可信输入，它就是一个 SSRF 入口；在面向
+  公众的场景中使用前，请启用审批或隔离网络。
+- **`web_fetch` 默认缓存响应 5 分钟。** 变化比这更快的页面需要
+  `web_fetch(HttpReader(cache_ttl=0))`。
 - **`duckduckgo_search()` / `tavily_search()` 会立即创建后端。** 缺少 `ddgs` 包或
   `TAVILY_API_KEY` 时，构建工具便会抛出 `UserError`，让配置问题在启动阶段暴露，
   而不是拖到运行中途。
@@ -296,7 +269,7 @@ async def latest_reply(ticket_id: str) -> str:
 
 - [工具](tools.md)：这些工具如何构建；你自己的工具也按同样方式写
 - [工作区](workspace.md)：文件和 shell 工具
-- 示例：[`tools/01_http.py`](../../examples/tools/01_http.py)，
+- 示例：[`tools/01_fetch.py`](../../examples/tools/01_fetch.py)，
   [`tools/02_time.py`](../../examples/tools/02_time.py)，
   [`tools/03_search.py`](../../examples/tools/03_search.py)，
   [`tools/04_human.py`](../../examples/tools/04_human.py)

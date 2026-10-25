@@ -17,7 +17,8 @@ import pytest
 from pydantic import BaseModel
 
 from lovia import Agent, RunContext, Runner, UserError, tool
-from lovia.tools import default_result_renderer, render_tool_result, run_tool
+from lovia.tools import result_to_text
+from lovia.tools.base import render_tool_result, run_tool, truncate_tool_output
 
 from ..scripted_provider import ScriptedProvider, call, text
 
@@ -315,7 +316,7 @@ async def test_agent_default_tool_retries_apply_when_tool_unset() -> None:
     assert attempts["n"] == 2
 
 
-def test_default_result_renderer_handles_common_python_values() -> None:
+def test_result_to_text_handles_common_python_values() -> None:
     class Color(Enum):
         RED = "red"
 
@@ -328,7 +329,7 @@ def test_default_result_renderer_handles_common_python_values() -> None:
         created: datetime
         home: Path
 
-    rendered = default_result_renderer(
+    rendered = result_to_text(
         {
             Color.RED: {
                 "payload": Payload(datetime(2026, 6, 10, 12, 30), ("a", "b")),
@@ -359,12 +360,12 @@ def test_default_result_renderer_handles_common_python_values() -> None:
     }
 
 
-def test_default_result_renderer_fallbacks() -> None:
+def test_result_to_text_fallbacks() -> None:
     # Sets become lists (element order not guaranteed).
-    assert sorted(json.loads(default_result_renderer({2, 1}))) == [1, 2]
+    assert sorted(json.loads(result_to_text({2, 1}))) == [1, 2]
     # A leaf json.dumps can't handle falls back to str() of the converted tree
     # rather than raising into the runner.
-    rendered = default_result_renderer({"obj": object()})
+    rendered = result_to_text({"obj": object()})
     assert isinstance(rendered, str) and "object object" in rendered
 
 
@@ -452,8 +453,6 @@ async def test_param_named_ctx_without_annotation_is_a_regular_arg() -> None:
 
 
 def test_truncate_tool_output_helper() -> None:
-    from lovia.tools import truncate_tool_output
-
     assert truncate_tool_output("short", 100) == "short"
     text_in = "H" * 8_000 + "T" * 2_000
     out = truncate_tool_output(text_in, 1_000)

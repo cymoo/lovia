@@ -13,7 +13,8 @@ import pytest
 
 from lovia.exceptions import ToolError, UserError
 from lovia.run_context import RunContext
-from lovia.tools.http import decode_body, http_request, writes_need_approval
+from lovia.tools._http import decode_body
+from lovia.tools.base import run_tool
 from lovia.tools.human import HumanChannel, ask_human
 from lovia.tools.search import (
     SearchResult,
@@ -21,7 +22,7 @@ from lovia.tools.search import (
     tavily_search,
     web_search,
 )
-from lovia.tools.time import current_date, now, sleep
+from lovia.tools.time import current_date, now
 
 
 def _ctx() -> RunContext:
@@ -34,7 +35,7 @@ def _ctx() -> RunContext:
 def _mock_http(
     monkeypatch: pytest.MonkeyPatch,
     handler: Callable[[httpx.Request], httpx.Response],
-    target: str = "lovia.tools.http.httpx.AsyncClient",
+    target: str,
 ) -> None:
     real_client = httpx.AsyncClient
 
@@ -43,92 +44,6 @@ def _mock_http(
         return real_client(**kwargs)
 
     monkeypatch.setattr(target, factory)
-
-
-@pytest.mark.asyncio
-async def test_http_request_compacts_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    _mock_http(
-        monkeypatch,
-        lambda request: httpx.Response(200, json={"a": [1, 2], "b": "x"}),
-    )
-    out = await http_request.invoke({"url": "https://api.example.com/data"}, _ctx())
-    assert out.startswith("HTTP 200 · application/json")
-    assert '{"a":[1,2],"b":"x"}' in out
-
-
-@pytest.mark.asyncio
-async def test_http_request_returns_html_verbatim(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Interpreting HTML is read_page's job; this tool is an honest HTTP client.
-    html = "<html><body><h1>Heading</h1></body></html>"
-    _mock_http(
-        monkeypatch,
-        lambda request: httpx.Response(
-            200, text=html, headers={"content-type": "text/html; charset=utf-8"}
-        ),
-    )
-    out = await http_request.invoke({"url": "https://example.com"}, _ctx())
-    assert html in out
-
-
-@pytest.mark.asyncio
-async def test_http_request_binary_returns_metadata_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _mock_http(
-        monkeypatch,
-        lambda request: httpx.Response(
-            200,
-            content=b"\x00\x01\x02\x03",
-            headers={"content-type": "application/octet-stream"},
-        ),
-    )
-    out = await http_request.invoke({"url": "https://example.com/blob"}, _ctx())
-    assert "binary content not shown" in out
-    assert "application/octet-stream" in out
-
-
-@pytest.mark.asyncio
-async def test_http_request_truncates_large_responses(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _mock_http(
-        monkeypatch,
-        lambda request: httpx.Response(
-            200, text="x" * 5_000, headers={"content-type": "text/plain"}
-        ),
-    )
-    out = await http_request.invoke(
-        {"url": "https://example.com/big", "max_chars": 200}, _ctx()
-    )
-    assert "truncated" in out
-    assert len(out) < 1_500
-
-
-@pytest.mark.asyncio
-async def test_http_request_rejects_non_http_schemes() -> None:
-    with pytest.raises(ToolError, match="scheme"):
-        await http_request.invoke({"url": "file:///etc/passwd"}, _ctx())
-
-
-@pytest.mark.asyncio
-async def test_http_request_survives_bogus_charset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # A server declaring an unknown charset must not crash the decode with a
-    # LookupError — the body is decoded with the utf-8 fallback instead.
-    _mock_http(
-        monkeypatch,
-        lambda request: httpx.Response(
-            200,
-            content="héllo".encode(),
-            headers={"content-type": "text/plain; charset=totally-bogus"},
-        ),
-    )
-    out = await http_request.invoke({"url": "https://example.com"}, _ctx())
-    assert out.startswith("HTTP 200")
-    assert "héllo" in out
 
 
 def test_decode_body_prefers_header_then_meta_then_utf8() -> None:
@@ -141,160 +56,6 @@ def test_decode_body_prefers_header_then_meta_then_utf8() -> None:
     # to the sniffed value rather than raising LookupError.
     assert "中文" in decode_body(gbk, "gbk")
     assert "中文" in decode_body(gbk, "totally-bogus", sniff_meta=True)
-
-
-@pytest.mark.asyncio
-async def test_http_request_forwards_method_headers_and_json_body(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    seen: dict[str, Any] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["method"] = request.method
-        seen["x-api-key"] = request.headers.get("x-api-key")
-        seen["content-type"] = request.headers.get("content-type")
-        seen["user-agent"] = request.headers.get("user-agent")
-        seen["body"] = request.read()
-        return httpx.Response(200, json={"ok": True})
-
-    _mock_http(monkeypatch, handler)
-    out = await http_request.invoke(
-        {
-            "url": "https://api.example.com/things",
-            "method": "post",  # lowercase must be normalized
-            "headers": {"X-Api-Key": "secret"},
-            "body": {"name": "x", "tags": [1, 2]},
-        },
-        _ctx(),
-    )
-    assert out.startswith("HTTP 200")
-    assert seen["method"] == "POST"
-    assert seen["x-api-key"] == "secret"
-    assert seen["content-type"] == "application/json"
-    assert "lovia/" in (seen["user-agent"] or "")
-    assert json.loads(seen["body"]) == {"name": "x", "tags": [1, 2]}
-
-
-@pytest.mark.asyncio
-async def test_http_request_lets_caller_override_user_agent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    seen: dict[str, Any] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["user-agent"] = request.headers.get("user-agent")
-        seen["ua_count"] = sum(
-            1 for name, _ in request.headers.raw if name.lower() == b"user-agent"
-        )
-        return httpx.Response(200, text="ok", headers={"content-type": "text/plain"})
-
-    _mock_http(monkeypatch, handler)
-    await http_request.invoke(
-        {"url": "https://example.com", "headers": {"User-Agent": "mine/1"}}, _ctx()
-    )
-    assert seen["user-agent"] == "mine/1"
-
-    # HTTP header names are case-insensitive but a dict is not: a lowercase
-    # override must replace the default, not add a second User-Agent header.
-    await http_request.invoke(
-        {"url": "https://example.com", "headers": {"user-agent": "lower/2"}}, _ctx()
-    )
-    assert seen["user-agent"] == "lower/2"
-    assert seen["ua_count"] == 1
-
-
-@pytest.mark.asyncio
-async def test_http_request_shows_response_headers_but_hides_cookies(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Rate limits and pagination links are why the model wants headers;
-    # set-cookie would drop a session token into the transcript.
-    _mock_http(
-        monkeypatch,
-        lambda request: httpx.Response(
-            200,
-            json={"ok": True},
-            headers={
-                "x-ratelimit-remaining": "42",
-                "link": '<https://api.example.com/next>; rel="next"',
-                "set-cookie": "session=supersecret; Path=/",
-            },
-        ),
-    )
-    out = await http_request.invoke({"url": "https://api.example.com/x"}, _ctx())
-    assert "x-ratelimit-remaining: 42" in out
-    assert 'rel="next"' in out
-    assert "supersecret" not in out
-
-
-@pytest.mark.asyncio
-async def test_http_request_reports_the_final_url_after_a_redirect(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/old":
-            return httpx.Response(302, headers={"location": "https://example.com/new"})
-        return httpx.Response(200, text="here", headers={"content-type": "text/plain"})
-
-    _mock_http(monkeypatch, handler)
-    out = await http_request.invoke({"url": "https://example.com/old"}, _ctx())
-    assert "URL: https://example.com/new" in out
-
-
-@pytest.mark.asyncio
-async def test_http_request_caps_download_at_1mb(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _mock_http(
-        monkeypatch,
-        lambda request: httpx.Response(
-            200, text="x" * 1_200_000, headers={"content-type": "text/plain"}
-        ),
-    )
-    out = await http_request.invoke(
-        {"url": "https://example.com/huge", "max_chars": 200}, _ctx()
-    )
-    assert "download capped at 1.0MB" in out
-
-
-@pytest.mark.asyncio
-async def test_http_request_sniffs_body_when_content_type_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    responses = iter(
-        [
-            httpx.Response(200, content=b"looks like text"),
-            httpx.Response(200, content=b"\x00\x01\x02binary"),
-        ]
-    )
-    _mock_http(monkeypatch, lambda request: next(responses))
-    textual = await http_request.invoke({"url": "https://example.com/a"}, _ctx())
-    assert "looks like text" in textual
-    binary = await http_request.invoke({"url": "https://example.com/b"}, _ctx())
-    assert "binary content not shown" in binary
-
-
-@pytest.mark.asyncio
-async def test_http_request_passes_xml_through(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _mock_http(
-        monkeypatch,
-        lambda request: httpx.Response(
-            200,
-            text="<rss><item>hi</item></rss>",
-            headers={"content-type": "application/rss+xml"},
-        ),
-    )
-    out = await http_request.invoke({"url": "https://example.com/feed"}, _ctx())
-    assert "<rss><item>hi</item></rss>" in out
-
-
-def test_writes_need_approval_gates_only_non_idempotent_methods() -> None:
-    assert not writes_need_approval({"url": "https://x"}, _ctx())  # default GET
-    assert not writes_need_approval({"method": "head"}, _ctx())
-    assert writes_need_approval({"method": "POST"}, _ctx())
-    assert writes_need_approval({"method": "delete"}, _ctx())
 
 
 # ---------------------------------------------------------------- time
@@ -320,17 +81,6 @@ async def test_now_unknown_timezone_raises_tool_error() -> None:
     # not a raw ZoneInfoNotFoundError traceback.
     with pytest.raises(ToolError, match="Unknown timezone"):
         await now.invoke({"tz": "Not/AZone"}, _ctx())
-
-
-@pytest.mark.asyncio
-async def test_sleep_is_capped() -> None:
-    out = await sleep.invoke({"seconds": 0.01}, _ctx())
-    assert "slept" in out
-
-
-@pytest.mark.asyncio
-async def test_sleep_clamps_negative_to_zero() -> None:
-    assert await sleep.invoke({"seconds": -5}, _ctx()) == "slept 0.0s"
 
 
 # ---------------------------------------------------------------- current_date
@@ -504,7 +254,6 @@ async def test_duckduckgo_other_backend_errors_still_raise() -> None:
 @pytest.mark.asyncio
 async def test_web_search_retries_a_dropped_connection() -> None:
     """One blip must not cost a model turn: the tool retries in place."""
-    from lovia.tools import run_tool
 
     attempts = {"n": 0}
 

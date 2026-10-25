@@ -681,7 +681,7 @@ def test_error_sse_falls_back_to_class_name_for_messageless_exceptions() -> None
     class ConnectError(Exception):
         pass
 
-    call = ToolCall(id="c1", name="http_request", arguments="{}")
+    call = ToolCall(id="c1", name="web_fetch", arguments="{}")
     payload = event_to_sse(events.ToolCallFailed(error=ConnectError(), call=call))
     assert payload is not None
     assert payload["event"] == "error"

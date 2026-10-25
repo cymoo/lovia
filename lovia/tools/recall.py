@@ -18,7 +18,7 @@ the transcript by content digest.
 
 The tool is **not** added by the user: a compacting :class:`ContextPolicy`
 provides it via its ``tools()`` hook, bound to its own store, and the runner
-injects it. :func:`make_recall_tool` is the factory the policy calls.
+injects it. :func:`recall_tool_result` is the factory the policy calls.
 """
 
 from __future__ import annotations
@@ -35,10 +35,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["make_recall_tool"]
+__all__ = ["recall_tool_result"]
 
 
-def make_recall_tool(store: "ResultStore | None") -> Tool:
+def recall_tool_result(store: "ResultStore | None") -> Tool:
     """Build a ``recall_tool_result`` tool bound to ``store``.
 
     The returned tool reads ``store.get(ref)`` first, then falls back to a
@@ -47,8 +47,8 @@ def make_recall_tool(store: "ResultStore | None") -> Tool:
     nowhere).
     """
 
-    @tool
-    async def recall_tool_result(
+    @tool(name="recall_tool_result")
+    async def _recall(
         ctx: RunContext[Any],
         ref: Annotated[
             str,
@@ -89,4 +89,4 @@ def make_recall_tool(store: "ResultStore | None") -> Tool:
                 return entry.output
         return f"No tool result found for reference {ref!r}."
 
-    return recall_tool_result
+    return _recall

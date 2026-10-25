@@ -272,7 +272,7 @@ For gating that needs a *human decision* rather than code, use the
 `@tool` is a convenience over the `Tool` dataclass (`name`, `description`,
 `parameters`, `invoke`, plus the policy fields above). Factories that close
 over configuration return `Tool` values — the built-in
-`web_search(impl)`, `page_reader(impl)` and `ask_human(channel)` are
+`web_search(impl)`, `web_fetch(impl)` and `ask_human(channel)` are
 examples; a
 [plugin](plugins.md) is the packaging for tools that come with prompt text
 or lifecycle.

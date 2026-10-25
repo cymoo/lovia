@@ -1,43 +1,26 @@
-"""HTTP transport plus the ``http_request`` tool.
+"""The HTTP transport ``web_fetch`` builds on.
 
-``http_request`` is an honest HTTP client for the model: it sends the method,
-headers and body it is given and reports the status, the response headers and
-the body as text. It deliberately does **not** interpret HTML — reading a web
-page is :mod:`lovia.tools.page`'s job (``read_page``).
+:func:`fetch_raw` performs one capped GET — the body is streamed with a hard
+byte cap, so huge downloads stop early — :func:`decode_body` turns bytes into
+text by declared (or sniffed) charset, and :func:`render_payload` turns a
+non-HTML body into the text the model sees: compact JSON, text as-is, binary
+as metadata only.
 
-The body is streamed with a hard byte cap (huge downloads stop early), decoded
-by declared charset, and clipped to ``max_chars``. JSON is re-serialized
-compactly; binary returns metadata only. Headers and body come back
-fenced (:mod:`lovia.tools.fence`), with injection-shaped text inside
-disarmed — material to read, not bytes to reproduce.
-
-This module also holds the transport helpers ``read_page`` builds on:
-:func:`fetch_raw` performs one capped request, :func:`decode_body` turns bytes
-into text, and :func:`compact_json` shrinks JSON payloads.
-
-No SSRF filtering is applied: the tool reaches whatever the host can reach,
-including private/internal addresses (and redirects may lead there too). When
-the model is exposed to untrusted input, gate the tool — either wholesale with
-``dataclasses.replace(http_request, needs_approval=True)`` or writes-only with
-``needs_approval=writes_need_approval`` — or isolate the network instead.
+No SSRF filtering is applied: a fetch reaches whatever the host can reach,
+including private/internal addresses (and redirects may lead there too).
 """
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
-from typing import Annotated, Any
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import Field
 
 from ..http_config import resolve_verify
 from ..exceptions import ToolError
-from ..run_context import RunContext
-from .base import clip_text, tool
-from .fence import FENCE_NOTE, fence
 
 __all__ = [
     "MAX_RESPONSE_BYTES",
@@ -47,24 +30,15 @@ __all__ = [
     "default_user_agent",
     "display_media_type",
     "fetch_raw",
-    "http_request",
     "looks_textual",
     "render_payload",
     "validate_url",
-    "writes_need_approval",
 ]
 
 # Hard cap on bytes read from the network, independent of max_chars.
 MAX_RESPONSE_BYTES = 1_000_000
 
 _BINARY_TYPE_PREFIXES = ("image/", "video/", "audio/", "font/")
-
-# Response headers worth their tokens minus the one that leaks credentials:
-# ``set-cookie`` would put session tokens straight into the transcript.
-_HIDDEN_RESPONSE_HEADERS = frozenset({"set-cookie"})
-_MAX_HEADER_CHARS = 600
-
-_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 # ``<meta charset=x>`` / ``<meta http-equiv=content-type content="...charset=x">``
 _META_CHARSET_RE = re.compile(
@@ -82,7 +56,6 @@ class RawResponse:
     status_code: int
     media_type: str
     """Content type with parameters stripped, lowercased (may be empty)."""
-    headers: dict[str, str] = field(default_factory=dict)
     body: bytes = b""
     charset: str | None = None
     """Charset declared in the Content-Type header, if any."""
@@ -124,29 +97,21 @@ def validate_url(url: str) -> None:
 async def fetch_raw(
     url: str,
     *,
-    method: str = "GET",
     headers: dict[str, str] | None = None,
-    json_body: object | None = None,
     timeout: float = 30.0,
     max_bytes: int = MAX_RESPONSE_BYTES,
     user_agent: str | None = None,
 ) -> RawResponse:
-    """Perform one redirect-following request, reading at most ``max_bytes``."""
+    """Perform one redirect-following GET, reading at most ``max_bytes``."""
     validate_url(url)
-    # Caller-supplied headers win, so a model can override the default UA.
-    # The check is case-insensitive: HTTP header names are, but a dict is not,
-    # and keeping both "User-Agent" and "user-agent" would put two of them on
-    # the wire with no rule for which the server honors.
     request_headers = dict(headers or {})
-    if user_agent and not any(name.lower() == "user-agent" for name in request_headers):
+    if user_agent:
         request_headers["User-Agent"] = user_agent
 
     async with httpx.AsyncClient(
         timeout=timeout, follow_redirects=True, verify=resolve_verify()
     ) as client:
-        async with client.stream(
-            method.upper(), url, headers=request_headers, json=json_body
-        ) as resp:
+        async with client.stream("GET", url, headers=request_headers) as resp:
             chunks: list[bytes] = []
             received = 0
             size_capped = False
@@ -163,7 +128,6 @@ async def fetch_raw(
                 .split(";")[0]
                 .strip()
                 .lower(),
-                headers=dict(resp.headers),
                 body=b"".join(chunks)[:max_bytes],
                 # Unlike ``resp.encoding`` this is None when the header carries
                 # no charset, which is what lets decode_body fall back to
@@ -210,32 +174,6 @@ def compact_json(text: str) -> str:
         return text
 
 
-def writes_need_approval(args: dict[str, Any], ctx: RunContext[Any]) -> bool:
-    """Approval predicate: let reads through, gate anything that may write.
-
-    Not the default — approval fails closed, so a ``Runner.run`` caller with no
-    approval handler would have every POST denied. Opt in explicitly::
-
-        import dataclasses
-        from lovia.tools import http_request, writes_need_approval
-
-        gated = dataclasses.replace(
-            http_request, needs_approval=writes_need_approval
-        )
-    """
-    return str(args.get("method", "GET")).upper() not in _IDEMPOTENT_METHODS
-
-
-def _render_headers(headers: dict[str, str]) -> str:
-    shown = [
-        f"{name}: {value}"
-        for name, value in headers.items()
-        if name.lower() not in _HIDDEN_RESPONSE_HEADERS
-    ]
-    text, _ = clip_text("\n".join(shown), _MAX_HEADER_CHARS, hint="")
-    return text
-
-
 def render_payload(raw: RawResponse) -> str:
     """Turn a response body into the text the model sees."""
     if "json" in raw.media_type:
@@ -271,60 +209,3 @@ _MEDIA_TYPE = re.compile(
 def display_media_type(media_type: str) -> str:
     """``media_type`` when it is a well-formed MIME type, else ``"unknown"``."""
     return media_type if _MEDIA_TYPE.fullmatch(media_type) else "unknown"
-
-
-@tool(
-    name="http_request",
-    description=(
-        "Make an HTTP(S) request and return the status, response headers and "
-        "body.\n"
-        "- Use this for REST APIs and non-HTML endpoints. To read a web page "
-        "as text, use read_page instead — this tool returns HTML raw.\n"
-        "- JSON responses are compacted; binary responses return metadata "
-        "only.\n"
-        "- body is sent as a JSON request body for POST/PUT/PATCH.\n"
-        "- One shot per call: no sessions, cookies, or JavaScript rendering.\n"
-        f"- {FENCE_NOTE}"
-    ),
-)
-async def http_request(
-    url: Annotated[str, "Absolute http:// or https:// URL."],
-    method: Annotated[str, "HTTP method (GET, POST, ...)."] = "GET",
-    headers: Annotated[dict[str, str] | None, "Optional request headers."] = None,
-    body: Annotated[object | None, "Optional JSON body for POST/PUT/PATCH."] = None,
-    timeout: Annotated[
-        float, Field(default=30.0, ge=1, le=120, description="Timeout in seconds.")
-    ] = 30.0,
-    max_chars: Annotated[
-        int,
-        Field(
-            default=20_000, ge=100, le=200_000, description="Max characters returned."
-        ),
-    ] = 20_000,
-) -> str:
-    raw = await fetch_raw(
-        url,
-        method=method,
-        headers=headers,
-        json_body=body,
-        timeout=timeout,
-        user_agent=default_user_agent(),
-    )
-    rendered, char_capped = clip_text(render_payload(raw), max_chars, hint="")
-
-    size_note = f"{len(rendered)} chars"
-    if raw.size_capped:
-        size_note += f" (download capped at {MAX_RESPONSE_BYTES / 1e6:.1f}MB)"
-    elif char_capped:
-        size_note += " (truncated)"
-
-    media_type = display_media_type(raw.media_type)
-    lines = [f"HTTP {raw.status_code} · {media_type} · {size_note}"]
-    if raw.url != url:
-        lines.append(f"URL: {raw.url}")
-    # Headers and body are the server's words; the status line above is ours.
-    remote = [part for part in (_render_headers(raw.headers), rendered) if part]
-    if remote:
-        lines.append("")
-        lines.append(fence("\n\n".join(remote)))
-    return "\n".join(lines)

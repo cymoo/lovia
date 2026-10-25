@@ -27,7 +27,8 @@ from lovia.plugins.mcp import (
     render_mcp_content,
 )
 from lovia.run_context import RunContext
-from lovia.tools import Tool, render_tool_result, run_tool
+from lovia.tools import Tool
+from lovia.tools.base import render_tool_result, run_tool
 
 
 @pytest.mark.parametrize("headers", [None, {"User-Agent": "lovia-parallel-mcp"}])

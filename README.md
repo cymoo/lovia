@@ -174,7 +174,7 @@ async def apply_migration(name: str) -> str:
     return "applied"
 ```
 
-The built-in web tools (`read_page`, `http_request`, `web_search`) fence what
+The built-in web tools (`web_fetch`, `web_search`) fence what
 they fetch, so the model reads it as material rather than instructions;
 `fence()` does the same for your own tools.
 

@@ -189,10 +189,6 @@ def clip_text(
     head and tail halves are kept with the notice in between (useful for
     shell output where exit diagnostics sit at the end); otherwise only the
     head is kept and the notice is appended.
-
-    A neutral text utility shared by the workspace session and the http tool;
-    it lives here in ``tools.base`` so both depend "downward" on the tool
-    infrastructure rather than on each other.
     """
     if len(text) <= limit:
         return text, False
@@ -249,8 +245,13 @@ def _jsonable_key(value: Any, *, _depth: int) -> str | int | float | bool | None
     return str(key)
 
 
-def default_result_renderer(result: Any) -> str:
-    """Render a tool result as the string the model will see."""
+def result_to_text(result: Any) -> str:
+    """Turn a tool result into the string the model sees: ``str`` as-is,
+    anything else as JSON.
+
+    The fallback when no :data:`ToolResultRenderer` applies — and a helper
+    for renderers, but not one itself: it takes no ``ctx``.
+    """
     if isinstance(result, str):
         return result
     result = _to_jsonable(result)
@@ -357,19 +358,13 @@ async def render_tool_result(
 
     1. The tool's own ``result_renderer`` if set.
     2. ``default`` (typically ``agent.tool_result_renderer``) if provided.
-    3. The framework's :func:`default_result_renderer` (``str`` /
-       ``json.dumps``).
+    3. :func:`result_to_text` (``str`` / ``json.dumps``).
     """
     renderer = tool.result_renderer or default
     if renderer is None:
-        return default_result_renderer(result)
-    rendered = renderer(result, ctx)
-    rendered_value = await _maybe_await(rendered)
-    return (
-        rendered_value
-        if isinstance(rendered_value, str)
-        else default_result_renderer(rendered_value)
-    )
+        return result_to_text(result)
+    rendered = await _maybe_await(renderer(result, ctx))
+    return result_to_text(rendered)
 
 
 @overload

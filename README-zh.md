@@ -462,7 +462,6 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 
 - **开箱即用的完整聊天** —— SSE 流式输出、会话、审批、定时任务、记忆编辑与文件上传；
   浏览器断开后运行仍在服务端继续。
-  折叠的活动摘要使用本地化工具名称，如“读取网页”和“HTTP 请求”；工具卡片还会按需显示 URL 与 HTTP 方法。
 - **在浏览器里配置模型** —— 设置 → 模型，档案保存到 `~/.lovia/config.json`，修改即时生效；
   `lovia web --check` 用于诊断连接。
 - **富工具结果** —— 工具返回 `ui_result(kind, props)` 即可渲染 UI；内置表格、ECharts 图表

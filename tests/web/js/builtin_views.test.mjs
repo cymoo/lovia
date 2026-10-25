@@ -18,7 +18,8 @@ test('a call reads as what it did and to what', () => {
   assert.equal(builtinSummary('read_file', { path: 'src/a.py' }), 'Read file src/a.py');
   assert.equal(builtinSummary('shell', { command: 'ls -la\n  | wc -l' }), '$ ls -la | wc -l');
   assert.equal(builtinSummary('web_search', { query: 'lovia' }), 'Web search “lovia”');
-  assert.equal(builtinSummary('http_request', { url: 'https://x.dev' }), 'Request GET https://x.dev');
+  assert.equal(builtinSummary('read_page', { url: 'https://x.dev' }), 'Read page https://x.dev');
+  assert.equal(builtinSummary('http_request', { url: 'https://x.dev' }), 'HTTP request GET https://x.dev');
   assert.equal(builtinSummary('list_files', {}), 'List files');
   assert.equal(builtinSummary('list_files', { path: '.' }), 'List files');
   assert.equal(builtinSummary('list_files', { path: 'src' }), 'List files src');
@@ -39,6 +40,8 @@ test('arguments that do not fit keep the default line', () => {
 
 test('labels name a built-in tool; others keep their name', () => {
   assert.equal(toolLabel('read_file'), 'Read file');
+  assert.equal(toolLabel('read_page'), 'Read page');
+  assert.equal(toolLabel('http_request'), 'HTTP request');
   assert.equal(toolLabel('order_status'), 'order_status');
 });
 

@@ -493,6 +493,8 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 - **Full chat out of the box** — SSE streaming, sessions, approvals,
   schedules, a memory editor and file attachments; runs survive browser
   disconnects.
+  Folded activity summaries use localized tool names, including “Read page”
+  and “HTTP request”; tool cards also show the URL and HTTP method where applicable.
 - **Models set up in the browser** — Settings → Models saves profiles to
   `~/.lovia/config.json` and applies changes live; `lovia web --check`
   diagnoses the connection.

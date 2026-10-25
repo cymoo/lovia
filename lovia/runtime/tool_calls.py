@@ -39,7 +39,7 @@ from ..reliability import CancelToken, RunBudget
 from .run_state import RunState
 from .utils import truncate_repr
 from ..parts import ContentPart, coerce_parts, project_parts
-from ..tools import Tool, render_tool_result, run_tool, truncate_tool_output
+from ..tools.base import Tool, render_tool_result, run_tool, truncate_tool_output
 from ..tracing import Tracer, tool_call_span
 from ..transcript import ToolCallEntry, ToolResultEntry
 

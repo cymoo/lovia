@@ -26,10 +26,9 @@ from ..tools import (
     ask_human,
     current_date,
     duckduckgo_search,
-    http_request,
     now,
-    read_page,
     tavily_search,
+    web_fetch,
 )
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
 from .charts import show_chart
@@ -151,13 +150,13 @@ def resolve_memory(cli_dir: str | None, no_memory: bool) -> Memory | None:
 def resolve_tools(search: SearchConfig | None = None) -> list[Tool]:
     """The always-on built-in tools for the default agent.
 
-    ``now``, ``read_page`` and ``http_request`` have no extra dependencies.
+    ``now`` and ``web_fetch`` have no extra dependencies.
     Web search follows the configured backend: ``auto`` uses Tavily when a
     key is configured and the keyless ``ddgs`` backend otherwise. When the
     chosen backend can't run we load the rest and log how to enable it
     rather than failing.
     """
-    tools: list[Tool] = [now, read_page, http_request]
+    tools: list[Tool] = [now, web_fetch()]
     search = search or SearchConfig()
     backend = search.backend
     if backend == "auto":

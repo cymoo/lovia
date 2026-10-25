@@ -69,7 +69,7 @@ from pydantic import Field
 from ..types import JsonObject
 from ..exceptions import MCPError, ToolError, UserError
 from ..run_context import RunContext
-from ..tools import (
+from ..tools.base import (
     ApprovalPredicate,
     Tool,
     ToolResultRenderer,

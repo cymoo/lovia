@@ -137,8 +137,8 @@ and custom CA variables still require explicit `env=` configuration;
 `shell(command, background=true)` starts the command as a **session-owned
 background process** and returns a process id immediately — the way to run
 dev servers, watchers, and long builds or test runs, then verify them with
-follow-up commands (`http_request` against the server, `read_process_output`
-for the test tail). The start is judged by the **same policy and approval
+follow-up commands (`curl` against the server, `read_process_output` for the
+test tail). The start is judged by the **same policy and approval
 gate** as a foreground command; backgrounding never softens the verdict.
 
 Semantics:

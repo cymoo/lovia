@@ -7,7 +7,8 @@ from lovia.context import Compaction, InMemoryResultStore, OffloadToolResults
 from lovia.context.state import result_digest
 from lovia.events import ContextCompacted
 from lovia.run_context import RunContext
-from lovia.tools import make_recall_tool, run_tool
+from lovia.tools import recall_tool_result
+from lovia.tools.base import run_tool
 from lovia.transcript import ToolResultEntry
 
 from ..scripted_provider import ScriptedProvider, call as scripted_call, text
@@ -69,11 +70,11 @@ async def test_offload_archives_old_result_and_view_carries_marker():
 
     # recall fetches from the store first...
     ctx = RunContext(deps=None, entries=persisted, agent=agent)
-    assert await run_tool(make_recall_tool(store), {"ref": BIG_REF}, ctx) == BIG
+    assert await run_tool(recall_tool_result(store), {"ref": BIG_REF}, ctx) == BIG
     # ...falls back to the transcript digest scan when the store has nothing...
-    assert await run_tool(make_recall_tool(None), {"ref": BIG_REF}, ctx) == BIG
+    assert await run_tool(recall_tool_result(None), {"ref": BIG_REF}, ctx) == BIG
     # ...and a bare call_id (legacy markers, cleared results) still resolves.
-    assert await run_tool(make_recall_tool(None), {"ref": "c1"}, ctx) == BIG
+    assert await run_tool(recall_tool_result(None), {"ref": "c1"}, ctx) == BIG
 
 
 async def test_runner_dispatches_policy_provided_recall_tool():
@@ -153,4 +154,4 @@ async def test_offload_without_store_markers_and_recall_falls_back():
     # transcript via the digest scan (store=None, hash fallback).
     persisted = await sess.load("s1")
     ctx = RunContext(deps=None, entries=persisted, agent=agent)
-    assert await run_tool(make_recall_tool(None), {"ref": BIG_REF}, ctx) == BIG
+    assert await run_tool(recall_tool_result(None), {"ref": BIG_REF}, ctx) == BIG

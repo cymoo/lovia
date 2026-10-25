@@ -1,12 +1,11 @@
-"""Fetching the web — two tools, because they are two different jobs.
+"""Fetching the web — ``web_fetch`` reads one URL for its content.
 
-``read_page`` reads a page for its content: HTML becomes Markdown, so headings,
-links and images survive. ``http_request`` is a plain HTTP client for REST
-endpoints: it returns status, headers and the body untouched.
+HTML becomes Markdown, so headings, links and images survive; JSON comes back
+compacted, text as-is.
 
 Run::
 
-    python examples/tools/01_http.py
+    python examples/tools/01_fetch.py
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner, events, model_from_env
-from lovia.tools import http_request, read_page
+from lovia.tools import web_fetch
 
 load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
@@ -25,12 +24,9 @@ MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 async def main() -> None:
     agent = Agent(
         name="Fetcher",
-        instructions=(
-            "Use read_page for web pages and http_request for JSON APIs. "
-            "Summarise what you find."
-        ),
+        instructions="Use web_fetch to read URLs. Summarise what you find.",
         model=MODEL,
-        tools=[read_page, http_request],
+        tools=[web_fetch()],
     )
     handle = Runner.stream(
         agent,

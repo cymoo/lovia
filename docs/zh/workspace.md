@@ -109,7 +109,7 @@ API key、代理配置和自定义 CA 变量仍需通过 `env=` 显式传入；
 
 `shell(command, background=true)` 会把命令作为 **session 拥有的后台进程**启动，并立即返回
 process id —— 这是运行 dev server、watcher、长构建/长测试的方式：启动后用后续命令验证它
-（对 server 发 `http_request`，用 `read_process_output` 看测试尾部输出）。启动经过与前台命令
+（用 `curl` 访问 server，用 `read_process_output` 看测试尾部输出）。启动经过与前台命令
 **完全相同的策略与审批门禁**；backgrounding 绝不会让判定变松。
 
 语义：

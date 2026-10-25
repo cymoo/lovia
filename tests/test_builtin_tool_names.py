@@ -23,11 +23,9 @@ from lovia.tools import (
     SearchResult,
     Tool,
     ask_human,
-    http_request,
-    make_recall_tool,
     now,
-    read_page,
-    sleep,
+    recall_tool_result,
+    web_fetch,
     web_search,
 )
 from lovia.workspace import tools as workspace_tools
@@ -57,21 +55,17 @@ class _NoSearch:
 def test_tools_module() -> None:
     assert _names(
         [
-            http_request,
-            read_page,
+            web_fetch(),
             now,
-            sleep,
             web_search(_NoSearch()),
             ask_human(HumanChannel()),
-            make_recall_tool(InMemoryResultStore()),
+            recall_tool_result(InMemoryResultStore()),
         ]
     ) == [
         "ask_human",
-        "http_request",
         "now",
-        "read_page",
         "recall_tool_result",
-        "sleep",
+        "web_fetch",
         "web_search",
     ]
 

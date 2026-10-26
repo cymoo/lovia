@@ -1653,12 +1653,12 @@ function renderBranchButton(turn, footer) {
     btn.disabled = false;
     // Only into the branch: the user may have moved on while it opened.
     if (branch === null || store.sessionId !== branch) return;
+    // The composer becomes that message: its text and exactly its files, not
+    // whatever the tray held before (it survives a chat switch).
     setDraft(text);
-    if (files.length && attachEnabled()) {
-      _pendingAttachments = files;
-      renderAttachTray();
-      updateSendEnabled();
-    }
+    _pendingAttachments = attachEnabled() ? files : [];
+    renderAttachTray();
+    updateSendEnabled();
   });
   const anchor = footer.querySelector(':scope > .btn-copy');
   if (anchor) anchor.after(btn);

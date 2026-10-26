@@ -543,8 +543,17 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
   } else {
     transcriptEl.appendChild(node);
   }
+  // The reply above now ends before an unnamed turn: no branch until it's named.
+  renderMessageActions(previousTurn(node)?.querySelector('.bubble'));
   scrollDown();
   return node;
+}
+
+/** @param {Element} node @returns {Element | null} The nearest `.turn` above. */
+function previousTurn(node) {
+  let prev = node.previousElementSibling;
+  while (prev && !prev.classList.contains('turn')) prev = prev.previousElementSibling;
+  return prev;
 }
 
 function startAssistantTurn(ts) {
@@ -1620,16 +1629,32 @@ function renderMessageActions(bubble) {
 }
 
 /**
- * "Branch in new chat" on a settled reply: the new chat keeps everything up to
- * and including it. The server cuts *before* a user message, so the cut is
- * the next user turn's ref — none past the tail, which copies the whole chat.
- * Resolved on click, as later turns arrive and get named.
+ * Where a branch from this reply cuts: the server cuts *before* a user
+ * message, so it is the next user turn's ref — `null` past the tail, a copy of
+ * the whole chat. `undefined` while that turn has no ref: its run is still
+ * going, or held its refs frame back (they arrive with the next history load).
+ * @param {HTMLElement} turn
+ * @returns {string | null | undefined}
+ */
+function branchCut(turn) {
+  let next = turn.nextElementSibling;
+  while (next && !next.matches('.turn.user')) next = next.nextElementSibling;
+  if (!next) return null;
+  return /** @type {HTMLElement} */ (next).dataset.ref || undefined;
+}
+
+/**
+ * "Branch in new chat" on a settled reply whose cut is known (`branchCut`):
+ * the new chat keeps everything up to and including it. Redrawn when a user
+ * turn lands after the reply (appendUserTurn) and when refs arrive (stampRefs).
  * @param {HTMLElement} turn
  * @param {Element} footer
  */
 function renderBranchButton(turn, footer) {
   footer.querySelector(':scope > .btn-branch')?.remove();
-  if (!turn.matches('.turn.assistant:not(.streaming)')) return;
+  if (!turn.matches('.turn.assistant:not(.streaming)') || branchCut(turn) === undefined) {
+    return;
+  }
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'btn-branch';
@@ -1638,18 +1663,10 @@ function renderBranchButton(turn, footer) {
   btn.innerHTML = icon('git-branch', { size: 13 });
   btn.addEventListener('click', async () => {
     const source = store.sessionId;
-    if (!source) return;
-    let next = turn.nextElementSibling;
-    while (next && !next.matches('.turn.user')) next = next.nextElementSibling;
-    const ref = /** @type {HTMLElement | null} */ (next)?.dataset.ref ?? null;
-    // A later turn without a ref belongs to a run still going; so does the
-    // tail while streaming. Either way there is no finished point to cut at.
-    if (next ? !ref : store.streaming) {
-      toast(t('chat.branchBusy'));
-      return;
-    }
+    const cut = branchCut(turn); // asked again: the turns may have moved on
+    if (!source || cut === undefined) return;
     btn.disabled = true;
-    await forkChat(source, ref);
+    await forkChat(source, cut);
     btn.disabled = false;
   });
   const anchor = footer.querySelector(':scope > .btn-copy');
@@ -1687,7 +1704,8 @@ function stampRefs(refs) {
     const entry = cached[Number(turn.dataset.userTurn)];
     if (entry) entry.ref = refs[skip + i];
   });
-  if (users.length) renderAllMessageActions(users[0]);
+  // From the reply above the first: its branch cut is that turn's ref.
+  if (users.length) renderAllMessageActions(previousTurn(users[0]) ?? users[0]);
 }
 
 // ---- Mid-run injection: queued user turns awaiting confirmation ----------

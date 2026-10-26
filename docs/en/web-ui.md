@@ -361,9 +361,10 @@ not queued and must wait for the active Run to finish.
 **Branch in new chat**, on any finished reply, starts a new chat with
 everything up to and including that reply, so you can take the conversation in
 another direction from there. Branching from the last reply copies the whole
-chat. A reply followed by a Run still in progress can be branched once that Run
-finishes. The original is left untouched, the new chat links back to it, and
-deleting one leaves the other.
+chat. A reply followed by a Run still in progress gets the action once that Run
+has finished. A branch copies what the server holds at that moment. The original
+is left untouched, the new chat links back to it, and deleting one leaves the
+other.
 
 A branch copies the conversation, not the workspace: files written since the
 branch point stay as they are now.

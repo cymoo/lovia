@@ -14,6 +14,9 @@ const sessionsList = document.getElementById('sessions-list');
 const tasksWrap = document.getElementById('tasks-wrap');
 const tasksBtn = document.getElementById('tasks-btn');
 const tasksPopover = document.getElementById('tasks-popover');
+const originBtn = /** @type {HTMLButtonElement | null} */ (
+  document.getElementById('origin-btn')
+);
 const chatTitleEl = document.getElementById('chat-title');
 const sessionSearch = /** @type {HTMLInputElement | null} */ (
   document.getElementById('session-search')
@@ -228,6 +231,7 @@ async function refreshTranscript() {
     if (store.sessionId !== id || store.streaming) return; // superseded
     store.currentParentId = data.parent_id || null;
     renderTasksButton();
+    renderOrigin(data.origin);
     if (chatTitleEl) chatTitleEl.textContent = data.title || t('session.newChat');
     store.emit('render-history', data.entries || []);
     if (data.active_run_id) store.emit('reconnect', id);
@@ -302,7 +306,7 @@ function sessionsSignature() {
     [...(store.activeRuns || [])].sort(),
     store.sessions.map((s) => [
       s.id, s.title ?? '', s.updated_at, s.pinned ? 1 : 0, s.agent ?? '',
-      s.parent_id ?? '', s.last_run_status ?? '',
+      s.parent_id ?? '', s.last_run_status ?? '', s.origin_kind ?? '',
     ]),
     // Live-run status flips (running → blocked_on_approval) re-badge tasks.
     [...(store.runsBySession || new Map())].map(([id, r]) => `${id}:${r.status}`).sort(),
@@ -531,6 +535,14 @@ function renderSessions() {
     main.type = 'button';
     main.className = 'session-main';
     main.title = sidebarTooltip(s);
+    // A branch starts with its source's title: mark it apart.
+    if (s.origin_kind === 'fork') {
+      const mark = document.createElement('span');
+      mark.className = 'session-branch';
+      mark.setAttribute('aria-hidden', 'true');
+      mark.innerHTML = icon('git-branch', { size: 12 });
+      main.appendChild(mark);
+    }
     const title = document.createElement('span');
     title.className = 'session-title';
     title.textContent = s.title || t('session.newChat');
@@ -680,6 +692,53 @@ function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, s
   return [pinMark, menu];
 }
 
+/** @type {{ session_id: string, title?: string | null, exists?: boolean } | null} */
+let _origin = null;
+
+/**
+ * The topbar link back to the chat this one was branched from — a session
+ * detail's `origin`, or null to hide it. A deleted source stays named, inert.
+ * @param {{ session_id: string, title?: string | null, exists?: boolean } | null | undefined} origin
+ */
+function renderOrigin(origin) {
+  _origin = origin ?? null;
+  if (!originBtn) return;
+  originBtn.hidden = !origin;
+  if (!origin) return;
+  const label = document.createElement('span');
+  label.textContent = origin.exists
+    ? t('session.branchedFrom', { title: origin.title || t('session.newChat') })
+    : t('session.branchSourceGone');
+  originBtn.title = label.textContent;
+  originBtn.innerHTML = icon('git-branch', { size: 14 });
+  originBtn.append(label);
+  originBtn.disabled = !origin.exists;
+  originBtn.onclick = () => switchSession(origin.session_id);
+}
+
+/**
+ * Branch a chat into a new one and open it: whole, or up to just before the
+ * user message `ref` names (see `POST /api/sessions/{id}/fork`). A user who
+ * moved to another chat meanwhile stays there; the branch waits in the list.
+ * @param {string} id
+ * @param {string | null} [ref]
+ * @returns {Promise<string | null>} The new chat's id, or null if it failed.
+ */
+export async function forkChat(id, ref = null) {
+  const from = store.sessionId;
+  let created;
+  try {
+    created = await api.forkSession(id, ref);
+  } catch (err) {
+    toast(err.message || t('chat.branchFailed'), { type: 'error' });
+    return null;
+  }
+  await loadSessions();
+  // Opened only if the user is still where they asked; else it waits in the list.
+  if (store.sessionId === from) await switchSession(created.session_id);
+  return created.session_id;
+}
+
 /** `stack` keeps an already-open dialog alive under the prompt. */
 async function renameSession(s, { stack = false } = {}) {
   const title = await promptDialog(t('dialog.renameChat'), s.title || '', { stack });
@@ -773,6 +832,7 @@ export async function switchSession(id) {
   store.syncURL(id);
   store.emit('session-switched', id);
   store.currentParentId = null; // re-learned from the session detail below
+  renderOrigin(null); // likewise
   loadCurrentTasks();
 
   const transcript = document.getElementById('transcript');
@@ -791,6 +851,7 @@ export async function switchSession(id) {
     if (store.sessionId !== id) return; // a newer switch superseded this one
     store.currentParentId = data.parent_id || null;
     renderTasksButton();
+    renderOrigin(data.origin);
     // Align the switcher with the chat's own agent BEFORE the history replay:
     // the sync may reset the Files panel, which must not eat the replayed
     // workspace touches. Follow-ups then run on the agent this chat belongs to.
@@ -826,6 +887,7 @@ export function clearChat() {
   store.sessionId = null;
   store.syncURL(null);
   store.lastMessage = null;
+  renderOrigin(null);
   if (chatTitleEl) chatTitleEl.textContent = t('session.newChat');
   if (exportWrap) exportWrap.style.display = 'none';
   store.emit('reset-chat-view');
@@ -1028,6 +1090,11 @@ export function initSessions() {
   // Agents usually land after the first session render — the signature covers
   // the flip, so this redraws exactly once to add the agent chips.
   store.on('agents-loaded', renderSessions);
+  // The open branch's source deleted from this tab: its link goes inert now,
+  // not on the next load.
+  store.on('session-deleted', (id) => {
+    if (_origin?.session_id === id) renderOrigin({ ..._origin, exists: false });
+  });
 
   // Keep the run dots honest and surface background completions.
   _schedulePoll();

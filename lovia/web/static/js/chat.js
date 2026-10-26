@@ -4,7 +4,7 @@ import { store } from './store.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
 import { copyToClipboard, openImageLightbox } from './ui.js';
-import { loadSessions, updateSessionTitle } from './sessions.js';
+import { forkChat, loadSessions, updateSessionTitle } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
 import { enterToSend, followupsEnabled, openSettings } from './settings.js';
@@ -543,8 +543,17 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
   } else {
     transcriptEl.appendChild(node);
   }
+  // The reply above now ends before an unnamed turn: no branch until it's named.
+  renderMessageActions(previousTurn(node)?.querySelector('.bubble'));
   scrollDown();
   return node;
+}
+
+/** @param {Element} node @returns {Element | null} The nearest `.turn` above. */
+function previousTurn(node) {
+  let prev = node.previousElementSibling;
+  while (prev && !prev.classList.contains('turn')) prev = prev.previousElementSibling;
+  return prev;
 }
 
 function startAssistantTurn(ts) {
@@ -1599,6 +1608,7 @@ function renderMessageActions(bubble) {
   const turn = /** @type {HTMLElement | null} */ (bubble?.closest('.turn'));
   const footer = bubble?.querySelector(':scope > .turn-footer');
   if (!turn || !footer) return;
+  renderBranchButton(turn, footer);
   let box = footer.querySelector(':scope > .msg-actions');
   const settled = !turn.matches('.queued, .streaming');
   const buttons = settled ? messageActionButtons(() => describeMessage(turn), turn) : [];
@@ -1616,6 +1626,52 @@ function renderMessageActions(bubble) {
     footer.querySelector(':scope > .btn-copy') ?? footer.querySelector(':scope > .timestamp');
   if (anchor) anchor.after(box);
   else footer.prepend(box);
+}
+
+/**
+ * Where a branch from this reply cuts: the server cuts *before* a user
+ * message, so it is the next user turn's ref — `null` past the tail, a copy of
+ * the whole chat. `undefined` while that turn has no ref: its run is still
+ * going, or held its refs frame back (they arrive with the next history load).
+ * @param {HTMLElement} turn
+ * @returns {string | null | undefined}
+ */
+function branchCut(turn) {
+  let next = turn.nextElementSibling;
+  while (next && !next.matches('.turn.user')) next = next.nextElementSibling;
+  if (!next) return null;
+  return /** @type {HTMLElement} */ (next).dataset.ref || undefined;
+}
+
+/**
+ * "Branch in new chat" on a settled reply whose cut is known (`branchCut`):
+ * the new chat keeps everything up to and including it. Redrawn when a user
+ * turn lands after the reply (appendUserTurn) and when refs arrive (stampRefs).
+ * @param {HTMLElement} turn
+ * @param {Element} footer
+ */
+function renderBranchButton(turn, footer) {
+  footer.querySelector(':scope > .btn-branch')?.remove();
+  if (!turn.matches('.turn.assistant:not(.streaming)') || branchCut(turn) === undefined) {
+    return;
+  }
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-branch';
+  btn.title = t('chat.branch');
+  btn.setAttribute('aria-label', t('chat.branch'));
+  btn.innerHTML = icon('git-branch', { size: 13 });
+  btn.addEventListener('click', async () => {
+    const source = store.sessionId;
+    const cut = branchCut(turn); // asked again: the turns may have moved on
+    if (!source || cut === undefined) return;
+    btn.disabled = true;
+    await forkChat(source, cut);
+    btn.disabled = false;
+  });
+  const anchor = footer.querySelector(':scope > .btn-copy');
+  if (anchor) anchor.after(btn);
+  else footer.append(btn);
 }
 
 function renderAllMessageActions(from = null) {
@@ -1648,7 +1704,8 @@ function stampRefs(refs) {
     const entry = cached[Number(turn.dataset.userTurn)];
     if (entry) entry.ref = refs[skip + i];
   });
-  if (users.length) renderAllMessageActions(users[0]);
+  // From the reply above the first: its branch cut is that turn's ref.
+  if (users.length) renderAllMessageActions(previousTurn(users[0]) ?? users[0]);
 }
 
 // ---- Mid-run injection: queued user turns awaiting confirmation ----------

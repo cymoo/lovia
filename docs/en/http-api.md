@@ -124,7 +124,7 @@ normalizes all three.
 | `schedule_not_found` | 404 | no such schedule |
 | `model_not_found` | 404 | no such model profile |
 | `file_not_found` | 404 | no such workspace file or directory |
-| `turn_not_found` | 404 | rewind named a user turn the chat doesn't have |
+| `turn_not_found` | 404 | rewind or fork named a user turn the chat doesn't have |
 | `image_not_found` | 404 | no servable image at that tool-result index |
 | `ui_data_not_found` | 404 | no component data under that ref in this chat |
 | `approval_not_found` | 404 | no pending approval matches |
@@ -134,6 +134,8 @@ normalizes all three.
 | `feature_unavailable` | 404 / 501 | the server or agent lacks it (no workspace, memory, checkpointer, question channel, or `rewind`) |
 | `run_active` | 409 | a run owns this chat |
 | `run_stopping` | 409 | a stopped run is still winding down; retry shortly |
+| `run_unfinished` | 409 | the chat's last run was interrupted and can still resume; a whole-chat fork waits for it |
+| `nothing_to_fork` | 409 | the fork would be empty: no finished history before that point |
 | `run_cancelled` | 409 | a blocking turn's run was stopped (cancel, chat deletion, or shutdown) |
 | `agent_unregistered` | 409 | the interrupted run's agent is no longer served |
 | `schedule_not_fired` | 409 | the schedule couldn't fire right now |
@@ -165,6 +167,7 @@ normalizes all three.
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
 | `POST /api/sessions/{id}/followups` | `{followups: [...]}` — questions the user might ask next; `[]` when the feature is off or nothing fits. POST because it spends model tokens |
 | `POST /api/sessions/{id}/rewind` | drop everything from a user message onward, named by its `ref` or by `user_turn`, its zero-based index among the user messages; 404 for a `ref` no longer in the chat, 409 while a run is live, 501 if the store lacks `rewind` |
+| `POST /api/sessions/{id}/fork` | `{ref?}` → `{session_id}`: copy the chat's finished history into a new, independent chat — up to just before the user message `ref` names, or whole. The new chat's detail carries `origin: {kind: "fork", session_id, ref, title, exists}`; deleting either chat leaves the other. A fork copies the conversation, not the workspace: files stay as they are now. A whole copy is refused (409) while a run is live, stopping, or resumable |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
 | `GET /api/sessions/{id}/ui-data/{ref}` | a UI component's full props, stored by `put_ui_data` during a run of this chat ([details](web-server.md#bulk-data)) |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web-server.md#scheduling): list, create, retime/pause, delete, fire now |

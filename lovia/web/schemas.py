@@ -252,6 +252,19 @@ class MessageOut(BaseModel):
     compaction: dict[str, Any] | None = None
 
 
+class SessionOrigin(BaseModel):
+    """Where a chat came from. Provenance only: deleting the source leaves
+    the chat alone (unlike ``parent_id``, which deletes with its chat)."""
+
+    kind: Literal["fork"]
+    session_id: str
+    # The source's user message a fork was cut before; None for a whole copy.
+    ref: str | None = None
+    # The source as it is now: its title, and whether it still exists.
+    title: str | None = None
+    exists: bool = True
+
+
 class SessionDetail(BaseModel):
     id: str
     title: str | None = None
@@ -263,6 +276,8 @@ class SessionDetail(BaseModel):
     # Set on a subagent task session: the chat that spawned it — the UI's
     # "back to parent chat" affordance.
     parent_id: str | None = None
+    # Set on a fork: the chat it was copied from — the UI's "forked from" link.
+    origin: SessionOrigin | None = None
 
 
 class ChatSessionInfo(BaseModel):
@@ -278,6 +293,9 @@ class ChatSessionInfo(BaseModel):
     # Task sessions only: the latest run's terminal status ("completed",
     # "failed", "cancelled", …) — the sidebar's badge for finished tasks.
     last_run_status: str | None = None
+    # "fork" on a branch of another chat (see SessionDetail.origin) — the
+    # sidebar marks it, since a branch starts with its source's title.
+    origin_kind: Literal["fork"] | None = None
 
 
 class RunInfo(BaseModel):
@@ -403,6 +421,16 @@ class RewindRequest(BaseModel):
         if (self.ref is None) == (self.user_turn is None):
             raise ValueError("give exactly one of ref, user_turn")
         return self
+
+
+class ForkRequest(BaseModel):
+    # A user message's ref (MessageOut.ref): the fork keeps everything before
+    # it. Omitted: copy the whole chat.
+    ref: str | None = Field(default=None, max_length=200)
+
+
+class ForkResponse(BaseModel):
+    session_id: str  # the new chat
 
 
 class RewindResponse(BaseModel):

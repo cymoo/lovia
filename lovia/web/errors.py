@@ -63,6 +63,8 @@ ErrorCode = Literal[
     "feature_unavailable",
     "run_active",
     "run_stopping",
+    "run_unfinished",
+    "nothing_to_fork",
     "run_cancelled",
     "agent_unregistered",
     "schedule_not_fired",

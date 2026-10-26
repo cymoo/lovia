@@ -457,7 +457,7 @@ def test_migrated_database_matches_a_fresh_one(tmp_path: Path) -> None:
         conn = sqlite3.connect(path)
         versions = dict(conn.execute("SELECT store, version FROM lovia_schema"))
         conn.close()
-        assert versions == {"chat": 1}
+        assert versions == {"chat": 2}
 
 
 async def test_chat_store_wal_covers_all_three_stores(tmp_path: Path) -> None:

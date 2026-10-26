@@ -1,4 +1,4 @@
-"""Session routes: list, fetch, rename, delete, todos, and export."""
+"""Session routes: list, fetch, rename, delete, rewind, fork, todos, and export."""
 
 from __future__ import annotations
 
@@ -23,16 +23,19 @@ from ...plugins import todos_from_entries
 from ...transcript import InputEntry, ToolResultEntry, entries_to_messages
 from ..errors import WebError
 from ..followups import FollowupRequest
-from ..sse import SessionRetitledData
+from ..sse import SessionCreatedData, SessionRetitledData
 from ..schemas import (
     ChatSessionInfo,
     FollowupsResponse,
+    ForkRequest,
+    ForkResponse,
     MessageOut,
     RewindRequest,
     RewindResponse,
     RunInfo,
     RunRecordInfo,
     SessionDetail,
+    SessionOrigin,
     SessionPatch,
     TodoItemOut,
     TodosResponse,
@@ -201,6 +204,16 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         entries, active_run_id = await _session_view(
             deps, session_id, created_at=created, updated_at=updated
         )
+        origin = None
+        if meta is not None and meta.origin_kind and meta.origin_session_id:
+            source = await store.get(meta.origin_session_id)
+            origin = SessionOrigin(
+                kind="fork",
+                session_id=meta.origin_session_id,
+                ref=meta.origin_ref,
+                title=source.title if source else None,
+                exists=source is not None,
+            )
         return SessionDetail(
             id=meta.id if meta else session_id,
             title=meta.title if meta else None,
@@ -210,6 +223,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             entries=entries,
             active_run_id=active_run_id,
             parent_id=meta.parent_id if meta else None,
+            origin=origin,
         )
 
     @router.get("/api/sessions/{session_id}/ui-data/{ref}")
@@ -439,6 +453,74 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             updated_at=meta.updated_at if meta else now,
         )
         return RewindResponse(removed=removed, entries=view)
+
+    @router.post("/api/sessions/{session_id}/fork", response_model=ForkResponse)
+    async def fork_session(session_id: str, req: ForkRequest) -> ForkResponse:
+        """Copy the chat — up to just before the user message ``ref`` names,
+        or whole — into a new, independent chat.
+
+        A fork copies finished history only (see ``ChatStore.fork``), so it
+        never touches a run or a checkpoint. A ``ref`` names a message of a
+        finished run, so a run going on meanwhile changes nothing. A whole copy
+        means "the chat as I see it", which a live, stopping or resumable run
+        extends past the finished history: refused until that run settles.
+        """
+        async with deps._chat_alive(session_id) as alive:
+            pass
+        if not alive:
+            raise WebError(404, "session_not_found", f"unknown session {session_id}")
+        if req.ref is None:
+            if deps.supervisor.get(session_id) is not None:
+                raise WebError(
+                    409,
+                    "run_active",
+                    "a run is active for this session",
+                    hint="duplicate the chat once it finishes",
+                )
+            if not await deps.supervisor.drain(session_id):
+                raise WebError(
+                    409,
+                    "run_stopping",
+                    "a run is still stopping for this session",
+                    hint="try again shortly",
+                )
+            stale = await store.get_active_run_id(session_id)
+            if stale and store.checkpointer is not None:
+                snapshot = await store.checkpointer.load(stale)
+                if snapshot is not None and snapshot.status in _RESUMABLE:
+                    raise WebError(
+                        409,
+                        "run_unfinished",
+                        "the chat's last run was interrupted",
+                        hint="resume it or send a new message first",
+                    )
+        try:
+            fork_id = await store.fork(session_id, ref=req.ref)
+        except ValueError:
+            raise WebError(
+                404, "turn_not_found", f"message {req.ref!r} not found"
+            ) from None
+        except LookupError:
+            raise WebError(
+                404, "session_not_found", f"unknown session {session_id}"
+            ) from None
+        if fork_id is None:
+            raise WebError(
+                409,
+                "nothing_to_fork",
+                "there is no finished history to copy",
+                hint="fork from a later message",
+            )
+        meta = await store.get(fork_id)
+        deps.emit(
+            "session_created",
+            SessionCreatedData(
+                session_id=fork_id,
+                agent=meta.agent if meta else None,
+                title=meta.title if meta else None,
+            ),
+        )
+        return ForkResponse(session_id=fork_id)
 
     @router.get("/api/sessions/{session_id}/todos", response_model=TodosResponse)
     async def get_todos(session_id: str) -> TodosResponse:

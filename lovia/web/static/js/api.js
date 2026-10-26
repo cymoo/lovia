@@ -214,6 +214,15 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify(target),
     }).then(_json),
+  // Copy the chat into a new one — up to just before the user message `ref`
+  // names, or whole; resolves to { session_id } of the copy.
+  /** @param {string} id @param {string | null} [ref] */
+  forkSession: (id, ref = null) =>
+    request(`/api/sessions/${encodeURIComponent(id)}/fork`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(ref ? { ref } : {}),
+    }).then(_json),
   // The chat as a file → Response (`json` feeds the client-side HTML export).
   exportChat: (id, format = 'md') =>
     request(`/api/sessions/${encodeURIComponent(id)}/export${qs({ format })}`),

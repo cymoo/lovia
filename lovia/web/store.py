@@ -17,6 +17,7 @@ import json
 import secrets
 import sqlite3
 import time
+import uuid
 import zlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -25,7 +26,7 @@ from typing import Any, TypeVar
 
 from ..checkpointer import Checkpointer
 from ..types import JsonObject
-from ..session import Session
+from ..session import Segment, Session
 from ..stores import (
     InMemoryCheckpointer,
     InMemorySession,
@@ -33,13 +34,18 @@ from ..stores import (
     SQLiteSession,
 )
 from ..stores._sqlite import Migration, SQLiteStore
+from ..stores.session import _rewind_split
+from ..transcript import InputEntry
 
 __all__ = ["ChatMeta", "ChatStore", "RunRow", "ScheduleRow"]
 
 _T = TypeVar("_T")
 
 # Column order shared by every ``ChatMeta`` SELECT (and ``ChatMeta.from_row``).
-_META_COLS = "id, title, agent, created_at, updated_at, pinned, parent_id"
+_META_COLS = (
+    "id, title, agent, created_at, updated_at, pinned, parent_id, "
+    "origin_kind, origin_session_id, origin_ref"
+)
 
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
 _SCHED_COLS = (
@@ -52,6 +58,28 @@ _SCHED_COLS = (
 def _dumps_context(context: JsonObject | None) -> str | None:
     """A client context as stored; an empty one stores as NULL."""
     return json.dumps(context, ensure_ascii=False) if context else None
+
+
+def _ref_offset(segments: list[Segment], ref: str) -> int | None:
+    """The flat transcript index of the user message ``ref`` names, or None.
+
+    Reads the ``"<run_id>:<n>"`` refs ``api.serialization.user_turn_refs``
+    hands out: the ``n``-th user entry of run ``run_id``'s segment.
+    """
+    run_id, _, n = ref.rpartition(":")
+    if not n.isdigit():
+        return None
+    offset = 0
+    for seg in segments:
+        if seg.run_id == run_id:
+            users = [
+                i
+                for i, entry in enumerate(seg.entries)
+                if isinstance(entry, InputEntry) and entry.role == "user"
+            ]
+            return offset + users[int(n)] if int(n) < len(users) else None
+        offset += len(seg.entries)
+    return None
 
 
 # Column order shared by every ``RunRow`` SELECT (and ``from_row``).
@@ -162,9 +190,44 @@ def _reconcile_unversioned(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _fork_origin(conn: sqlite3.Connection) -> None:
+    """Version 2: forks (#306).
+
+    * ``origin_*`` — where a chat came from (a fork of another chat), kept
+      apart from ``parent_id``: ownership cascades on delete, provenance never.
+    * ``chat_ui_data`` keyed by ``(session_id, id)``, so a fork copies its
+      source's rows verbatim and the refs in the copied transcript resolve.
+    * The ``parent_id`` index that waited for a migration of its own (#299).
+    """
+    for column in ("origin_kind", "origin_session_id", "origin_ref"):
+        conn.execute(f"ALTER TABLE chat_sessions ADD COLUMN {column} TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_sessions_origin "
+        "ON chat_sessions(origin_session_id, origin_ref)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent "
+        "ON chat_sessions(parent_id)"
+    )
+    # SQLite can't change a primary key in place: rebuild the table. The
+    # composite key's leading column also serves per-session lookups, so the
+    # old session index goes with the old table.
+    conn.execute(
+        "CREATE TABLE chat_ui_data_v2 ("
+        "session_id TEXT NOT NULL, id TEXT NOT NULL, created_at REAL NOT NULL, "
+        "payload BLOB NOT NULL, PRIMARY KEY (session_id, id))"
+    )
+    conn.execute(
+        "INSERT INTO chat_ui_data_v2 (session_id, id, created_at, payload) "
+        "SELECT session_id, id, created_at, payload FROM chat_ui_data"
+    )
+    conn.execute("DROP TABLE chat_ui_data")
+    conn.execute("ALTER TABLE chat_ui_data_v2 RENAME TO chat_ui_data")
+
+
 # Changes to the chat tables since ``_META_SCHEMA``, in order (see
 # ``SQLiteStore``). Append a step; never edit one that has shipped.
-_MIGRATIONS: tuple[Migration, ...] = (_reconcile_unversioned,)
+_MIGRATIONS: tuple[Migration, ...] = (_reconcile_unversioned, _fork_origin)
 
 
 @dataclass(frozen=True)
@@ -180,11 +243,30 @@ class ChatMeta:
     parent_id: str | None = None
     """Set on a subagent task session: the chat that spawned it. The UI
     groups such sessions under a Tasks section instead of the chat list."""
+    origin_kind: str | None = None
+    """Where the chat came from — ``"fork"`` — or None. Provenance only:
+    unlike ``parent_id`` it never cascades a delete, and the source may be
+    gone."""
+    origin_session_id: str | None = None
+    origin_ref: str | None = None
+    """For a fork: the source's user message the fork was cut before (None
+    for a whole-chat copy)."""
 
     @classmethod
     def from_row(cls, row: Any) -> "ChatMeta":
         """Build from a ``_META_COLS`` row."""
-        return cls(row[0], row[1], row[2], row[3], row[4], bool(row[5]), row[6])
+        return cls(
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            bool(row[5]),
+            row[6],
+            row[7],
+            row[8],
+            row[9],
+        )
 
     def to_dict(self) -> JsonObject:
         return {
@@ -195,6 +277,9 @@ class ChatMeta:
             "updated_at": self.updated_at,
             "pinned": self.pinned,
             "parent_id": self.parent_id,
+            "origin_kind": self.origin_kind,
+            "origin_session_id": self.origin_session_id,
+            "origin_ref": self.origin_ref,
         }
 
 
@@ -502,6 +587,78 @@ class ChatStore:
             (session_id,),
             ChatMeta.from_row,
         )
+
+    async def fork(self, source_id: str, *, ref: str | None = None) -> str | None:
+        """Copy ``source_id``'s finished history into a new chat; return its id.
+
+        With ``ref`` (a user message's ``"<run_id>:<n>"``) the copy stops just
+        before that message; without, it is the whole chat. Returns None when
+        that leaves nothing to copy. Raises ``ValueError`` when ``ref`` names
+        no message of the finished history, and ``LookupError`` when the
+        source chat is gone.
+
+        The source is only read, and once: that ``segments`` call is the
+        fork's snapshot, so a run, rewind or delete racing it needs no lock.
+        The copy is published when complete rather than atomic — the
+        transcript lands under a fresh id nobody holds yet, then one metadata
+        transaction re-checks the source, copies its UI data and inserts the
+        row that makes the chat exist. A failure clears the copied transcript;
+        a crash in between leaves it unreferenced, where nothing shows it (the
+        ``Session`` protocol can't enumerate ids, so there is no sweep).
+        """
+        segments = await self.session.segments(source_id)
+        if ref is None:
+            kept, boundary = segments, None
+        else:
+            keep = _ref_offset(segments, ref)
+            if keep is None:
+                raise ValueError(f"no message {ref!r} in the chat's finished history")
+            # The same cut a rewind makes: whole runs keep their meta, the cut
+            # one drops it (its carried context state describes the tail).
+            kept, boundary, _ = _rewind_split(segments, keep)
+        copied = [*kept, *([boundary] if boundary is not None else [])]
+        if not copied:
+            return None
+
+        fork_id = uuid.uuid4().hex
+        now = time.time()
+
+        def _publish() -> bool:
+            with self._meta._tx() as conn:
+                source = conn.execute(
+                    "SELECT title, agent FROM chat_sessions WHERE id = ?", (source_id,)
+                ).fetchone()
+                if source is None:
+                    return False
+                conn.execute(
+                    "INSERT INTO chat_ui_data (session_id, id, created_at, payload) "
+                    "SELECT ?, id, created_at, payload FROM chat_ui_data "
+                    "WHERE session_id = ?",
+                    (fork_id, source_id),
+                )
+                conn.execute(
+                    "INSERT INTO chat_sessions (id, title, agent, created_at, "
+                    "updated_at, origin_kind, origin_session_id, origin_ref) "
+                    "VALUES (?, ?, ?, ?, ?, 'fork', ?, ?)",
+                    (fork_id, source[0], source[1], now, now, source_id, ref),
+                )
+                return True
+
+        try:
+            for seg in copied:
+                await self.session.append(
+                    fork_id, seg.entries, run_id=seg.run_id, meta=seg.meta
+                )
+            published = await self._meta._run(_publish)
+        except Exception:
+            # Not on cancellation: the publish may still commit in its worker
+            # thread, and clearing then would empty a chat that exists.
+            await self.session.clear(fork_id)
+            raise
+        if not published:
+            await self.session.clear(fork_id)
+            raise LookupError(source_id)
+        return fork_id
 
     # ``Sequence`` (not ``list[...]``) on the read methods: this method shadows
     # the ``list`` builtin inside the class body, so a later ``list[ChatMeta]``

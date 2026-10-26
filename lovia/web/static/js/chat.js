@@ -4,7 +4,7 @@ import { store } from './store.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
 import { copyToClipboard, openImageLightbox } from './ui.js';
-import { loadSessions, updateSessionTitle } from './sessions.js';
+import { forkChat, loadSessions, updateSessionTitle } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
 import { enterToSend, followupsEnabled, openSettings } from './settings.js';
@@ -1599,6 +1599,7 @@ function renderMessageActions(bubble) {
   const turn = /** @type {HTMLElement | null} */ (bubble?.closest('.turn'));
   const footer = bubble?.querySelector(':scope > .turn-footer');
   if (!turn || !footer) return;
+  renderBranchButton(turn, footer);
   let box = footer.querySelector(':scope > .msg-actions');
   const settled = !turn.matches('.queued, .streaming');
   const buttons = settled ? messageActionButtons(() => describeMessage(turn), turn) : [];
@@ -1616,6 +1617,38 @@ function renderMessageActions(bubble) {
     footer.querySelector(':scope > .btn-copy') ?? footer.querySelector(':scope > .timestamp');
   if (anchor) anchor.after(box);
   else footer.prepend(box);
+}
+
+/**
+ * "Branch in new chat" on a user turn its run has named (a ref): the new chat
+ * keeps everything before the message, which waits in the composer to be
+ * edited and sent. Not on the chat's first message — nothing precedes it.
+ * @param {HTMLElement} turn
+ * @param {Element} footer
+ */
+function renderBranchButton(turn, footer) {
+  footer.querySelector(':scope > .btn-branch')?.remove();
+  const ref = turn.dataset.ref;
+  if (!ref || !turn.matches('.turn.user:not(.queued)') || turn.dataset.userTurn === '0') {
+    return;
+  }
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-branch';
+  btn.title = t('chat.branch');
+  btn.setAttribute('aria-label', t('chat.branch'));
+  btn.innerHTML = icon('git-branch', { size: 13 });
+  btn.addEventListener('click', async () => {
+    const text = turn.querySelector('.body')?.textContent ?? '';
+    const source = store.sessionId;
+    if (!source) return;
+    btn.disabled = true;
+    if ((await forkChat(source, ref)) !== null) setDraft(text);
+    btn.disabled = false;
+  });
+  const anchor = footer.querySelector(':scope > .btn-copy');
+  if (anchor) anchor.after(btn);
+  else footer.append(btn);
 }
 
 function renderAllMessageActions(from = null) {

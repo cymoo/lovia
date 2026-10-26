@@ -447,6 +447,27 @@ body.sidebar-collapsed .sidebar {
 #tasks-btn.attention {
   color: var(--warn);
 }
+/* -- a branch's link back to the chat it came from ---------------------- */
+.origin-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 16em;
+  color: var(--muted);
+}
+.origin-link > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.origin-link[hidden] {
+  display: none;
+}
+@media (max-width: 640px) {
+  .origin-link > span {
+    display: none; /* the icon alone; the title is in the tooltip */
+  }
+}
 .tasks-popover {
   position: absolute;
   top: calc(100% + 6px);
@@ -626,6 +647,12 @@ body.sidebar-collapsed .sidebar {
   }
 }
 /* The chat's agent, at the row's end — shown only when there's a choice. */
+.session-branch {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-right: -2px; /* the row's 8px gap is too loose for an inline mark */
+  color: var(--muted-2);
+}
 .session-agent {
   flex-shrink: 0;
   max-width: 40%;
@@ -5232,6 +5259,7 @@ body.files-splitting {
 /* ---- Edit & regenerate ------------------------------------------------------------------------------ */
 /* Same whisper-visibility as the copy action. */
 .btn-edit,
+.btn-branch,
 .btn-regen {
   display: inline-flex;
   align-items: center;
@@ -5255,6 +5283,9 @@ body.files-splitting {
 .turn.user:hover .btn-edit,
 .turn.user:focus-within .btn-edit,
 .btn-edit:focus-visible,
+.turn.user:hover .btn-branch,
+.turn.user:focus-within .btn-branch,
+.btn-branch:focus-visible,
 .turn .bubble:hover .btn-regen,
 .turn .bubble:focus-within .btn-regen,
 .btn-regen:focus-visible {
@@ -5262,6 +5293,7 @@ body.files-splitting {
   pointer-events: auto;
 }
 .btn-edit:hover,
+.btn-branch:hover,
 .btn-regen:hover {
   color: var(--ink);
   background: var(--surface-2);
@@ -5269,6 +5301,7 @@ body.files-splitting {
 /* After the rules above, or they would win: no hover on touch. */
 @media (hover: none) {
   .btn-edit,
+  .btn-branch,
   .btn-regen {
     opacity: 1;
     pointer-events: auto;

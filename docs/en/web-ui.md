@@ -356,6 +356,17 @@ Text sent while a Run is active becomes steering input for its next Turn. If
 the Run finishes first, the text starts the next Run in order. Attachments are
 not queued and must wait for the active Run to finish.
 
+## Branching a chat
+
+**Branch in new chat**, on any user message after the first, starts a new chat
+with everything before that message and puts the message in the composer, ready
+to edit and send. **Duplicate**, in a chat's sidebar menu, copies the whole chat;
+it waits until the chat's Run has finished. Either way the original is left
+untouched, the new chat links back to it, and deleting one leaves the other.
+
+A branch copies the conversation, not the workspace: files written since the
+branch point stay as they are now.
+
 ## Background subagents
 
 `lovia web` enables [background subagents](multi-agent.md#background-subagents)

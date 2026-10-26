@@ -116,7 +116,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `schedule_not_found` | 404 | 定时任务不存在 |
 | `model_not_found` | 404 | 模型配置不存在 |
 | `file_not_found` | 404 | 工作区文件或目录不存在 |
-| `turn_not_found` | 404 | rewind 指定的用户 Turn 不存在 |
+| `turn_not_found` | 404 | rewind 或 fork 指定的用户 Turn 不存在 |
 | `image_not_found` | 404 | 该 Tool 结果位置没有可提供的图片 |
 | `ui_data_not_found` | 404 | 本聊天中没有该 ref 对应的组件数据 |
 | `approval_not_found` | 404 | 没有匹配的待审批请求 |
@@ -126,6 +126,8 @@ API 路由抛出的错误都使用同一种响应体：
 | `feature_unavailable` | 404 / 501 | 服务端或 Agent 不具备该功能（工作区、Memory、checkpointer、提问通道或 `rewind`） |
 | `run_active` | 409 | 该聊天已有 Run 在执行 |
 | `run_stopping` | 409 | 已停止的 Run 仍在收尾，请稍后重试 |
+| `run_unfinished` | 409 | 该聊天的上一个 Run 被中断且仍可恢复；复制整个聊天要等它结束 |
+| `nothing_to_fork` | 409 | fork 结果会是空的：该位置之前没有已完成的历史 |
 | `run_cancelled` | 409 | 阻塞式 Turn 的 Run 被停止（取消、删除聊天或服务端关闭） |
 | `agent_unregistered` | 409 | 中断的 Run 所属 Agent 已不再提供服务 |
 | `schedule_not_fired` | 409 | 定时任务暂时无法触发 |
@@ -157,6 +159,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
 | `POST /api/sessions/{id}/followups` | 生成追问建议，返回 `{followups: [...]}`；功能未启用或建议器未返回内容时为 `[]`。该操作可能消耗模型 token，因此使用 POST |
 | `POST /api/sessions/{id}/rewind` | 从某条用户消息起删除后续内容；用它的 `ref` 指定，或用 `user_turn`（它在用户消息中的索引，从 0 开始）；`ref` 已不在聊天中时返回 404，运行中返回 409，不支持 `rewind` 时返回 501 |
+| `POST /api/sessions/{id}/fork` | `{ref?}` → `{session_id}`：把聊天已完成的历史复制成一个新的独立聊天；给 `ref` 时只复制到该用户消息之前，不给则复制整个聊天。新聊天的详情带 `origin: {kind: "fork", session_id, ref, title, exists}`；删除任一聊天都不影响另一个。fork 复制的是对话，不是工作区：文件保持当前状态。有 Run 正在运行、正在收尾或可恢复时，复制整个聊天返回 409 |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出聊天 |
 | `GET /api/sessions/{id}/ui-data/{ref}` | UI 组件的完整 props，由本聊天运行中的 `put_ui_data` 保存（[详情](web-server.md#大块数据)） |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |

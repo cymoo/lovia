@@ -111,6 +111,8 @@
     <h1 id="view-title" class="chat-title" hidden></h1>
     <div class="topbar-actions" data-part="topbar-actions">
       {% block topbar_actions %}{% endblock %}
+      <!-- The chat this one was branched from; shown only on a branch. -->
+      <button id="origin-btn" class="btn btn-ghost btn-sm origin-link" type="button" hidden data-part="origin"></button>
       <!-- This chat's background subagent tasks; shown only when it has any. -->
       <div class="export-wrap" id="tasks-wrap" style="display:none" data-part="tasks">
         <button id="tasks-btn" class="btn btn-ghost btn-sm" type="button" aria-haspopup="menu" aria-controls="tasks-popover" aria-expanded="false"></button>

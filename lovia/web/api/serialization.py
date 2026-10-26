@@ -41,6 +41,7 @@ def session_info(
         pinned=meta.pinned,
         parent_id=meta.parent_id,
         last_run_status=last_run_status,
+        origin_kind="fork" if meta.origin_kind == "fork" else None,
     )
 
 

@@ -358,11 +358,12 @@ not queued and must wait for the active Run to finish.
 
 ## Branching a chat
 
-**Branch in new chat**, on any user message after the first, starts a new chat
-with everything before that message and puts the message in the composer, ready
-to edit and send. **Duplicate**, in a chat's sidebar menu, copies the whole chat;
-it waits until the chat's Run has finished. Either way the original is left
-untouched, the new chat links back to it, and deleting one leaves the other.
+**Branch in new chat**, on any finished reply, starts a new chat with
+everything up to and including that reply, so you can take the conversation in
+another direction from there. Branching from the last reply copies the whole
+chat. A reply followed by a Run still in progress can be branched once that Run
+finishes. The original is left untouched, the new chat links back to it, and
+deleting one leaves the other.
 
 A branch copies the conversation, not the workspace: files written since the
 branch point stay as they are now.

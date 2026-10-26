@@ -685,12 +685,6 @@ function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, s
   add(t('session.rename'), icon('pencil', { size: 14 }), () =>
     renameSession(s, { stack: stacked }),
   );
-  add(t('session.duplicate'), icon('copy', { size: 14 }), async (b) => {
-    b.disabled = true;
-    // From the all-chats dialog: the copy opens in the chat view behind it.
-    if ((await forkChat(s.id)) !== null) row.closest('dialog')?.close();
-    b.disabled = false;
-  });
   add(t('session.delete'), icon('trash-2', { size: 14 }), async () => {
     if (await deleteSession(s.id, s.title)) onDeleted();
   });
@@ -725,7 +719,7 @@ function renderOrigin(origin) {
 /**
  * Branch a chat into a new one and open it: whole, or up to just before the
  * user message `ref` names (see `POST /api/sessions/{id}/fork`). A user who
- * moved to another chat meanwhile stays there.
+ * moved to another chat meanwhile stays there; the branch waits in the list.
  * @param {string} id
  * @param {string | null} [ref]
  * @returns {Promise<string | null>} The new chat's id, or null if it failed.

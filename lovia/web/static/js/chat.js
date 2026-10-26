@@ -1620,18 +1620,16 @@ function renderMessageActions(bubble) {
 }
 
 /**
- * "Branch in new chat" on a user turn its run has named (a ref): the new chat
- * keeps everything before the message, which waits in the composer to be
- * edited and sent. Not on the chat's first message — nothing precedes it.
+ * "Branch in new chat" on a settled reply: the new chat keeps everything up to
+ * and including it. The server cuts *before* a user message, so the cut is
+ * the next user turn's ref — none past the tail, which copies the whole chat.
+ * Resolved on click, as later turns arrive and get named.
  * @param {HTMLElement} turn
  * @param {Element} footer
  */
 function renderBranchButton(turn, footer) {
   footer.querySelector(':scope > .btn-branch')?.remove();
-  const ref = turn.dataset.ref;
-  if (!ref || !turn.matches('.turn.user:not(.queued)') || turn.dataset.userTurn === '0') {
-    return;
-  }
+  if (!turn.matches('.turn.assistant:not(.streaming)')) return;
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'btn-branch';
@@ -1639,26 +1637,20 @@ function renderBranchButton(turn, footer) {
   btn.setAttribute('aria-label', t('chat.branch'));
   btn.innerHTML = icon('git-branch', { size: 13 });
   btn.addEventListener('click', async () => {
-    const text = turn.querySelector('.body')?.textContent ?? '';
-    // The branch ends before this message, its attachment note included:
-    // the files ride back in through the composer tray.
-    const files = JSON.parse(
-      /** @type {HTMLElement | null} */ (turn.querySelector('.msg-attachments'))
-        ?.dataset.files ?? '[]',
-    );
     const source = store.sessionId;
     if (!source) return;
+    let next = turn.nextElementSibling;
+    while (next && !next.matches('.turn.user')) next = next.nextElementSibling;
+    const ref = /** @type {HTMLElement | null} */ (next)?.dataset.ref ?? null;
+    // A later turn without a ref belongs to a run still going; so does the
+    // tail while streaming. Either way there is no finished point to cut at.
+    if (next ? !ref : store.streaming) {
+      toast(t('chat.branchBusy'));
+      return;
+    }
     btn.disabled = true;
-    const branch = await forkChat(source, ref);
+    await forkChat(source, ref);
     btn.disabled = false;
-    // Only into the branch: the user may have moved on while it opened.
-    if (branch === null || store.sessionId !== branch) return;
-    // The composer becomes that message: its text and exactly its files, not
-    // whatever the tray held before (it survives a chat switch).
-    setDraft(text);
-    _pendingAttachments = attachEnabled() ? files : [];
-    renderAttachTray();
-    updateSendEnabled();
   });
   const anchor = footer.querySelector(':scope > .btn-copy');
   if (anchor) anchor.after(btn);
@@ -3468,10 +3460,6 @@ async function uploadFiles(files) {
 function makeAttachmentsBlock(attachments) {
   const wrap = document.createElement('div');
   wrap.className = 'msg-attachments';
-  // The workspace files, for "Branch in new chat" to attach again.
-  wrap.dataset.files = JSON.stringify(
-    attachments.filter((a) => a.path).map(({ path, name, kind }) => ({ path, name, kind })),
-  );
   for (const att of attachments) wrap.appendChild(makeAttachmentView(att));
   return wrap;
 }

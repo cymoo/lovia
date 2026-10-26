@@ -698,12 +698,16 @@ function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, s
   return [pinMark, menu];
 }
 
+/** @type {{ session_id: string, title?: string | null, exists?: boolean } | null} */
+let _origin = null;
+
 /**
  * The topbar link back to the chat this one was branched from — a session
  * detail's `origin`, or null to hide it. A deleted source stays named, inert.
  * @param {{ session_id: string, title?: string | null, exists?: boolean } | null | undefined} origin
  */
 function renderOrigin(origin) {
+  _origin = origin ?? null;
   if (!originBtn) return;
   originBtn.hidden = !origin;
   if (!origin) return;
@@ -720,12 +724,14 @@ function renderOrigin(origin) {
 
 /**
  * Branch a chat into a new one and open it: whole, or up to just before the
- * user message `ref` names (see `POST /api/sessions/{id}/fork`).
+ * user message `ref` names (see `POST /api/sessions/{id}/fork`). A user who
+ * moved to another chat meanwhile stays there.
  * @param {string} id
  * @param {string | null} [ref]
  * @returns {Promise<string | null>} The new chat's id, or null if it failed.
  */
 export async function forkChat(id, ref = null) {
+  const from = store.sessionId;
   let created;
   try {
     created = await api.forkSession(id, ref);
@@ -734,7 +740,8 @@ export async function forkChat(id, ref = null) {
     return null;
   }
   await loadSessions();
-  await switchSession(created.session_id);
+  // Opened only if the user is still where they asked; else it waits in the list.
+  if (store.sessionId === from) await switchSession(created.session_id);
   return created.session_id;
 }
 
@@ -1089,6 +1096,11 @@ export function initSessions() {
   // Agents usually land after the first session render — the signature covers
   // the flip, so this redraws exactly once to add the agent chips.
   store.on('agents-loaded', renderSessions);
+  // The open branch's source deleted from this tab: its link goes inert now,
+  // not on the next load.
+  store.on('session-deleted', (id) => {
+    if (_origin?.session_id === id) renderOrigin({ ..._origin, exists: false });
+  });
 
   // Keep the run dots honest and surface background completions.
   _schedulePoll();

@@ -1640,11 +1640,25 @@ function renderBranchButton(turn, footer) {
   btn.innerHTML = icon('git-branch', { size: 13 });
   btn.addEventListener('click', async () => {
     const text = turn.querySelector('.body')?.textContent ?? '';
+    // The branch ends before this message, its attachment note included:
+    // the files ride back in through the composer tray.
+    const files = JSON.parse(
+      /** @type {HTMLElement | null} */ (turn.querySelector('.msg-attachments'))
+        ?.dataset.files ?? '[]',
+    );
     const source = store.sessionId;
     if (!source) return;
     btn.disabled = true;
-    if ((await forkChat(source, ref)) !== null) setDraft(text);
+    const branch = await forkChat(source, ref);
     btn.disabled = false;
+    // Only into the branch: the user may have moved on while it opened.
+    if (branch === null || store.sessionId !== branch) return;
+    setDraft(text);
+    if (files.length && attachEnabled()) {
+      _pendingAttachments = files;
+      renderAttachTray();
+      updateSendEnabled();
+    }
   });
   const anchor = footer.querySelector(':scope > .btn-copy');
   if (anchor) anchor.after(btn);
@@ -3454,6 +3468,10 @@ async function uploadFiles(files) {
 function makeAttachmentsBlock(attachments) {
   const wrap = document.createElement('div');
   wrap.className = 'msg-attachments';
+  // The workspace files, for "Branch in new chat" to attach again.
+  wrap.dataset.files = JSON.stringify(
+    attachments.filter((a) => a.path).map(({ path, name, kind }) => ({ path, name, kind })),
+  );
   for (const att of attachments) wrap.appendChild(makeAttachmentView(att));
   return wrap;
 }

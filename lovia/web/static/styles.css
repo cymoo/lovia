@@ -2625,7 +2625,7 @@ button.question-option:hover {
   align-items: center;
   justify-content: center;
   width: 32px;
-  height: 32px;
+  height: 38px; /* share the send button's center on the bottom-aligned row */
   border-radius: 50%;
   color: var(--muted);
   transition:
@@ -2895,9 +2895,9 @@ button.question-option:hover {
 
 /* Stop: a quiet danger outline that harmonizes with the send circle. */
 #stop {
-  padding: 8px 16px;
+  height: 38px;
+  padding: 0 16px;
   border-radius: 999px;
-  margin-bottom: 2px;
 }
 .btn-danger {
   background: transparent;
@@ -4734,7 +4734,7 @@ body.files-splitting {
   align-items: center;
   justify-content: center;
   width: 30px;
-  height: 34px; /* matches the send button's row height */
+  height: 38px; /* matches the send button's row height */
   border-radius: 50%;
   color: var(--accent);
   cursor: pointer;

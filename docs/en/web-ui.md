@@ -368,6 +368,13 @@ beside Stop (it shows only while a Run is active, and remembers your choice):
 Attachments are neither steered nor queued: they wait for the active Run to
 finish.
 
+Mode-switch notices update in place and disappear 1.5 seconds after the last
+switch. Notifications show at most two toasts at once; ordinary notices never
+evict errors. Refreshing the page summarizes results from while you were away
+in one toast, with completed and failed counts kept separate. Live background
+results arriving within one second are grouped, and duplicate run results are
+ignored within the page.
+
 ## Branching a chat
 
 **Branch in new chat**, on any finished reply, starts a new chat with

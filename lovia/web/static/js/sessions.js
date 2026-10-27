@@ -4,6 +4,7 @@ import { store } from './store.js';
 import { api, apiError } from './api.js';
 import { closeSidebar, promptDialog, confirmDialog, showDialog } from './ui.js';
 import { toast } from './toast.js';
+import { createRunNotices } from './run-notices.js';
 import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
 import { notificationsEnabled, playCompletionSound } from './settings.js';
@@ -59,7 +60,10 @@ const _baseTitle = document.title;
 // load, anything in /api/runs/history that finished after it gets a catch-up
 // toast, then the watermark moves to now.
 const RUNS_SEEN_KEY = 'lovia-runs-seen';
-const MISSED_TOAST_MAX = 5;
+const runNotices = createRunNotices({
+  notify: toast, t,
+  titleOf: (sid) => store.sessions.find((s) => s.id === sid)?.title || t('toast.backgroundRun'),
+});
 
 function _markRunsSeen() {
   try {
@@ -67,21 +71,22 @@ function _markRunsSeen() {
   } catch { /* storage unavailable (e.g. private mode) — feature degrades off */ }
 }
 
-async function checkMissedRuns() {
-  let seen = NaN;
+function _readRunsSeen() {
   try {
-    seen = parseFloat(localStorage.getItem(RUNS_SEEN_KEY));
+    return parseFloat(localStorage.getItem(RUNS_SEEN_KEY));
   } catch {
-    return;
+    return NaN;
   }
+}
+
+async function checkMissedRuns(seen) {
   if (!Number.isFinite(seen)) {
     _markRunsSeen(); // first visit seeds the watermark quietly
     return;
   }
   let records;
   try {
-    // Generous limit: the toasts cap themselves below, but the watermark only
-    // advances over what this fetch actually covered.
+    // Catch-up is one summary, regardless of how many records are returned.
     records = await api.runHistory({ since: seen, limit: 100 });
   } catch {
     // An older server or a blip: keep the old watermark so the next load
@@ -89,36 +94,22 @@ async function checkMissedRuns() {
     return;
   }
   _markRunsSeen();
-  // completed/failed are outcomes worth announcing; "cancelled" was the user's
-  // own doing and "interrupted" is a resumable pause, not a result.
-  const missed = records.filter(
-    (r) => r.status === 'completed' || r.status === 'failed',
-  );
-  const titleOf = (sid) =>
-    store.sessions.find((s) => s.id === sid)?.title || t('toast.backgroundRun');
-  for (const r of missed.slice(0, MISSED_TOAST_MAX)) {
-    const ok = r.status === 'completed';
-    toast(
-      t(ok ? 'toast.missedRunFinished' : 'toast.missedRunFailed', {
-        title: titleOf(r.session_id),
-      }),
-      { type: ok ? 'success' : 'error' },
-    );
-  }
-  if (missed.length > MISSED_TOAST_MAX) {
-    toast(t('toast.missedRunMore', { n: missed.length - MISSED_TOAST_MAX }));
-  }
+  runNotices.add(records, { missed: true });
 }
 
-function _notifyRunFinished(sid) {
+function _notifyRunFinished(sid, runId, status = 'completed') {
   // Whatever else happens below, this browser has now seen results up to here.
   _markRunsSeen();
+  const run = { id: runId, session_id: sid, status };
   const stoppedAt = _recentlyStopped.get(sid);
-  if (stoppedAt && Date.now() - stoppedAt < STOPPED_GRACE_MS) return;
   // The chat on screen ends its own stream visibly — no extra notice.
-  if (sid === store.sessionId && store.streaming) return;
+  if ((stoppedAt && Date.now() - stoppedAt < STOPPED_GRACE_MS)
+    || (sid === store.sessionId && store.streaming)) {
+    runNotices.remember(run);
+    return;
+  }
+  if (!runNotices.add([run])) return;
   const title = store.sessions.find((s) => s.id === sid)?.title || t('toast.backgroundRun');
-  toast(t('toast.runFinished', { title }), { type: 'success' });
   playCompletionSound(); // no-op unless the sound preference is on
   if (document.hidden) {
     _unseenFinished += 1;
@@ -126,7 +117,9 @@ function _notifyRunFinished(sid) {
     // Only while hidden — a visible tab's toast is notification enough.
     if (notificationsEnabled()) {
       try {
-        new Notification(_baseTitle, { body: t('toast.runFinished', { title }) });
+        new Notification(_baseTitle, {
+          body: t(status === 'failed' ? 'toast.runFailed' : 'toast.runFinished', { title }),
+        });
       } catch { /* platform quirks (e.g. no Notification in this context) */ }
     }
   }
@@ -186,7 +179,7 @@ export function initEventStream() {
     try {
       const d = JSON.parse(e.data);
       // "interrupted" is a server shutdown/resumable pause, not an outcome.
-      if (d.status !== 'interrupted') _notifyRunFinished(d.session_id);
+      if (d.status !== 'interrupted') _notifyRunFinished(d.session_id, d.run_id, d.status);
       // A clientless run (a scheduled fire, or a subagent report delivery)
       // finished on the open chat before this tab attached to it (a fast run
       // wins the race against the reconnect above): reload the transcript so
@@ -280,12 +273,21 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
     const prevRuns = store.activeRuns || new Set();
     store.activeRuns = new Set(runs.map((r) => r.session_id));
     // Full live-run rows (status, started_at) — the task rows' badge data.
+    const prevRows = store.runsBySession;
     store.runsBySession = new Map(runs.map((r) => [r.session_id, r]));
     // Diff-based completion detection belongs to the polling fallback; with
     // the event stream live, run_finished notifies directly (no double toast).
     if (_runsPrimed && !_eventsLive) {
       for (const sid of prevRuns) {
-        if (!store.activeRuns.has(sid)) _notifyRunFinished(sid);
+        if (!store.activeRuns.has(sid)) {
+          // Absence from the active list does not tell success from failure.
+          // Match the run we observed, not a newer run on the same chat.
+          const runId = prevRows?.get(sid)?.run_id;
+          if (runId) void api.runHistory({ run_id: runId, limit: 1 }).then((records) => {
+            const record = records[0];
+            if (record) _notifyRunFinished(sid, record.id, record.status);
+          }).catch(() => { /* a later catch-up can still report the result */ });
+        }
       }
     }
     _runsPrimed = true;
@@ -1092,7 +1094,10 @@ export function initSearch() {
 /** Boot the session sidebar: initial load, search, and background-run polling/notifications. */
 export function initSessions() {
   // Catch-up runs after the first session load so titles are resolvable.
-  loadSessions().then(checkMissedRuns);
+  // Capture the watermark before loading: a live completion must not advance
+  // it past older, unseen results while the initial request is in flight.
+  const seen = _readRunsSeen();
+  loadSessions().then(() => checkMissedRuns(seen));
   initSearch();
 
   document.getElementById('new-chat')?.addEventListener('click', startNewChat);

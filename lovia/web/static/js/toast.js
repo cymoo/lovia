@@ -3,6 +3,9 @@
 //   toast('Couldn’t rename chat', { type: 'error' });
 
 const DEFAULT_TIMEOUT_MS = 3200;
+const MAX_TOASTS = 2;
+/** @type {Map<HTMLElement, { key?: string, type: string, dismissed: boolean, timer: ReturnType<typeof setTimeout>, dismiss: () => void, drop: () => void }>} */
+const entries = new Map();
 
 function container() {
   let el = document.getElementById('toast-container');
@@ -32,30 +35,62 @@ function container() {
 }
 
 /**
- * Show a transient notification. Click to dismiss; auto-dismisses after `timeout`.
+ * Show at most two notifications. A key updates one in place; otherwise identical
+ * text/type repeats coalesce. Ordinary notices never evict errors.
+ * Click to dismiss; an update restarts `timeout` from the latest event.
  * @param {string} message
- * @param {{ type?: 'info' | 'success' | 'error', timeout?: number }} [opts]
+ * @param {{ type?: 'info' | 'success' | 'error', timeout?: number, key?: string }} [opts]
  * @returns {HTMLElement} The toast element.
  */
-export function toast(message, { type = 'info', timeout = DEFAULT_TIMEOUT_MS } = {}) {
+export function toast(message, { type = 'info', timeout = DEFAULT_TIMEOUT_MS, key } = {}) {
+  const host = container();
+  for (const [el, entry] of entries) {
+    if (entry.dismissed) continue;
+    const matches = key !== undefined ? entry.key === key
+      : entry.key === undefined && entry.type === type && el.textContent === message;
+    if (!matches) continue;
+    clearTimeout(entry.timer);
+    entry.type = type;
+    el.className = `toast toast-${type} show`;
+    el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    if (el.textContent !== message) el.textContent = message;
+    entry.timer = setTimeout(entry.dismiss, timeout);
+    return el;
+  }
+
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
   el.setAttribute('role', type === 'error' ? 'alert' : 'status');
   el.textContent = message;
-  container().appendChild(el);
-  requestAnimationFrame(() => el.classList.add('show'));
+  if (entries.size >= MAX_TOASTS) {
+    // Include exiting elements in the cap: bursts must not leave a third pill
+    // fading out beneath two new ones. Eviction skips the exit animation.
+    const victim = [...entries.values()].find((e) => e.dismissed)
+      || [...entries.values()].find((e) => e.type !== 'error')
+      || (type === 'error' ? entries.values().next().value : null);
+    if (!victim) return el; // both slots carry errors; discard this ordinary notice
+    victim.drop();
+  }
+  host.appendChild(el);
+  requestAnimationFrame(() => { if (!entry.dismissed) el.classList.add('show'); });
 
-  let dismissed = false;
+  const drop = () => {
+    entry.dismissed = true;
+    clearTimeout(entry.timer);
+    entries.delete(el);
+    el.remove();
+  };
   const dismiss = () => {
-    if (dismissed) return;
-    dismissed = true;
+    if (entry.dismissed) return;
+    entry.dismissed = true;
+    clearTimeout(entry.timer);
     el.classList.remove('show');
-    const drop = () => el.remove();
     el.addEventListener('transitionend', drop, { once: true });
-    setTimeout(drop, 400); // fallback if the transition never fires
+    entry.timer = setTimeout(drop, 400); // fallback if the transition never fires
   };
 
-  const timer = setTimeout(dismiss, timeout);
-  el.addEventListener('click', () => { clearTimeout(timer); dismiss(); });
+  const entry = { key, type, dismissed: false, timer: setTimeout(dismiss, timeout), dismiss, drop };
+  entries.set(el, entry);
+  el.addEventListener('click', dismiss);
   return el;
 }

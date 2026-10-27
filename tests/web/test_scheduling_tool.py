@@ -612,3 +612,40 @@ async def test_start_session_needs_the_web_app() -> None:
     # Outside a supervised run there is no app to open the chat in.
     with pytest.raises(ToolError, match="web app"):
         await tool.invoke({"instruction": "go"}, _ctx())
+
+
+@pytest.mark.asyncio
+async def test_start_session_cancelled_mid_start_leaves_no_chat() -> None:
+    store = ChatStore.in_memory()
+    provider = ScriptedProvider(
+        [call("start_session", {"instruction": "x"}, call_id="c1"), text("done")]
+    )
+    # A tool timeout cancels the start after the chat row is written.
+    agent = Agent(
+        name="bot",
+        model=provider,
+        plugins=[Scheduling(store)],
+        default_tool_timeout=0.2,
+    )
+    app = create_app(agent, store=store, titles=False)
+    workspaces = app.state.deps.workspaces
+    bind, closed = workspaces.bind, []
+
+    async def slow_bind(sid, agent):
+        if sid != "s1":  # the new chat's start hangs past the timeout
+            await asyncio.sleep(10)
+        return await bind(sid, agent)
+
+    async def close(sid):
+        closed.append(sid)
+
+    workspaces.bind, workspaces.close = slow_bind, close
+    async with _client(app) as ac:
+        await ac.post("/api/chat", json={"message": "go", "session_id": "s1"})
+        listed = (await ac.get("/api/sessions")).json()
+        parent = (await ac.get("/api/sessions/s1")).json()
+    assert [s["id"] for s in listed] == ["s1"]
+    assert len(closed) == 1 and closed[0] != "s1"
+    result = next(e for e in parent["entries"] if e["role"] == "tool")
+    assert result["is_error"] is True
+    assert not app.state.deps.supervisor.get(closed[0])

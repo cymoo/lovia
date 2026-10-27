@@ -415,10 +415,10 @@ def _make_start_tool() -> Tool:
         async with deps._chat_alive(sid, stored=False) as alive:
             if not alive:
                 raise ToolError("Nothing started: chats are being deleted.")
-            await deps.store.upsert(
-                sid, agent=agent_key, title=shown, spawned_from=origin
-            )
             try:
+                await deps.store.upsert(
+                    sid, agent=agent_key, title=shown, spawned_from=origin
+                )
                 await deps.supervisor.start(
                     session_id=sid,
                     agent=agent,
@@ -431,8 +431,9 @@ def _make_start_tool() -> Tool:
                     client=client,
                     run_deps=run_deps,
                 )
-            except Exception as exc:
-                # Undo the empty chat, as a subagent's failed start does.
+            except BaseException as exc:
+                # Undo the empty chat, as a subagent's failed start does —
+                # also when a tool timeout cancels the start part way.
                 await deps.workspaces.close(sid)
                 await deps.store.delete(sid)
                 if isinstance(exc, WebError) and exc.code == "too_many_runs":

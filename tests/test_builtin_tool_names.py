@@ -149,4 +149,5 @@ async def test_web_tools() -> None:
         "cancel_schedule",
         "list_schedules",
         "schedule_run",
+        "start_session",
     ]

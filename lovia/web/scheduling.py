@@ -25,6 +25,13 @@ a schedule (the user can resume or delete it in the panel; hard delete stays
 user-only), and the self-cancel path of a stop condition (``until``) must work
 inside a clientless scheduled run, where an approval request would park until
 the timeout auto-denies it (see ``RunSupervisor._await_approval``).
+
+``start_session`` is the "now, but elsewhere" sibling: it opens a new
+top-level chat (provenance ``origin_kind = "spawn"``, no owner — unlike a
+subagent's task chat) and starts this agent on it at once, reporting nothing
+back. No approval either: the chat is visible right away, and the
+supervisor's concurrency cap bounds it. It needs the serving app, not just the
+store, and reads it off the run (``RUN_SERVER``).
 """
 
 from __future__ import annotations
@@ -35,12 +42,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
+from ..exceptions import ToolError
 from ..plugins.base import PluginInstance
 from ..run_context import RunContext
 from ..tools import Tool, tool
-from .run_deps import RUN_CLIENT
+from .errors import WebError
+from .run_deps import RUN_CLIENT, RUN_SERVER, RunTrigger, build_run_deps
 from .scheduler import initial_next_fire, validate_trigger
+from .sse import SessionCreatedData
 from .store import ChatStore, ScheduleRow
+from .titles import provisional_title
 
 _DESCRIPTION = (
     "Schedule a run to execute later, after a delay, or on a recurring basis. "
@@ -75,7 +86,10 @@ _INSTRUCTIONS = (
     "stop schedules yourself with `list_schedules` and "
     "`cancel_schedule(schedule_id, reason)` — stopping only deactivates (the "
     "user can resume or delete it in the Scheduled-runs panel), so it needs "
-    "no approval; deleting outright is the user's call, via the panel."
+    "no approval; deleting outright is the user's call, via the panel.\n"
+    "To do something now but in its own chat — the user asks for a new or "
+    "separate chat — call `start_session` instead: the chat starts at once and "
+    "the user can open it, but its results are not reported back here."
 )
 
 
@@ -340,6 +354,103 @@ def _make_cancel_tool(store: ChatStore) -> Tool:
     return cancel_schedule
 
 
+_START_DESCRIPTION = (
+    "Open a new, separate chat and start working on `instruction` there right "
+    "away, as this agent. The user can switch to that chat and keep talking in "
+    "it. Its results are NOT reported back to this chat: the call only "
+    "confirms the chat started."
+)
+
+
+def _make_start_tool() -> Tool:
+    # retries=0: a start is not idempotent — a retry could open a second chat.
+    @tool(name="start_session", description=_START_DESCRIPTION, retries=0)
+    async def start_session(
+        ctx: RunContext[Any],
+        instruction: Annotated[
+            str,
+            "The new chat's first message: a complete, self-contained prompt — "
+            "the new chat sees none of this conversation.",
+        ],
+        title: Annotated[
+            str | None,
+            "A short title for the new chat; omit it to have one generated.",
+        ] = None,
+    ) -> dict[str, str]:
+        text = instruction.strip()
+        if not text:
+            raise ToolError("Nothing started: the instruction was empty.")
+        deps, origin = RUN_SERVER.get(), ctx.session_id
+        if deps is None or origin is None:
+            raise ToolError("start_session only works in a chat of the web app.")
+        row = await deps.store.get(origin)
+        try:
+            # This chat's agent, as served now (a settings change may have
+            # swapped it since this run started).
+            agent = deps.pick(row.agent if row is not None else None)
+        except WebError as exc:
+            raise ToolError(f"Couldn't start a chat: {exc}") from exc
+        agent_key = deps.name_of(agent)
+
+        # The low-level path the scheduler's fire and a subagent's task share
+        # — a chat row, then a clientless supervised run — minus the
+        # schedule's bookkeeping. The new chat works in this run's context.
+        sid = uuid.uuid4().hex
+        source = f"spawn:{origin}"
+        client = RUN_CLIENT.get()
+        try:
+            run_deps = await build_run_deps(
+                deps.run_deps,
+                RunTrigger(
+                    session_id=sid,
+                    agent=agent,
+                    source=source,
+                    client_context=client or {},
+                ),
+            )
+        except Exception as exc:
+            raise ToolError(f"The new chat's run was refused: {exc}") from exc
+        named = (title or "").strip() or None
+        shown = named or provisional_title(text)
+        async with deps._chat_alive(sid, stored=False) as alive:
+            if not alive:
+                raise ToolError("Nothing started: chats are being deleted.")
+            try:
+                await deps.store.upsert(
+                    sid, agent=agent_key, title=shown, spawned_from=origin
+                )
+                await deps.supervisor.start(
+                    session_id=sid,
+                    agent=agent,
+                    input=text,
+                    # A given title stays; otherwise one is generated.
+                    is_new=named is None,
+                    title_message=text if named is None else None,
+                    autostart=True,
+                    source=source,
+                    client=client,
+                    run_deps=run_deps,
+                )
+            except BaseException as exc:
+                # Undo the empty chat, as a subagent's failed start does —
+                # also when a tool timeout cancels the start part way.
+                await deps.workspaces.close(sid)
+                await deps.store.delete(sid)
+                if isinstance(exc, WebError) and exc.code == "too_many_runs":
+                    raise ToolError(
+                        "Nothing started: the server is at its concurrent-run limit.",
+                        hint="wait for other runs to finish, then try again",
+                    ) from exc
+                raise
+        deps.emit(
+            "session_created",
+            SessionCreatedData(session_id=sid, agent=agent_key, title=shown),
+        )
+        return {"session_id": sid, "title": shown, "status": "started"}
+
+    return start_session
+
+
 @dataclass
 class Scheduling:
     """Plugin: tools that let the model create and manage Scheduled runs.
@@ -347,9 +458,9 @@ class Scheduling:
     Construct it with the same :class:`~lovia.web.store.ChatStore` the web app
     uses; ``schedule_run`` writes :class:`~lovia.web.store.ScheduleRow`s the
     :class:`~lovia.web.scheduler.Scheduler` polls, and
-    ``list_schedules``/``cancel_schedule`` read and deactivate them. Only
-    ``schedule_run`` is gated by approval (see the module docstring for why
-    the other two must not be).
+    ``list_schedules``/``cancel_schedule`` read and deactivate them;
+    ``start_session`` opens a new chat now. Only ``schedule_run`` is gated by
+    approval (see the module docstring for why the others are not).
     """
 
     store: ChatStore
@@ -362,6 +473,7 @@ class Scheduling:
                 _make_tool(self.store),
                 _make_list_tool(self.store),
                 _make_cancel_tool(self.store),
+                _make_start_tool(),
             ],
             instructions=self.instructions,
         )

@@ -244,7 +244,8 @@ class ChatMeta:
     """Set on a subagent task session: the chat that spawned it. The UI
     groups such sessions under a Tasks section instead of the chat list."""
     origin_kind: str | None = None
-    """Where the chat came from — ``"fork"`` — or None. Provenance only:
+    """Where the chat came from — ``"fork"`` (a copy) or ``"spawn"`` (started
+    by the source chat's agent) — or None. Provenance only:
     unlike ``parent_id`` it never cascades a delete, and the source may be
     gone."""
     origin_session_id: str | None = None
@@ -525,20 +526,23 @@ class ChatStore:
         agent: str | None = None,
         title: str | None = None,
         parent_id: str | None = None,
+        spawned_from: str | None = None,
     ) -> None:
         """Insert a row if missing, otherwise bump ``updated_at``.
 
         ``title`` is applied only on insert (a provisional title for a brand-new
         session); on conflict the existing title is left untouched so a
         background-generated title is never clobbered. ``parent_id`` likewise
-        sticks from the insert — a session's task-ness never changes later.
+        sticks from the insert — a session's task-ness never changes later —
+        and so does ``spawned_from``, the chat whose agent started this one
+        (``origin_kind = "spawn"``).
         """
         now = time.time()
         await self._write(
             """
             INSERT INTO chat_sessions (id, title, agent, created_at, updated_at,
-                                       parent_id)
-            VALUES (?, ?, ?, ?, ?, ?)
+                                       parent_id, origin_kind, origin_session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 updated_at = excluded.updated_at,
                 agent = COALESCE(chat_sessions.agent, excluded.agent)
@@ -550,6 +554,8 @@ class ChatStore:
                 now,
                 now,
                 parent_id,
+                "spawn" if spawned_from else None,
+                spawned_from,
             ),
         )
 

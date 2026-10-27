@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from fastapi import Request
 
     from ..agent import Agent
+    from .api.deps import RouterDeps
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +45,10 @@ MAX_CLIENT_CONTEXT_BYTES = 64 * 1024
 #: (scheduling.py), so a schedule the agent makes fires in the same context.
 RUN_CLIENT: ContextVar[JsonObject | None] = ContextVar("lovia_run_client", default=None)
 
+#: The app serving the run on this task, set beside RUN_CLIENT: what the
+#: start_session tool (scheduling.py) opens a new chat through.
+RUN_SERVER: ContextVar[RouterDeps | None] = ContextVar("lovia_run_server", default=None)
+
 
 @dataclass(frozen=True)
 class RunTrigger:
@@ -53,7 +58,8 @@ class RunTrigger:
     agent: Agent[Any]
     source: str
     """``"user"`` (a chat message, or a reconnect resuming a run),
-    ``"schedule:<id>"``, ``"subagent:<session>"`` or ``"subagent-report:<id>"``."""
+    ``"schedule:<id>"``, ``"subagent:<session>"``, ``"subagent-report:<id>"``
+    or ``"spawn:<session>"`` (a chat another chat's agent started)."""
     request: Request | None = None
     """The request that started the run; ``None`` when nobody requested it."""
     client_context: Mapping[str, JsonValue] = field(default_factory=dict)

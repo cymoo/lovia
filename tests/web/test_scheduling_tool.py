@@ -241,6 +241,7 @@ async def test_plugin_contributes_tools_and_instructions() -> None:
         "schedule_run",
         "list_schedules",
         "cancel_schedule",
+        "start_session",
     }
     assert inst.instructions  # non-empty guidance steers the model
 
@@ -539,3 +540,112 @@ async def test_fired_run_cancels_its_own_schedule_without_approval() -> None:
     # …and the advancing mark_fired didn't resurrect it (see store.mark_fired).
     rec = await _wait_outcome(store, f"schedule:{row.id}")
     assert rec.status == "completed"  # no approval parking, no failure
+
+
+# --------------------------------------------------------------------------- #
+# start_session: a new top-level chat, started now
+# --------------------------------------------------------------------------- #
+
+
+def _start_app(store: ChatStore, args: dict, **kwargs):
+    # Both runs answer "done", so the order the parent's second turn and the
+    # new chat's first one reach the shared script doesn't matter.
+    provider = ScriptedProvider(
+        [call("start_session", args, call_id="c1"), text("done"), text("done")]
+    )
+    agent = Agent(name="bot", model=provider, plugins=[Scheduling(store)])
+    return create_app(agent, store=store, titles=False, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_start_session_opens_a_spawned_chat() -> None:
+    store = ChatStore.in_memory()
+    app = _start_app(store, {"instruction": "research tides", "title": "Tides"})
+    async with _client(app) as ac:
+        res = await ac.post("/api/chat", json={"message": "go", "session_id": "s1"})
+        assert res.status_code == 200
+        await _drain_runs(app.state.deps)
+        listed = (await ac.get("/api/sessions")).json()
+        (new,) = [s for s in listed if s["id"] != "s1"]
+        detail = (await ac.get(f"/api/sessions/{new['id']}")).json()
+        parent = (await ac.get("/api/sessions/s1")).json()
+    # Top-level (no owner), marked as spawned, titled as asked.
+    assert new["parent_id"] is None
+    assert new["origin_kind"] == "spawn"
+    assert new["title"] == "Tides"
+    assert detail["origin"]["kind"] == "spawn"
+    assert detail["origin"]["session_id"] == "s1"
+    assert detail["origin"]["exists"] is True
+    # It ran the instruction, recorded under its own source.
+    assert detail["entries"][0]["content"] == "research tides"
+    rec = await _wait_outcome(store, "spawn:s1")
+    assert rec.session_id == new["id"] and rec.status == "completed"
+    # The tool result names the chat; nothing is reported back beyond that.
+    result = next(e for e in parent["entries"] if e["role"] == "tool")
+    assert new["id"] in result["content"]
+    assert parent["entries"][-1]["content"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_start_session_at_the_cap_leaves_no_chat() -> None:
+    store = ChatStore.in_memory()
+    # The parent's own run takes the only slot.
+    app = _start_app(store, {"instruction": "x"}, max_background_runs=1)
+    async with _client(app) as ac:
+        await ac.post("/api/chat", json={"message": "go", "session_id": "s1"})
+        listed = (await ac.get("/api/sessions")).json()
+        parent = (await ac.get("/api/sessions/s1")).json()
+    assert [s["id"] for s in listed] == ["s1"]
+    result = next(e for e in parent["entries"] if e["role"] == "tool")
+    assert result["is_error"] is True
+    assert "concurrent-run limit" in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_start_session_needs_the_web_app() -> None:
+    from lovia.exceptions import ToolError
+    from lovia.web.scheduling import _make_start_tool
+
+    tool = _make_start_tool()
+    with pytest.raises(ToolError, match="empty"):
+        await tool.invoke({"instruction": "  "}, _ctx())
+    # Outside a supervised run there is no app to open the chat in.
+    with pytest.raises(ToolError, match="web app"):
+        await tool.invoke({"instruction": "go"}, _ctx())
+
+
+@pytest.mark.asyncio
+async def test_start_session_cancelled_mid_start_leaves_no_chat() -> None:
+    store = ChatStore.in_memory()
+    provider = ScriptedProvider(
+        [call("start_session", {"instruction": "x"}, call_id="c1"), text("done")]
+    )
+    # A tool timeout cancels the start after the chat row is written.
+    agent = Agent(
+        name="bot",
+        model=provider,
+        plugins=[Scheduling(store)],
+        default_tool_timeout=0.2,
+    )
+    app = create_app(agent, store=store, titles=False)
+    workspaces = app.state.deps.workspaces
+    bind, closed = workspaces.bind, []
+
+    async def slow_bind(sid, agent):
+        if sid != "s1":  # the new chat's start hangs past the timeout
+            await asyncio.sleep(10)
+        return await bind(sid, agent)
+
+    async def close(sid):
+        closed.append(sid)
+
+    workspaces.bind, workspaces.close = slow_bind, close
+    async with _client(app) as ac:
+        await ac.post("/api/chat", json={"message": "go", "session_id": "s1"})
+        listed = (await ac.get("/api/sessions")).json()
+        parent = (await ac.get("/api/sessions/s1")).json()
+    assert [s["id"] for s in listed] == ["s1"]
+    assert len(closed) == 1 and closed[0] != "s1"
+    result = next(e for e in parent["entries"] if e["role"] == "tool")
+    assert result["is_error"] is True
+    assert not app.state.deps.supervisor.get(closed[0])

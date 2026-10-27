@@ -31,6 +31,8 @@ test('a call reads as what it did and to what', () => {
     'Chart Sales',
   );
   assert.equal(builtinSummary('show_table', { columns: ['a'], rows: [] }), 'Table');
+  assert.equal(builtinSummary('start_session', { instruction: 'x', title: 'Tides' }), 'Start a chat “Tides”');
+  assert.equal(builtinSummary('start_session', { instruction: 'x' }), 'Start a chat');
 });
 
 test('arguments that do not fit keep the default line', () => {

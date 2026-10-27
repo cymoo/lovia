@@ -256,7 +256,9 @@ class SessionOrigin(BaseModel):
     """Where a chat came from. Provenance only: deleting the source leaves
     the chat alone (unlike ``parent_id``, which deletes with its chat)."""
 
-    kind: Literal["fork"]
+    # "fork": copied from the source. "spawn": started by the source's agent
+    # (the start_session tool), with none of its history.
+    kind: Literal["fork", "spawn"]
     session_id: str
     # The source's user message a fork was cut before; None for a whole copy.
     ref: str | None = None
@@ -276,7 +278,7 @@ class SessionDetail(BaseModel):
     # Set on a subagent task session: the chat that spawned it — the UI's
     # "back to parent chat" affordance.
     parent_id: str | None = None
-    # Set on a fork: the chat it was copied from — the UI's "forked from" link.
+    # Set on a fork or a spawn: the chat it came from — the UI's link back.
     origin: SessionOrigin | None = None
 
 
@@ -293,9 +295,9 @@ class ChatSessionInfo(BaseModel):
     # Task sessions only: the latest run's terminal status ("completed",
     # "failed", "cancelled", …) — the sidebar's badge for finished tasks.
     last_run_status: str | None = None
-    # "fork" on a branch of another chat (see SessionDetail.origin) — the
-    # sidebar marks it, since a branch starts with its source's title.
-    origin_kind: Literal["fork"] | None = None
+    # Where the chat came from (see SessionDetail.origin). The sidebar marks
+    # a "fork", since a branch starts with its source's title.
+    origin_kind: Literal["fork", "spawn"] | None = None
 
 
 class RunInfo(BaseModel):
@@ -307,8 +309,8 @@ class RunInfo(BaseModel):
     status: Literal["running", "blocked_on_approval"]
     turns: int
     # What started the run: "user" | "schedule:<id>" | "subagent:<session>"
-    # | "subagent-report:<task>" — lets a UI tie a live run back to what
-    # fired it.
+    # | "subagent-report:<task>" | "spawn:<session>" — lets a UI tie a live
+    # run back to what fired it.
     source: str = "user"
     # Epoch seconds when the run began — the sidebar's elapsed ticker.
     started_at: float | None = None

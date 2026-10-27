@@ -369,6 +369,10 @@ other.
 A branch copies the conversation, not the workspace: files written since the
 branch point stay as they are now.
 
+Ask the agent to do something "in a new chat" and it can start one itself
+(`start_session`). Its card opens the new chat, which starts with none of
+this conversation and links back to the chat that started it.
+
 ## Background subagents
 
 `lovia web` enables [background subagents](multi-agent.md#background-subagents)

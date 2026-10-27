@@ -66,7 +66,7 @@ from .sse import (
     usage_dict,
 )
 from ..types import JsonObject
-from .run_deps import RUN_CLIENT
+from .run_deps import RUN_CLIENT, RUN_SERVER
 from .store import RunRow
 
 if TYPE_CHECKING:
@@ -78,7 +78,8 @@ log = logging.getLogger(__name__)
 
 # What started the run this task serves: "user" | "schedule:<id>" |
 # "subagent:<session>" (a child task run) | "subagent-report:<task>" (the
-# clientless run that delivers a report). Set at the top of every supervised
+# clientless run that delivers a report) | "spawn:<session>" (a chat that
+# session's agent started). Set at the top of every supervised
 # task, so every log line emitted inside that task's context — core RunLoop
 # lines included, since ``create_task`` copies the context — can be
 # attributed to its run.
@@ -597,6 +598,7 @@ class RunController:
         session, store = deps.session, deps.store
         UI_DATA_SINK.set((store, sid))
         RUN_CLIENT.set(self.client or None)
+        RUN_SERVER.set(deps)
         next_input: str | list[Message] = self._first_input
         ckpt = self._first_ckpt
         seed = self._seed_entries

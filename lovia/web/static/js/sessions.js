@@ -9,6 +9,7 @@ import { exportSessionHtml, exportFilename } from './export.js';
 import { notificationsEnabled, playCompletionSound } from './settings.js';
 import { dateBucket, formatDateTime, formatTimeSmart } from './util.js';
 import { closeView } from './views.js';
+import { OPEN_SESSION_EVENT } from './builtin-views.js';
 
 const sessionsList = document.getElementById('sessions-list');
 const tasksWrap = document.getElementById('tasks-wrap');
@@ -195,7 +196,8 @@ export function initEventStream() {
         !store.streaming &&
         (src.startsWith('schedule:') ||
           src.startsWith('subagent:') ||
-          src.startsWith('subagent-report:'))
+          src.startsWith('subagent-report:') ||
+          src.startsWith('spawn:'))
       ) {
         refreshTranscript();
       }
@@ -692,25 +694,30 @@ function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, s
   return [pinMark, menu];
 }
 
-/** @type {{ session_id: string, title?: string | null, exists?: boolean } | null} */
+/** @typedef {{ kind: 'fork' | 'spawn', session_id: string, title?: string | null, exists?: boolean }} Origin */
+
+/** @type {Origin | null} */
 let _origin = null;
 
 /**
- * The topbar link back to the chat this one was branched from — a session
- * detail's `origin`, or null to hide it. A deleted source stays named, inert.
- * @param {{ session_id: string, title?: string | null, exists?: boolean } | null | undefined} origin
+ * The topbar link back to the chat this one came from — branched from it, or
+ * started by its agent — a session detail's `origin`, or null to hide it. A
+ * deleted source stays named, inert.
+ * @param {Origin | null | undefined} origin
  */
 function renderOrigin(origin) {
   _origin = origin ?? null;
   if (!originBtn) return;
   originBtn.hidden = !origin;
   if (!origin) return;
+  const spawned = origin.kind === 'spawn';
   const label = document.createElement('span');
-  label.textContent = origin.exists
-    ? t('session.branchedFrom', { title: origin.title || t('session.newChat') })
-    : t('session.branchSourceGone');
+  const title = origin.title || t('session.newChat');
+  label.textContent = spawned
+    ? t(origin.exists ? 'session.startedFrom' : 'session.startSourceGone', { title })
+    : t(origin.exists ? 'session.branchedFrom' : 'session.branchSourceGone', { title });
   originBtn.title = label.textContent;
-  originBtn.innerHTML = icon('git-branch', { size: 14 });
+  originBtn.innerHTML = icon(spawned ? 'square-pen' : 'git-branch', { size: 14 });
   originBtn.append(label);
   originBtn.disabled = !origin.exists;
   originBtn.onclick = () => switchSession(origin.session_id);
@@ -1094,6 +1101,10 @@ export function initSessions() {
   // not on the next load.
   store.on('session-deleted', (id) => {
     if (_origin?.session_id === id) renderOrigin({ ..._origin, exists: false });
+  });
+  // A start_session card opens the chat it started.
+  document.addEventListener(OPEN_SESSION_EVENT, (e) => {
+    switchSession(/** @type {CustomEvent<string>} */ (e).detail);
   });
 
   // Keep the run dots honest and surface background completions.

@@ -46,6 +46,7 @@ from .serialization import (
     export_md,
     export_txt,
     message_to_json_dict,
+    origin_kind,
     tool_result_flags,
     run_record,
     segments_runs,
@@ -205,10 +206,11 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             deps, session_id, created_at=created, updated_at=updated
         )
         origin = None
-        if meta is not None and meta.origin_kind and meta.origin_session_id:
+        kind = origin_kind(meta.origin_kind) if meta is not None else None
+        if meta is not None and kind is not None and meta.origin_session_id:
             source = await store.get(meta.origin_session_id)
             origin = SessionOrigin(
-                kind="fork",
+                kind=kind,
                 session_id=meta.origin_session_id,
                 ref=meta.origin_ref,
                 title=source.title if source else None,

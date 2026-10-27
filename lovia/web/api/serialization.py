@@ -13,7 +13,7 @@ change the wire format.
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, NamedTuple, cast
+from typing import Any, Literal, NamedTuple, cast
 
 from ...messages import Message
 from ...parts import ImagePart
@@ -41,8 +41,13 @@ def session_info(
         pinned=meta.pinned,
         parent_id=meta.parent_id,
         last_run_status=last_run_status,
-        origin_kind="fork" if meta.origin_kind == "fork" else None,
+        origin_kind=origin_kind(meta.origin_kind),
     )
+
+
+def origin_kind(value: str | None) -> Literal["fork", "spawn"] | None:
+    """A stored ``origin_kind`` as the API speaks it; an unknown one is None."""
+    return "fork" if value == "fork" else "spawn" if value == "spawn" else None
 
 
 def run_record(row: RunRow) -> RunRecordInfo:

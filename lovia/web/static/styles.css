@@ -447,7 +447,7 @@ body.sidebar-collapsed .sidebar {
 #tasks-btn.attention {
   color: var(--warn);
 }
-/* -- a branch's link back to the chat it came from ---------------------- */
+/* -- a branch's (or a started chat's) link back to the chat it came from - */
 .origin-link {
   display: inline-flex;
   align-items: center;
@@ -4820,6 +4820,18 @@ body.files-splitting {
 .tool .tool-ui-notice {
   font-size: 13px;
   color: var(--muted);
+}
+/* A chat start_session opened (builtin-views.js): the card's way there. */
+.tool .chat-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.tool .chat-link > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* The card of the built-in components (figure.js): an HTML heading + toolbar
    row, the component's body below at full card width. */

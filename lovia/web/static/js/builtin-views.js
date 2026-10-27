@@ -6,7 +6,11 @@
 // `name(args)` line.
 
 import { t } from './i18n.js';
+import { icon } from './icons.js';
 import { setDefaultView } from './tool-views.js';
+
+/** The event a started chat's card fires to open it (sessions.js listens). */
+export const OPEN_SESSION_EVENT = 'lovia-open-session';
 
 /** @param {unknown} v */
 const str = (v) => (typeof v === 'string' && v.trim() ? v.replace(/\s+/g, ' ').trim() : null);
@@ -40,6 +44,7 @@ const TOOLS = {
   show_table: ['toolview.table', (a) => str(a.title) ?? ''],
   show_html: ['toolview.page', (a) => str(a.title) ?? ''],
   show_chart: ['toolview.chart', (a) => chartTitle(a.option) ?? ''],
+  start_session: ['toolview.startSession', (a) => quoted(a.title) ?? ''],
 };
 
 /** @param {any} option An ECharts option: `title` is an object or a list. */
@@ -73,10 +78,56 @@ function withPrompt(command) {
   return line && `$ ${line}`;
 }
 
+/**
+ * The chat a start_session call opened, from its result.
+ * @param {string | undefined} result
+ * @returns {{ session_id: string, title?: string } | null}
+ */
+function startedChat(result) {
+  try {
+    const chat = JSON.parse(result ?? '');
+    return typeof chat?.session_id === 'string' ? chat : null;
+  } catch {
+    return null;
+  }
+}
+
+// The card of a chat start_session opened is the way there. A view draws a
+// card's body in every state, so a failed call shows its error here.
+/** @type {import('./tool-views.js').ToolView['render']} */
+function renderStartedChat(el, tool) {
+  el.replaceChildren();
+  if (tool.isError) {
+    const notice = document.createElement('div');
+    notice.className = 'tool-ui-notice';
+    notice.textContent = tool.result ?? '';
+    el.append(notice);
+    return;
+  }
+  const chat = startedChat(tool.result);
+  if (!chat) return;
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'btn btn-ghost btn-sm chat-link';
+  open.innerHTML = icon('square-pen', { size: 14 });
+  const title = document.createElement('span');
+  title.textContent = chat.title || t('session.newChat');
+  open.append(title);
+  open.insertAdjacentHTML('beforeend', icon('chevron-right', { size: 14 }));
+  open.title = t('toolview.openChat');
+  open.addEventListener('click', () => {
+    open.dispatchEvent(
+      new CustomEvent(OPEN_SESSION_EVENT, { bubbles: true, detail: chat.session_id }),
+    );
+  });
+  el.append(open);
+}
+
 for (const name of ['shell', ...Object.keys(TOOLS)]) {
   const key = name === 'shell' ? 'toolview.shell' : TOOLS[name][0];
   setDefaultView(name, {
     summary: (tool) => builtinSummary(tool.name, tool.args),
+    render: name === 'start_session' ? renderStartedChat : undefined,
     label: () => t(key),
   });
 }

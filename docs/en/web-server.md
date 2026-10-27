@@ -1018,6 +1018,16 @@ no approval: cancelling deactivates the schedule without deleting its record,
 and self-cancel must work inside a clientless scheduled run, where an
 approval request would be auto-denied.
 
+For work that should start now but in its own chat, the plugin also
+contributes `start_session(instruction, title=None)`. It opens a new top-level
+chat that runs the current chat's agent on `instruction` at once, in the
+context of the run that called it, and returns `{session_id, title, status}`.
+The new chat links back to the one that started it (`origin.kind == "spawn"`)
+but belongs to no one: deleting either chat leaves the other, and its answer
+is not reported back. It needs no approval, since the chat is visible right
+away and `max_background_runs` bounds it; at that limit the call fails and
+leaves no chat behind.
+
 ## Security checklist
 
 - Keep `host="127.0.0.1"` for personal use; non-loopback binds are

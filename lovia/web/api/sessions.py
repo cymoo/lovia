@@ -147,7 +147,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         return [
             RunInfo(
                 session_id=sid,
-                run_id=c.run_id,
+                run_id=c.record_id,
                 agent=deps.name_of(c.agent),  # registry key, same as AgentInfo
                 status=c.status,
                 turns=c.turns,
@@ -162,18 +162,21 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         session_id: str | None = Query(None),
         source: str | None = Query(None, max_length=200),
         since: float | None = Query(None),
+        run_id: str | None = Query(None, max_length=200),
         limit: int = Query(50, ge=1, le=500),
         offset: int = Query(0, ge=0),
     ) -> list[RunRecordInfo]:
         """Persisted run records, newest first (live runs stay on ``/api/runs``).
 
         ``since`` keeps only runs finished after that timestamp — how a client
-        asks "what completed while I was away?" after a reload.
+        asks "what completed while I was away?" after a reload. ``run_id``
+        looks one run up by the id its lifecycle events carry.
         """
         rows = await store.list_runs(
             session_id=session_id,
             source=source,
             since=since,
+            run_id=run_id,
             limit=limit,
             offset=offset,
         )

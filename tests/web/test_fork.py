@@ -240,7 +240,7 @@ async def test_a_v1_database_migrates_its_ui_data(tmp_path: Path) -> None:
         "SELECT version FROM lovia_schema WHERE store = 'chat'"
     ).fetchone()[0]
     conn.close()
-    assert pk == ["session_id", "id"] and version == 2
+    assert pk == ["session_id", "id"] and version == len(_MIGRATIONS)
 
 
 # ---------------------------------------------------------------- the route -

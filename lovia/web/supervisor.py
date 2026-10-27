@@ -282,9 +282,15 @@ class RunController:
         # /inject endpoint uses); otherwise this run's own.
         self.mailbox = mailbox if mailbox is not None else Mailbox()
         self.hub = EventHub()
+        # The current leg's checkpoint id: a fresh one per auto-chained leg,
+        # None without a checkpointer.
         self.run_id = (
             first_checkpoint.resolved_run_id if first_checkpoint is not None else None
         )
+        # The whole run's id, from its first leg to its end and across a
+        # resume: its durable record, lifecycle events and GET /api/runs.
+        # start()/start_resume() settle it before anyone can see the run.
+        self.record_id = self.run_id or uuid.uuid4().hex
         self.status = "running"
         self.turns = 0
         self.succeeded = False
@@ -607,10 +613,10 @@ class RunController:
         error_seen = False
         final_error: str | None = None  # message for the durable run record
         failed_terminally = False  # ended in a non-resumable failure (drop checkpoint)
-        # The durable run record. Keyed by the first leg's run_id so a resumed
-        # run finalizes the row it opened; minted when checkpointing is off.
-        # Best-effort bookkeeping: never let it break the run itself.
-        record_id = self.run_id or uuid.uuid4().hex
+        # The durable run record, under the run's stable id — so a resumed run
+        # finalizes the row it opened. Best-effort bookkeeping: never let it
+        # break the run itself.
+        record_id = self.record_id
         try:
             await store.start_run(
                 RunRow(
@@ -737,7 +743,7 @@ class RunController:
                 next_input = []
                 seed = []
                 ckpt = await self.supervisor._checkpoint_for(
-                    sid, uuid.uuid4().hex, self.client
+                    sid, uuid.uuid4().hex, self.client, record_id=record_id
                 )
             if succeeded and store.checkpointer is not None:
                 await store.clear_active_run_id(sid, expected=self.run_id)
@@ -885,12 +891,19 @@ class RunSupervisor:
         return iter(list(self._controllers.items()))
 
     async def _checkpoint_for(
-        self, sid: str, run_id: str, client: JsonObject | None
+        self,
+        sid: str,
+        run_id: str,
+        client: JsonObject | None,
+        *,
+        record_id: str | None = None,
     ) -> CheckpointOptions | None:
+        """Point the chat at a leg's checkpoint ``run_id``; ``record_id`` names
+        the run it continues (None: a first leg, whose record is ``run_id``)."""
         store = self.deps.store
         if store.checkpointer is None:
             return None
-        await store.set_active_run_id(sid, run_id, context=client)
+        await store.set_active_run_id(sid, run_id, context=client, record_id=record_id)
         return CheckpointOptions(
             checkpointer=store.checkpointer,
             run_id=run_id,
@@ -966,8 +979,10 @@ class RunSupervisor:
         # running task. The loser now gets the 409 above and attaches instead.
         self._controllers[session_id] = ctrl
         self.last_client[session_id] = client
+        # The first leg's checkpoint id is the run's id too.
+        ctrl.record_id = uuid.uuid4().hex
         try:
-            ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex, client)
+            ckpt = await self._checkpoint_for(session_id, ctrl.record_id, client)
         except BaseException:
             self._controllers.pop(session_id, None)
             # A concurrent request may have attached during that await; close
@@ -1008,6 +1023,12 @@ class RunSupervisor:
             delete_on_success=True,
         )
         seed = drop_system_entries(list(snapshot.entries))
+        # A leg past the first checkpoints under its own id; the pointer beside
+        # it names the run it continues.
+        record_id = await self.deps.store.get_active_record_id(
+            session_id, snapshot.run_id
+        )
+        self._check_slot(session_id, cap=False)  # that await, as above
         ctrl = RunController(
             deps=self.deps,
             supervisor=self,
@@ -1025,6 +1046,7 @@ class RunSupervisor:
             run_deps=run_deps,
             chat_created_at=meta.created_at if meta else None,
         )
+        ctrl.record_id = record_id
         self._controllers[session_id] = ctrl
         self.last_client[session_id] = client
         return ctrl
@@ -1129,15 +1151,15 @@ async def forward(
     source: _Attachment | _Subscription,
     *,
     sid: str,
-    emit_session: bool,
+    run_id: str,
 ) -> AsyncIterator[dict[str, str]]:
-    """Stream a subscription (START/resume) or a re-attach to SSE payloads.
+    """Stream a subscription (START/resume) or a re-attach to SSE payloads,
+    opening with the ``session`` frame that names the chat and the run.
 
     On client disconnect, sse-starlette cancels this generator → the ``finally``
     unsubscribes (the entire **detach** mechanism); the run is never touched.
     """
-    if emit_session:
-        yield frame("session", SessionData(session_id=sid))
+    yield frame("session", SessionData(session_id=sid, run_id=run_id))
     if isinstance(source, _Attachment):
         sub = source.subscription
         yield frame(

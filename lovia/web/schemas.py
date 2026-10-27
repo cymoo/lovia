@@ -175,6 +175,10 @@ class ChatRequest(BaseModel):
     # provideContext): handed to create_app(run_deps=...) as trigger.client.
     # Ignored when the message joins a live run, which keeps its own.
     context: dict[str, Any] | None = None
+    # A stream request for a chat with a live run: "inject" steers the message
+    # into that run (its next turn); "reject" answers 409 run_active and never
+    # injects — for a message meant to start a run of its own (a follow-up).
+    busy: Literal["inject", "reject"] = "inject"
 
     _bounded = field_validator("context")(lambda value: _bounded_context(value))
 
@@ -304,7 +308,9 @@ class RunInfo(BaseModel):
     """A live supervised (background) run, for ``GET /api/runs``."""
 
     session_id: str
-    run_id: str | None = None
+    # The run's id, stable across its auto-chained legs and a resume: the
+    # one run_started / run_finished and GET /api/runs/history carry.
+    run_id: str
     agent: str
     status: Literal["running", "blocked_on_approval"]
     turns: int

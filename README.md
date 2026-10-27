@@ -494,9 +494,6 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   any reply, messages that steer a running run or queue until it completes,
   approvals, schedules, a memory editor and file attachments; runs survive
   browser disconnects.
-- **Models set up in the browser** — Settings → Models saves profiles to
-  `~/.lovia/config.json` and applies changes live; `lovia web --check`
-  diagnoses the connection.
 - **Rich tool results** — a tool returns `ui_result(kind, props)` to draw UI;
   tables, ECharts charts and sandboxed HTML pages come built in
   (`show_table`, `show_chart`, `show_html`).

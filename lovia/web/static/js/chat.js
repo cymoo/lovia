@@ -3688,7 +3688,9 @@ function toggleComposerMode() {
   } catch { /* the choice lasts this page only */ }
   syncComposerMode();
   updateSendEnabled();
-  toast(t(next === 'queue' ? 'composer.nowQueue' : 'composer.nowSteer'));
+  toast(t(next === 'queue' ? 'composer.nowQueue' : 'composer.nowSteer'), {
+    key: 'composer-mode', timeout: 1500,
+  });
 }
 
 /**

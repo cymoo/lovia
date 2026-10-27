@@ -30,6 +30,7 @@ import {
   toolPath,
 } from './tools.js';
 import { BlockStream } from './stream-blocks.js';
+import { createSendQueue } from './send-queue.js';
 import { isStep, placeStep, removeStep, sealActivity } from './activity.js';
 import { collectContext } from './lovia.js';
 import { messageActionButtons, watchMessageActions } from './message-actions.js';
@@ -2316,6 +2317,12 @@ async function applyEvent({ event, data }) {
       // Surface it in the sidebar right away — with its provisional title —
       // instead of waiting for the run to finish.
       if (!known) loadSessions();
+      // The run this view follows, by the id its lifecycle events carry: what
+      // a message queued now waits on.
+      _shownRunId = data.run_id ?? null;
+      updateSendEnabled(); // a message can queue behind it now
+      _onAdmit?.(data.run_id);
+      _onAdmit = null;
       // The run is registered now: a stop clicked while it was being admitted
       // can reach it.
       _admitting = false;
@@ -2736,6 +2743,13 @@ let _streamAbortController = null;
 // run, and a stop waits for it (see cancelStream).
 let _admitting = false;
 let _stopOnceAdmitted = false;
+// The run the view streams, once its `session` frame names it (null before,
+// and after the stream ends): what a message queued now waits on.
+/** @type {string | null} */
+let _shownRunId = null;
+// runStream's ear for that frame: its run was admitted.
+/** @type {((runId: string) => void) | null} */
+let _onAdmit = null;
 // When the run on screen started (epoch seconds; 0: unknown), for the Stop
 // button's tooltip: how long it's gone on, there when wanted, never on screen.
 let _runStartedAt = 0;
@@ -2903,7 +2917,7 @@ function enterStreamingUI() {
     stopBtn.title = t('composer.stopTip');
   }
   scrollBtn?.classList.add('live');
-  if (promptEl) promptEl.placeholder = t('composer.queuePlaceholder');
+  syncComposerMode();
   updateSendEnabled();
   // Keep screen readers from re-announcing every 60 ms streaming re-render;
   // they pick the transcript back up once the turn settles.
@@ -2915,6 +2929,7 @@ function enterStreamingUI() {
 /** @param {'done' | 'error' | 'cancelled' | 'detached'} [status] How the run shown went. */
 function exitStreamingUI(status = 'detached') {
   store.streaming = false;
+  _shownRunId = null;
   _awaiting = null;
   syncAwaiting();
   scrollBtn?.classList.remove('live');
@@ -2926,6 +2941,7 @@ function exitStreamingUI(status = 'detached') {
     promptEl.placeholder = t('composer.placeholder');
     promptEl.focus();
   }
+  syncComposerMode(); // the mode button is a mid-run control
   updateSendEnabled();
   document.getElementById('transcript')?.setAttribute('aria-busy', 'false');
   updateRegenButton();
@@ -2934,13 +2950,31 @@ function exitStreamingUI(status = 'detached') {
 }
 
 /**
+ * How a stream's request went, for a caller that must know: `admitted` once
+ * its `session` frame named the run; `refused` when the server turned it
+ * away (its error), nothing having started.
+ * @typedef {{ admitted: boolean, refused: { code: string, message: string } | null }} StreamOutcome
+ */
+
+/**
  * Send `message` (with optional attachments) and stream the assistant's reply
  * into a new turn.
  * @param {string} message
  * @param {any[] | null} [attachments] Prepared attachment descriptors.
- * @returns {Promise<void>}
+ * @param {{ busy?: 'reject', onAdmit?: (runId: string) => void }} [opts]
+ *   `busy: 'reject'` — a queued message: never steered into a live run, and
+ *   a refusal or a break before admission is reported, not drawn (the
+ *   queue's strip says what happened). `onAdmit` hears the run's id.
+ * @returns {Promise<StreamOutcome>}
  */
-export async function runStream(message, attachments = null) {
+export async function runStream(message, attachments = null, { busy, onAdmit } = {}) {
+  const queued = busy === 'reject';
+  /** @type {StreamOutcome} */
+  const outcome = { admitted: false, refused: null };
+  _onAdmit = (runId) => {
+    outcome.admitted = true;
+    onAdmit?.(runId);
+  };
   store.lastMessage = message;
   store.titlePending = false; // set true by the `session` event for new chats
   stopTitlePolling();
@@ -2976,6 +3010,7 @@ export async function runStream(message, attachments = null) {
         session_id: store.sessionId,
         attachments: attachments?.length ? attachments : undefined,
         context: collectContext(),
+        busy,
       },
       { signal: _streamAbortController.signal }
     );
@@ -2985,6 +3020,10 @@ export async function runStream(message, attachments = null) {
       // The server's message (e.g. "too many concurrent runs") beats a bare
       // status line.
       const err = await apiError(res);
+      if (queued) {
+        outcome.refused = { code: err.code ?? '', message: err.message };
+        return outcome;
+      }
       _lastErrorCode = err.code ?? '';
       appendErrorNotice(err.message, err.code);
       appendRetry();
@@ -2999,15 +3038,18 @@ export async function runStream(message, attachments = null) {
     for await (const ev of readStream(res, flags)) {
       if (store.chatEpoch !== streamEpoch) {
         _streamAbortController?.abort();
-        return;
+        return outcome;
       }
       await handleEvent(ev);
     }
   } catch (err) {
     // A session switch / new chat detaches by bumping the epoch and aborting
     // the fetch — not an error, and the view we left is gone. Leave it alone.
-    if (store.chatEpoch !== streamEpoch) return;
+    if (store.chatEpoch !== streamEpoch) return outcome;
     terminal = true;
+    // A queued message that broke off before the server named its run: its
+    // fate is unknown, which the queue reports.
+    if (queued && !outcome.admitted) return outcome;
     if (err.name === 'AbortError') {
       cancelled = true;
       ensureBody();
@@ -3023,6 +3065,7 @@ export async function runStream(message, attachments = null) {
     }
   } finally {
     cancelRender();
+    _onAdmit = null;
     // If a switch superseded this stream, its DOM/UI now belong to another view;
     // do only the connection-local cleanup above and skip the rest.
     if (store.chatEpoch === streamEpoch) {
@@ -3067,6 +3110,7 @@ export async function runStream(message, attachments = null) {
       }
     }
   }
+  return outcome;
 }
 
 /**
@@ -3372,10 +3416,13 @@ function updateSendEnabled() {
   if (store.streaming) {
     // Stop owns the slot; Send reappears only once there's text to queue —
     // a greyed Send next to Stop reads as two competing controls.
+    // What Send does now, said on the button too: the placeholder that says
+    // it is gone once there is text. Queuing waits for the run to be named.
+    const queue = composerMode() === 'queue';
     sendBtn.hidden = !hasText;
-    sendBtn.disabled = !hasText;
-    sendBtn.title = t('composer.queueTip');
-    sendBtn.setAttribute('aria-label', t('composer.queueSend'));
+    sendBtn.disabled = !hasText || (queue && !_shownRunId);
+    sendBtn.title = t(queue ? 'composer.queueTip' : 'composer.steerTip');
+    sendBtn.setAttribute('aria-label', t(queue ? 'composer.queueSend' : 'composer.steerSend'));
   } else {
     sendBtn.hidden = false;
     sendBtn.disabled = !(hasText || pendingReady().length);
@@ -3599,6 +3646,166 @@ export async function sendText(message) {
   }
 }
 
+// ---- Queued messages: sent once the run on screen completes (#308) -------
+// While a run streams, the composer either steers it (the message joins its
+// next turn, above) or queues the message to start a run of its own after
+// this one completes (send-queue.js). Which is the user's standing choice —
+// the mode button flips it, ⌥/Alt+Enter flips one send.
+const MODE_KEY = 'lovia-composer-mode';
+const modeBtn = /** @type {HTMLButtonElement | null} */ (document.getElementById('composer-mode'));
+const queueEl = document.getElementById('send-queue');
+let _flipOnce = false;
+// The open chat is drawn, not mid-switch: a queued message may join it.
+let _viewReady = true;
+
+/** @returns {'steer' | 'queue'} */
+function composerMode() {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'queue' ? 'queue' : 'steer';
+  } catch {
+    return 'steer';
+  }
+}
+
+function syncComposerMode() {
+  const queue = composerMode() === 'queue';
+  if (modeBtn) {
+    modeBtn.hidden = !store.streaming;
+    modeBtn.innerHTML = icon(queue ? 'clock' : 'zap', { size: 16 });
+    const label = t(queue ? 'composer.modeQueue' : 'composer.modeSteer');
+    modeBtn.title = label;
+    modeBtn.setAttribute('aria-label', label);
+  }
+  if (promptEl && store.streaming) {
+    promptEl.placeholder = t(queue ? 'composer.queuePlaceholder' : 'composer.steerPlaceholder');
+  }
+}
+
+function toggleComposerMode() {
+  const next = composerMode() === 'queue' ? 'steer' : 'queue';
+  try {
+    localStorage.setItem(MODE_KEY, next);
+  } catch { /* the choice lasts this page only */ }
+  syncComposerMode();
+  updateSendEnabled();
+  toast(t(next === 'queue' ? 'composer.nowQueue' : 'composer.nowSteer'));
+}
+
+/**
+ * Send a queued message as its own run (busy="reject"): a muted turn until
+ * the server admits it, gone if it is refused.
+ * @param {string} sid
+ * @param {string} text
+ * @returns {Promise<import('./send-queue.js').SendResult>}
+ */
+function sendQueued(sid, text) {
+  return new Promise((resolve) => {
+    if (store.sessionId !== sid) {
+      resolve('busy'); // left between the check and the send: ask again later
+      return;
+    }
+    document.getElementById('empty-state')?.remove();
+    _resumeAutoScroll();
+    const node = appendUserTurn(text, { queued: true });
+    void runStream(text, null, {
+      busy: 'reject',
+      onAdmit: (runId) => {
+        confirmQueuedTurn(node);
+        resolve({ runId });
+      },
+    }).then((outcome) => {
+      if (outcome.admitted) return;
+      node?.remove();
+      if (outcome.refused?.code === 'run_active') {
+        resolve('busy');
+      } else if (outcome.refused) {
+        toast(outcome.refused.message, { type: 'error' });
+        resolve({ refused: outcome.refused.message });
+      } else {
+        resolve('unknown');
+      }
+    });
+  });
+}
+
+const sendQueue = createSendQueue({
+  liveRuns: () => api.listRuns(),
+  runRecord: async (runId) => (await api.runHistory({ run_id: runId, limit: 1 }))[0] ?? null,
+  ready: (sid) => _viewReady && store.sessionId === sid && !store.streaming,
+  send: sendQueued,
+  changed: (sid) => {
+    if (sid === store.sessionId) renderQueue();
+  },
+});
+
+/** The open chat's queue, above the composer. */
+function renderQueue() {
+  if (!queueEl) return;
+  const sid = store.sessionId;
+  const { items, paused, sending } = sid
+    ? sendQueue.view(sid)
+    : { items: [], paused: null, sending: null };
+  queueEl.hidden = !items.length;
+  queueEl.replaceChildren();
+  if (!sid || !items.length) return;
+  if (paused) {
+    const note = document.createElement('div');
+    note.className = 'send-queue-note';
+    const text = document.createElement('span');
+    text.textContent = t(paused === 'unknown' ? 'queue.unknown' : 'queue.paused');
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'btn btn-ghost btn-sm';
+    go.textContent = t(paused === 'unknown' ? 'queue.resend' : 'queue.sendNow');
+    go.addEventListener('click', () => sendQueue.sendNow(sid));
+    note.append(text, go);
+    queueEl.append(note);
+  }
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'send-queue-item';
+    row.innerHTML = icon('clock', { size: 13 });
+    const text = document.createElement('span');
+    text.className = 'send-queue-text';
+    text.textContent = item.text;
+    text.title = item.text;
+    const drop = document.createElement('button');
+    drop.type = 'button';
+    drop.className = 'send-queue-drop';
+    drop.innerHTML = icon('x', { size: 13 });
+    drop.title = t('queue.withdraw');
+    drop.setAttribute('aria-label', t('queue.withdraw'));
+    drop.disabled = sending === item.id;
+    drop.addEventListener('click', () => sendQueue.withdraw(sid, item.id));
+    row.append(text, drop);
+    queueEl.append(row);
+  }
+}
+
+// Every wake-up goes through the queue's one pump, which asks the server
+// afresh: the view's own stream ending (after its cleanup), any run starting
+// or ending (/api/events, and its reconnects), the chat drawn after a switch.
+store.on('run-end', ({ sessionId }) => {
+  if (sessionId) void sendQueue.pump(sessionId);
+});
+store.on('runs-changed', () => {
+  if (store.sessionId) void sendQueue.pump(store.sessionId);
+});
+store.on('session-switched', () => {
+  _viewReady = false;
+  renderQueue();
+});
+store.on('session-loaded', (id) => {
+  _viewReady = true;
+  renderQueue();
+  void sendQueue.pump(id);
+});
+store.on('reset-chat-view', () => {
+  _viewReady = true;
+  renderQueue();
+});
+modeBtn?.addEventListener('click', toggleComposerMode);
+
 // UI components (components.js) see the page through this context, and may
 // post a message for the user — only from a real click/keypress, so a
 // component can never send on its own (e.g. while rendering).
@@ -3713,6 +3920,14 @@ export function initComposer() {
   restoreDraft(); // the new-chat draft; a URL-restored session re-restores on switch
   promptEl?.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || coarsePointer) return;
+    // ⌥/Alt+Enter mid-run: this one message the other way (steer ⇄ queue),
+    // whichever Enter preference is set.
+    if (e.altKey && store.streaming) {
+      e.preventDefault();
+      _flipOnce = true;
+      composer?.requestSubmit();
+      return;
+    }
     const withMod = e.metaKey || e.ctrlKey;
     const send = enterToSend() ? !e.shiftKey && !withMod : withMod;
     if (send) {
@@ -3733,15 +3948,25 @@ export function initComposer() {
     const message = promptEl.value.trim();
 
     if (store.streaming) {
-      // Queue path — text only; attachments need a fresh turn, not inject.
+      // Mid-run — text only; attachments need a fresh turn of their own.
       if (!message) return;
+      const queue = (composerMode() === 'queue') !== _flipOnce;
+      _flipOnce = false;
+      // A message queues behind the run on screen, which its stream names
+      // as it is admitted: until then the text stays put (Send is disabled).
+      if (queue && !(store.sessionId && _shownRunId)) return;
       promptEl.value = '';
       autoresize();
       updateSendEnabled();
       clearDraft();
+      if (queue) {
+        sendQueue.enqueue(store.sessionId, message, _shownRunId);
+        return;
+      }
       await sendText(message);
       return;
     }
+    _flipOnce = false;
 
     const attachments = pendingReady();
     if (!message && !attachments.length) return;

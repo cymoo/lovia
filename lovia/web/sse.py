@@ -35,6 +35,9 @@ from .errors import RunErrorCode, run_error_code
 
 class SessionData(TypedDict):
     session_id: str
+    # The run this stream follows — the id its run_started / run_finished
+    # carry, stable across auto-chained legs and a resume.
+    run_id: str
 
 
 class SnapshotData(TypedDict):

@@ -225,9 +225,20 @@ def _fork_origin(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE chat_ui_data_v2 RENAME TO chat_ui_data")
 
 
+def _active_record(conn: sqlite3.Connection) -> None:
+    """Version 3: ``active_record_id`` — the run record an interrupted run's
+    checkpoint belongs to. Each auto-chained leg checkpoints under a fresh id,
+    so a leg past the first can't name its run's record by itself (#308)."""
+    conn.execute("ALTER TABLE chat_sessions ADD COLUMN active_record_id TEXT")
+
+
 # Changes to the chat tables since ``_META_SCHEMA``, in order (see
 # ``SQLiteStore``). Append a step; never edit one that has shipped.
-_MIGRATIONS: tuple[Migration, ...] = (_reconcile_unversioned, _fork_origin)
+_MIGRATIONS: tuple[Migration, ...] = (
+    _reconcile_unversioned,
+    _fork_origin,
+    _active_record,
+)
 
 
 @dataclass(frozen=True)
@@ -816,18 +827,36 @@ class ChatStore:
         )
 
     async def set_active_run_id(
-        self, session_id: str, run_id: str, *, context: JsonObject | None = None
+        self,
+        session_id: str,
+        run_id: str,
+        *,
+        context: JsonObject | None = None,
+        record_id: str | None = None,
     ) -> None:
         """Record that ``run_id`` is the active (potentially interrupted) run.
 
         ``context`` is the run's client context: a resume after a restart
         hands it to ``run_deps=`` again, since a checkpoint keeps none.
+        ``record_id`` is the run record the checkpoint's leg belongs to, for
+        the same resume (None: the record is ``run_id`` itself).
         """
         await self._write(
-            "UPDATE chat_sessions SET active_run_id = ?, active_context_json = ? "
-            "WHERE id = ?",
-            (run_id, _dumps_context(context), session_id),
+            "UPDATE chat_sessions SET active_run_id = ?, active_context_json = ?, "
+            "active_record_id = ? WHERE id = ?",
+            (run_id, _dumps_context(context), record_id, session_id),
         )
+
+    async def get_active_record_id(self, session_id: str, run_id: str) -> str:
+        """The run record of the active checkpoint ``run_id``: the one stored
+        beside it, else ``run_id`` itself (a pointer from before version 3)."""
+        record = await self._read_one(
+            "SELECT active_record_id FROM chat_sessions "
+            "WHERE id = ? AND active_run_id = ?",
+            (session_id, run_id),
+            lambda row: row[0],
+        )
+        return record or run_id
 
     async def get_active_context(self, session_id: str) -> JsonObject | None:
         """The client context recorded with the active run, if any."""
@@ -850,13 +879,14 @@ class ChatStore:
         if expected is None:
             await self._write(
                 "UPDATE chat_sessions SET active_run_id = NULL, "
-                "active_context_json = NULL WHERE id = ?",
+                "active_context_json = NULL, active_record_id = NULL WHERE id = ?",
                 (session_id,),
             )
         else:
             await self._write(
                 "UPDATE chat_sessions SET active_run_id = NULL, "
-                "active_context_json = NULL WHERE id = ? AND active_run_id = ?",
+                "active_context_json = NULL, active_record_id = NULL "
+                "WHERE id = ? AND active_run_id = ?",
                 (session_id, expected),
             )
 
@@ -1069,6 +1099,7 @@ class ChatStore:
         session_id: str | None = None,
         source: str | None = None,
         since: float | None = None,
+        run_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> Sequence[RunRow]:
@@ -1076,10 +1107,13 @@ class ChatStore:
 
         ``since`` keeps only runs that finished after that timestamp — the
         "what completed while I was away?" query behind reload-surviving
-        notifications.
+        notifications. ``run_id`` picks one run's record.
         """
         where: list[str] = []
         params: list[Any] = []
+        if run_id is not None:
+            where.append("id = ?")
+            params.append(run_id)
         if session_id is not None:
             where.append("session_id = ?")
             params.append(session_id)

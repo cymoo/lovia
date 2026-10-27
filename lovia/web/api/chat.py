@@ -41,6 +41,16 @@ from .deps import RouterDeps
 from .serialization import Run, segments_runs
 
 
+def _busy() -> WebError:
+    """The refusal of a ``busy="reject"`` message for a chat with a live run."""
+    return WebError(
+        409,
+        "run_active",
+        "a run is active for this session",
+        hint='sent with busy="reject": send it again once that run has ended',
+    )
+
+
 def build_chat_router(deps: RouterDeps) -> APIRouter:
     router = APIRouter()
     store = deps.store
@@ -149,6 +159,11 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     @router.post("/api/chat/stream")
     async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse:
         sid = req.session_id or uuid.uuid4().hex
+        if req.busy == "reject" and deps.supervisor.get(sid) is not None:
+            # Known busy on arrival: refused before the hook or any write. A
+            # run that starts later is caught in attach() — no inject, no
+            # start, though the hook may have run and the chat been touched.
+            raise _busy()
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
         agent = resolve_agent(meta, req.agent)
         is_new = meta is None
@@ -180,11 +195,15 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
 
         def attach(live: RunController) -> EventSourceResponse:
             # A run is already live for this session: a new message injects
-            # (Phase 1); this connection attaches to co-watch it.
+            # (Phase 1); this connection attaches to co-watch it. Every path
+            # that finds one comes through here, so busy="reject" holds on
+            # each — a message never meant to steer is refused instead.
+            if req.busy == "reject":
+                raise _busy()
             if req.message.strip():
                 live.inject(req.message)
             return EventSourceResponse(
-                forward(live.attach(with_snapshot=True), sid=sid, emit_session=True)
+                forward(live.attach(with_snapshot=True), sid=sid, run_id=live.record_id)
             )
 
         live = deps.supervisor.get(sid)
@@ -230,7 +249,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         sub = ctrl.subscribe_live()
         if checkpointer is not None and stranded:
             await checkpointer.delete(stranded)
-        return EventSourceResponse(forward(sub, sid=sid, emit_session=True))
+        return EventSourceResponse(forward(sub, sid=sid, run_id=ctrl.record_id))
 
     @router.post("/api/chat/inject")
     async def chat_inject(req: InjectRequest) -> dict[str, Any]:
@@ -320,7 +339,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 forward(
                     live.attach(with_snapshot=True),
                     sid=session_id,
-                    emit_session=True,
+                    run_id=live.record_id,
                 )
             )
 
@@ -394,12 +413,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                     forward(
                         live.attach(with_snapshot=True),
                         sid=session_id,
-                        emit_session=True,
+                        run_id=live.record_id,
                     )
                 )
             raise
         return EventSourceResponse(
-            forward(ctrl.subscribe_resume(runs), sid=session_id, emit_session=True)
+            forward(ctrl.subscribe_resume(runs), sid=session_id, run_id=ctrl.record_id)
         )
 
     return router

@@ -156,6 +156,8 @@ export function initEventStream() {
     _eventsLive = true;
     clearTimeout(_pollTimer);
     refresh();
+    // A run may have ended while disconnected, its run_finished missed.
+    store.emit('runs-changed');
   };
   es.onerror = () => {
     // CONNECTING → a transient drop: EventSource retries by itself and the
@@ -876,6 +878,9 @@ export async function switchSession(id) {
       // tail. Skipped while a run is live: its own completion produces fresh ones.
       store.emit('maybe-followups', data.entries || []);
     }
+    // The chat is drawn (and reattached, if a run goes on): what waits for
+    // its view — messages queued to send here — may act now.
+    store.emit('session-loaded', id);
   } catch (err) {
     if (store.sessionId !== id) return; // superseded; don't clobber the new view
     const errState = document.createElement('div');

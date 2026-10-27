@@ -664,9 +664,10 @@ async def test_cancel_during_auto_chain_hop_does_not_revive(monkeypatch) -> None
     orig_set = store.set_active_run_id
     sets = 0
 
-    async def gated_set(sid, run_id, *, context=None):
+    async def gated_set(sid, run_id, *, context=None, record_id=None):
         nonlocal sets
-        await orig_set(sid, run_id, context=context)  # advance the DB pointer first
+        # Advance the DB pointer first.
+        await orig_set(sid, run_id, context=context, record_id=record_id)
         sets += 1
         if sets == 2:
             parked.set()
@@ -1219,7 +1220,7 @@ async def test_failed_start_releases_window_attachers(monkeypatch) -> None:
     entered = asyncio.Event()
     proceed = asyncio.Event()
 
-    async def failing_set_active(self, session_id, run_id, *, context=None):
+    async def failing_set_active(self, session_id, run_id, **_):
         entered.set()
         await proceed.wait()
         raise RuntimeError("db down")
@@ -1231,7 +1232,7 @@ async def test_failed_start_releases_window_attachers(monkeypatch) -> None:
             session_id="s1", agent=agent, input="go", is_new=True, title_message=None
         )
     )
-    await entered.wait()
+    await asyncio.wait_for(entered.wait(), timeout=5)
     live = deps.supervisor.get("s1")
     assert live is not None  # reserved during the window
     attachment = live.attach(with_snapshot=True)

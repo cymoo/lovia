@@ -152,8 +152,8 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/chat/cancel?session_id=` | 取消正在执行的 Run（保留已完成的 Turn） |
 | `POST /api/chat/inject` / `uninject` | 为正在执行的 Run 排队或撤回[追加指令](cancellation.md#在运行中追加指令) |
 | `GET /api/sessions?q=&limit=&offset=` | 列出或搜索对话（置顶优先，支持分页）；`DELETE` 清空全部对话 |
-| `GET /api/runs` | 正在运行的服务端托管任务 |
-| `GET /api/runs/history?session_id=&source=&since=&limit=&offset=` | 查询持久化的运行记录，包括结果、错误、时长和 token 用量；`since` 按结束时间过滤 |
+| `GET /api/runs` | 正在运行的服务端托管任务。`run_id` 与该 Run 的生命周期事件和运行记录一致，自动续跑和恢复后都不变 |
+| `GET /api/runs/history?session_id=&source=&since=&run_id=&limit=&offset=` | 查询持久化的运行记录，包括结果、错误、时长和 token 用量；`since` 按结束时间过滤，`run_id` 查询单个 Run |
 | `GET /api/events` | **SSE**：订阅进程级生命周期事件（不重放历史事件） |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名或置顶；删除（连同其后台任务和绑定它的定时任务）。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null`。每次 Run 的最后一条回答带 `duration`（秒）；记录了用时的 Run，其消息时间戳为真实时间。来自另一个对话的聊天带 `origin`：`kind` 为 `"fork"`（分支）或 `"spawn"`（由那个对话的 agent 用 `start_session` 启动）；列表中的 `origin_kind` 与之一致 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
@@ -174,6 +174,11 @@ API 路由抛出的错误都使用同一种响应体：
 `POST /api/schedules` 同样接受 `context`。`context` 是一个不超过 64 KB 的 JSON 对象，即
 `create_app(run_deps=...)` 以 `trigger.client_context` 收到的客户端上下文（见[运行依赖](web-server.md#运行依赖)）。
 加入一个进行中运行的消息不会改变那次运行的上下文。
+
+`/api/chat/stream` 还接受 `busy`，决定对话已有 Run 在执行时如何处理这条消息：`"inject"`（默认）
+把它作为追加指令注入该 Run；`"reject"` 改为返回 409 `run_active`，绝不注入——用于必须单独
+启动一次 Run 的消息，例如排队到本轮结束后再发送的 follow-up。请求到达时对话已经忙碌，会在执行
+任何逻辑、写入任何数据之前拒绝；期间另有 Run 启动时同样拒绝，既不注入，也不启动新 Run。
 
 ### 生命周期事件
 
@@ -223,7 +228,7 @@ API 路由抛出的错误都使用同一种响应体：
 
 | SSE 事件 | 数据 |
 | --- | --- |
-| `session` | `{session_id}`：新聊天流的第一条事件 |
+| `session` | `{session_id, run_id}`：每个聊天流的第一条事件，标明对话和所跟随的 Run（即其生命周期事件中的 `run_id`） |
 | `snapshot` | `{session_id, status, entries}`：重连时的当前状态，包含已完成的 Turn |
 | `text_delta` | `{delta}` |
 | `reasoning_delta` | `{delta}` |

@@ -160,8 +160,8 @@ normalizes all three.
 | `POST /api/chat/cancel?session_id=` | stop the live run (completed turns are kept) |
 | `POST /api/chat/inject` / `uninject` | queue / withdraw a [steering message](cancellation.md#steering-a-live-run) for the live run |
 | `GET /api/sessions?q=&limit=&offset=` | list / search chats (pinned first, paged); `DELETE` clears all |
-| `GET /api/runs` | live supervised runs |
-| `GET /api/runs/history?session_id=&source=&since=&limit=&offset=` | persisted run records (outcome, error, duration, token usage); `since` filters to runs finished after that timestamp |
+| `GET /api/runs` | live supervised runs. A run's `run_id` is the one its lifecycle events and history record carry, kept across auto-chained legs and a resume |
+| `GET /api/runs/history?session_id=&source=&since=&run_id=&limit=&offset=` | persisted run records (outcome, error, duration, token usage); `since` filters to runs finished after that timestamp, `run_id` picks one run |
 | `GET /api/events` | **SSE**: subscribe to process-wide lifecycle events (no history replay) |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete (with its subagent tasks and the schedules bound to it). Each user message carries a `ref` — `"<run_id>:<n>"`, stable across reloads and rewinds; `null` until its run has finished. The answer that ends a run carries its `duration` in seconds, and timestamps are real where the run recorded its timing. A chat that came from another carries `origin` — `kind` is `"fork"` (a branch) or `"spawn"` (started by that chat's agent with `start_session`) — and the list's `origin_kind` says the same |
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
@@ -184,6 +184,13 @@ takes a `context` too. `context` is a JSON object of at most 64 KB — the clien
 context `create_app(run_deps=...)` receives as `trigger.client_context` (see
 [Run deps](web-server.md#run-deps)). A message that joins a live run
 doesn't change that run's context.
+
+`/api/chat/stream` also takes `busy`: what a message for a chat with a live
+run does. `"inject"` (the default) steers it into that run; `"reject"` answers
+409 `run_active` instead and never injects — for a message that must start a
+run of its own, such as a follow-up queued until the current run ends. A chat
+already busy on arrival is refused before anything runs or is written; a run
+that starts meanwhile is still refused, with no injection and no new run.
 
 ### Lifecycle events
 
@@ -238,7 +245,7 @@ of `event:` / `data:` pairs: the Runner's
 
 | SSE event | Payload |
 | --- | --- |
-| `session` | `{session_id}` — first frame of a new stream |
+| `session` | `{session_id, run_id}` — first frame of every stream: the chat, and the run it follows (the id its lifecycle events carry) |
 | `snapshot` | `{session_id, status, entries}` — re-attach prologue: the completed turns so far |
 | `text_delta` | `{delta}` |
 | `reasoning_delta` | `{delta}` |

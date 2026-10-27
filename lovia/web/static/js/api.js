@@ -175,9 +175,10 @@ export const api = {
   // Persisted run records, newest first. `since` keeps only runs finished
   // after that timestamp — the missed-completion catch-up on page load.
   // `session_id` scopes to one chat — the context-ring restore on reload.
-  /** @param {{ session_id?: string, since?: number, limit?: number }} [opts] */
-  runHistory: ({ session_id, since, limit } = {}) =>
-    request(`/api/runs/history${qs({ session_id, since, limit })}`).then(_json),
+  // `run_id` picks one run's record — how a queued message's run ended.
+  /** @param {{ session_id?: string, since?: number, limit?: number, run_id?: string }} [opts] */
+  runHistory: ({ session_id, since, limit, run_id } = {}) =>
+    request(`/api/runs/history${qs({ session_id, since, limit, run_id })}`).then(_json),
   getSession: (id) => request(`/api/sessions/${encodeURIComponent(id)}`).then(_json),
   renameSession: (id, title) =>
     request(`/api/sessions/${encodeURIComponent(id)}`, {

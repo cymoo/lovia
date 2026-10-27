@@ -12,7 +12,7 @@ import pytest
 from lovia.stores import InMemorySession
 from lovia.transcript import TranscriptEntry, AssistantTextEntry
 from lovia.web import ChatStore
-from lovia.web.store import RunRow, ScheduleRow
+from lovia.web.store import _MIGRATIONS, RunRow, ScheduleRow
 
 
 def _journal_mode(path: Path) -> str:
@@ -457,7 +457,7 @@ def test_migrated_database_matches_a_fresh_one(tmp_path: Path) -> None:
         conn = sqlite3.connect(path)
         versions = dict(conn.execute("SELECT store, version FROM lovia_schema"))
         conn.close()
-        assert versions == {"chat": 2}
+        assert versions == {"chat": len(_MIGRATIONS)}
 
 
 async def test_chat_store_wal_covers_all_three_stores(tmp_path: Path) -> None:

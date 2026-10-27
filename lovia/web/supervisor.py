@@ -862,6 +862,24 @@ class RunController:
 # --------------------------------------------------------------------------- #
 
 
+def _spent_before(record: JsonObject | None, leg: Usage) -> Usage:
+    """What a resumed run's earlier legs spent: its record's usage, written
+    when it was interrupted, less what the interrupted leg had spent then —
+    the leg reports that again, in its own total, when it completes."""
+    fields = (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+    )
+    return Usage(
+        **{
+            f: max(0, int(cast(int, (record or {}).get(f) or 0)) - getattr(leg, f))
+            for f in fields
+        }
+    )
+
+
 class RunSupervisor:
     def __init__(self, deps: RouterDeps) -> None:
         self.deps = deps
@@ -1028,7 +1046,8 @@ class RunSupervisor:
         record_id = await self.deps.store.get_active_record_id(
             session_id, snapshot.run_id
         )
-        self._check_slot(session_id, cap=False)  # that await, as above
+        records = await self.deps.store.list_runs(run_id=record_id, limit=1)
+        self._check_slot(session_id, cap=False)  # those awaits, as above
         ctrl = RunController(
             deps=self.deps,
             supervisor=self,
@@ -1047,6 +1066,9 @@ class RunSupervisor:
             chat_created_at=meta.created_at if meta else None,
         )
         ctrl.record_id = record_id
+        ctrl.usage = _spent_before(
+            records[0].usage if records else None, snapshot.usage
+        )
         self._controllers[session_id] = ctrl
         self.last_client[session_id] = client
         return ctrl

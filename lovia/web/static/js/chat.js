@@ -2320,6 +2320,7 @@ async function applyEvent({ event, data }) {
       // The run this view follows, by the id its lifecycle events carry: what
       // a message queued now waits on.
       _shownRunId = data.run_id ?? null;
+      updateSendEnabled(); // a message can queue behind it now
       _onAdmit?.(data.run_id);
       _onAdmit = null;
       // The run is registered now: a stop clicked while it was being admitted
@@ -3415,11 +3416,11 @@ function updateSendEnabled() {
   if (store.streaming) {
     // Stop owns the slot; Send reappears only once there's text to queue —
     // a greyed Send next to Stop reads as two competing controls.
-    sendBtn.hidden = !hasText;
-    sendBtn.disabled = !hasText;
     // What Send does now, said on the button too: the placeholder that says
-    // it is gone once there is text.
+    // it is gone once there is text. Queuing waits for the run to be named.
     const queue = composerMode() === 'queue';
+    sendBtn.hidden = !hasText;
+    sendBtn.disabled = !hasText || (queue && !_shownRunId);
     sendBtn.title = t(queue ? 'composer.queueTip' : 'composer.steerTip');
     sendBtn.setAttribute('aria-label', t(queue ? 'composer.queueSend' : 'composer.steerSend'));
   } else {
@@ -3951,13 +3952,14 @@ export function initComposer() {
       if (!message) return;
       const queue = (composerMode() === 'queue') !== _flipOnce;
       _flipOnce = false;
+      // A message queues behind the run on screen, which its stream names
+      // as it is admitted: until then the text stays put (Send is disabled).
+      if (queue && !(store.sessionId && _shownRunId)) return;
       promptEl.value = '';
       autoresize();
       updateSendEnabled();
       clearDraft();
-      // Queued after the run on screen — once its stream has named it (the
-      // instant before, the message steers instead).
-      if (queue && store.sessionId && _shownRunId) {
+      if (queue) {
         sendQueue.enqueue(store.sessionId, message, _shownRunId);
         return;
       }

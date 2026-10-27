@@ -65,15 +65,18 @@ export function createSendQueue(host) {
   }
 
   /**
-   * Whether the run waited on lets the head go: `go`, `wait` (it, or another
-   * run, still has the chat — or its outcome isn't written yet), or `stop`.
+   * Whether the head may go: `go`, `wait` (a run still has the chat, or the
+   * one waited on hasn't its outcome written yet), or `stop` (that run didn't
+   * complete). `runId` null — a forced send — skips the outcome, never the
+   * idle chat: a send into a busy chat would only bounce, again and again.
    * @param {string} sid
-   * @param {string} runId
+   * @param {string | null} runId
    * @returns {Promise<'go' | 'wait' | 'stop'>}
    */
   async function verdict(sid, runId) {
     const live = await host.liveRuns();
     if (live.some((r) => r.session_id === sid)) return 'wait';
+    if (runId === null) return 'go';
     const rec = await host.runRecord(runId);
     // The record is written when the run starts, so none for a run that is no
     // longer live means it can't be vouched for: not a success.
@@ -96,16 +99,16 @@ export function createSendQueue(host) {
       do {
         q.again = false;
         if (!q.items.length || q.paused || !host.ready(sid)) return;
-        if (!q.force && q.after !== null) {
-          // A check that can't reach the server waits for the next wake-up.
-          const v = await verdict(sid, q.after).catch(() => /** @type {const} */ ('wait'));
-          if (v === 'stop') {
-            q.paused = 'failed';
-            return;
-          }
-          if (v === 'wait') continue; // unless woken meanwhile, done for now
-          if (!host.ready(sid)) return; // the page moved on during the check
+        // A check that can't reach the server waits for the next wake-up.
+        const v = await verdict(sid, q.force ? null : q.after).catch(
+          () => /** @type {const} */ ('wait'),
+        );
+        if (v === 'stop') {
+          q.paused = 'failed';
+          return;
         }
+        if (v === 'wait') continue; // unless woken meanwhile, done for now
+        if (!host.ready(sid)) return; // the page moved on during the check
         const head = q.items[0];
         q.sending = head.id; // past withdrawing: it is on its way
         host.changed(sid);
@@ -113,7 +116,9 @@ export function createSendQueue(host) {
           q.sending = null;
         });
         if (res === 'busy') {
-          q.again = true; // ask afresh: the run that has the chat ends later
+          // Ask afresh: another run took the chat, so the check waits for its
+          // end (its run_finished wakes the queue) — or sends, if it is over.
+          q.again = true;
         } else if (res === 'unknown') {
           q.paused = 'unknown';
         } else if ('refused' in res) {

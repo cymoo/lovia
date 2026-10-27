@@ -177,6 +177,47 @@ test('a send with no answer pauses as unknown; send now forces the head', async 
   assert.deepEqual(q.view('c').items.map((i) => i.text), ['B']); // waits on RA
 });
 
+test('send now still waits for an idle chat: no resend loop on 409', async () => {
+  const { s, q } = fixture();
+  s.records.R = 'failed';
+  q.enqueue('c', 'A', 'R');
+  await settled();
+  assert.equal(q.view('c').paused, 'failed');
+
+  // Another run takes the chat just as the forced send goes out.
+  s.answers = [
+    () => {
+      s.live = [{ session_id: 'c', run_id: 'X' }];
+      return 'busy';
+    },
+  ];
+  q.sendNow('c');
+  await settled();
+  await settled();
+  assert.deepEqual(s.sent, ['A']); // one try, then it waits on X
+  await wake(q);
+  assert.deepEqual(s.sent, ['A']);
+
+  s.live = []; // X ends: its run_finished wakes the queue
+  await wake(q);
+  assert.deepEqual(s.sent, ['A', 'A']);
+  assert.deepEqual(q.view('c').items, []);
+});
+
+test('send now waits for a run already on the chat', async () => {
+  const { s, q } = fixture();
+  s.records.R = 'cancelled';
+  q.enqueue('c', 'A', 'R');
+  await settled();
+  s.live = [{ session_id: 'c', run_id: 'X' }]; // e.g. a schedule fired
+  q.sendNow('c');
+  await settled();
+  assert.deepEqual(s.sent, []);
+  s.live = [];
+  await wake(q);
+  assert.deepEqual(s.sent, ['A']);
+});
+
 test('a refusal keeps the item and pauses', async () => {
   const { s, q } = fixture();
   s.records.R = 'completed';

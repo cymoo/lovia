@@ -128,7 +128,10 @@ async def test_one_id_without_a_checkpointer(tmp_path: Path) -> None:
 
 async def _interrupted_leg(store: ChatStore, *, record_id: str | None) -> None:
     """A chat whose run was interrupted in a later leg, ``leg-2``, as if the
-    process restarted; ``record_id`` is what the pointer names beside it."""
+    process restarted; ``record_id`` is what the pointer names beside it.
+
+    Its earlier legs spent 100 tokens and ``leg-2`` 20 before the interrupt,
+    so the record says 120 (written then, the interrupted leg folded in)."""
     await store.upsert("s1", agent="bot")
     now = time.time()
     await store.start_run(
@@ -141,13 +144,18 @@ async def _interrupted_leg(store: ChatStore, *, record_id: str | None) -> None:
             error=None,
             started_at=now - 10,
             finished_at=now - 5,
-            usage=None,
+            usage={"input_tokens": 90, "output_tokens": 30, "total_tokens": 120},
         )
     )
     await store.checkpointer.append(
         "leg-2",
         [InputEntry(role="user", content="more")],
-        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+        RunHead(
+            agent_name="bot",
+            usage=Usage(input_tokens=15, output_tokens=5),
+            turns=1,
+            status="interrupted",
+        ),
     )
     await store.set_active_run_id("s1", "leg-2", record_id=record_id)
 
@@ -169,6 +177,10 @@ async def test_a_resumed_later_leg_finishes_its_runs_record() -> None:
     assert _run_ids(events, "run_finished") == ["run-R"]
     # The same record, finished — not a second one for the leg.
     assert [(r["run_id"], r["status"]) for r in history] == [("run-R", "completed")]
+    # Its usage keeps the earlier legs' 100: plus the resumed leg's own total,
+    # its 20 so far and the scripted call's 1 + 1 (else it would be 16 + 6).
+    usage = history[0]["usage"]
+    assert (usage["input_tokens"], usage["output_tokens"]) == (91, 31)
 
 
 async def test_a_pointer_from_before_record_ids_resumes_as_its_checkpoint() -> None:

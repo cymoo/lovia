@@ -2618,6 +2618,78 @@ button.question-option:hover {
 .attach-tray[hidden] {
   display: none;
 }
+/* Mid-run: Send steers the run (zap) or queues after it (clock). */
+.btn-composer-mode {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--muted);
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
+}
+.btn-composer-mode:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+.btn-composer-mode[hidden] {
+  display: none;
+}
+/* Messages queued until the run completes, one line each, above the input. */
+.send-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: var(--content-w);
+  margin: 0 auto 8px;
+  padding: 0 4px;
+  font-size: 13px;
+}
+.send-queue[hidden] {
+  display: none;
+}
+.send-queue-item,
+.send-queue-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px 4px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+}
+.send-queue-note {
+  justify-content: space-between;
+  color: var(--ink);
+}
+.send-queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.send-queue-drop {
+  flex-shrink: 0;
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.send-queue-drop:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+.send-queue-drop:disabled {
+  opacity: 0.4;
+}
 .attach-chip {
   display: inline-flex;
   align-items: center;

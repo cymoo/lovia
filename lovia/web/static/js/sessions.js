@@ -49,6 +49,9 @@ const STOPPED_GRACE_MS = 10000;
 let _pollTimer = null;
 let _eventsLive = false; // /api/events connected → the poll loop stays off
 let _runsPrimed = false; // first load only seeds the baseline — no notices
+// A disappeared run stays here until history confirms its outcome. Sidebar
+// snapshots must stay current even when that separate lookup fails.
+const _pendingRunResults = new Map(); // run ID → { sid, loading }
 const _recentlyStopped = new Map(); // sid → ts of a UI-initiated stop
 let _unseenFinished = 0; // completions while the tab was hidden
 const _baseTitle = document.title;
@@ -66,6 +69,8 @@ const runNotices = createRunNotices({
 });
 
 function _markRunsSeen() {
+  // A newer result must not move catch-up past an unresolved older one.
+  if (_pendingRunResults.size) return;
   try {
     localStorage.setItem(RUNS_SEEN_KEY, String(Date.now() / 1000));
   } catch { /* storage unavailable (e.g. private mode) — feature degrades off */ }
@@ -283,12 +288,22 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
           // Absence from the active list does not tell success from failure.
           // Match the run we observed, not a newer run on the same chat.
           const runId = prevRows?.get(sid)?.run_id;
-          if (runId) void api.runHistory({ run_id: runId, limit: 1 }).then((records) => {
-            const record = records[0];
-            if (record) _notifyRunFinished(sid, record.id, record.status);
-          }).catch(() => { /* a later catch-up can still report the result */ });
+          if (runId && !_pendingRunResults.has(runId)) {
+            _pendingRunResults.set(runId, { sid, loading: false });
+          }
         }
       }
+    }
+    for (const [runId, pending] of _pendingRunResults) {
+      if (pending.loading) continue;
+      pending.loading = true;
+      void api.runHistory({ run_id: runId, limit: 1 }).then((records) => {
+        const record = records[0];
+        if (!record || record.status === 'running') return; // finish may not be persisted yet
+        _pendingRunResults.delete(runId);
+        _notifyRunFinished(pending.sid, record.id, record.status);
+      }).catch(() => { /* keep the ID for the next refresh */ })
+        .finally(() => { pending.loading = false; });
     }
     _runsPrimed = true;
     renderSessions();

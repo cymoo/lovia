@@ -220,6 +220,7 @@ only when it needs to differ:
 | Tokens | What they set |
 | --- | --- |
 | `--bg`, `--surface`, `--surface-2`, `--surface-3`, `--border`, `--border-strong` | Canvas, panels, cards, hover, and their borders |
+| `--sidebar-surface` | The sidebar's background |
 | `--ink`, `--ink-2`, `--muted`, `--muted-2` | Text, from primary to faint |
 | `--accent`, `--accent-hover`, `--accent-soft`, `--accent-text` | The brand color and its tints (the last three derive from `--accent`) |
 | `--user-surface`, `--user-border` | The user's message bubble |

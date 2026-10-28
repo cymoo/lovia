@@ -228,7 +228,7 @@ export async function exportSessionHtml(sessionId, title) {
 // keeps the file dependency-free. hljs colors mirror static/styles.css.
 const EXPORT_CSS = `
 :root, [data-theme="light"] {
-  --bg:#f7f8fa; --surface:#fff; --surface-2:#f0f2f5; --border:#e4e7ec;
+  --bg:#fff; --surface:#fff; --surface-2:#f0f2f5; --border:#e4e7ec;
   --ink:#16181d; --ink-2:#3d424c; --muted:#6b7280; --muted-2:#9aa1ad;
   --accent:#2d8a6e; --accent-text:#1c6b54; --user-surface:#eaf1f9; --user-border:#d3e0ef;
 }

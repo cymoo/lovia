@@ -205,6 +205,7 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 | 变量 | 作用 |
 | --- | --- |
 | `--bg`、`--surface`、`--surface-2`、`--surface-3`、`--border`、`--border-strong` | 画布、面板、卡片、悬停态及其边框 |
+| `--sidebar-surface` | 侧栏背景 |
 | `--ink`、`--ink-2`、`--muted`、`--muted-2` | 文字，由深到浅 |
 | `--accent`、`--accent-hover`、`--accent-soft`、`--accent-text` | 品牌色及其衍生色（后三个默认由 `--accent` 推导） |
 | `--user-surface`、`--user-border` | 用户消息气泡 |

@@ -310,6 +310,120 @@ export function promptDialog(message, defaultValue = '', { stack = false } = {})
   });
 }
 
+// ---- Popup menu --------------------------------------------------------
+/**
+ * @typedef {{ label: string, icon?: string, danger?: boolean, onSelect: () => void }} MenuItem
+ * `null` in an item list draws a separator.
+ */
+
+/** @type {(() => void) | null} */
+let _closeMenu = null;
+
+/**
+ * Open a menu of actions: under `at` when it is the button that opened it, or
+ * at a pointer position for a context menu. One at a time. Arrow keys / Home /
+ * End move, Esc closes back to the opener, Tab, an outside press, scrolling
+ * or resizing close it.
+ *
+ * A manual popover, so it sits in the top layer over a modal dialog; it mounts
+ * inside that dialog when opened from one, since the rest of the page is inert.
+ * @param {HTMLElement | { x: number, y: number }} at
+ * @param {(MenuItem | null)[]} items
+ * @returns {() => void} Closes the menu.
+ */
+export function openMenu(at, items) {
+  const opener = at instanceof HTMLElement ? at : null;
+  const toggledShut = opener?.getAttribute('aria-expanded') === 'true';
+  _closeMenu?.();
+  if (toggledShut) return () => {};
+  const restoreFocus = opener ?? /** @type {HTMLElement | null} */ (document.activeElement);
+  const menu = document.createElement('div');
+  menu.className = 'popup-menu';
+  menu.setAttribute('role', 'menu');
+  menu.popover = 'manual';
+  for (const item of items) {
+    if (!item) {
+      const sep = document.createElement('div');
+      sep.className = 'popup-menu-sep';
+      sep.setAttribute('role', 'separator');
+      menu.append(sep);
+      continue;
+    }
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'popup-menu-item' + (item.danger ? ' danger' : '');
+    b.setAttribute('role', 'menuitem');
+    b.tabIndex = -1;
+    b.innerHTML = item.icon || '';
+    b.append(item.label);
+    b.addEventListener('click', () => {
+      close();
+      item.onSelect();
+    });
+    menu.append(b);
+  }
+  const host = opener?.closest('dialog[open]') || document.body;
+  host.append(menu);
+  menu.showPopover();
+
+  // Under the opener, right-aligned to it; flipped above when it would run off
+  // the bottom. A pointer position opens down-right of the pointer.
+  const { width, height } = menu.getBoundingClientRect();
+  const r = opener?.getBoundingClientRect();
+  let x = r ? r.right - width : /** @type {{ x: number }} */ (at).x;
+  let y = r ? r.bottom + 4 : /** @type {{ y: number }} */ (at).y;
+  if (y + height > innerHeight - 8) y = r ? r.top - height - 4 : y - height;
+  x = Math.max(8, Math.min(x, innerWidth - width - 8));
+  y = Math.max(8, y);
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+
+  const buttons = /** @type {HTMLElement[]} */ ([...menu.querySelectorAll('[role="menuitem"]')]);
+  buttons[0]?.focus();
+  opener?.setAttribute('aria-expanded', 'true');
+
+  const onKey = (/** @type {KeyboardEvent} */ e) => {
+    const i = buttons.indexOf(/** @type {HTMLElement} */ (document.activeElement));
+    const n = buttons.length;
+    const go = { ArrowDown: i + 1, ArrowUp: i - 1 + n, Home: 0, End: n - 1 }[e.key];
+    if (go !== undefined) buttons[go % n]?.focus();
+    else if (e.key === 'Escape') {
+      close();
+      restoreFocus?.focus();
+    } else if (e.key === 'Tab') close();
+    else return;
+    // Claimed here — and Esc must not also cancel a dialog the menu sits in.
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  const onPress = (/** @type {Event} */ e) => {
+    const target = /** @type {Node} */ (e.target);
+    // A press on the opener is left to its click, which toggles the menu shut.
+    if (!menu.contains(target) && !opener?.contains(target)) close();
+  };
+  menu.addEventListener('keydown', onKey);
+  document.addEventListener('pointerdown', onPress, true);
+  window.addEventListener('scroll', close, true);
+  window.addEventListener('resize', close);
+
+  function close() {
+    if (_closeMenu !== close) return;
+    _closeMenu = null;
+    document.removeEventListener('pointerdown', onPress, true);
+    window.removeEventListener('scroll', close, true);
+    window.removeEventListener('resize', close);
+    opener?.setAttribute('aria-expanded', 'false');
+    menu.remove();
+  }
+  _closeMenu = close;
+  return close;
+}
+
+/** Whether a popup menu is open (Esc belongs to it, not to the run). */
+export function menuOpen() {
+  return _closeMenu !== null;
+}
+
 // ---- Clipboard ---------------------------------------------------------
 /**
  * Copy text to the clipboard, falling back to a hidden textarea + execCommand

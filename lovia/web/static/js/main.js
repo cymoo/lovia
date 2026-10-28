@@ -2,7 +2,7 @@
 import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { api, configureApi } from './api.js';
-import { closeSidebar, initTheme, initSidebarToggle, promptDialog, showDialog } from './ui.js';
+import { closeSidebar, initTheme, initSidebarToggle, menuOpen, promptDialog, showDialog } from './ui.js';
 import {
   cancelStream,
   detachStream,
@@ -238,7 +238,7 @@ function isTyping(target) {
 function initKeyboardShortcuts() {
   // Esc stops the current run. Registered in the CAPTURE phase so anything an
   // existing bubble-phase Esc handler is about to close (context popover,
-  // export menu, mobile sidebar, files preview) is still visibly open here and
+  // export menu, a popup menu, mobile sidebar, files preview) is still visibly open here and
   // wins the keypress — the run stops on the next, unclaimed Esc.
   document.addEventListener(
     'keydown',
@@ -248,6 +248,7 @@ function initKeyboardShortcuts() {
       if (document.querySelector('dialog[open]')) return;
       if (document.getElementById('context-popover')?.hidden === false) return;
       if (document.getElementById('export-menu')?.hidden === false) return;
+      if (menuOpen()) return;
       if (document.getElementById('sidebar')?.classList.contains('open')) return;
       const filesOpen = document
         .getElementById('files-panel')

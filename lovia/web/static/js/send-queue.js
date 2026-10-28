@@ -103,15 +103,16 @@ export function createSendQueue(host) {
         const v = await verdict(sid, q.force ? null : q.after).catch(
           () => /** @type {const} */ ('wait'),
         );
+        // The queue moved on during the check: a steer whose answer was lost
+        // may have put its item back paused as `unknown` — a pause the
+        // verdict must neither send past nor overwrite.
+        if (q.paused || !q.items.length) return;
         if (v === 'stop') {
           q.paused = 'failed';
           return;
         }
         if (v === 'wait') continue; // unless woken meanwhile, done for now
         if (!host.ready(sid)) return; // the page moved on during the check
-        // …or the queue did: a steer whose answer was lost may have put its
-        // item back, paused, while the check ran.
-        if (q.paused || !q.items.length) return;
         const head = q.items[0];
         q.sending = head.id; // past withdrawing: it is on its way
         host.changed(sid);
@@ -172,19 +173,19 @@ export function createSendQueue(host) {
       return { item, after };
     },
     /**
-     * Return a withdrawn item to the head — a steer no run took. An emptied
-     * queue waits on its old run again, so the item goes only if that run
+     * Put `text` at the head — a steer no run took. An emptied queue waits on
+     * `after` (a withdrawn item's old run) again, so it goes only if that run
      * completed, as it would have had it stayed. `unsure`: the steer got no
      * answer and may have landed, so the queue pauses as `unknown` instead.
      * @param {string} sid
-     * @param {QueuedItem} item
+     * @param {string} text
      * @param {string | null} after
      * @param {boolean} [unsure]
      */
-    putBack(sid, item, after, unsure = false) {
+    putBack(sid, text, after, unsure = false) {
       const q = queue(sid);
       if (!q.items.length) q.after = after;
-      q.items.unshift(item);
+      q.items.unshift({ id: ++seq, text });
       if (unsure) q.paused = 'unknown';
       host.changed(sid);
       void pump(sid);

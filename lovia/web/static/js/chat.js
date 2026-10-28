@@ -1817,23 +1817,16 @@ function flushQueuedTurns() {
 // distinct turns server-side while the transcript shows several, skewing the
 // user-turn ordinals rewind depends on.
 async function drainPendingResend() {
-  if (!_pendingResend.length || !store.sessionId) return;
+  const sid = store.sessionId;
+  if (!_pendingResend.length || !sid) return;
   const items = _pendingResend.splice(0);
   for (const it of items) {
-    let res = null;
-    try {
-      res = await api.inject({ session_id: store.sessionId, message: it.message });
-    } catch { /* network error — treat as raced again */ }
-    if (res?.accepted) {
-      // A snapshot re-render may have wiped the muted bubble — recreate it.
-      if (!it.node?.isConnected) it.node = appendUserTurn(it.message, { queued: true });
-      if (it.node) {
-        _queuedTurns.push(it.node);
-        addWithdrawButton(it.node, res.id);
-      }
-    } else {
-      _pendingResend.push(it); // still no live run — the next finally retries
-    }
+    // A snapshot re-render may have wiped the muted bubble — recreate it.
+    const bubble = it.node?.isConnected ? it.node : appendUserTurn(it.message, { queued: true });
+    const { node, outcome } = await steer(it.message, bubble);
+    // Still no live run — the next finally retries.
+    if (outcome === 'refused') _pendingResend.push({ message: it.message, node });
+    else if (outcome === 'unknown') parkUnsure(sid, node, it.message, _shownRunId);
   }
 }
 
@@ -3628,11 +3621,29 @@ export async function sendText(message) {
     await runStream(message);
     return;
   }
+  const sid = store.sessionId;
+  const after = _shownRunId;
   const { node, outcome } = await steer(message);
   // Raced the run's end: keep the bubble muted and deliver the message
   // as its own turn once the stream settles — the next run re-injects it
   // (drainPendingResend) or it seeds a fresh run (resumePendingResend).
-  if (outcome !== 'accepted') _pendingResend.push({ message, node });
+  if (outcome === 'refused') _pendingResend.push({ message, node });
+  else if (outcome === 'unknown' && sid) parkUnsure(sid, node, message, after);
+}
+
+/**
+ * A steer that got no answer may sit in the run already — its drain then
+ * draws it from the server — so it is never resent on our own: it waits at
+ * the head of the queue strip, paused as unknown, for the user to check the
+ * chat and send again or withdraw (#320).
+ * @param {string} sid
+ * @param {HTMLElement | null} node Its muted bubble.
+ * @param {string} message
+ * @param {string | null} after
+ */
+function parkUnsure(sid, node, message, after) {
+  node?.remove();
+  sendQueue.putBack(sid, message, after, true);
 }
 
 /**
@@ -3643,10 +3654,10 @@ export async function sendText(message) {
  * it; `unknown` — no answer (network, or a 5xx a proxy may have sent after
  * the server took it), so the run may hold it.
  * @param {string} message
+ * @param {HTMLElement | null} [node] Its muted bubble, if already drawn.
  * @returns {Promise<{ node: HTMLElement | null, outcome: 'accepted' | 'refused' | 'unknown' }>}
  */
-async function steer(message) {
-  const node = appendUserTurn(message, { queued: true });
+async function steer(message, node = appendUserTurn(message, { queued: true })) {
   if (node) _queuedTurns.push(node); // before the await: its drain may beat the answer
   /** @type {'accepted' | 'refused' | 'unknown'} */
   let outcome = 'refused';
@@ -3691,8 +3702,12 @@ async function steerQueued(sid, id) {
   _resumeAutoScroll();
   const { node, outcome } = await steer(taken.item.text);
   if (outcome === 'accepted') return;
+  if (outcome === 'unknown') {
+    parkUnsure(sid, node, taken.item.text, taken.after);
+    return;
+  }
   node?.remove();
-  sendQueue.putBack(sid, taken.item, taken.after, outcome === 'unknown');
+  sendQueue.putBack(sid, taken.item.text, taken.after);
 }
 
 /** Back into the empty composer, to be edited and sent again. */

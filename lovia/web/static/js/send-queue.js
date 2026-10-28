@@ -12,10 +12,12 @@
 // afresh each time, so no ordering of those signals can strand a queue.
 
 /**
- * @typedef {{ id: number, text: string }} QueuedItem
+ * @typedef {{ id: number, text: string, attachments: any[] }} QueuedItem
+ *   `attachments`: the composer's descriptors, opaque here — they ride the send.
  * @typedef {'failed' | 'unknown' | null} Paused `failed`: the run waited on
- *   didn't complete, or a send was refused. `unknown`: a send broke off
- *   before the server answered — it may have started a run.
+ *   didn't complete, or a send was refused. `unknown`: the head's delivery is
+ *   in doubt (a send broke off before the server answered, a steer lost its
+ *   answer) — it may have landed.
  * @typedef {{ items: QueuedItem[], after: string | null, paused: Paused,
  *   force: boolean, pumping: boolean, again: boolean, sending: number | null }} Queue
  * @typedef {{ runId: string } | 'busy' | 'unknown' | { refused: string }} SendResult
@@ -28,8 +30,8 @@
  * @property {(runId: string) => Promise<{ status: string } | null>} runRecord
  * @property {(sessionId: string) => boolean} ready The chat is open here and
  *   nothing streams in it.
- * @property {(sessionId: string, text: string) => Promise<SendResult>} send
- *   Send `text` with busy="reject"; resolves on admission or refusal.
+ * @property {(sessionId: string, item: QueuedItem) => Promise<SendResult>} send
+ *   Send `item` with busy="reject"; resolves on admission or refusal.
  * @property {(sessionId: string) => void} changed
  */
 
@@ -116,7 +118,7 @@ export function createSendQueue(host) {
         const head = q.items[0];
         q.sending = head.id; // past withdrawing: it is on its way
         host.changed(sid);
-        const res = await host.send(sid, head.text).finally(() => {
+        const res = await host.send(sid, head).finally(() => {
           q.sending = null;
         });
         if (res === 'busy') {
@@ -142,16 +144,18 @@ export function createSendQueue(host) {
 
   return {
     /**
-     * Queue `text` for chat `sid`, after run `after` — the live run's id.
+     * Queue `text` (with `attachments`) for chat `sid`, after run `after` —
+     * the live run's id.
      * @param {string} sid
      * @param {string} text
      * @param {string} after
+     * @param {any[]} [attachments]
      */
-    enqueue(sid, text, after) {
+    enqueue(sid, text, after, attachments = []) {
       const q = queue(sid);
       // A queue already waiting keeps its run: this item follows the others.
       if (!q.items.length) q.after = after;
-      q.items.push({ id: ++seq, text });
+      q.items.push({ id: ++seq, text, attachments });
       host.changed(sid);
       void pump(sid);
     },
@@ -167,9 +171,14 @@ export function createSendQueue(host) {
       const item = q?.items.find((it) => it.id === id);
       if (!q || !item || q.sending === id) return null;
       const after = q.after;
+      // An `unknown` pause is about the head's delivery: it leaves with the
+      // head, not passing to the next item (#323). `failed` is about the run
+      // waited on, and stays while anything still waits on it.
+      const lifts = q.paused === 'unknown' && item === q.items[0];
       q.items = q.items.filter((it) => it !== item);
-      if (!q.items.length) q.paused = null;
+      if (!q.items.length || lifts) q.paused = null;
       settle(sid);
+      if (lifts && q.items.length) void pump(sid);
       return { item, after };
     },
     /**
@@ -185,7 +194,7 @@ export function createSendQueue(host) {
     putBack(sid, text, after, unsure = false) {
       const q = queue(sid);
       if (!q.items.length) q.after = after;
-      q.items.unshift({ id: ++seq, text });
+      q.items.unshift({ id: ++seq, text, attachments: [] }); // a steer is text-only
       if (unsure) q.paused = 'unknown';
       host.changed(sid);
       void pump(sid);

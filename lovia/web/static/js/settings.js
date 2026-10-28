@@ -16,7 +16,7 @@ const TEXT_SIZE_KEY = 'lovia-text-size';
 const FOLLOWUPS_KEY = 'lovia-followups';
 
 // ---- Message text size ----------------------------------------------------
-// Scales the transcript's prose via the --chat-font-scale CSS var (styles.css
+// Scales the transcript's prose via the --lv-chat-font-scale CSS var (styles.css
 // multiplies the message font-sizes by it). 'md' is the default → var unset.
 const TEXT_SCALES = { sm: '0.92', md: '1', lg: '1.14' };
 

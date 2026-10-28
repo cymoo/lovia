@@ -83,7 +83,7 @@ function revOf(path) {
 
 // ---- Panel sizing -----------------------------------------------------------
 // The divider on the panel's left edge drags the width (arrow keys nudge it,
-// double-click resets). The width lives in a `--files-w` CSS var and persists
+// double-click resets). The width lives in a `--lv-files-w` CSS var and persists
 // per browser; unset, the stylesheet default applies.
 const WIDTH_KEY = 'lovia-files-w';
 const MIN_W = 300;
@@ -174,7 +174,7 @@ function initResizer() {
 // ---- List / preview split ---------------------------------------------------
 // The divider between the file list and the preview drags the split (arrow
 // keys nudge it, double-click resets) — mirrors initResizer. The viewer height
-// lives in a `--files-viewer-h` CSS var as a *percentage* of the panel (px
+// lives in a `--lv-files-viewer-h` CSS var as a *percentage* of the panel (px
 // would crush the list when the window shrinks) and persists per browser.
 const SPLIT_KEY = 'lovia-files-split';
 const MIN_VIEWER_H = 240; // matches .lv-files-viewer's min-height

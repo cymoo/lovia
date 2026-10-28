@@ -28,7 +28,7 @@ function resolveTheme(pref) {
 // The static <meta name="theme-color" media=…> pair in the template follows
 // the OS. Once JS owns the theme (saved preference may oppose the OS), browser
 // chrome must follow the *resolved* theme: swap the pair for one meta fed from
-// the live --bg token, so it also stays right if the palette ever changes.
+// the live --lv-bg token, so it also stays right if the palette ever changes.
 function syncThemeColor() {
   document
     .querySelectorAll('meta[name="theme-color"][media]')

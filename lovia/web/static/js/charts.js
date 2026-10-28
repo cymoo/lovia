@@ -257,12 +257,12 @@ function loadEcharts() {
 
 // ---- Theme --------------------------------------------------------------------
 
-// The palette and inks are CSS variables (styles.css `--chart-*`), so a
+// The palette and inks are CSS variables (styles.css `--lv-chart-*`), so a
 // deployer retheme is a few lines in the `head` template block.
 function themeFromCss() {
   const cs = getComputedStyle(document.documentElement);
   const v = (/** @type {string} */ name) => cs.getPropertyValue(name).trim();
-  const color = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => v(`--chart-${i}`)).filter(Boolean);
+  const color = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => v(`--lv-chart-${i}`)).filter(Boolean);
   const text = v('--lv-chart-text');
   const strong = v('--lv-chart-title');
   const axis = v('--lv-chart-axis');

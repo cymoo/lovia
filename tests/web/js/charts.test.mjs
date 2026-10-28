@@ -247,10 +247,11 @@ test('toCsv quotes per RFC 4180 and defuses spreadsheet formulas', () => {
 
 // A stand-in for the ECharts global and the computed styles the theme reads.
 function stubEcharts({ failOn } = {}) {
-  const calls = { init: [], option: null, disposed: 0 };
+  const calls = { init: [], theme: null, option: null, disposed: 0 };
   globalThis.echarts = {
-    init(dom, _theme, opts) {
+    init(dom, theme, opts) {
       calls.init.push([dom, opts]);
+      calls.theme = theme;
       return {
         setOption(o) {
           if (failOn === 'setOption') throw new Error('bad option');
@@ -290,6 +291,16 @@ test('chartSnapshot: an untitled chart still has an accessible name', async () =
   const html = await chartSnapshot({ series: [bar] }, /** @type {any} */ ({ lang: 'en' }));
   assert.doesNotMatch(html, /figcaption/);
   assert.match(html, /alt="Chart"/);
+});
+
+test('chartSnapshot: the palette comes from the --lv-chart-N tokens', async () => {
+  const calls = stubEcharts();
+  globalThis.getComputedStyle = /** @type {any} */ (() => ({
+    getPropertyValue: (/** @type {string} */ name) => (/^--lv-chart-\d$/.test(name) ? `#${name.at(-1)}` : ''),
+    fontFamily: 'sans',
+  }));
+  await chartSnapshot({ series: [bar] }, /** @type {any} */ ({ lang: 'en' }));
+  assert.deepEqual(calls.theme.color, ['#1', '#2', '#3', '#4', '#5', '#6', '#7', '#8']);
 });
 
 test('chartSnapshot: disposes the instance when drawing fails', async () => {

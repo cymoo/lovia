@@ -288,7 +288,7 @@ test('a steer no run took goes back to the head, after its old run', async () =>
   const taken = q.withdraw('c', q.view('c').items[1].id);
   assert.ok(taken);
   // The inject raced R's end: B rejoins at the head and waits on R as before.
-  q.putBack('c', taken.item, taken.after);
+  q.putBack('c', taken.item.text, taken.after);
   assert.deepEqual(q.view('c').items.map((i) => i.text), ['B', 'A']);
   s.live = [];
   s.records.R = 'completed';
@@ -306,7 +306,7 @@ test('put back into an emptied queue still honours a run that failed', async () 
   assert.deepEqual(q.chats(), []);
   s.live = [];
   s.records.R = 'failed';
-  q.putBack('c', taken.item, taken.after);
+  q.putBack('c', taken.item.text, taken.after);
   await settled();
   assert.deepEqual(s.sent, []);
   assert.equal(q.view('c').paused, 'failed');
@@ -321,7 +321,7 @@ test('a steer with no answer goes back paused as unknown, never resent alone', a
   const taken = q.withdraw('c', q.view('c').items[0].id);
   assert.ok(taken);
   // The inject's response was lost: R may already hold A.
-  q.putBack('c', taken.item, taken.after, true);
+  q.putBack('c', taken.item.text, taken.after, true);
   assert.equal(q.view('c').paused, 'unknown');
   s.live = [];
   s.records.R = 'completed';
@@ -333,32 +333,35 @@ test('a steer with no answer goes back paused as unknown, never resent alone', a
   assert.deepEqual(s.sent, ['A']);
 });
 
-test('a pause that lands during the check stops the send', async () => {
-  /** @type {() => void} */
-  let release = () => {};
-  const gate = new Promise((r) => (release = () => r(undefined)));
-  // The check of R's outcome is still out when the steer's answer is lost.
-  const { s, q } = fixture({
-    runRecord: async () => {
-      await gate;
-      return { status: 'completed' };
-    },
+for (const status of ['completed', 'failed', 'cancelled']) {
+  test(`an unknown pause set during the check stands (R ${status})`, async () => {
+    /** @type {() => void} */
+    let release = () => {};
+    const gate = new Promise((r) => (release = () => r(undefined)));
+    // The check of R's outcome is still out when the steer's answer is lost.
+    const { s, q } = fixture({
+      runRecord: async () => {
+        await gate;
+        return { status };
+      },
+    });
+    s.live = [{ session_id: 'c', run_id: 'R' }];
+    q.enqueue('c', 'A', 'R');
+    q.enqueue('c', 'B', 'R');
+    await settled();
+    const taken = q.withdraw('c', q.view('c').items[0].id); // A is steered…
+    assert.ok(taken);
+    s.live = []; // …R ends, and the queue starts its check
+    void q.pump('c');
+    await settled();
+    q.putBack('c', taken.item.text, taken.after, true);
+    release();
+    await settled();
+    assert.deepEqual(s.sent, []); // neither A (R may hold it) nor B behind it
+    // Still "check the chat first", not a plain failure inviting a resend.
+    assert.equal(q.view('c').paused, 'unknown');
   });
-  s.live = [{ session_id: 'c', run_id: 'R' }];
-  q.enqueue('c', 'A', 'R');
-  q.enqueue('c', 'B', 'R');
-  await settled();
-  const taken = q.withdraw('c', q.view('c').items[0].id); // A is steered…
-  assert.ok(taken);
-  s.live = []; // …R ends, and the queue starts its check
-  void q.pump('c');
-  await settled();
-  q.putBack('c', taken.item, taken.after, true);
-  release();
-  await settled();
-  assert.deepEqual(s.sent, []); // neither A (R may hold it) nor B behind it
-  assert.equal(q.view('c').paused, 'unknown');
-});
+}
 
 test('withdrawing the last item clears a pause', async () => {
   const { s, q } = fixture();

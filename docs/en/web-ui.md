@@ -363,7 +363,9 @@ Text sent while a Run is active does one of two things, decided per message:
 - **Steer** (⌥/Alt+Enter, or **Steer** on a queued message): the text joins
   the Run at its next Turn. If the Run finishes first, text sent with
   ⌥/Alt+Enter starts the next Run in order; a queued message steered too late
-  returns to the head of the queue.
+  returns to the head of the queue. A steer that gets no answer (e.g. the
+  network dropped) may have landed, so it is never resent on its own: it waits
+  at the head of the queue, paused, for you to check the chat.
 
 A queued message can also go back to the composer for editing (when the
 composer is empty), or be withdrawn. Attachments are neither steered nor

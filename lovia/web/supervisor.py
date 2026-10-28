@@ -33,7 +33,7 @@ from ..parts import coerce_parts
 from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
 from ..session import TIMING_META_KEY
-from ..steering import Mailbox
+from ..steering import InjectedContent, Mailbox
 from ..transcript import (
     InputEntry,
     ToolResultEntry,
@@ -396,8 +396,8 @@ class RunController:
             snapshot=snapshot, buffered=buffered, subscription=sub, status=self.status
         )
 
-    def inject(self, message: str) -> int:
-        return self.mailbox.push(message)
+    def inject(self, content: InjectedContent) -> int:
+        return self.mailbox.push(content)
 
     def uninject(self, token: int) -> bool:
         return self.mailbox.remove(token)

@@ -1712,7 +1712,7 @@ function stampRefs(refs) {
 // ---- Mid-run injection: queued user turns awaiting confirmation ----------
 let _queuedTurns = [];   // FIFO of muted user-turn nodes (one per pending inject)
 const _drained = new WeakSet(); // the ones a run's user_injected confirmed
-let _pendingResend = []; // { message, node } pairs that raced a run's end (see runStream)
+let _pendingResend = []; // { message, attachments, node } that raced a run's end (see runStream)
 
 // True when an assistant turn carries no rendered content yet (just opened, or
 // only an empty footer). Avoids stranding an empty bubble between two messages
@@ -1820,13 +1820,17 @@ async function drainPendingResend() {
   const sid = store.sessionId;
   if (!_pendingResend.length || !sid) return;
   const items = _pendingResend.splice(0);
-  for (const it of items) {
+  for (const { message, attachments, node: drawn } of items) {
     // A snapshot re-render may have wiped the muted bubble — recreate it.
-    const bubble = it.node?.isConnected ? it.node : appendUserTurn(it.message, { queued: true });
-    const { node, outcome } = await steer(it.message, bubble);
+    const bubble = drawn?.isConnected
+      ? drawn
+      : appendUserTurn(message, { queued: true, attachments });
+    const { node, outcome } = await steer(message, attachments, bubble);
     // Still no live run — the next finally retries.
-    if (outcome === 'refused') _pendingResend.push({ message: it.message, node });
-    else if (outcome === 'unknown') parkUnsure(sid, node, it.message, _shownRunId);
+    if (outcome === 'refused') _pendingResend.push({ message, attachments, node });
+    else if (outcome === 'unknown') {
+      parkUnsure(sid, node, { text: message, attachments }, _shownRunId);
+    }
   }
 }
 
@@ -1839,9 +1843,9 @@ function resumePendingResend() {
   if (next.node?.isConnected) {
     confirmQueuedTurn(next.node);
   } else {
-    appendUserTurn(next.message);
+    appendUserTurn(next.message, { attachments: next.attachments });
   }
-  runStream(next.message);
+  runStream(next.message, attachmentPayload(next.attachments));
   return true;
 }
 
@@ -2413,8 +2417,10 @@ async function applyEvent({ event, data }) {
         _drained.add(queued);
         confirmQueuedTurn(queued);
       } else {
-        // Injected elsewhere (e.g. another tab): render above the fresh bubble.
-        appendUserTurn(data.content, { before: store.turnNode });
+        // Injected elsewhere (e.g. another tab): render above the fresh bubble,
+        // its attachment note back as previews (as history renders it).
+        const { text, attachments } = splitAttachmentNote(data.content);
+        appendUserTurn(text, { before: store.turnNode, attachments });
       }
       scrollDown();
       break;
@@ -3388,7 +3394,7 @@ store.on('session-deleted', (id) => {
 // workspace (POST /api/workspace/upload); they ride the next send as
 // ChatRequest.attachments. Gated on the agent having a workspace — the same
 // switch as the Files panel. Mid-run they ride a queued message (a run of its
-// own); a steer is text-only (/api/chat/inject takes no attachments).
+// own) or a steer (InjectRequest.attachments).
 let _pendingAttachments = []; // uploaded { path, name, mime, kind, size } (+ uploading?)
 
 function attachEnabled() {
@@ -3645,14 +3651,26 @@ export async function sendText(message) {
     await runStream(message);
     return;
   }
+  await steerNow(message);
+}
+
+/**
+ * Steer `message` into the live run now — ⌥/Alt+Enter, or a send mid-run.
+ * @param {string} message
+ * @param {any[]} [attachments]
+ */
+async function steerNow(message, attachments = []) {
+  _resumeAutoScroll();
   const sid = store.sessionId;
   const after = _shownRunId;
-  const { node, outcome } = await steer(message);
+  const { node, outcome } = await steer(message, attachments);
   // Raced the run's end: keep the bubble muted and deliver the message
   // as its own turn once the stream settles — the next run re-injects it
   // (drainPendingResend) or it seeds a fresh run (resumePendingResend).
-  if (outcome === 'refused') _pendingResend.push({ message, node });
-  else if (outcome === 'unknown' && sid) parkUnsure(sid, node, message, after);
+  if (outcome === 'refused') _pendingResend.push({ message, attachments, node });
+  else if (outcome === 'unknown' && sid) {
+    parkUnsure(sid, node, { text: message, attachments }, after);
+  }
 }
 
 /**
@@ -3662,7 +3680,7 @@ export async function sendText(message) {
  * chat and send again or withdraw (#320).
  * @param {string} sid
  * @param {HTMLElement | null} node Its muted bubble.
- * @param {string} message
+ * @param {{ text: string, attachments: any[] }} message
  * @param {string | null} after
  */
 function parkUnsure(sid, node, message, after) {
@@ -3678,15 +3696,24 @@ function parkUnsure(sid, node, message, after) {
  * it; `unknown` — no answer (network, or a 5xx a proxy may have sent after
  * the server took it), so the run may hold it.
  * @param {string} message
+ * @param {any[]} [attachments] Uploaded ones; they join the run with the text.
  * @param {HTMLElement | null} [node] Its muted bubble, if already drawn.
  * @returns {Promise<{ node: HTMLElement | null, outcome: 'accepted' | 'refused' | 'unknown' }>}
  */
-async function steer(message, node = appendUserTurn(message, { queued: true })) {
+async function steer(
+  message,
+  attachments = [],
+  node = appendUserTurn(message, { queued: true, attachments }),
+) {
   if (node) _queuedTurns.push(node); // before the await: its drain may beat the answer
   /** @type {'accepted' | 'refused' | 'unknown'} */
   let outcome = 'refused';
   try {
-    const res = await api.inject({ session_id: store.sessionId, message });
+    const res = await api.inject({
+      session_id: store.sessionId,
+      message,
+      attachments: attachmentPayload(attachments),
+    });
     if (res?.accepted) {
       if (node) addWithdrawButton(node, res.id);
       return { node, outcome: 'accepted' };
@@ -3724,14 +3751,14 @@ async function steerQueued(sid, id) {
   const taken = sendQueue.withdraw(sid, id);
   if (!taken) return;
   _resumeAutoScroll();
-  const { node, outcome } = await steer(taken.item.text);
+  const { node, outcome } = await steer(taken.item.text, taken.item.attachments);
   if (outcome === 'accepted') return;
   if (outcome === 'unknown') {
-    parkUnsure(sid, node, taken.item.text, taken.after);
+    parkUnsure(sid, node, taken.item, taken.after);
     return;
   }
   node?.remove();
-  sendQueue.putBack(sid, taken.item.text, taken.after);
+  sendQueue.putBack(sid, taken.item, taken.after);
 }
 
 /** Back into the empty composer — text and attachments — to edit and resend. */
@@ -3839,8 +3866,8 @@ function renderQueue() {
     if (item.attachments.length) row.append(queuedAttachments(item.attachments, names));
     const onItsWay = sending === item.id;
     row.classList.toggle('sending', onItsWay);
-    // Steering needs a run live in this chat to take it, and is text-only.
-    if (store.streaming && !onItsWay && !item.attachments.length) {
+    // Steering needs a run live in this chat to take it.
+    if (store.streaming && !onItsWay) {
       const go = button('zap', 'queue.steerTip', () => void steerQueued(sid, item.id));
       go.classList.add('send-queue-steer');
       go.insertAdjacentText('beforeend', t('queue.steer'));
@@ -4069,12 +4096,6 @@ export function initComposer() {
       const queue = !_steerOnce;
       _steerOnce = false;
       if (!message && !attachments.length) return;
-      // A steer is text-only: never split a message into a steered text and
-      // files left behind — keep it all, and say how it can go.
-      if (!queue && attachments.length) {
-        toast(t('composer.steerNoAttach'), { key: 'steer-no-attach', timeout: 3000 });
-        return;
-      }
       // A message queues behind the run on screen, which its stream names
       // as it is admitted: until then it stays put (Send is disabled).
       if (queue && !(store.sessionId && _shownRunId)) return;
@@ -4088,7 +4109,7 @@ export function initComposer() {
         sendQueue.enqueue(store.sessionId, message, _shownRunId, attachments);
         return;
       }
-      await sendText(message);
+      await steerNow(message, attachments);
       return;
     }
     _steerOnce = false;

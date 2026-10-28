@@ -186,19 +186,19 @@ export function createSendQueue(host) {
       return { item, after };
     },
     /**
-     * Put `text` at the head — a steer no run took. An emptied queue waits on
-     * `after` (a withdrawn item's old run) again, so it goes only if that run
-     * completed, as it would have had it stayed. `unsure`: the steer got no
-     * answer and may have landed, so the queue pauses as `unknown` instead.
+     * Put a message at the head — a steer no run took. An emptied queue waits
+     * on `after` (a withdrawn item's old run) again, so it goes only if that
+     * run completed, as it would have had it stayed. `unsure`: the steer got
+     * no answer and may have landed, so the queue pauses as `unknown` instead.
      * @param {string} sid
-     * @param {string} text
+     * @param {{ text: string, attachments: any[] }} message
      * @param {string | null} after
      * @param {boolean} [unsure]
      */
-    putBack(sid, text, after, unsure = false) {
+    putBack(sid, { text, attachments }, after, unsure = false) {
       const q = queue(sid);
       if (!q.items.length) q.after = after;
-      q.items.unshift({ id: ++seq, text, attachments: [] }); // a steer is text-only
+      q.items.unshift({ id: ++seq, text, attachments });
       if (unsure) q.paused = 'unknown';
       host.changed(sid);
       void pump(sid);

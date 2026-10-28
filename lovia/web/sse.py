@@ -20,7 +20,7 @@ from ..types import JsonObject, JsonValue
 from .. import events
 from ..exceptions import LoviaError, ProviderError
 from ..messages import Usage
-from ..parts import ImagePart, coerce_parts, text_of
+from ..parts import ContentPart, ImagePart, TextPart, coerce_parts
 from ..plugins import TodoItem
 from ..transcript import (
     AssistantTextEntry,
@@ -281,6 +281,14 @@ def _todo_payload(todos: list[TodoItem]) -> list[JsonObject]:
     ]
 
 
+def _text_parts(content: str | list[ContentPart]) -> str:
+    """A steer's text, without ``text_of``'s ``[image]`` markers: the client
+    splits the attachment note back into previews, as for history."""
+    if isinstance(content, str):
+        return content
+    return "".join(p.text for p in content if isinstance(p, TextPart))
+
+
 def _entries_to_dict(entries: list[TranscriptEntry]) -> JsonObject:
     """Flatten the entries emitted in one assistant turn into a wire shape.
 
@@ -346,7 +354,7 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
     if isinstance(ev, events.UserMessageInjected):
         return frame(
             "user_injected",
-            UserInjectedData(content=text_of(ev.content), turn=ev.turn),
+            UserInjectedData(content=_text_parts(ev.content), turn=ev.turn),
         )
     if isinstance(ev, events.ToolCallStarted):
         return frame(

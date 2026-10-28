@@ -3381,8 +3381,8 @@ store.on('session-deleted', (id) => {
 // The "+" button, paste, and drag-drop upload images/files to the agent's
 // workspace (POST /api/workspace/upload); they ride the next send as
 // ChatRequest.attachments. Gated on the agent having a workspace — the same
-// switch as the Files panel — and disabled mid-stream (attachments need a
-// fresh turn, not the inject/queue path).
+// switch as the Files panel. Mid-run they ride a queued message (a run of its
+// own); a steer is text-only (/api/chat/inject takes no attachments).
 let _pendingAttachments = []; // uploaded { path, name, mime, kind, size } (+ uploading?)
 
 function attachEnabled() {
@@ -3406,22 +3406,39 @@ function pendingReady() {
   return _pendingAttachments.filter((a) => !a.uploading && a.path);
 }
 
+/** What ChatRequest.attachments carries for the tray's chips. */
+function attachmentPayload(/** @type {any[]} */ attachments) {
+  return attachments.map((a) => ({ path: a.path, mime: a.mime, kind: a.kind, name: a.name }));
+}
+
+// An upload still in flight holds Send: sending without it would drop it.
+function uploading() {
+  return _pendingAttachments.some((a) => a.uploading);
+}
+
+// Nothing typed and nothing attached: the composer can take an item back.
+function composerEmpty() {
+  return !promptEl?.value.trim() && !_pendingAttachments.length;
+}
+
 function updateSendEnabled() {
   if (!sendBtn) return;
   const hasText = !!promptEl?.value.trim();
+  const hasContent = hasText || pendingReady().length > 0;
+  const waiting = uploading();
   if (store.streaming) {
-    // Stop owns the slot; Send reappears only once there's text to queue —
-    // a greyed Send next to Stop reads as two competing controls.
+    // Stop owns the slot; Send reappears only once there's something to
+    // queue — a greyed Send next to Stop reads as two competing controls.
     // What Send does now, said on the button too: the placeholder that says
     // it is gone once there is text. Queuing waits for the run to be named.
-    sendBtn.hidden = !hasText;
-    sendBtn.disabled = !hasText || !_shownRunId;
-    sendBtn.title = t('composer.queueTip');
+    sendBtn.hidden = !(hasContent || waiting);
+    sendBtn.disabled = !hasContent || waiting || !_shownRunId;
+    sendBtn.title = t(waiting ? 'composer.waitUploads' : 'composer.queueTip');
     sendBtn.setAttribute('aria-label', t('composer.queueSend'));
   } else {
     sendBtn.hidden = false;
-    sendBtn.disabled = !(hasText || pendingReady().length);
-    sendBtn.title = t('composer.sendTip');
+    sendBtn.disabled = !hasContent || waiting;
+    sendBtn.title = t(waiting ? 'composer.waitUploads' : 'composer.sendTip');
     sendBtn.setAttribute('aria-label', t('composer.send'));
   }
   syncQueueEdit();
@@ -3432,7 +3449,7 @@ function syncAttachButton() {
   if (!btn) return;
   const ok = attachEnabled();
   btn.hidden = !ok;
-  btn.disabled = !ok || store.streaming;
+  btn.disabled = !ok;
   if (!ok && _pendingAttachments.length) {
     _pendingAttachments = [];
     renderAttachTray();
@@ -3503,6 +3520,7 @@ async function uploadFiles(files) {
     };
     _pendingAttachments.push(chip);
     renderAttachTray();
+    updateSendEnabled(); // Send waits for it
     try {
       Object.assign(chip, await api.uploadFile(file, { agent: store.agent }), {
         uploading: false,
@@ -3710,21 +3728,24 @@ async function steerQueued(sid, id) {
   sendQueue.putBack(sid, taken.item.text, taken.after);
 }
 
-/** Back into the empty composer, to be edited and sent again. */
+/** Back into the empty composer — text and attachments — to edit and resend. */
 function editQueued(/** @type {string} */ sid, /** @type {number} */ id) {
-  if (promptEl?.value.trim()) return; // never over a draft
+  if (!composerEmpty()) return; // never over a draft
   const taken = sendQueue.withdraw(sid, id);
-  if (taken) setDraft(taken.item.text);
+  if (!taken) return;
+  _pendingAttachments = [...taken.item.attachments];
+  renderAttachTray();
+  setDraft(taken.item.text);
 }
 
 /**
  * Send a queued message as its own run (busy="reject"): a muted turn until
  * the server admits it, gone if it is refused.
  * @param {string} sid
- * @param {string} text
+ * @param {import('./send-queue.js').QueuedItem} item
  * @returns {Promise<import('./send-queue.js').SendResult>}
  */
-function sendQueued(sid, text) {
+function sendQueued(sid, { text, attachments }) {
   return new Promise((resolve) => {
     if (store.sessionId !== sid) {
       resolve('busy'); // left between the check and the send: ask again later
@@ -3732,8 +3753,8 @@ function sendQueued(sid, text) {
     }
     document.getElementById('empty-state')?.remove();
     _resumeAutoScroll();
-    const node = appendUserTurn(text, { queued: true });
-    void runStream(text, null, {
+    const node = appendUserTurn(text, { queued: true, attachments });
+    void runStream(text, attachmentPayload(attachments), {
       busy: 'reject',
       onAdmit: (runId) => {
         confirmQueuedTurn(node);
@@ -3801,15 +3822,19 @@ function renderQueue() {
     const row = document.createElement('div');
     row.className = 'send-queue-item';
     row.innerHTML = icon('clock', { size: 13 });
+    const names = item.attachments.map((a) => a.name || a.path).join(' · ');
     const text = document.createElement('span');
     text.className = 'send-queue-text';
-    text.textContent = item.text;
-    text.title = item.text;
+    // Attachments only: their names say what the message is.
+    text.classList.toggle('muted', !item.text);
+    text.textContent = item.text || names;
+    text.title = text.textContent;
     row.append(text);
+    if (item.attachments.length) row.append(queuedAttachments(item.attachments, names));
     const onItsWay = sending === item.id;
     row.classList.toggle('sending', onItsWay);
-    // Steering needs a run live in this chat to take it.
-    if (store.streaming && !onItsWay) {
+    // Steering needs a run live in this chat to take it, and is text-only.
+    if (store.streaming && !onItsWay && !item.attachments.length) {
       const go = button('zap', 'queue.steerTip', () => void steerQueued(sid, item.id));
       go.classList.add('send-queue-steer');
       go.insertAdjacentText('beforeend', t('queue.steer'));
@@ -3817,7 +3842,7 @@ function renderQueue() {
     }
     const edit = button('pencil', 'queue.edit', () => editQueued(sid, item.id));
     edit.classList.add('send-queue-edit');
-    edit.disabled = onItsWay || !!promptEl?.value.trim();
+    edit.disabled = onItsWay || !composerEmpty();
     const drop = button('x', 'queue.withdraw', () => sendQueue.withdraw(sid, item.id));
     drop.disabled = onItsWay;
     row.append(edit, drop);
@@ -3825,12 +3850,44 @@ function renderQueue() {
   }
 }
 
+/**
+ * A queued item's attachments, one line high: up to three image thumbnails,
+ * then the rest as one count — so a row never grows past its text.
+ * @param {any[]} atts
+ * @param {string} names
+ */
+function queuedAttachments(atts, names) {
+  const wrap = document.createElement('span');
+  wrap.className = 'send-queue-atts';
+  wrap.title = names;
+  wrap.setAttribute('role', 'img');
+  wrap.setAttribute('aria-label', t('queue.attachments', { n: atts.length, names }));
+  const thumbs = atts.filter((a) => a.kind === 'image' && a.path).slice(0, 3);
+  for (const att of thumbs) {
+    const img = document.createElement('img');
+    img.className = 'send-queue-thumb';
+    img.src = api.workspaceRawUrl({ agent: store.agent, path: att.path });
+    img.alt = '';
+    wrap.append(img);
+  }
+  const rest = atts.length - thumbs.length;
+  if (rest) {
+    const more = document.createElement('span');
+    more.className = 'send-queue-more';
+    // After thumbnails "+N"; files alone, a file icon (and their count).
+    if (thumbs.length) more.textContent = `+${rest}`;
+    else more.innerHTML = icon('file-text', { size: 13 }) + (rest > 1 ? String(rest) : '');
+    wrap.append(more);
+  }
+  return wrap;
+}
+
 /** Edit only into an empty composer: re-checked as the draft changes. */
 function syncQueueEdit() {
-  const draft = !!promptEl?.value.trim();
+  const busy = !composerEmpty();
   queueEl?.querySelectorAll('.send-queue-edit').forEach((btn) => {
     if (btn instanceof HTMLButtonElement) {
-      btn.disabled = draft || !!btn.closest('.send-queue-item.sending');
+      btn.disabled = busy || !!btn.closest('.send-queue-item.sending');
     }
   });
 }
@@ -3894,10 +3951,10 @@ export function initComposer() {
     attachInput.value = ''; // let the same file be picked again
   });
   document.getElementById('attach')?.addEventListener('click', () => {
-    if (!store.streaming && attachEnabled()) attachInput.click();
+    if (attachEnabled()) attachInput.click();
   });
   promptEl?.addEventListener('paste', (e) => {
-    if (store.streaming || !attachEnabled()) return;
+    if (!attachEnabled()) return;
     const files = [...(e.clipboardData?.files || [])];
     if (files.length) {
       e.preventDefault();
@@ -3918,7 +3975,7 @@ export function initComposer() {
   });
   if (composer) {
     composer.addEventListener('dragover', (e) => {
-      if (store.streaming || !attachEnabled()) return;
+      if (!attachEnabled()) return;
       if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
       e.preventDefault();
       composer.classList.add('drag-over');
@@ -3928,7 +3985,7 @@ export function initComposer() {
     });
     composer.addEventListener('drop', (e) => {
       composer.classList.remove('drag-over');
-      if (store.streaming || !attachEnabled()) return;
+      if (!attachEnabled()) return;
       const files = [...(e.dataTransfer?.files || [])];
       if (files.length) {
         e.preventDefault();
@@ -3945,10 +4002,6 @@ export function initComposer() {
   // server re-derives kind/mime from the file on disk anyway.
   store.on('attach-workspace-file', ({ path, name, kind }) => {
     if (!attachEnabled()) return;
-    if (store.streaming) {
-      toast(t('files.attachBusy'), { type: 'error' });
-      return;
-    }
     if (!_pendingAttachments.some((a) => a.path === path)) {
       _pendingAttachments.push({ path, name, kind, mime: 'application/octet-stream' });
       renderAttachTray();
@@ -3999,20 +4052,34 @@ export function initComposer() {
     e.preventDefault();
     const message = promptEl.value.trim();
 
+    // An upload in flight holds the send (Send is disabled), whichever key.
+    if (uploading()) {
+      _steerOnce = false;
+      return;
+    }
+    const attachments = pendingReady();
+
     if (store.streaming) {
-      // Mid-run — text only; attachments need a fresh turn of their own.
-      if (!message) return;
       const queue = !_steerOnce;
       _steerOnce = false;
+      if (!message && !attachments.length) return;
+      // A steer is text-only: never split a message into a steered text and
+      // files left behind — keep it all, and say how it can go.
+      if (!queue && attachments.length) {
+        toast(t('composer.steerNoAttach'), { key: 'steer-no-attach', timeout: 3000 });
+        return;
+      }
       // A message queues behind the run on screen, which its stream names
-      // as it is admitted: until then the text stays put (Send is disabled).
+      // as it is admitted: until then it stays put (Send is disabled).
       if (queue && !(store.sessionId && _shownRunId)) return;
       promptEl.value = '';
       autoresize();
+      _pendingAttachments = [];
+      renderAttachTray();
       updateSendEnabled();
       clearDraft();
       if (queue) {
-        sendQueue.enqueue(store.sessionId, message, _shownRunId);
+        sendQueue.enqueue(store.sessionId, message, _shownRunId, attachments);
         return;
       }
       await sendText(message);
@@ -4020,14 +4087,8 @@ export function initComposer() {
     }
     _steerOnce = false;
 
-    const attachments = pendingReady();
     if (!message && !attachments.length) return;
-    const payload = attachments.map((a) => ({
-      path: a.path,
-      mime: a.mime,
-      kind: a.kind,
-      name: a.name,
-    }));
+    const payload = attachmentPayload(attachments);
     promptEl.value = '';
     autoresize();
     _pendingAttachments = [];

@@ -17,15 +17,17 @@ function fixture(host = {}) {
     records: /** @type {Record<string, string>} */ ({}),
     ready: true,
     sent: /** @type {string[]} */ ([]),
+    items: /** @type {any[]} */ ([]), // what each send was handed
     answers: /** @type {any[]} */ ([]),
   };
   const q = createSendQueue({
     liveRuns: async () => s.live,
     runRecord: async (id) => (id in s.records ? { status: s.records[id] } : null),
     ready: () => s.ready,
-    send: async (_sid, text) => {
-      s.sent.push(text);
-      const answer = s.answers.shift() ?? { runId: `run-${text}` };
+    send: async (_sid, item) => {
+      s.sent.push(item.text);
+      s.items.push(item);
+      const answer = s.answers.shift() ?? { runId: `run-${item.text}` };
       return typeof answer === 'function' ? answer() : answer;
     },
     changed: () => {},
@@ -362,6 +364,73 @@ for (const status of ['completed', 'failed', 'cancelled']) {
     assert.equal(q.view('c').paused, 'unknown');
   });
 }
+
+test('attachments ride their item through a 409 and a pause', async () => {
+  const { s, q } = fixture();
+  s.records.R = 'completed';
+  const atts = [{ path: 'uploads/a.png', kind: 'image', name: 'a.png' }];
+  s.answers = ['busy', { refused: 'too many concurrent runs' }];
+  q.enqueue('c', 'look', 'R', atts);
+  await settled();
+  await settled();
+  assert.equal(q.view('c').paused, 'failed');
+  assert.deepEqual(q.view('c').items[0].attachments, atts); // kept while paused
+  q.sendNow('c');
+  await settled();
+  assert.deepEqual(s.sent, ['look', 'look', 'look']);
+  assert.ok(s.items.every((it) => it.attachments === atts));
+  assert.deepEqual(q.view('c').items, []);
+});
+
+test('withdraw hands an item back with its attachments', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  const atts = [{ path: 'uploads/r.pdf', kind: 'file', name: 'r.pdf' }];
+  q.enqueue('c', '', 'R', atts);
+  await settled();
+  const taken = q.withdraw('c', q.view('c').items[0].id);
+  assert.deepEqual(taken?.item.attachments, atts);
+});
+
+test('withdrawing an unsure head lifts its pause from the next item (#323)', async () => {
+  const { s, q } = fixture();
+  s.records.R = 'completed';
+  s.answers = ['unknown'];
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  await settled();
+  assert.equal(q.view('c').paused, 'unknown');
+  q.withdraw('c', q.view('c').items[0].id); // the user checked: drop A
+  await settled();
+  assert.deepEqual(s.sent, ['A', 'B']); // B was never tried: it goes as usual
+  assert.equal(q.view('c').paused, null);
+});
+
+test('withdrawing behind an unsure head keeps the pause', async () => {
+  const { s, q } = fixture();
+  s.records.R = 'completed';
+  s.answers = ['unknown'];
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  q.enqueue('c', 'C', 'R');
+  await settled();
+  q.withdraw('c', q.view('c').items[1].id); // B, not the head in doubt
+  await settled();
+  assert.equal(q.view('c').paused, 'unknown');
+  assert.deepEqual(s.sent, ['A']);
+});
+
+test('withdrawing a head behind a failed run keeps the pause', async () => {
+  const { s, q } = fixture();
+  s.records.R = 'failed';
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  await settled();
+  q.withdraw('c', q.view('c').items[0].id);
+  await settled();
+  assert.equal(q.view('c').paused, 'failed'); // R still failed: B waits too
+  assert.deepEqual(s.sent, []);
+});
 
 test('withdrawing the last item clears a pause', async () => {
   const { s, q } = fixture();

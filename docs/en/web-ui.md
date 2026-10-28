@@ -367,9 +367,11 @@ Text sent while a Run is active does one of two things, decided per message:
   network dropped) may have landed, so it is never resent on its own: it waits
   at the head of the queue, paused, for you to check the chat.
 
-A queued message can also go back to the composer for editing (when the
-composer is empty), or be withdrawn. Attachments are neither steered nor
-queued: they wait for the active Run to finish.
+Attachments can be added while a Run is active: they go with a queued
+message. A steer is text-only, so a message with attachments can only be
+queued. Send waits for any upload still in progress. A queued message can also
+go back to the composer for editing — text and attachments, when the composer
+and its tray are empty — or be withdrawn.
 
 ## Branching a chat
 

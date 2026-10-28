@@ -3257,8 +3257,11 @@ export async function cancelStream() {
     return;
   }
   // Whatever its record says once the stop lands (#322): messages queued
-  // behind it wait for the user, not for a `completed`.
-  if (_shownRunId) sendQueue.markStopped(_shownRunId);
+  // behind it wait for the user, not for a `completed`. A reconnect shows
+  // Stop before its stream names the run (and the abort below means it never
+  // will): the chat's live-run row names it then.
+  const runId = _shownRunId ?? store.runsBySession?.get(store.sessionId ?? '')?.run_id;
+  if (runId) sendQueue.markStopped(runId);
   if (_streamAbortController) _streamAbortController.abort();
   if (store.sessionId) {
     try {

@@ -39,6 +39,8 @@
 export function createSendQueue(host) {
   /** @type {Map<string, Queue>} */
   const queues = new Map();
+  /** Runs the user stopped here, whatever their records end up saying. */
+  const stopped = new Set();
   let seq = 0;
 
   /** @param {string} sid */
@@ -85,7 +87,9 @@ export function createSendQueue(host) {
     if (!rec) return 'stop';
     // Its stream may close before its outcome is written: run_finished follows.
     if (rec.status === 'running') return 'wait';
-    return rec.status === 'completed' ? 'go' : 'stop';
+    // A stop is cooperative: one that lands in the final model call lets it
+    // finish, and the run ends `completed`. The user still stopped it (#322).
+    return rec.status === 'completed' && !stopped.has(runId) ? 'go' : 'stop';
   }
 
   /** @param {string} sid */
@@ -198,6 +202,10 @@ export function createSendQueue(host) {
       if (unsure) q.paused = 'unknown';
       host.changed(sid);
       void pump(sid);
+    },
+    /** The user stopped run `runId`: a queue behind it pauses as if it failed. */
+    markStopped(/** @type {string} */ runId) {
+      stopped.add(runId);
     },
     /** Send the head now, whatever its run did — the paused queue's way on. */
     sendNow(/** @type {string} */ sid) {

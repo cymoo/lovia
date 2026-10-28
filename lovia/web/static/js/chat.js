@@ -3256,6 +3256,9 @@ export async function cancelStream() {
     _stopOnceAdmitted = true;
     return;
   }
+  // Whatever its record says once the stop lands (#322): messages queued
+  // behind it wait for the user, not for a `completed`.
+  if (_shownRunId) sendQueue.markStopped(_shownRunId);
   if (_streamAbortController) _streamAbortController.abort();
   if (store.sessionId) {
     try {

@@ -88,6 +88,23 @@ test('a run that did not complete pauses the queue', async () => {
   }
 });
 
+test('a run the user stopped pauses the queue even if it ended completed (#322)', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  s.records.R = 'running';
+  q.enqueue('c', 'A', 'R');
+  await settled();
+  q.markStopped('R'); // Stop pressed during the final model call…
+  s.live = [];
+  s.records.R = 'completed'; // …which finished anyway
+  await wake(q);
+  assert.deepEqual(s.sent, []);
+  assert.equal(q.view('c').paused, 'failed');
+  q.sendNow('c'); // the user's way on, as after any stop
+  await settled();
+  assert.deepEqual(s.sent, ['A']);
+});
+
 test('no record for a run that is gone is not a success', async () => {
   const { s, q } = fixture();
   q.enqueue('c', 'A', 'R');

@@ -354,11 +354,10 @@ let _closeMenu = null;
 /**
  * Open a menu of actions: under `at` when it is the button that opened it, or
  * at a pointer position for a context menu. One at a time. Arrow keys / Home /
- * End move, Esc closes back to the opener, Tab, an outside press, scrolling
- * or resizing close it.
+ * End move, Esc closes back to the opener, Tab closes and moves on from it, an
+ * outside press, scrolling or resizing close it.
  *
- * A manual popover, so it sits in the top layer over a modal dialog; it mounts
- * inside that dialog when opened from one, since the rest of the page is inert.
+ * A manual popover, so it sits in the top layer over a modal dialog.
  * @param {HTMLElement | { x: number, y: number }} at
  * @param {(MenuItem | null)[]} items
  * @returns {() => void} Closes the menu.
@@ -394,8 +393,10 @@ export function openMenu(at, items) {
     });
     menu.append(b);
   }
-  const host = opener?.closest('dialog[open]') || document.body;
-  host.append(menu);
+  // Into the topmost modal dialog, wherever the menu was opened from: a context
+  // menu has no opener to look up from, and outside that dialog it is inert.
+  const modals = document.querySelectorAll('dialog:modal');
+  (modals[modals.length - 1] || document.body).append(menu);
   menu.showPopover();
 
   // Under the opener, right-aligned to it; flipped above when it would run off
@@ -419,11 +420,12 @@ export function openMenu(at, items) {
     const n = buttons.length;
     const go = { ArrowDown: i + 1, ArrowUp: i - 1 + n, Home: 0, End: n - 1 }[e.key];
     if (go !== undefined) buttons[go % n]?.focus();
-    else if (e.key === 'Escape') {
+    else if (e.key === 'Escape' || e.key === 'Tab') {
       close();
       restoreFocus?.focus();
-    } else if (e.key === 'Tab') close();
-    else return;
+      // Tab then moves on from the opener, as if the menu had never been there.
+      if (e.key === 'Tab') return;
+    } else return;
     // Claimed here — and Esc must not also cancel a dialog the menu sits in.
     e.preventDefault();
     e.stopPropagation();

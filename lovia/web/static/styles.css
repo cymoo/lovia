@@ -676,9 +676,13 @@ body.sidebar-collapsed .sidebar {
 }
 /* A row's "⋯" (both chat lists): revealed on hover / keyboard focus / while
    its menu is open. In the sidebar it overlays the title's end, fading the
-   title out, so revealing it never reflows the row. */
+   title out, so revealing it never reflows the row. Hidden by opacity, not
+   display, so Tab can reach it: the row loses :focus-visible as focus leaves
+   the title, before focus lands here. */
 .session-more {
-  display: none;
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
@@ -702,7 +706,21 @@ body.sidebar-collapsed .sidebar {
 .all-chats-item:hover .session-more,
 .all-chats-item:has(:focus-visible) .session-more,
 .session-more[aria-expanded="true"] {
-  display: flex;
+  opacity: 1;
+  pointer-events: auto;
+}
+/* In the all-chats row's flow: no width until revealed, where the pin mark
+   gives way to it. */
+.all-chats-item .session-more {
+  width: 0;
+  margin-right: 0;
+  overflow: hidden;
+}
+.all-chats-item:hover .session-more,
+.all-chats-item:has(:focus-visible) .session-more,
+.all-chats-item .session-more[aria-expanded="true"] {
+  width: 26px;
+  margin-right: 4px;
 }
 .session-item .session-more {
   position: absolute;
@@ -4752,7 +4770,12 @@ body.files-splitting {
   /* Always shown, so in the row's flow: the title truncates before it instead
      of fading out under it. */
   .session-more {
-    display: flex;
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .all-chats-item .session-more {
+    width: 26px;
+    margin-right: 4px;
   }
   .session-item .session-more {
     position: static;

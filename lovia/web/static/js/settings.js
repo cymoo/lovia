@@ -3,7 +3,7 @@
 // (localStorage: language, theme, text size, Enter behavior, notifications,
 // sound); Models/Search edit the server's config.json through model-config.js
 // and appear only when the server reports features.model_config.
-import { showDialog, setThemePref, themePref } from './ui.js';
+import { segmented, showDialog, setThemePref, themePref } from './ui.js';
 import { t, languages, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
@@ -106,13 +106,32 @@ export function playCompletionSound() {
 
 // ---- General pane ---------------------------------------------------------
 
-function field(labelText, control) {
-  const row = document.createElement('label');
+/**
+ * A settings row: label (with an optional hint under it) and its control. A
+ * radio group sits in a plain row — a wrapping <label> would forward every
+ * click on the row to its first radio.
+ * @param {string} labelText
+ * @param {HTMLElement} control
+ * @param {string} [hint]
+ */
+function field(labelText, control, hint) {
+  const group = control.getAttribute('role') === 'radiogroup';
+  const row = document.createElement(group ? 'div' : 'label');
   row.className = 'settings-row';
+  const text = document.createElement('span');
+  text.className = 'settings-text';
   const span = document.createElement('span');
   span.className = 'settings-label';
   span.textContent = labelText;
-  row.append(span, control);
+  text.append(span);
+  if (hint) {
+    const sub = document.createElement('span');
+    sub.className = 'settings-hint';
+    sub.textContent = hint;
+    text.append(sub);
+  }
+  if (group) control.setAttribute('aria-label', labelText);
+  row.append(text, control);
   return row;
 }
 
@@ -129,6 +148,30 @@ function select(options, value) {
   return el;
 }
 
+/**
+ * An on/off switch (the schedules list's). `onChange` gets the new state, and
+ * `set` to put it back when the change didn't take.
+ * @param {boolean} checked
+ * @param {(on: boolean, set: (on: boolean) => void) => void} onChange
+ */
+function toggle(checked, onChange) {
+  const sw = document.createElement('button');
+  sw.type = 'button';
+  sw.className = 'switch';
+  sw.setAttribute('role', 'switch');
+  const set = (on) => sw.setAttribute('aria-checked', String(on));
+  set(checked);
+  const knob = document.createElement('span');
+  knob.className = 'switch-knob';
+  sw.append(knob);
+  sw.addEventListener('click', () => {
+    const on = sw.getAttribute('aria-checked') !== 'true';
+    set(on);
+    onChange(on, set);
+  });
+  return sw;
+}
+
 function buildGeneralPane() {
   const panel = document.createElement('div');
   panel.className = 'settings-panel';
@@ -140,35 +183,35 @@ function buildGeneralPane() {
     setLangPref(lang.value);
     location.reload();
   });
-  const langRow = field(t('settings.language'), lang);
+  const langRow = field(t('settings.language'), lang, t('settings.reloadNote'));
   langRow.dataset.part = 'language';
   panel.appendChild(langRow);
 
   // Theme — applies live.
-  const theme = select(
+  const theme = segmented(
     [
-      ['system', t('settings.themeSystem')],
-      ['light', t('settings.themeLight')],
-      ['dark', t('settings.themeDark')],
+      ['light', t('settings.themeLight'), 'sun'],
+      ['dark', t('settings.themeDark'), 'moon'],
+      ['system', t('settings.themeSystem'), 'monitor'],
     ],
     themePref(),
+    setThemePref,
   );
-  theme.addEventListener('change', () => setThemePref(theme.value));
   panel.appendChild(field(t('settings.theme'), theme));
 
   // Message text size — applies live.
-  const textSize = select(
+  const textSize = segmented(
     [
       ['sm', t('settings.textSmall')],
       ['md', t('settings.textDefault')],
       ['lg', t('settings.textLarge')],
     ],
     textSizePref(),
+    (size) => {
+      localStorage.setItem(TEXT_SIZE_KEY, size);
+      applyTextSize(size);
+    },
   );
-  textSize.addEventListener('change', () => {
-    localStorage.setItem(TEXT_SIZE_KEY, textSize.value);
-    applyTextSize(textSize.value);
-  });
   panel.appendChild(field(t('settings.textSize'), textSize));
 
   // Enter behavior — read live by the composer, so no reload needed.
@@ -186,11 +229,8 @@ function buildGeneralPane() {
 
   // Desktop notifications for finished background runs.
   if (typeof Notification !== 'undefined') {
-    const notif = document.createElement('input');
-    notif.type = 'checkbox';
-    notif.checked = notificationsEnabled();
-    notif.addEventListener('change', async () => {
-      if (!notif.checked) {
+    const notif = toggle(notificationsEnabled(), async (on, set) => {
+      if (!on) {
         localStorage.setItem(NOTIF_KEY, '0');
         return;
       }
@@ -198,45 +238,28 @@ function buildGeneralPane() {
       if (perm === 'granted') {
         localStorage.setItem(NOTIF_KEY, '1');
       } else {
-        notif.checked = false;
+        set(false);
         toast(t('settings.notifDenied'), { type: 'error' });
       }
     });
-    const row = field(t('settings.notifications'), notif);
-    row.classList.add('settings-check');
-    panel.appendChild(row);
+    panel.appendChild(field(t('settings.notifications'), notif));
   }
 
   // Completion sound — play a preview when switched on so it's not a mystery.
-  const sound = document.createElement('input');
-  sound.type = 'checkbox';
-  sound.checked = soundEnabled();
-  sound.addEventListener('change', () => {
-    localStorage.setItem(SOUND_KEY, sound.checked ? '1' : '0');
-    if (sound.checked) playCompletionSound();
+  const sound = toggle(soundEnabled(), (on) => {
+    localStorage.setItem(SOUND_KEY, on ? '1' : '0');
+    if (on) playCompletionSound();
   });
-  const soundRow = field(t('settings.sound'), sound);
-  soundRow.classList.add('settings-check');
-  panel.appendChild(soundRow);
+  panel.appendChild(field(t('settings.sound'), sound));
 
   // Follow-up chips — only offered when the server can actually produce them,
   // so this is never a switch that does nothing (same guard as notifications).
   if (store.canSuggest) {
-    const followups = document.createElement('input');
-    followups.type = 'checkbox';
-    followups.checked = followupsEnabled();
-    followups.addEventListener('change', () => {
-      localStorage.setItem(FOLLOWUPS_KEY, followups.checked ? '1' : '0');
+    const followups = toggle(followupsEnabled(), (on) => {
+      localStorage.setItem(FOLLOWUPS_KEY, on ? '1' : '0');
     });
-    const followupsRow = field(t('settings.followups'), followups);
-    followupsRow.classList.add('settings-check');
-    panel.appendChild(followupsRow);
+    panel.appendChild(field(t('settings.followups'), followups));
   }
-
-  const note = document.createElement('p');
-  note.className = 'settings-note';
-  note.textContent = t('settings.reloadNote');
-  panel.appendChild(note);
   return panel;
 }
 

@@ -2,7 +2,7 @@
 import { t } from './i18n.js';
 import { store } from './store.js';
 import { api, apiError } from './api.js';
-import { closeSidebar, promptDialog, confirmDialog, showDialog } from './ui.js';
+import { closeSidebar, promptDialog, confirmDialog, showDialog, openMenu } from './ui.js';
 import { toast } from './toast.js';
 import { createRunNotices } from './run-notices.js';
 import { icon } from './icons.js';
@@ -26,7 +26,7 @@ const sessionSearch = /** @type {HTMLInputElement | null} */ (
 const exportBtn = document.getElementById('export-btn');
 const exportWrap = document.getElementById('export-wrap');
 
-// lucide `pin` — the at-rest marker and the pin/unpin menu button.
+// lucide `pin` — the all-chats rows' pinned marker and the pin/unpin menu item.
 const PIN_SVG = icon('pin', { size: 14 });
 
 // The sidebar renders at most one page of chats; anything beyond that lives in
@@ -531,10 +531,11 @@ function renderSessions() {
     return;
   }
   // Pinned, then date groups (the server sorts pinned first, then by recency,
-  // so each group is one run of rows). A lone group needs no heading.
+  // so each group is one run of rows). A lone date group needs no heading; the
+  // Pinned one always has it — rows carry no pin mark of their own.
   const now = new Date();
   const groupOf = (s) => (s.pinned ? 'pinned' : dateBucket(s.updated_at, now));
-  const headed = new Set(chats.map(groupOf)).size > 1;
+  const headed = new Set(chats.map(groupOf)).size > 1 || chats.some((s) => s.pinned);
   let prevGroup = null;
   for (const s of chats) {
     const group = groupOf(s);
@@ -577,7 +578,7 @@ function renderSessions() {
     }
     main.addEventListener('click', () => switchSession(s.id));
 
-    item.append(main, ...rowActions(s, item));
+    item.append(main, rowActions(s, item));
     sessionsList.appendChild(item);
   }
 
@@ -642,7 +643,9 @@ export function updateSessionTitle(sessionId, title) {
 // handed as well as the cache, and reports back so the caller can repaint.
 
 /**
- * The at-rest pin marker + hover action menu both chat lists append to a row.
+ * The "⋯" button both chat lists append to a row: it opens the row's actions,
+ * as does a right-click anywhere on the row. The items are built at open time,
+ * so they follow the chat's current pinned / running state.
  *
  * Handlers restate `row` themselves instead of leaning on a re-render: the
  * all-chats dialog's rows are standalone and nothing repaints them. In the
@@ -655,62 +658,60 @@ export function updateSessionTitle(sessionId, title) {
  * `tsc --checkJs` (TS8024), and one without a default drops out of the type.
  */
 function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, stacked = false } = {}) {
-  const pinMark = document.createElement('span');
-  pinMark.className = 'session-pin';
-  pinMark.setAttribute('aria-hidden', 'true');
-  pinMark.innerHTML = PIN_SVG;
-
-  const menu = document.createElement('div');
-  menu.className = 'session-menu';
-  const add = (title, svg, onClick) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.title = title;
-    b.innerHTML = svg;
-    b.addEventListener('click', (e) => {
-      e.stopPropagation();
-      onClick(b);
-    });
-    menu.append(b);
-    return b;
-  };
-
-  // A running chat gets a stop control right in the list — no need to open it
-  // just to end its background run.
-  if (store.activeRuns?.has(s.id)) {
-    add(t('session.stop'), icon('square', { size: 13 }), async (b) => {
-      b.disabled = true;
-      if (!(await stopRun(s.id))) {
-        b.disabled = false; // still running — leave the control usable
-        return;
-      }
-      b.remove();
-      row.classList.remove('running');
-    }).classList.add('session-stop');
-  }
-
-  const pinBtn = add(
-    s.pinned ? t('session.unpin') : t('session.pin'),
-    PIN_SVG,
-    async () => {
-      const pinned = await togglePin(s);
-      if (pinned === null) return;
-      // Restate in place — neither list re-sorts a row out from under the pointer.
-      row.classList.toggle('pinned', pinned);
-      pinBtn.classList.toggle('active', pinned);
-      pinBtn.title = pinned ? t('session.unpin') : t('session.pin');
+  const items = () => [
+    // A running chat can be stopped from the list — no need to open it just
+    // to end its background run.
+    ...(store.activeRuns?.has(s.id)
+      ? [{
+          label: t('session.stop'),
+          icon: icon('square', { size: 14 }),
+          onSelect: async () => {
+            if (await stopRun(s.id)) row.classList.remove('running');
+          },
+        }]
+      : []),
+    {
+      label: t(s.pinned ? 'session.unpin' : 'session.pin'),
+      icon: PIN_SVG,
+      onSelect: async () => {
+        const pinned = await togglePin(s);
+        // Restate in place — neither list re-sorts a row out from under the pointer.
+        if (pinned !== null) row.classList.toggle('pinned', pinned);
+      },
     },
-  );
-  pinBtn.classList.toggle('active', !!s.pinned);
+    {
+      label: t('session.rename'),
+      icon: icon('pencil', { size: 14 }),
+      onSelect: () => renameSession(s, { stack: stacked }),
+    },
+    null,
+    {
+      label: t('session.delete'),
+      icon: icon('trash-2', { size: 14 }),
+      danger: true,
+      onSelect: async () => {
+        if (await deleteSession(s.id, s.title)) onDeleted();
+      },
+    },
+  ];
 
-  add(t('session.rename'), icon('pencil', { size: 14 }), () =>
-    renameSession(s, { stack: stacked }),
-  );
-  add(t('session.delete'), icon('trash-2', { size: 14 }), async () => {
-    if (await deleteSession(s.id, s.title)) onDeleted();
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'session-more';
+  more.title = t('session.actions');
+  more.setAttribute('aria-label', t('session.actions'));
+  more.setAttribute('aria-haspopup', 'menu');
+  more.setAttribute('aria-expanded', 'false');
+  more.innerHTML = icon('ellipsis', { size: 16 });
+  more.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openMenu(more, items());
   });
-
-  return [pinMark, menu];
+  row.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    openMenu({ x: e.clientX, y: e.clientY }, items());
+  });
+  return more;
 }
 
 /** @typedef {{ kind: 'fork' | 'spawn', session_id: string, title?: string | null, exists?: boolean }} Origin */
@@ -954,8 +955,8 @@ function openAllSessionsDialog(query = '') {
   let offset = 0;
   let loading = false;
 
-  // Same three-slot row as the sidebar (main button, pin marker, action menu) —
-  // only the main button's layout differs, so the actions come from rowActions.
+  // The sidebar's row (main button, "⋯" actions) plus a pin marker: this list
+  // is flat, with no Pinned group to say it.
   function rowFor(s) {
     const row = document.createElement('div');
     row.className = 'all-chats-item';
@@ -981,7 +982,11 @@ function openAllSessionsDialog(query = '') {
       switchSession(s.id).catch(() => {});
     });
 
-    row.append(main, ...rowActions(s, row, {
+    const pinMark = document.createElement('span');
+    pinMark.className = 'session-pin';
+    pinMark.setAttribute('aria-hidden', 'true');
+    pinMark.innerHTML = PIN_SVG;
+    row.append(main, pinMark, rowActions(s, row, {
       stacked: true, // a prompt must not close the list it was opened from
       onDeleted: () => {
         row.remove();

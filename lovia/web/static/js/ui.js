@@ -310,6 +310,154 @@ export function promptDialog(message, defaultValue = '', { stack = false } = {})
   });
 }
 
+// ---- Segmented control -------------------------------------------------
+let _segments = 0;
+
+/**
+ * A few mutually exclusive choices, all in view on a pill track. Native radios
+ * underneath, so arrow keys and radiogroup semantics come for free.
+ * @param {[string, string, string?][]} options value, label, optional icon name
+ * @param {string} value Selected value.
+ * @param {(value: string) => void} [onChange]
+ */
+export function segmented(options, value, onChange) {
+  const name = `seg-${++_segments}`;
+  const wrap = document.createElement('div');
+  wrap.className = 'seg-control';
+  wrap.setAttribute('role', 'radiogroup');
+  for (const [val, label, glyph] of options) {
+    const opt = document.createElement('label');
+    opt.className = 'seg-btn';
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = name;
+    radio.value = val;
+    radio.checked = val === value;
+    radio.addEventListener('change', () => onChange?.(val));
+    opt.append(radio);
+    if (glyph) opt.insertAdjacentHTML('beforeend', icon(glyph, { size: 14 }));
+    opt.append(label);
+    wrap.append(opt);
+  }
+  return wrap;
+}
+
+// ---- Popup menu --------------------------------------------------------
+/**
+ * @typedef {{ label: string, icon?: string, danger?: boolean, onSelect: () => void }} MenuItem
+ * `null` in an item list draws a separator.
+ */
+
+/** @type {(() => void) | null} */
+let _closeMenu = null;
+
+/**
+ * Open a menu of actions: under `at` when it is the button that opened it, or
+ * at a pointer position for a context menu. One at a time. Arrow keys / Home /
+ * End move, Esc closes back to the opener, Tab closes and moves on from it, an
+ * outside press, scrolling or resizing close it.
+ *
+ * A manual popover, so it sits in the top layer over a modal dialog.
+ * @param {HTMLElement | { x: number, y: number }} at
+ * @param {(MenuItem | null)[]} items
+ * @returns {() => void} Closes the menu.
+ */
+export function openMenu(at, items) {
+  const opener = at instanceof HTMLElement ? at : null;
+  const toggledShut = opener?.getAttribute('aria-expanded') === 'true';
+  _closeMenu?.();
+  if (toggledShut) return () => {};
+  const restoreFocus = opener ?? /** @type {HTMLElement | null} */ (document.activeElement);
+  const menu = document.createElement('div');
+  menu.className = 'popup-menu';
+  menu.setAttribute('role', 'menu');
+  menu.popover = 'manual';
+  for (const item of items) {
+    if (!item) {
+      const sep = document.createElement('div');
+      sep.className = 'popup-menu-sep';
+      sep.setAttribute('role', 'separator');
+      menu.append(sep);
+      continue;
+    }
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'popup-menu-item' + (item.danger ? ' danger' : '');
+    b.setAttribute('role', 'menuitem');
+    b.tabIndex = -1;
+    b.innerHTML = item.icon || '';
+    b.append(item.label);
+    b.addEventListener('click', () => {
+      close();
+      item.onSelect();
+    });
+    menu.append(b);
+  }
+  // Into the topmost modal dialog, wherever the menu was opened from: a context
+  // menu has no opener to look up from, and outside that dialog it is inert.
+  const modals = document.querySelectorAll('dialog:modal');
+  (modals[modals.length - 1] || document.body).append(menu);
+  menu.showPopover();
+
+  // Under the opener, right-aligned to it; flipped above when it would run off
+  // the bottom. A pointer position opens down-right of the pointer.
+  const { width, height } = menu.getBoundingClientRect();
+  const r = opener?.getBoundingClientRect();
+  let x = r ? r.right - width : /** @type {{ x: number }} */ (at).x;
+  let y = r ? r.bottom + 4 : /** @type {{ y: number }} */ (at).y;
+  if (y + height > innerHeight - 8) y = r ? r.top - height - 4 : y - height;
+  x = Math.max(8, Math.min(x, innerWidth - width - 8));
+  y = Math.max(8, y);
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+
+  const buttons = /** @type {HTMLElement[]} */ ([...menu.querySelectorAll('[role="menuitem"]')]);
+  buttons[0]?.focus();
+  opener?.setAttribute('aria-expanded', 'true');
+
+  const onKey = (/** @type {KeyboardEvent} */ e) => {
+    const i = buttons.indexOf(/** @type {HTMLElement} */ (document.activeElement));
+    const n = buttons.length;
+    const go = { ArrowDown: i + 1, ArrowUp: i - 1 + n, Home: 0, End: n - 1 }[e.key];
+    if (go !== undefined) buttons[go % n]?.focus();
+    else if (e.key === 'Escape' || e.key === 'Tab') {
+      close();
+      restoreFocus?.focus();
+      // Tab then moves on from the opener, as if the menu had never been there.
+      if (e.key === 'Tab') return;
+    } else return;
+    // Claimed here — and Esc must not also cancel a dialog the menu sits in.
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  const onPress = (/** @type {Event} */ e) => {
+    const target = /** @type {Node} */ (e.target);
+    // A press on the opener is left to its click, which toggles the menu shut.
+    if (!menu.contains(target) && !opener?.contains(target)) close();
+  };
+  menu.addEventListener('keydown', onKey);
+  document.addEventListener('pointerdown', onPress, true);
+  window.addEventListener('scroll', close, true);
+  window.addEventListener('resize', close);
+
+  function close() {
+    if (_closeMenu !== close) return;
+    _closeMenu = null;
+    document.removeEventListener('pointerdown', onPress, true);
+    window.removeEventListener('scroll', close, true);
+    window.removeEventListener('resize', close);
+    opener?.setAttribute('aria-expanded', 'false');
+    menu.remove();
+  }
+  _closeMenu = close;
+  return close;
+}
+
+/** Whether a popup menu is open (Esc belongs to it, not to the run). */
+export function menuOpen() {
+  return _closeMenu !== null;
+}
+
 // ---- Clipboard ---------------------------------------------------------
 /**
  * Copy text to the clipboard, falling back to a hidden textarea + execCommand

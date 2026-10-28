@@ -28,9 +28,11 @@
   /* Native form controls / scrollbars follow the active theme. */
   color-scheme: light;
 
-  /* surfaces — cool slate: a crisp neutral off-white canvas, white cards.
-     Mirrors the dark theme's hue family so both themes read as one system. */
-  --bg: #f7f8fa;
+  /* surfaces — cool slate: the chat canvas is the paper (white); the sidebar
+     is chrome, a recessed off-white plane beside it. Mirrors the dark theme's
+     hue family so both themes read as one system. */
+  --bg: #ffffff;
+  --sidebar-surface: #f7f8fa;
   --surface: #ffffff;
   --surface-2: #f0f2f5;
   --surface-3: #e6e9ee;
@@ -126,6 +128,7 @@
   /* surfaces — cool slate: neutral blue-gray, crisp elevation ramp.
      bg (canvas) < surface (panels) < surface-2 (cards) < surface-3 (hover). */
   --bg: #0d0e12;
+  --sidebar-surface: #16181e;
   --surface: #16181e;
   --surface-2: #1d2027;
   --surface-3: #272b35;
@@ -278,7 +281,7 @@ html {
 /* ---- Sidebar ------------------------------------------------------------ */
 .sidebar {
   grid-area: sidebar;
-  background: var(--surface);
+  background: var(--sidebar-surface);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -569,31 +572,25 @@ body.sidebar-collapsed .sidebar {
   color: var(--ink);
 }
 
+/* --row-bg is the row's current fill; the "⋯" button fades the title into it. */
 .session-item {
+  --row-bg: transparent;
   position: relative;
   display: flex;
   align-items: stretch;
   border-radius: var(--radius-sm);
   margin-bottom: 1px;
+  background: var(--row-bg);
   transition: background var(--t-fast);
 }
-.session-item:hover {
-  background: var(--surface-2);
+.session-item:hover,
+.session-item:has(:focus-visible, [aria-expanded="true"]) {
+  --row-bg: var(--surface-2);
 }
+/* Selection is a neutral fill, not the accent: the accent stays for meaning
+   (status, focus), and the topbar already names the open chat. */
 .session-item.active {
-  background: var(--accent-soft);
-}
-/* Active indicator: a small rounded pill, not a hard inset edge. */
-.session-item.active::before {
-  content: "";
-  position: absolute;
-  left: -6px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 18px;
-  border-radius: 3px;
-  background: var(--accent);
+  --row-bg: var(--surface-3);
 }
 .session-main {
   flex: 1;
@@ -620,8 +617,7 @@ body.sidebar-collapsed .sidebar {
   color: var(--ink);
 }
 .session-item.active .session-title {
-  color: var(--accent-text);
-  font-weight: 600;
+  color: var(--ink);
 }
 /* A live background run for this session (detach/reconnect). The all-chats
    dialog carries a stop button on those rows, so it needs the marker too. */
@@ -672,73 +668,153 @@ body.sidebar-collapsed .sidebar {
   font-size: 11.5px;
   font-weight: 600;
   color: var(--muted-2);
-  background: var(--surface);
+  background: var(--sidebar-surface);
   transition: background var(--t-fast); /* in step with the sidebar's */
 }
 .session-group:not(:first-child) {
   margin-top: 6px;
 }
-/* Shared by both chat lists — the sidebar rows and the all-chats dialog rows
-   build the same pin/rename/delete cluster. */
-.session-menu {
-  display: none;
-  align-items: center;
-  padding-right: 4px;
-  gap: 1px;
-}
-.session-item:hover .session-menu,
-.session-item:focus-within .session-menu,
-.all-chats-item:hover .session-menu,
-.all-chats-item:focus-within .session-menu {
+/* A row's "⋯" (both chat lists): revealed on hover / keyboard focus / while
+   its menu is open. In the sidebar it overlays the title's end, fading the
+   title out, so revealing it never reflows the row. Hidden by opacity, not
+   display, so Tab can reach it: the row loses :focus-visible as focus leaves
+   the title, before focus lands here. */
+.session-more {
   display: flex;
-}
-.session-menu button {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-xs);
-  color: var(--muted);
-  display: flex;
+  opacity: 0;
+  pointer-events: none;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  align-self: center;
+  margin-right: 4px;
+  border-radius: var(--radius-xs);
+  color: var(--muted);
   transition:
     background var(--t-fast),
     color var(--t-fast);
 }
-.session-menu button:hover {
-  background: var(--surface-3);
+.session-more:hover,
+.session-more[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--ink) 7%, var(--row-bg, transparent));
   color: var(--ink);
 }
-.session-menu button.active {
-  color: var(--accent);
+.session-item:hover .session-more,
+.session-item:has(:focus-visible) .session-more,
+.all-chats-item:hover .session-more,
+.all-chats-item:has(:focus-visible) .session-more,
+.session-more[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
 }
-.session-menu button.session-stop:hover {
-  background: var(--danger-soft);
-  color: var(--danger);
+/* In the all-chats row's flow: no width until revealed, where the pin mark
+   gives way to it. */
+.all-chats-item .session-more {
+  width: 0;
+  margin-right: 0;
+  overflow: hidden;
 }
-/* At-rest pin marker: visible only while pinned and not hovering (the hover
-   menu reuses the same slot). */
+.all-chats-item:hover .session-more,
+.all-chats-item:has(:focus-visible) .session-more,
+.all-chats-item .session-more[aria-expanded="true"] {
+  width: 26px;
+  margin-right: 4px;
+}
+.session-item .session-more {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  background-color: var(--row-bg);
+}
+.session-item .session-more::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  width: 20px;
+  background: linear-gradient(to right, transparent, var(--row-bg));
+  pointer-events: none;
+}
+/* The all-chats list is flat (no Pinned group), so its rows mark a pin. */
 .session-pin {
   display: none;
   align-items: center;
   padding-right: 10px;
-  color: var(--accent);
+  color: var(--muted-2);
   flex-shrink: 0;
 }
 .session-pin svg {
   width: 13px;
   height: 13px;
 }
-.session-item.pinned .session-pin,
 .all-chats-item.pinned .session-pin {
   display: flex;
 }
-.session-item:hover .session-pin,
-.session-item:focus-within .session-pin,
 .all-chats-item:hover .session-pin,
-.all-chats-item:focus-within .session-pin {
+.all-chats-item:has(:focus-visible) .session-pin {
   display: none;
 }
-/* Separator below the pinned group. */
+
+/* ---- Popup menu (ui.js openMenu) ---------------------------------------- */
+.popup-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  min-width: 168px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-md);
+  overflow: visible;
+  animation: pop-in var(--t-fast) var(--ease);
+}
+[data-theme="dark"] .popup-menu {
+  background: var(--surface-2);
+}
+.popup-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-xs);
+  font-size: 13.5px;
+  color: var(--ink-2);
+  text-align: left;
+  outline: none;
+}
+.popup-menu-item svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.popup-menu-item:hover,
+.popup-menu-item:focus-visible {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+[data-theme="dark"] .popup-menu-item:hover,
+[data-theme="dark"] .popup-menu-item:focus-visible {
+  background: var(--surface-3);
+}
+.popup-menu-item.danger,
+.popup-menu-item.danger svg {
+  color: var(--danger);
+}
+.popup-menu-item.danger:hover,
+.popup-menu-item.danger:focus-visible {
+  background: var(--danger-soft);
+}
+.popup-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
 
 .agent-select {
   width: 100%;
@@ -2522,6 +2598,10 @@ button.question-option:hover {
     var(--shadow-md),
     0 0 0 3.5px color-mix(in srgb, var(--accent) 9%, transparent);
 }
+/* No attach button: the text starts clear of the pill's round end. */
+.composer-inner:has(> .btn-attach[hidden]) {
+  padding-left: 20px;
+}
 [data-theme="dark"] .composer-inner {
   background: var(--surface-2);
 }
@@ -2959,8 +3039,9 @@ button.question-option:hover {
    there's no baseline descender gap throwing off vertical centering. */
 .btn-icon svg,
 .btn svg,
-.session-menu button svg,
+.session-more svg,
 .session-pin svg,
+.popup-menu-item svg,
 .sched-item-actions button svg,
 .mermaid-lightbox-btn svg,
 .todo-mark svg,
@@ -3329,35 +3410,6 @@ dialog.custom-dialog::backdrop {
   }
 }
 
-/* -- pause/resume switch (the one inline row action) -- */
-.sched-switch {
-  position: relative;
-  width: 30px;
-  height: 18px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: var(--surface-3);
-  box-shadow: inset 0 0 0 1px var(--border-strong);
-  transition: background var(--t-fast), box-shadow var(--t-fast);
-}
-.sched-switch[aria-checked="true"] {
-  background: var(--accent);
-  box-shadow: none;
-}
-.sched-switch-knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--surface);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
-  transition: transform var(--t-fast);
-}
-.sched-switch[aria-checked="true"] .sched-switch-knob {
-  transform: translateX(12px);
-}
 
 /* -- detail view -- */
 .sched-detail {
@@ -4715,12 +4767,22 @@ body.files-splitting {
    exist. Keyed on capability, not width — a wide tablet has no hover either,
    so the phone media query alone would miss it. */
 @media (hover: none) {
-  .session-menu {
-    display: flex;
+  /* Always shown, so in the row's flow: the title truncates before it instead
+     of fading out under it. */
+  .session-more {
+    opacity: 1;
+    pointer-events: auto;
   }
-  .session-item.pinned .session-pin,
-  .all-chats-item.pinned .session-pin {
-    display: none; /* the menu's pin button (always visible here) takes over */
+  .all-chats-item .session-more {
+    width: 26px;
+    margin-right: 4px;
+  }
+  .session-item .session-more {
+    position: static;
+    transform: none;
+  }
+  .session-item .session-more::before {
+    content: none;
   }
   .btn-copy,
   .btn-copy-code {
@@ -5144,7 +5206,8 @@ body.files-splitting {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 20px 0 6px;
+  max-width: var(--content-w); /* the turns' column, not the whole pane */
+  margin: 20px auto 6px;
   font-size: 11px;
   color: var(--muted-2);
   font-variant-numeric: tabular-nums;
@@ -5303,30 +5366,63 @@ body.files-splitting {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 8px 0;
+  min-height: 52px;
+  padding: 10px 0;
   cursor: default;
+}
+.settings-row + .settings-row {
+  border-top: 1px solid var(--border);
+}
+.settings-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 .settings-label {
   font-size: 13.5px;
-  color: var(--ink-2);
+  color: var(--ink);
+}
+.settings-hint {
+  font-size: 12px;
+  color: var(--muted);
 }
 .settings-select {
   width: auto;
   min-width: 150px;
 }
-.settings-check {
+
+.settings-row:has(.switch) {
   cursor: pointer;
 }
-.settings-check input {
-  accent-color: var(--accent);
-  width: 16px;
-  height: 16px;
+
+/* On/off switch — a role="switch" button holding its knob (settings toggles,
+   a schedule's pause/resume). */
+.switch {
+  position: relative;
   flex-shrink: 0;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  transition: background var(--t-med) var(--ease);
 }
-.settings-note {
-  margin: 10px 0 0;
-  font-size: 12px;
-  color: var(--muted-2);
+.switch[aria-checked="true"] {
+  background: var(--accent);
+}
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform var(--t-med) var(--ease);
+}
+.switch[aria-checked="true"] .switch-knob {
+  transform: translateX(14px);
 }
 
 /* ---- Long-transcript performance -------------------------------------------------------------------- */
@@ -5883,32 +5979,54 @@ body.files-splitting {
   font-size: 12px;
   font-family: var(--mono);
 }
+/* Segmented control (ui.js segmented): a pill track of native radios, the
+   chosen one raised — the files-panel tabs' look. */
 .seg-control {
   display: inline-flex;
+  flex-shrink: 0;
   gap: 2px;
   padding: 3px;
   background: var(--surface-2);
   border-radius: 999px;
+}
+.cfg-field .seg-control {
   margin-top: 6px;
 }
 .seg-btn {
-  border: 0;
-  background: transparent;
+  position: relative; /* holds its hidden radio */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--muted);
   padding: 4px 13px;
   border-radius: 999px;
-  font: inherit;
   font-size: 12.5px;
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
 }
-.seg-btn.active {
+.seg-btn:hover {
+  color: var(--ink-2);
+}
+.seg-btn input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.seg-btn:has(:checked) {
   background: var(--surface);
   color: var(--ink);
   font-weight: 560;
   box-shadow: var(--shadow-xs);
 }
-[data-theme="dark"] .seg-btn.active {
+[data-theme="dark"] .seg-btn:has(:checked) {
   background: var(--surface-3);
+}
+.seg-btn:has(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .cfg-test-row {
   display: flex;

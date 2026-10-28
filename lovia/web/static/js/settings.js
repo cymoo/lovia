@@ -16,7 +16,7 @@ const TEXT_SIZE_KEY = 'lovia-text-size';
 const FOLLOWUPS_KEY = 'lovia-followups';
 
 // ---- Message text size ----------------------------------------------------
-// Scales the transcript's prose via the --chat-font-scale CSS var (styles.css
+// Scales the transcript's prose via the --lv-chat-font-scale CSS var (styles.css
 // multiplies the message font-sizes by it). 'md' is the default → var unset.
 const TEXT_SCALES = { sm: '0.92', md: '1', lg: '1.14' };
 
@@ -32,8 +32,8 @@ function textSizePref() {
  */
 export function applyTextSize(size = textSizePref()) {
   const root = document.documentElement;
-  if (size === 'md') root.style.removeProperty('--chat-font-scale');
-  else root.style.setProperty('--chat-font-scale', TEXT_SCALES[size] || TEXT_SCALES.md);
+  if (size === 'md') root.style.removeProperty('--lv-chat-font-scale');
+  else root.style.setProperty('--lv-chat-font-scale', TEXT_SCALES[size] || TEXT_SCALES.md);
 }
 
 // ---- Enter-to-send --------------------------------------------------------
@@ -117,16 +117,16 @@ export function playCompletionSound() {
 function field(labelText, control, hint) {
   const group = control.getAttribute('role') === 'radiogroup';
   const row = document.createElement(group ? 'div' : 'label');
-  row.className = 'settings-row';
+  row.className = 'lv-settings-row';
   const text = document.createElement('span');
-  text.className = 'settings-text';
+  text.className = 'lv-settings-text';
   const span = document.createElement('span');
-  span.className = 'settings-label';
+  span.className = 'lv-settings-label';
   span.textContent = labelText;
   text.append(span);
   if (hint) {
     const sub = document.createElement('span');
-    sub.className = 'settings-hint';
+    sub.className = 'lv-settings-hint';
     sub.textContent = hint;
     text.append(sub);
   }
@@ -137,7 +137,7 @@ function field(labelText, control, hint) {
 
 function select(options, value) {
   const el = document.createElement('select');
-  el.className = 'dialog-input settings-select';
+  el.className = 'lv-dialog-input lv-settings-select';
   for (const [val, label] of options) {
     const opt = document.createElement('option');
     opt.value = val;
@@ -157,12 +157,12 @@ function select(options, value) {
 function toggle(checked, onChange) {
   const sw = document.createElement('button');
   sw.type = 'button';
-  sw.className = 'switch';
+  sw.className = 'lv-switch';
   sw.setAttribute('role', 'switch');
   const set = (on) => sw.setAttribute('aria-checked', String(on));
   set(checked);
   const knob = document.createElement('span');
-  knob.className = 'switch-knob';
+  knob.className = 'lv-switch-knob';
   sw.append(knob);
   sw.addEventListener('click', () => {
     const on = sw.getAttribute('aria-checked') !== 'true';
@@ -174,7 +174,7 @@ function toggle(checked, onChange) {
 
 function buildGeneralPane() {
   const panel = document.createElement('div');
-  panel.className = 'settings-panel';
+  panel.className = 'lv-settings-panel';
 
   // Language — applies on reload. 'auto' is the deployment's default_lang,
   // else the browser's.
@@ -283,27 +283,27 @@ export function openSettings(initialTab = 'general') {
   tabs.push({ id: 'about', label: t('settings.tabAbout'), build: buildAboutPane });
 
   const shell = document.createElement('div');
-  shell.className = 'settings-shell';
+  shell.className = 'lv-settings-shell';
 
   const head = document.createElement('div');
-  head.className = 'settings-head';
+  head.className = 'lv-settings-head';
   const h = document.createElement('h3');
   h.textContent = t('settings.title');
   const close = document.createElement('button');
   close.type = 'button';
-  close.className = 'btn-icon settings-close';
+  close.className = 'lv-btn-icon lv-settings-close';
   close.setAttribute('aria-label', t('dialog.close'));
   close.textContent = '✕';
   head.append(h, close);
   shell.appendChild(head);
 
   const body = document.createElement('div');
-  body.className = 'settings-body';
+  body.className = 'lv-settings-body';
   const rail = document.createElement('nav');
-  rail.className = 'settings-rail';
+  rail.className = 'lv-settings-rail';
   rail.setAttribute('role', 'tablist');
   const pane = document.createElement('div');
-  pane.className = 'settings-pane-host';
+  pane.className = 'lv-settings-pane-host';
   pane.id = 'settings-pane';
   pane.setAttribute('role', 'tabpanel');
 
@@ -312,7 +312,7 @@ export function openSettings(initialTab = 'general') {
   const activate = (id) => {
     active = id;
     for (const [tabId, btn] of buttons) {
-      btn.classList.toggle('active', tabId === id);
+      btn.classList.toggle('lv-active', tabId === id);
       btn.setAttribute('aria-selected', tabId === id ? 'true' : 'false');
     }
     pane.setAttribute('aria-labelledby', `settings-tab-${id}`);
@@ -322,7 +322,7 @@ export function openSettings(initialTab = 'general') {
   for (const tab of tabs) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'settings-rail-item';
+    btn.className = 'lv-settings-rail-item';
     btn.id = `settings-tab-${tab.id}`;
     btn.setAttribute('role', 'tab');
     btn.setAttribute('aria-controls', 'settings-pane');
@@ -335,7 +335,7 @@ export function openSettings(initialTab = 'general') {
   shell.appendChild(body);
 
   const dialog = showDialog({ body: shell });
-  dialog.classList.add('dialog-xl');
+  dialog.classList.add('lv-dialog-xl');
   close.addEventListener('click', () => dialog.close());
   activate(active);
   return dialog;

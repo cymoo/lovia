@@ -67,7 +67,7 @@ async ({ hash, forced }) => {
   const util = await import(`/static/${hash}/js/util.js`);
   const { highlightCode } = await import(`/static/${hash}/js/chat.js`);
   const { store } = await import(`/static/${hash}/js/store.js`);
-  const bodies = document.querySelectorAll('#transcript .turn.assistant .body');
+  const bodies = document.querySelectorAll('#transcript .lv-turn.lv-assistant .lv-body');
   const body = bodies[bodies.length - 1];
   if (!body) return { ok: false, why: 'no body' };
   const ref = document.createElement('div');
@@ -77,7 +77,7 @@ async ({ hash, forced }) => {
   // their count.
   const strip = (el) => {
     const c = el.cloneNode(true);
-    const figs = c.querySelectorAll('figure.mermaid-diagram, pre > code.language-mermaid');
+    const figs = c.querySelectorAll('figure.lv-mermaid-diagram, pre > code.language-mermaid');
     figs.forEach((f) => (f.closest('figure, pre')).replaceWith(document.createComment('mmd')));
     return { html: c.innerHTML.replace(/<!--tail-->/g, ''), diagrams: figs.length };
   };
@@ -92,7 +92,9 @@ async ({ hash, forced }) => {
 BUSY = (
     "() => document.getElementById('transcript')?.getAttribute('aria-busy') === 'true'"
 )
-BODY = "document.querySelector('#transcript .turn.assistant:last-of-type .body')"
+BODY = (
+    "document.querySelector('#transcript .lv-turn.lv-assistant:last-of-type .lv-body')"
+)
 
 
 def static_hash(url: str) -> str:
@@ -166,11 +168,11 @@ def scenario_main(page, url: str, hash_: str, check: Check) -> None:
     # The mermaid block is committed early; its render is async — wait for the
     # swap, then anchor identity to the figure.
     page.wait_for_function(
-        f"() => ({BODY}).querySelectorAll('figure.mermaid-diagram').length === 1",
+        f"() => ({BODY}).querySelectorAll('figure.lv-mermaid-diagram').length === 1",
         timeout=15000,
     )
     page.evaluate(
-        f"() => {{ window.__fig = ({BODY}).querySelector('figure.mermaid-diagram'); }}"
+        f"() => {{ window.__fig = ({BODY}).querySelector('figure.lv-mermaid-diagram'); }}"
     )
     chars0 = page.evaluate(f"() => ({BODY}).textContent.length")
     equiv_checks, equiv_ok = 0, 0
@@ -202,7 +204,7 @@ def scenario_main(page, url: str, hash_: str, check: Check) -> None:
     page.evaluate("() => document.getSelection().removeAllRanges()")
     # Still streaming: the figure swapped in earlier must be the very same node.
     same_fig = page.evaluate(
-        f"() => {{ const f = ({BODY}).querySelectorAll('figure.mermaid-diagram'); return f.length === 1 && f[0] === window.__fig && window.__fig.isConnected; }}"
+        f"() => {{ const f = ({BODY}).querySelectorAll('figure.lv-mermaid-diagram'); return f.length === 1 && f[0] === window.__fig && window.__fig.isConnected; }}"
     )
     check(
         same_fig,
@@ -217,7 +219,7 @@ def scenario_main(page, url: str, hash_: str, check: Check) -> None:
     # The settle flush is a full render by design (fresh nodes), so identity
     # is not expected to survive it — only the count.
     one_fig = page.evaluate(
-        f"() => ({BODY}).querySelectorAll('figure.mermaid-diagram').length === 1"
+        f"() => ({BODY}).querySelectorAll('figure.lv-mermaid-diagram').length === 1"
     )
     check(one_fig, "after settle: exactly one diagram")
     all_hl = page.evaluate(

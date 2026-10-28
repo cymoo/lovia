@@ -63,7 +63,7 @@ function emitWorkspaceTouch(name, path) {
 function addCodeBlockControls(container) {
   container.querySelectorAll('pre').forEach((pre) => {
     if (pre.querySelector('code.language-mermaid')) return; // diagram, not a code block
-    if (pre.querySelector('.btn-copy-code')) return; // already added
+    if (pre.querySelector('.lv-btn-copy-code')) return; // already added
 
     // Detect language from highlight.js class
     const code = pre.querySelector('code');
@@ -81,14 +81,14 @@ function addCodeBlockControls(container) {
     // Language label
     if (lang) {
       const label = document.createElement('span');
-      label.className = 'code-lang';
+      label.className = 'lv-code-lang';
       label.textContent = lang;
       pre.appendChild(label);
     }
 
     // Copy button
     const btn = document.createElement('button');
-    btn.className = 'btn-copy-code';
+    btn.className = 'lv-btn-copy-code';
     btn.type = 'button';
     btn.title = t('chat.copyCode');
     btn.innerHTML = `${icon('copy', { size: 12 })} ${t('chat.copyCode')}`;
@@ -101,17 +101,17 @@ function addCodeBlockControls(container) {
         // broke in non-English UIs and on snippets ending with "Copy".
         const clone = pre.cloneNode(true);
         clone
-          .querySelectorAll('.btn-copy-code, .code-lang')
+          .querySelectorAll('.lv-btn-copy-code, .lv-code-lang')
           .forEach((n) => n.remove());
         codeText = clone.textContent || '';
       }
       const ok = await copyToClipboard(codeText.trimEnd());
       if (ok) {
         btn.innerHTML = `${icon('check', { size: 12 })} ${t('chat.copied')}`;
-        btn.classList.add('copied');
+        btn.classList.add('lv-copied');
         setTimeout(() => {
           btn.innerHTML = `${icon('copy', { size: 12 })} ${t('chat.copyCode')}`;
-          btn.classList.remove('copied');
+          btn.classList.remove('lv-copied');
         }, 2000);
       }
     });
@@ -260,7 +260,7 @@ function flushRender(force = false) {
 // ---- Templates ---------------------------------------------------------
 function makeTurn(role, ts) {
   const node = cloneTemplate('tmpl-turn');
-  node.classList.add(role);
+  node.classList.add(`lv-${role}`);
   node.dataset.role = role;
   setTurnTimestamp(node, ts);
   return node;
@@ -271,7 +271,7 @@ function setTurnTimestamp(turn, ts = Date.now()) {
   // Compact display ("14:32" today), full form in the tooltip.
   turn.dataset.timestamp = formatTimeSmart(ts);
   turn.dataset.timestampFull = formatDateTime(ts, { seconds: true });
-  const timestamp = turn.querySelector('.turn-footer .timestamp');
+  const timestamp = turn.querySelector('.lv-turn-footer .lv-timestamp');
   if (timestamp) {
     timestamp.textContent = turn.dataset.timestamp;
     timestamp.title = turn.dataset.timestampFull;
@@ -288,16 +288,16 @@ function contentText(content) {
 
 function ensureFooter(bubble) {
   if (!bubble) return null;
-  let footer = bubble.querySelector(':scope > .turn-footer');
+  let footer = bubble.querySelector(':scope > .lv-turn-footer');
   if (!footer) {
     footer = document.createElement('div');
-    footer.className = 'turn-footer';
+    footer.className = 'lv-turn-footer';
     const timestamp = document.createElement('span');
-    timestamp.className = 'timestamp';
+    timestamp.className = 'lv-timestamp';
     footer.appendChild(timestamp);
   }
-  const timestamp = footer.querySelector('.timestamp');
-  const turn = bubble.closest('.turn');
+  const timestamp = footer.querySelector('.lv-timestamp');
+  const turn = bubble.closest('.lv-turn');
   if (timestamp && turn?.dataset.timestamp) {
     timestamp.textContent = turn.dataset.timestamp;
     timestamp.title = turn.dataset.timestampFull || '';
@@ -310,13 +310,13 @@ function appendBubbleContent(bubble, node) {
   if (!bubble || !node) return;
   // Content lands above the tail: the waiting dots (syncAwaiting), else the
   // footer — so a step still sees the activity group it extends.
-  const tail = bubble.querySelector(':scope > .awaiting, :scope > .turn-footer');
+  const tail = bubble.querySelector(':scope > .lv-awaiting, :scope > .lv-turn-footer');
   if (isStep(node)) {
     placeStep(bubble, node, tail);
     return;
   }
   // The reply's text has started: the steps before it fold away.
-  if (node.classList.contains('body')) sealActivity(bubble);
+  if (node.classList.contains('lv-body')) sealActivity(bubble);
   bubble.insertBefore(node, tail);
 }
 
@@ -345,7 +345,7 @@ function maybeDateSeparator(transcriptEl, ts, { anchorFirst = false } = {}) {
   _lastDateKey = key;
   if (isFirst && !anchorFirst) return;
   const sep = document.createElement('div');
-  sep.className = 'date-separator';
+  sep.className = 'lv-date-separator';
   sep.textContent = dateLabel(ts);
   transcriptEl.appendChild(sep);
 }
@@ -394,24 +394,24 @@ async function rewindTo(node, message) {
  * Mirrors updateRegenButton: same target turn, same lifecycle.
  */
 function updateEditButton() {
-  document.querySelectorAll('.btn-edit').forEach((b) => b.remove());
+  document.querySelectorAll('.lv-btn-edit').forEach((b) => b.remove());
   if (!store.canRewind || store.streaming || !store.sessionId) return;
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return;
   // Confirmed turns only: a queued bubble has no ordinal to rewind to yet.
-  const users = transcriptEl.querySelectorAll('.turn.user[data-user-turn]');
+  const users = transcriptEl.querySelectorAll('.lv-turn.lv-user[data-user-turn]');
   const last = /** @type {HTMLElement | undefined} */ (users[users.length - 1]);
   if (last) addEditButton(last);
 }
 
 function addEditButton(node) {
   if (!store.canRewind) return;
-  const bubble = node.querySelector('.bubble');
-  const footer = bubble?.querySelector(':scope > .turn-footer');
-  if (!footer || footer.querySelector('.btn-edit')) return;
+  const bubble = node.querySelector('.lv-bubble');
+  const footer = bubble?.querySelector(':scope > .lv-turn-footer');
+  if (!footer || footer.querySelector('.lv-btn-edit')) return;
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'btn-edit';
+  btn.className = 'lv-btn-edit';
   btn.title = t('chat.edit');
   btn.setAttribute('aria-label', t('chat.edit'));
   btn.innerHTML = icon('pencil', { size: 13 });
@@ -426,24 +426,24 @@ function startEditUserTurn(node) {
     toast(t('chat.editBusy'), { type: 'error' });
     return;
   }
-  const bubble = node.querySelector('.bubble');
-  const body = bubble?.querySelector('.body');
+  const bubble = node.querySelector('.lv-bubble');
+  const body = bubble?.querySelector('.lv-body');
   if (!bubble || !body || node.dataset.userTurn == null) return;
-  if (bubble.querySelector('.edit-area')) return; // already editing
+  if (bubble.querySelector('.lv-edit-area')) return; // already editing
 
   const wrap = document.createElement('div');
-  wrap.className = 'edit-area';
+  wrap.className = 'lv-edit-area';
   const ta = document.createElement('textarea');
   ta.value = body.textContent;
   const actions = document.createElement('div');
-  actions.className = 'edit-actions';
+  actions.className = 'lv-edit-actions';
   const cancelBtn = document.createElement('button');
   cancelBtn.type = 'button';
-  cancelBtn.className = 'btn btn-ghost btn-sm';
+  cancelBtn.className = 'lv-btn lv-btn-ghost lv-btn-sm';
   cancelBtn.textContent = t('dialog.cancel');
   const sendBtn = document.createElement('button');
   sendBtn.type = 'button';
-  sendBtn.className = 'btn btn-primary btn-sm';
+  sendBtn.className = 'lv-btn lv-btn-primary lv-btn-sm';
   sendBtn.textContent = t('chat.send');
   actions.append(cancelBtn, sendBtn);
   wrap.append(ta, actions);
@@ -485,28 +485,28 @@ function startEditUserTurn(node) {
 // One floating regenerate action on the last assistant turn: rewind to just
 // before the last user message and re-run it verbatim.
 function updateRegenButton() {
-  document.querySelector('.btn-regen')?.remove();
+  document.querySelector('.lv-btn-regen')?.remove();
   if (!store.canRewind || store.streaming || !store.sessionId) return;
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return;
-  const turns = transcriptEl.querySelectorAll('.turn');
+  const turns = transcriptEl.querySelectorAll('.lv-turn');
   const last = turns[turns.length - 1];
-  if (!last || !last.classList.contains('assistant')) return;
-  const users = transcriptEl.querySelectorAll('.turn.user[data-user-turn]');
+  if (!last || !last.classList.contains('lv-assistant')) return;
+  const users = transcriptEl.querySelectorAll('.lv-turn.lv-user[data-user-turn]');
   const lastUser = /** @type {HTMLElement} */ (users[users.length - 1]);
   if (!lastUser) return;
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'btn-regen';
+  btn.className = 'lv-btn-regen';
   btn.title = t('chat.regenerate');
   btn.setAttribute('aria-label', t('chat.regenerate'));
   btn.innerHTML = icon('refresh-cw', { size: 13 });
   btn.addEventListener('click', () => {
     if (store.streaming) return;
-    const text = lastUser.querySelector('.body')?.textContent?.trim();
+    const text = lastUser.querySelector('.lv-body')?.textContent?.trim();
     if (text) rewindTo(lastUser, text);
   });
-  ensureFooter(last.querySelector('.bubble'))?.appendChild(btn);
+  ensureFooter(last.querySelector('.lv-bubble'))?.appendChild(btn);
 }
 
 // ---- Render helpers ----------------------------------------------------
@@ -521,11 +521,11 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
   if (!transcriptEl) return null;
   if (!before) maybeDateSeparator(transcriptEl, Date.now());
   const node = makeTurn('user');
-  if (queued) node.classList.add('queued');
-  const bubble = node.querySelector('.bubble');
+  if (queued) node.classList.add('lv-queued');
+  const bubble = node.querySelector('.lv-bubble');
   if (text) {
     const body = document.createElement('div');
-    body.className = 'body';
+    body.className = 'lv-body';
     body.textContent = text;
     appendBubbleContent(bubble, body);
   }
@@ -545,15 +545,15 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
     transcriptEl.appendChild(node);
   }
   // The reply above now ends before an unnamed turn: no branch until it's named.
-  renderMessageActions(previousTurn(node)?.querySelector('.bubble'));
+  renderMessageActions(previousTurn(node)?.querySelector('.lv-bubble'));
   scrollDown();
   return node;
 }
 
-/** @param {Element} node @returns {Element | null} The nearest `.turn` above. */
+/** @param {Element} node @returns {Element | null} The nearest `.lv-turn` above. */
 function previousTurn(node) {
   let prev = node.previousElementSibling;
-  while (prev && !prev.classList.contains('turn')) prev = prev.previousElementSibling;
+  while (prev && !prev.classList.contains('lv-turn')) prev = prev.previousElementSibling;
   return prev;
 }
 
@@ -561,10 +561,10 @@ function startAssistantTurn(ts) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return {};
   const node = makeTurn('assistant', ts);
-  node.classList.add('streaming');
+  node.classList.add('lv-streaming');
   transcriptEl.appendChild(node);
   store.turnNode = node;
-  store.bubble = node.querySelector('.bubble');
+  store.bubble = node.querySelector('.lv-bubble');
   store.body = null;
   store.rawText = '';
   store.toolNodes.clear();
@@ -596,12 +596,12 @@ function startAssistantTurn(ts) {
 function resumeTailAssistantTurn() {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return false;
-  const turns = transcriptEl.querySelectorAll('.turn');
+  const turns = transcriptEl.querySelectorAll('.lv-turn');
   const node = /** @type {HTMLElement | undefined} */ (turns[turns.length - 1]);
-  if (!node?.classList.contains('assistant')) return false;
-  node.classList.add('streaming');
+  if (!node?.classList.contains('lv-assistant')) return false;
+  node.classList.add('lv-streaming');
   store.turnNode = node;
-  store.bubble = node.querySelector('.bubble');
+  store.bubble = node.querySelector('.lv-bubble');
   renderMessageActions(store.bubble); // none while it streams; settling redraws them
   // The rest starts clean: what's in the bubble is finished history, and the
   // continuation is a fresh model turn — its first delta opens a new body, its
@@ -619,7 +619,7 @@ function resumeTailAssistantTurn() {
 function ensureBody() {
   if (!store.body && store.bubble) {
     store.body = document.createElement('div');
-    store.body.className = 'body';
+    store.body.className = 'lv-body';
     appendBubbleContent(store.bubble, store.body);
     store.rawText = '';
   }
@@ -629,13 +629,13 @@ function ensureBody() {
 function ensureReasoning() {
   if (!store.reasoningNode && store.bubble) {
     const details = document.createElement('details');
-    details.className = 'reasoning';
+    details.className = 'lv-reasoning';
     details.open = true;
     const summary = document.createElement('summary');
-    summary.innerHTML = `<span class="reasoning-icon">💭</span><span class="reasoning-label">${t('chat.thinking')}</span>`;
+    summary.innerHTML = `<span class="lv-reasoning-icon">💭</span><span class="lv-reasoning-label">${t('chat.thinking')}</span>`;
     details.appendChild(summary);
     const content = document.createElement('div');
-    content.className = 'reasoning-content';
+    content.className = 'lv-reasoning-content';
     details.appendChild(content);
     // Append in stream order. A run shares one bubble across turns, so each
     // turn's reasoning must land after the prior turn's text/tools — inserting
@@ -650,13 +650,13 @@ function finalizeReasoning() {
   if (!store.reasoningNode || !store.reasoningText) return;
   // Only collapse on the first call — subsequent calls (e.g. from
   // repeated text_delta events) must not reset the user's toggle.
-  if (store.reasoningNode.classList.contains('done')) return;
+  if (store.reasoningNode.classList.contains('lv-done')) return;
   store.reasoningNode.open = false;
-  store.reasoningNode.classList.add('done');
+  store.reasoningNode.classList.add('lv-done');
   const end = store.reasoningEnd || Date.now();
   const start = store.reasoningStart || end;
   const elapsed = (end - start) / 1000;
-  const label = store.reasoningNode.querySelector('.reasoning-label');
+  const label = store.reasoningNode.querySelector('.lv-reasoning-label');
   // Reasoning that arrived in one burst has no meaningful duration.
   if (label) {
     label.textContent = elapsed < 1 ? t('chat.thoughtDone') : t('chat.thought', { s: elapsed.toFixed(1) });
@@ -689,7 +689,7 @@ function updateToolResult(id, result, isError, images) {
   const node = store.toolNodes.get(id);
   if (!node) return;
   setToolResult(node, result, isError, images, true);
-  if (node.classList.contains('tool--ui')) scrollDown(); // a component adds height
+  if (node.classList.contains('lv-tool--ui')) scrollDown(); // a component adds height
 }
 
 function removeToolNode(id) {
@@ -701,7 +701,7 @@ function removeToolNode(id) {
 // Tool names whose calls render as a todo card instead of a tool bubble.
 // Seeded with the default; renamed tools are learned from `todo` events.
 const todoNames = new Set(['todo_write']);
-// pending stays empty — its ring is drawn by `.todo-mark::before` in CSS.
+// pending stays empty — its ring is drawn by `.lv-todo-mark::before` in CSS.
 const TODO_MARK = {
   completed: icon('check', { size: 13 }),
   in_progress: icon('loader-circle', { size: 13 }),
@@ -730,33 +730,33 @@ function fillTodoCard(card, todos) {
   const done = todos.filter((todo) => todo.status === 'completed').length;
   const pct = total ? Math.round((done / total) * 100) : 0;
   const expanded = !store.todoCollapsed;
-  card.classList.toggle('complete', total > 0 && done === total);
+  card.classList.toggle('lv-complete', total > 0 && done === total);
   card.innerHTML =
-    `<button class="todo-toggle" type="button" aria-expanded="${expanded}" title="${expanded ? t('todo.hide') : t('todo.show')}">` +
-    `<span class="todo-title">${t('todo.plan')}</span>` +
-    `<span class="todo-count">${done}/${total}</span>` +
-    `<span class="todo-toggle-icon" aria-hidden="true">${expanded ? '-' : '+'}</span>` +
+    `<button class="lv-todo-toggle" type="button" aria-expanded="${expanded}" title="${expanded ? t('todo.hide') : t('todo.show')}">` +
+    `<span class="lv-todo-title">${t('todo.plan')}</span>` +
+    `<span class="lv-todo-count">${done}/${total}</span>` +
+    `<span class="lv-todo-toggle-icon" aria-hidden="true">${expanded ? '-' : '+'}</span>` +
     '</button>' +
-    '<div class="todo-content">' +
-    `<div class="todo-bar"><div class="todo-bar-fill" style="width:${pct}%"></div></div>` +
-    '<ul class="todo-list"></ul>' +
+    '<div class="lv-todo-content">' +
+    `<div class="lv-todo-bar"><div class="lv-todo-bar-fill" style="width:${pct}%"></div></div>` +
+    '<ul class="lv-todo-list"></ul>' +
     '</div>';
-  const toggle = card.querySelector('.todo-toggle');
+  const toggle = card.querySelector('.lv-todo-toggle');
   toggle?.addEventListener('click', () => setTodoCollapsed(!store.todoCollapsed));
-  const ul = card.querySelector('.todo-list');
+  const ul = card.querySelector('.lv-todo-list');
   for (const todo of todos) {
     const status = ['pending', 'in_progress', 'completed'].includes(todo.status)
       ? todo.status
       : 'pending';
     const li = document.createElement('li');
-    li.className = `todo-item ${status}`;
+    li.className = `lv-todo-item lv-${status}`;
     const label =
       status === 'in_progress' && todo.active_form ? todo.active_form : todo.content;
     const mark = document.createElement('span');
-    mark.className = 'todo-mark';
+    mark.className = 'lv-todo-mark';
     mark.innerHTML = TODO_MARK[status];
     const text = document.createElement('span');
-    text.className = 'todo-text';
+    text.className = 'lv-todo-text';
     text.textContent = label;
     li.append(mark, text);
     ul.appendChild(li);
@@ -766,16 +766,16 @@ function fillTodoCard(card, todos) {
 
 function buildTodoCard(todos) {
   const card = document.createElement('div');
-  card.className = 'todo-card';
+  card.className = 'lv-todo-card';
   return fillTodoCard(card, todos);
 }
 
 function setTodoCollapsed(collapsed) {
   const panel = document.getElementById('todo-panel');
   store.todoCollapsed = collapsed;
-  panel?.classList.toggle('collapsed', collapsed);
-  const toggle = /** @type {HTMLElement | null} */ (panel?.querySelector('.todo-toggle'));
-  const icon = panel?.querySelector('.todo-toggle-icon');
+  panel?.classList.toggle('lv-collapsed', collapsed);
+  const toggle = /** @type {HTMLElement | null} */ (panel?.querySelector('.lv-todo-toggle'));
+  const icon = panel?.querySelector('.lv-todo-toggle-icon');
   toggle?.setAttribute('aria-expanded', String(!collapsed));
   if (toggle) toggle.title = collapsed ? t('todo.show') : t('todo.hide');
   if (icon) icon.textContent = collapsed ? '+' : '-';
@@ -785,8 +785,8 @@ function clearTodoPanel() {
   const panel = document.getElementById('todo-panel');
   if (panel) {
     panel.replaceChildren();
-    panel.classList.add('hidden');
-    panel.classList.remove('collapsed');
+    panel.classList.add('lv-hidden');
+    panel.classList.remove('lv-collapsed');
   }
   store.todoNode = null;
   // Same default as store.js: collapsed on phones, where the bottom-anchored
@@ -825,8 +825,8 @@ function upsertTodoCard(todos) {
     return;
   }
 
-  panel.classList.remove('hidden');
-  panel.classList.toggle('collapsed', store.todoCollapsed);
+  panel.classList.remove('lv-hidden');
+  panel.classList.toggle('lv-collapsed', store.todoCollapsed);
   if (store.todoNode && panel.contains(store.todoNode)) {
     fillTodoCard(store.todoNode, todos);
   } else {
@@ -860,7 +860,7 @@ function appendApproval(call) {
   if (isAutoApproved(call.name)) {
     // A quiet record instead of a card — the decision was already made.
     const note = document.createElement('div');
-    note.className = 'approval-auto';
+    note.className = 'lv-approval-auto';
     note.textContent = t('approval.auto', { name: call.name });
     appendBubbleContent(store.bubble, note);
     api
@@ -874,31 +874,31 @@ function appendApproval(call) {
   setToolStatus(findToolNode(call.id), 'awaiting');
   store.emit('tool-awaiting');
   const node = cloneTemplate('tmpl-approval');
-  const head = node.querySelector('.approval-head');
+  const head = node.querySelector('.lv-approval-head');
   if (head) head.textContent = t('approval.waiting');
-  node.querySelector('.approve').textContent = t('approval.approve');
-  node.querySelector('.decline').textContent = t('approval.deny');
-  node.querySelector('.approval-name').textContent = call.name;
-  fillParams(node.querySelector('.approval-args'), call.arguments);
+  node.querySelector('.lv-approve').textContent = t('approval.approve');
+  node.querySelector('.lv-decline').textContent = t('approval.deny');
+  node.querySelector('.lv-approval-name').textContent = call.name;
+  fillParams(node.querySelector('.lv-approval-args'), call.arguments);
 
   const always = document.createElement('label');
-  always.className = 'approval-always';
+  always.className = 'lv-approval-always';
   const box = document.createElement('input');
   box.type = 'checkbox';
   always.append(box, ` ${t('approval.always', { name: call.name })}`);
-  node.querySelector('.approval-actions')?.before(always);
+  node.querySelector('.lv-approval-actions')?.before(always);
 
   const resolve = async (decision) => {
-    node.classList.add('resolved');
+    node.classList.add('lv-resolved');
     // A denial settles as an error result; an approval runs the call.
     if (decision === 'approve') setToolStatus(findToolNode(call.id), 'running');
     if (decision === 'approve' && box.checked) rememberApproval(call.name);
     always.remove();
     // Leave a record of which way it went instead of just dimming the card.
-    const actions = node.querySelector('.approval-actions');
+    const actions = node.querySelector('.lv-approval-actions');
     if (actions) {
       const status = document.createElement('span');
-      status.className = `approval-status ${decision}`;
+      status.className = `lv-approval-status lv-${decision}`;
       status.textContent =
         decision === 'approve' ? t('approval.approved') : t('approval.denied');
       actions.replaceChildren(status);
@@ -907,8 +907,8 @@ function appendApproval(call) {
       await api.approve({ session_id: store.sessionId, call_id: call.id, decision });
     } catch (err) { console.error(err); }
   };
-  node.querySelector('.approve').addEventListener('click', () => resolve('approve'));
-  node.querySelector('.decline').addEventListener('click', () => resolve('deny'));
+  node.querySelector('.lv-approve').addEventListener('click', () => resolve('approve'));
+  node.querySelector('.lv-decline').addEventListener('click', () => resolve('deny'));
   appendBubbleContent(store.bubble, node);
   store.body = null;
   store.rawText = '';
@@ -932,7 +932,7 @@ function focusApprovalCard(node) {
     ae === document.body ||
     (ae === promptEl && !promptEl.value.trim());
   if (!neutral) return;
-  /** @type {HTMLElement | null} */ (node.querySelector('.approve'))?.focus({
+  /** @type {HTMLElement | null} */ (node.querySelector('.lv-approve'))?.focus({
     preventScroll: true, // scrollDown() already owns the viewport
   });
 }
@@ -940,7 +940,7 @@ function focusApprovalCard(node) {
 function appendHandoff(from, to) {
   if (!store.bubble) return;
   const node = cloneTemplate('tmpl-handoff');
-  node.querySelector('.handoff-text').textContent = `${from}  →  ${to}`;
+  node.querySelector('.lv-handoff-text').textContent = `${from}  →  ${to}`;
   appendBubbleContent(store.bubble, node);
 }
 
@@ -976,23 +976,23 @@ function parseQuestion(args) {
 function findQuestionNode(id) {
   const escaped = window.CSS?.escape ? CSS.escape(id) : id.replace(/["\\]/g, '\\$&');
   return /** @type {HTMLElement | null} */ (
-    document.querySelector(`#transcript .question[data-call-id="${escaped}"]`)
+    document.querySelector(`#transcript .lv-question[data-call-id="${escaped}"]`)
   );
 }
 
 /** Freeze the card into its answered/expired end state. */
 function settleQuestion(node, answer) {
-  if (!node || node.classList.contains('resolved')) return;
-  node.classList.add('resolved');
-  const head = node.querySelector('.question-head');
+  if (!node || node.classList.contains('lv-resolved')) return;
+  node.classList.add('lv-resolved');
+  const head = node.querySelector('.lv-question-head');
   if (head) head.textContent = answer != null ? t('question.answered') : t('question.expired');
-  node.querySelector('.question-options')?.remove();
-  node.querySelector('.question-free')?.remove();
+  node.querySelector('.lv-question-options')?.remove();
+  node.querySelector('.lv-question-free')?.remove();
   if (answer != null && answer.trim()) {
     const echo = document.createElement('div');
-    echo.className = 'question-answer';
+    echo.className = 'lv-question-answer';
     echo.textContent = answer;
-    node.querySelector('.question-text')?.after(echo);
+    node.querySelector('.lv-question-text')?.after(echo);
   }
 }
 
@@ -1008,14 +1008,14 @@ function buildQuestionCard(call) {
 
   const node = cloneTemplate('tmpl-question');
   node.dataset.callId = call.id || '';
-  node.querySelector('.question-head').textContent = t('question.waiting');
-  node.querySelector('.question-text').textContent = q.question;
-  const optionsBox = node.querySelector('.question-options');
-  const form = node.querySelector('.question-free');
+  node.querySelector('.lv-question-head').textContent = t('question.waiting');
+  node.querySelector('.lv-question-text').textContent = q.question;
+  const optionsBox = node.querySelector('.lv-question-options');
+  const form = node.querySelector('.lv-question-free');
   const input = /** @type {HTMLTextAreaElement} */ (
-    node.querySelector('.question-input')
+    node.querySelector('.lv-question-input')
   );
-  const send = node.querySelector('.question-send');
+  const send = node.querySelector('.lv-question-send');
   send.textContent = t('question.send');
   input.placeholder = q.options.length
     ? t('question.placeholderWithOptions')
@@ -1023,7 +1023,7 @@ function buildQuestionCard(call) {
   input.setAttribute('aria-label', t('question.answerLabel'));
 
   const submit = async (answer) => {
-    if (node.classList.contains('resolved')) return;
+    if (node.classList.contains('lv-resolved')) return;
     try {
       const res = await api.answer({ session_id: store.sessionId, answer });
       if (res.ok) {
@@ -1046,12 +1046,12 @@ function buildQuestionCard(call) {
 
   const optionRow = (opt, el) => {
     const text = document.createElement('span');
-    text.className = 'question-option-label';
+    text.className = 'lv-question-option-label';
     text.textContent = opt.label;
     el.append(text);
     if (opt.description) {
       const desc = document.createElement('span');
-      desc.className = 'question-option-desc';
+      desc.className = 'lv-question-option-desc';
       desc.textContent = opt.description;
       el.append(desc);
     }
@@ -1061,7 +1061,7 @@ function buildQuestionCard(call) {
     const boxes = [];
     for (const opt of q.options) {
       const row = document.createElement('label');
-      row.className = 'question-option multi';
+      row.className = 'lv-question-option lv-multi';
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.value = opt.label;
@@ -1072,7 +1072,7 @@ function buildQuestionCard(call) {
     }
     const pick = document.createElement('button');
     pick.type = 'button';
-    pick.className = 'btn btn-primary question-pick';
+    pick.className = 'lv-btn lv-btn-primary lv-question-pick';
     pick.textContent = t('question.sendSelected');
     // Multi-select convention: chosen labels joined with newlines (labels
     // are schema-enforced single-line + unique, so the join is lossless).
@@ -1085,7 +1085,7 @@ function buildQuestionCard(call) {
     for (const opt of q.options) {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'question-option';
+      btn.className = 'lv-question-option';
       btn.setAttribute(
         'aria-label',
         opt.description ? `${opt.label} — ${opt.description}` : opt.label,
@@ -1141,7 +1141,7 @@ function focusQuestionCard(node) {
     ae === document.body ||
     (ae === promptEl && !promptEl.value.trim());
   if (!neutral) return;
-  const target = node.querySelector('.question-option, .question-input');
+  const target = node.querySelector('.lv-question-option, .lv-question-input');
   /** @type {HTMLElement | null} */ (target)?.focus({ preventScroll: true });
 }
 
@@ -1184,10 +1184,10 @@ function updateContextMeter(usage) {
   // Unknown window (provider advertises none): a neutral ring with no fill —
   // the popover still serves the token/cache detail.
   const pct = window_ ? Math.min(100, Math.round((fill / window_) * 100)) : null;
-  el.classList.remove('hidden');
-  el.classList.toggle('nowin', pct == null);
-  el.classList.toggle('warn', pct != null && pct >= 70 && pct < 90);
-  el.classList.toggle('danger', pct != null && pct >= 90);
+  el.classList.remove('lv-hidden');
+  el.classList.toggle('lv-nowin', pct == null);
+  el.classList.toggle('lv-warn', pct != null && pct >= 70 && pct < 90);
+  el.classList.toggle('lv-danger', pct != null && pct >= 90);
   const detail = pct != null
     ? t('context.meter', { used: formatTokens(fill), window: formatTokens(window_), pct })
     : t('context.meterNoWindow', { used: formatTokens(fill) });
@@ -1195,19 +1195,19 @@ function updateContextMeter(usage) {
   el.setAttribute('aria-label', detail); // keep assistive tech in sync
   // pathLength="100" on the circle → the dash array speaks percentages.
   /** @type {SVGElement} */ (
-    el.querySelector('.context-ring-fill')
+    el.querySelector('.lv-context-ring-fill')
   ).style.strokeDasharray = `${pct ?? 0} 100`;
   if (!document.getElementById('context-popover')?.hidden) fillContextPopover();
 }
 
 function hideContextMeter() {
   _lastUsage = null;
-  document.getElementById('context-ring')?.classList.add('hidden');
+  document.getElementById('context-ring')?.classList.add('lv-hidden');
   toggleContextPopover(false);
 }
 
 function fillContextPopover() {
-  const rows = document.querySelector('#context-popover .context-popover-rows');
+  const rows = document.querySelector('#context-popover .lv-context-popover-rows');
   if (!rows) return;
   const agent = store.agents.find((a) => a.name === store.agent);
   const window_ = agent?.context_window;
@@ -1231,12 +1231,12 @@ function fillContextPopover() {
       .filter(([, v]) => v != null)
       .map(([k, v, head]) => {
         const row = document.createElement('div');
-        row.className = 'context-popover-row' + (head ? ' context-popover-head' : '');
+        row.className = 'lv-context-popover-row' + (head ? ' lv-context-popover-head' : '');
         const key = document.createElement('span');
-        key.className = 'k';
+        key.className = 'lv-k';
         key.textContent = k;
         const val = document.createElement('span');
-        val.className = 'v';
+        val.className = 'lv-v';
         val.textContent = v;
         val.title = v;
         row.append(key, val);
@@ -1313,28 +1313,28 @@ store.on('render-history', () => restoreContextMeter(store.sessionId));
 function appendContextCompacted(target, data) {
   if (!target || !data) return;
   const node = cloneTemplate('tmpl-context-compacted');
-  const titleEl = node.querySelector('.context-title');
+  const titleEl = node.querySelector('.lv-context-title');
   if (titleEl) titleEl.textContent = t('context.compacted');
   if (data.reason) node.title = `reason: ${data.reason}`;
 
   // Trigger chip — reactive means we recovered from a provider context-overflow;
   // otherwise compaction fired proactively at the high-water mark.
-  const trigger = node.querySelector('.context-trigger');
+  const trigger = node.querySelector('.lv-context-trigger');
   if (data.reactive) {
     trigger.textContent = t('context.reactive');
-    trigger.classList.add('context-trigger--reactive');
+    trigger.classList.add('lv-context-trigger--reactive');
   } else {
     trigger.textContent = t('context.proactive');
-    trigger.classList.add('context-trigger--proactive');
+    trigger.classList.add('lv-context-trigger--proactive');
   }
 
   // Primary stat — tokens before → after, with the reduction percentage.
-  const stats = node.querySelector('.context-stats');
+  const stats = node.querySelector('.lv-context-stats');
   const before = formatTokens(data.tokens_before);
   const after = formatTokens(data.tokens_after);
   if (before && after) {
     const flow = document.createElement('span');
-    flow.className = 'context-flow';
+    flow.className = 'lv-context-flow';
     flow.textContent = `${before} → ${after} tokens`;
     stats.appendChild(flow);
     const pct =
@@ -1343,7 +1343,7 @@ function appendContextCompacted(target, data) {
         : 0;
     if (pct !== 0) {
       const badge = document.createElement('span');
-      badge.className = `context-badge${pct < 0 ? ' context-badge--grow' : ''}`;
+      badge.className = `lv-context-badge${pct < 0 ? ' lv-context-badge--grow' : ''}`;
       badge.textContent = pct < 0 ? `+${-pct}%` : `-${pct}%`;
       stats.appendChild(badge);
     }
@@ -1352,7 +1352,7 @@ function appendContextCompacted(target, data) {
   }
 
   // Detail line — bullets the policy authored, rendered verbatim.
-  const detail = node.querySelector('.context-detail');
+  const detail = node.querySelector('.lv-context-detail');
   const bits = Array.isArray(data.detail) ? data.detail : [];
   if (bits.length) {
     detail.textContent = bits.join(' · ');
@@ -1363,12 +1363,12 @@ function appendContextCompacted(target, data) {
   // Full summary text, collapsed by default.
   if (data.summary) {
     const details = document.createElement('details');
-    details.className = 'context-summary';
+    details.className = 'lv-context-summary';
     const label = document.createElement('summary');
     label.textContent = t('context.summary');
     details.appendChild(label);
     const body = document.createElement('div');
-    body.className = 'context-summary-body';
+    body.className = 'lv-context-summary-body';
     body.textContent = data.summary;
     details.appendChild(body);
     node.appendChild(details);
@@ -1385,13 +1385,13 @@ let _lastErrorCode = '';
 function appendRetry() {
   if (!store.bubble) return;
   const node = cloneTemplate('tmpl-retry');
-  const btn = node.querySelector('.retry-btn');
+  const btn = node.querySelector('.lv-retry-btn');
   btn.textContent = t('chat.retry');
   btn.addEventListener('click', () => store.emit('retry'));
   if (store.canConfigureModels && SETTINGS_FIXABLE.has(_lastErrorCode)) {
     const settings = document.createElement('button');
     settings.type = 'button';
-    settings.className = 'btn btn-ghost btn-sm';
+    settings.className = 'lv-btn lv-btn-ghost lv-btn-sm';
     settings.textContent = t('chat.openModelSettings');
     settings.addEventListener('click', () => openSettings('models'));
     node.appendChild(settings);
@@ -1466,10 +1466,10 @@ function humanizeError(message, code) {
 function appendErrorNotice(message, code) {
   if (!store.bubble) return;
   const note = document.createElement('div');
-  note.className = 'error-notice';
-  note.innerHTML = icon('triangle-alert', { size: 15, cls: 'error-notice-icon' });
+  note.className = 'lv-error-notice';
+  note.innerHTML = icon('triangle-alert', { size: 15, cls: 'lv-error-notice-icon' });
   const main = document.createElement('div');
-  main.className = 'error-notice-main';
+  main.className = 'lv-error-notice-main';
   const hint = humanizeError(message, code);
   const head = document.createElement('div');
   head.textContent = hint ?? String(message);
@@ -1477,7 +1477,7 @@ function appendErrorNotice(message, code) {
   if (hint) {
     // The raw error, one click away: friendly never means destroyed.
     const detail = document.createElement('details');
-    detail.className = 'error-notice-detail';
+    detail.className = 'lv-error-notice-detail';
     const summary = document.createElement('summary');
     summary.textContent = t('chat.errorDetails');
     const raw = document.createElement('div');
@@ -1541,7 +1541,7 @@ function cleanMarkdownForCopy(markdown) {
 // A bubble's text as Markdown: what copy puts on the clipboard.
 function bubbleMarkdown(bubble) {
   const bodies = Array.from(bubble.children).filter((node) =>
-    node.classList?.contains('body')
+    node.classList?.contains('lv-body')
   );
   return cleanMarkdownForCopy(bodies
     .map((body) => body.dataset.raw || body.textContent || '')
@@ -1553,7 +1553,7 @@ function bubbleMarkdown(bubble) {
 // The footer's copy button, then the deployer's message actions.
 function addMessageActions(bubble) {
   if (!bubble) return;
-  for (const node of bubble.querySelectorAll(':scope > .btn-copy, :scope > .turn-footer > .btn-copy')) {
+  for (const node of bubble.querySelectorAll(':scope > .lv-btn-copy, :scope > .lv-turn-footer > .lv-btn-copy')) {
     node.remove();
   }
   const footer = ensureFooter(bubble);
@@ -1568,10 +1568,10 @@ function addCopyButton(footer, markdown) {
     const ok = await copyToClipboard(markdown);
     if (ok) {
       btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-      btn.classList.add('copied');
+      btn.classList.add('lv-copied');
       setTimeout(() => {
         btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-        btn.classList.remove('copied');
+        btn.classList.remove('lv-copied');
       }, 1500);
     }
   });
@@ -1585,16 +1585,16 @@ function addCopyButton(footer, markdown) {
  * @returns {MessageRef}
  */
 function describeMessage(turn) {
-  const role = turn.classList.contains('user') ? 'user' : 'assistant';
+  const role = turn.classList.contains('lv-user') ? 'user' : 'assistant';
   let user = /** @type {Element | null} */ (turn);
-  while (user && !user.matches('.turn.user:not(.queued)')) user = user.previousElementSibling;
+  while (user && !user.matches('.lv-turn.lv-user:not(.lv-queued)')) user = user.previousElementSibling;
   let ref = /** @type {HTMLElement | null} */ (user)?.dataset.ref ?? null;
   if (!user && turn.dataset.question) {
     // Its question is above the rendered window: the history still has it.
     const cached = _historyEntries.filter((e) => e.role === 'user');
     ref = cached[Number(turn.dataset.question)]?.ref ?? null;
   }
-  const bubble = turn.querySelector('.bubble');
+  const bubble = turn.querySelector('.lv-bubble');
   return Object.freeze({
     sessionId: store.sessionId,
     ref,
@@ -1606,12 +1606,12 @@ function describeMessage(turn) {
 // (Re)draw a settled turn's message actions, right after its copy button. A
 // queued or still-streaming turn gets none yet; its settling draws them.
 function renderMessageActions(bubble) {
-  const turn = /** @type {HTMLElement | null} */ (bubble?.closest('.turn'));
-  const footer = bubble?.querySelector(':scope > .turn-footer');
+  const turn = /** @type {HTMLElement | null} */ (bubble?.closest('.lv-turn'));
+  const footer = bubble?.querySelector(':scope > .lv-turn-footer');
   if (!turn || !footer) return;
   renderBranchButton(turn, footer);
-  let box = footer.querySelector(':scope > .msg-actions');
-  const settled = !turn.matches('.queued, .streaming');
+  let box = footer.querySelector(':scope > .lv-msg-actions');
+  const settled = !turn.matches('.lv-queued, .lv-streaming');
   const buttons = settled ? messageActionButtons(() => describeMessage(turn), turn) : [];
   if (!buttons.length) {
     box?.remove();
@@ -1619,12 +1619,12 @@ function renderMessageActions(bubble) {
   }
   if (!box) {
     box = document.createElement('span');
-    box.className = 'msg-actions';
+    box.className = 'lv-msg-actions';
     box.setAttribute('data-part', 'message-actions');
   }
   box.replaceChildren(...buttons);
   const anchor =
-    footer.querySelector(':scope > .btn-copy') ?? footer.querySelector(':scope > .timestamp');
+    footer.querySelector(':scope > .lv-btn-copy') ?? footer.querySelector(':scope > .lv-timestamp');
   if (anchor) anchor.after(box);
   else footer.prepend(box);
 }
@@ -1639,7 +1639,7 @@ function renderMessageActions(bubble) {
  */
 function branchCut(turn) {
   let next = turn.nextElementSibling;
-  while (next && !next.matches('.turn.user')) next = next.nextElementSibling;
+  while (next && !next.matches('.lv-turn.lv-user')) next = next.nextElementSibling;
   if (!next) return null;
   return /** @type {HTMLElement} */ (next).dataset.ref || undefined;
 }
@@ -1652,13 +1652,13 @@ function branchCut(turn) {
  * @param {Element} footer
  */
 function renderBranchButton(turn, footer) {
-  footer.querySelector(':scope > .btn-branch')?.remove();
-  if (!turn.matches('.turn.assistant:not(.streaming)') || branchCut(turn) === undefined) {
+  footer.querySelector(':scope > .lv-btn-branch')?.remove();
+  if (!turn.matches('.lv-turn.lv-assistant:not(.lv-streaming)') || branchCut(turn) === undefined) {
     return;
   }
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'btn-branch';
+  btn.className = 'lv-btn-branch';
   btn.title = t('chat.branch');
   btn.setAttribute('aria-label', t('chat.branch'));
   btn.innerHTML = icon('git-branch', { size: 13 });
@@ -1670,18 +1670,18 @@ function renderBranchButton(turn, footer) {
     await forkChat(source, cut);
     btn.disabled = false;
   });
-  const anchor = footer.querySelector(':scope > .btn-copy');
+  const anchor = footer.querySelector(':scope > .lv-btn-copy');
   if (anchor) anchor.after(btn);
   else footer.append(btn);
 }
 
 function renderAllMessageActions(from = null) {
   const transcriptEl = document.getElementById('transcript');
-  const turns = transcriptEl?.querySelectorAll(':scope > .turn') ?? [];
+  const turns = transcriptEl?.querySelectorAll(':scope > .lv-turn') ?? [];
   let on = !from;
   for (const turn of turns) {
     on ||= turn === from;
-    if (on) renderMessageActions(turn.querySelector('.bubble'));
+    if (on) renderMessageActions(turn.querySelector('.lv-bubble'));
   }
 }
 
@@ -1693,7 +1693,7 @@ watchMessageActions(() => renderAllMessageActions());
 function stampRefs(refs) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl || !refs?.length) return;
-  const users = [...transcriptEl.querySelectorAll(':scope > .turn.user:not(.queued)')]
+  const users = [...transcriptEl.querySelectorAll(':scope > .lv-turn.lv-user:not(.lv-queued)')]
     .slice(-refs.length);
   const skip = refs.length - users.length;
   // A turn the snapshot rendered is in the history "Load earlier" redraws
@@ -1718,10 +1718,10 @@ let _pendingResend = []; // { message, attachments, node } that raced a run's en
 // only an empty footer). Avoids stranding an empty bubble between two messages
 // injected at the same turn boundary.
 function assistantTurnIsEmpty(node) {
-  const bubble = node?.querySelector('.bubble');
+  const bubble = node?.querySelector('.lv-bubble');
   if (!bubble) return true;
   for (const child of bubble.children) {
-    if (!child.classList.contains('turn-footer') && !child.classList.contains('awaiting')) {
+    if (!child.classList.contains('lv-turn-footer') && !child.classList.contains('lv-awaiting')) {
       return false;
     }
   }
@@ -1741,7 +1741,7 @@ function finalizeCurrentAssistantTurn() {
       // don't leave an empty grey bubble in the transcript.
       node.remove();
     } else {
-      node.classList.remove('streaming');
+      node.classList.remove('lv-streaming');
       // The server's finish (the `timing` frame) outranks the teardown's clock.
       if (!node.dataset.finished) setTurnTimestamp(node);
       sealActivity(store.bubble);
@@ -1762,12 +1762,12 @@ function finalizeCurrentAssistantTurn() {
 // Promote a muted "queued" user bubble to a normal one once the run consumes it.
 function confirmQueuedTurn(node) {
   if (!node) return;
-  node.classList.remove('queued');
-  node.querySelector('.withdraw-btn')?.remove();
+  node.classList.remove('lv-queued');
+  node.querySelector('.lv-withdraw-btn')?.remove();
   delete node.dataset.injectId;
   // Confirmation order matches the server's drain order — number it now.
   node.dataset.userTurn = String(_userTurnCount++);
-  addMessageActions(node.querySelector('.bubble'));
+  addMessageActions(node.querySelector('.lv-bubble'));
   // No edit button: this runs mid-run, and the pencil belongs to the tail turn
   // once the run settles (updateEditButton, called from exitStreamingUI).
 }
@@ -1775,12 +1775,12 @@ function confirmQueuedTurn(node) {
 // Add a cancel affordance to a queued bubble once its server token is known, so
 // the user can withdraw the message before the run drains it.
 function addWithdrawButton(node, injectId) {
-  const bubble = node?.querySelector('.bubble');
+  const bubble = node?.querySelector('.lv-bubble');
   if (!bubble) return;
   node.dataset.injectId = String(injectId);
-  if (bubble.querySelector('.withdraw-btn')) return;
+  if (bubble.querySelector('.lv-withdraw-btn')) return;
   const btn = document.createElement('button');
-  btn.className = 'withdraw-btn';
+  btn.className = 'lv-withdraw-btn';
   btn.type = 'button';
   btn.title = t('composer.queuedCancel');
   btn.setAttribute('aria-label', t('composer.queuedCancel'));
@@ -1880,7 +1880,7 @@ export function renderHistory(entries) {
 /** The "load earlier" button waits out a run: its redraw would wipe the live answer. */
 function syncLoadEarlier() {
   const btn = /** @type {HTMLButtonElement | null} */ (
-    document.querySelector('#transcript .load-earlier')
+    document.querySelector('#transcript .lv-load-earlier')
   );
   if (!btn) return;
   btn.disabled = !!store.streaming;
@@ -1972,7 +1972,7 @@ function renderHistoryWindow({ stickBottom }) {
   if (_historyStart > 0) {
     const more = document.createElement('button');
     more.type = 'button';
-    more.className = 'btn btn-ghost btn-sm load-earlier';
+    more.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-load-earlier';
     more.textContent = t('chat.loadEarlier', { n: _historyStart });
     more.addEventListener('click', loadEarlierHistory);
     transcriptEl.appendChild(more);
@@ -1989,14 +1989,14 @@ function renderHistoryWindow({ stickBottom }) {
       const turn = makeTurn('user', it.timestamp);
       turn.dataset.userTurn = String(userIdx++);
       if (it.ref) turn.dataset.ref = it.ref;
-      const bubble = turn.querySelector('.bubble');
+      const bubble = turn.querySelector('.lv-bubble');
       // A turn's attachments survive in stored history only as the note the
       // server appends to the text (attachments.py `_attachment_note`); recover
       // the previews from it and show the clean message — matching live send.
       const { text: bodyText, attachments } = splitAttachmentNote(contentText(it.content));
       if (bodyText) {
         const body = document.createElement('div');
-        body.className = 'body';
+        body.className = 'lv-body';
         body.textContent = bodyText;
         appendBubbleContent(bubble, body);
       }
@@ -2017,20 +2017,20 @@ function renderHistoryWindow({ stickBottom }) {
       const text = contentText(it.content);
       if (it.reasoning) {
         const details = document.createElement('details');
-        details.className = 'reasoning done';
+        details.className = 'lv-reasoning lv-done';
         const summary = document.createElement('summary');
         // History keeps no reasoning duration, hence not 'chat.thought'.
-        summary.innerHTML = `<span class="reasoning-icon">💭</span><span class="reasoning-label">${t('chat.thoughtDone')}</span>`;
+        summary.innerHTML = `<span class="lv-reasoning-icon">💭</span><span class="lv-reasoning-label">${t('chat.thoughtDone')}</span>`;
         details.appendChild(summary);
         const rc = document.createElement('div');
-        rc.className = 'reasoning-content';
+        rc.className = 'lv-reasoning-content';
         rc.textContent = it.reasoning;
         details.appendChild(rc);
         appendBubbleContent(currentBubble, details);
       }
       if (text) {
         const body = document.createElement('div');
-        body.className = 'body';
+        body.className = 'lv-body';
         body.dataset.raw = text; // store raw markdown for copy
         renderMarkdownInto(body, text, { agent: store.agent });
         appendBubbleContent(currentBubble, body);
@@ -2071,7 +2071,7 @@ function renderHistoryWindow({ stickBottom }) {
       addMessageActions(currentBubble);
       // A reply reads as of its last message — a timed run's is its finish,
       // as the live view stamps it at `done`.
-      if (it.timestamp) setTurnTimestamp(currentBubble.closest('.turn'), it.timestamp);
+      if (it.timestamp) setTurnTimestamp(currentBubble.closest('.lv-turn'), it.timestamp);
       if (it.duration != null) stampDuration(currentBubble, it.duration);
     } else if (it.role === 'context_compacted') {
       // Persisted run-boundary notice — render into the run's bubble (matching
@@ -2081,7 +2081,7 @@ function renderHistoryWindow({ stickBottom }) {
   }
 
   // Remove streaming markers
-  transcriptEl.querySelectorAll('.turn.streaming').forEach(n => n.classList.remove('streaming'));
+  transcriptEl.querySelectorAll('.lv-turn.lv-streaming').forEach(n => n.classList.remove('lv-streaming'));
   renderAllMessageActions(); // the replies were still marked streaming above
   store.bubble = null;
   store.body = null;
@@ -2111,7 +2111,7 @@ function _isAtBottom() {
   return el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_SCROLL_PX;
 }
 function updateScrollButton() {
-  scrollBtn?.classList.toggle('visible', !_isAtBottom());
+  scrollBtn?.classList.toggle('lv-visible', !_isAtBottom());
 }
 function _isUserScrollPaused() {
   return Date.now() < _userScrollPauseUntil;
@@ -2183,10 +2183,10 @@ scrollBtn?.addEventListener('click', () => {
  * server has a model to chat with (CLI default agent only). */
 function renderSetupHero(transcript) {
   const hero = document.createElement('div');
-  hero.className = 'empty-state setup-hero';
+  hero.className = 'lv-empty-state lv-setup-hero';
   hero.id = 'empty-state';
   const glyph = document.createElement('div');
-  glyph.className = 'setup-hero-glyph';
+  glyph.className = 'lv-setup-hero-glyph';
   glyph.textContent = '◈';
   const h2 = document.createElement('h2');
   h2.textContent = t('cfg.heroTitle');
@@ -2194,11 +2194,11 @@ function renderSetupHero(transcript) {
   p.textContent = t('cfg.heroBody');
   const cta = document.createElement('button');
   cta.type = 'button';
-  cta.className = 'btn btn-primary setup-hero-cta';
+  cta.className = 'lv-btn lv-btn-primary lv-setup-hero-cta';
   cta.textContent = t('cfg.heroCta');
   cta.addEventListener('click', () => store.emit('open-model-settings'));
   const alt = document.createElement('div');
-  alt.className = 'setup-hero-alt';
+  alt.className = 'lv-setup-hero-alt';
   alt.textContent = t('cfg.heroAlt');
   hero.append(glyph, h2, p, cta, alt);
   transcript.replaceChildren(hero);
@@ -2215,7 +2215,7 @@ export function renderEmptyState() {
   // The server renders the welcome (its `welcome` block, overrides included)
   // into the page once and into this template; restore it from there.
   const empty = document.createElement('div');
-  empty.className = 'empty-state';
+  empty.className = 'lv-empty-state';
   empty.id = 'empty-state';
   empty.dataset.part = 'welcome';
   const tmpl = /** @type {HTMLTemplateElement | null} */ (document.getElementById('tmpl-welcome'));
@@ -2272,21 +2272,21 @@ function syncAwaiting() {
   if (!el) {
     el = document.createElement('div');
     el.id = 'awaiting-model';
-    el.className = 'awaiting';
+    el.className = 'lv-awaiting';
     const dots = document.createElement('span');
-    dots.className = 'awaiting-dots';
+    dots.className = 'lv-awaiting-dots';
     dots.append(...[0, 1, 2].map(() => document.createElement('i')));
     const text = document.createElement('span');
-    text.className = 'awaiting-text';
+    text.className = 'lv-awaiting-text';
     el.append(dots, text);
   }
   const retry = _awaiting.retry;
-  /** @type {HTMLElement} */ (el.querySelector('.awaiting-text')).textContent = retry
+  /** @type {HTMLElement} */ (el.querySelector('.lv-awaiting-text')).textContent = retry
     ? t('chat.retrying', { n: retry.attempt + 1, max: retry.max_attempts })
     : '';
   el.title = retry?.message ?? '';
   // Last, or just above the footer an adopted (reconnected) bubble carries.
-  const footer = store.bubble.querySelector(':scope > .turn-footer');
+  const footer = store.bubble.querySelector(':scope > .lv-turn-footer');
   if (el.parentNode !== store.bubble || el.nextElementSibling !== footer) {
     store.bubble.insertBefore(el, footer);
   }
@@ -2353,7 +2353,7 @@ async function applyEvent({ event, data }) {
       if (!store.reasoningStart) store.reasoningStart = Date.now();
       store.reasoningEnd = Date.now();
       store.reasoningText += data.delta;
-      const content = store.reasoningNode?.querySelector('.reasoning-content');
+      const content = store.reasoningNode?.querySelector('.lv-reasoning-content');
       // Same selection guard as flushRender — the next delta catches up.
       if (content && !selectionInside(content)) {
         content.textContent = store.reasoningText;
@@ -2393,7 +2393,7 @@ async function applyEvent({ event, data }) {
         ensureReasoning();
         store.reasoningText = data.message.reasoning;
         if (store.reasoningNode)
-          store.reasoningNode.querySelector('.reasoning-content').textContent = store.reasoningText;
+          store.reasoningNode.querySelector('.lv-reasoning-content').textContent = store.reasoningText;
         store.reasoningEnd = Date.now();
       }
       finalizeReasoning();
@@ -2508,7 +2508,7 @@ async function applyEvent({ event, data }) {
     case 'timing':
       // The finished leg's timing as its segment recorded it: the answer reads
       // as on replay — as of its finish, with how long its run took.
-      const turn = /** @type {HTMLElement | null | undefined} */ (store.bubble?.closest('.turn'));
+      const turn = /** @type {HTMLElement | null | undefined} */ (store.bubble?.closest('.lv-turn'));
       setTurnTimestamp(turn, data.finished_at);
       if (turn) turn.dataset.finished = '1';
       stampDuration(store.bubble, data.duration);
@@ -2525,9 +2525,9 @@ async function applyEvent({ event, data }) {
       const tokens = data?.usage?.total_tokens ? formatTokens(data.usage.total_tokens) : null;
       if (tokens && store.bubble) {
         const footer = ensureFooter(store.bubble);
-        if (footer && !footer.querySelector('.usage')) {
+        if (footer && !footer.querySelector('.lv-usage')) {
           const span = document.createElement('span');
-          span.className = 'usage';
+          span.className = 'lv-usage';
           span.title = `${formatTokens(data.usage.input_tokens) ?? '?'} in · ${formatTokens(data.usage.output_tokens) ?? '?'} out`;
           span.textContent = `${tokens} tok`;
           footer.appendChild(span);
@@ -2660,7 +2660,7 @@ function renderFollowups(items) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl || !items?.length) return;
   const wrap = document.createElement('div');
-  wrap.className = 'followups';
+  wrap.className = 'lv-followups';
   wrap.id = 'followups';
   // A plain <div> has no implicit role, so an aria-label on it has nothing to
   // attach to and most screen readers drop it. `group` gives the label
@@ -2670,10 +2670,10 @@ function renderFollowups(items) {
   for (const text of items) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    // `.chip` is the shared pill *look*; the behaviour class must NOT be
-    // `.empty-example`, whose delegated handler on #transcript fills the
+    // `.lv-chip` is the shared pill *look*; the behaviour class must NOT be
+    // `.lv-empty-example`, whose delegated handler on #transcript fills the
     // composer — a follow-up sends instead, and wearing both fired both.
-    btn.className = 'chip followup';
+    btn.className = 'lv-chip lv-followup';
     btn.textContent = text;
     btn.addEventListener('click', () => {
       // Unlike a starter prompt (which only fills the composer), a follow-up
@@ -2774,12 +2774,12 @@ function formatDuration(sec) {
 function stampDuration(bubble, sec) {
   if (!bubble || sec < DURATION_MIN_S) return;
   const footer = ensureFooter(bubble);
-  if (!footer || footer.querySelector(':scope > .duration')) return;
+  if (!footer || footer.querySelector(':scope > .lv-duration')) return;
   const span = document.createElement('span');
-  span.className = 'duration';
+  span.className = 'lv-duration';
   span.textContent = formatDuration(sec);
   span.title = t('chat.took', { d: span.textContent });
-  footer.querySelector(':scope > .timestamp')?.after(span);
+  footer.querySelector(':scope > .lv-timestamp')?.after(span);
 }
 
 // ---- Dropped-stream recovery ---------------------------------------------
@@ -2831,7 +2831,7 @@ function appendReconnectRow(sessionId) {
   if (!transcriptEl || document.getElementById('reconnect-row')) return;
   const node = cloneTemplate('tmpl-retry');
   node.id = 'reconnect-row';
-  const btn = node.querySelector('.retry-btn');
+  const btn = node.querySelector('.lv-retry-btn');
   btn.textContent = t('chat.reconnect');
   btn.addEventListener('click', () => {
     node.remove();
@@ -2917,7 +2917,7 @@ function enterStreamingUI() {
     stopBtn.style.display = '';
     stopBtn.title = t('composer.stopTip');
   }
-  scrollBtn?.classList.add('live');
+  scrollBtn?.classList.add('lv-live');
   if (promptEl) promptEl.placeholder = t('composer.queuePlaceholder');
   renderQueue(); // its Steer buttons need a live run
   updateSendEnabled();
@@ -2934,7 +2934,7 @@ function exitStreamingUI(status = 'detached') {
   _shownRunId = null;
   _awaiting = null;
   syncAwaiting();
-  scrollBtn?.classList.remove('live');
+  scrollBtn?.classList.remove('lv-live');
   _runStartedAt = 0;
   syncAttachButton();
   syncLoadEarlier();
@@ -3491,27 +3491,27 @@ function renderAttachTray() {
 
 function makeAttachChip(att, onRemove) {
   const chip = document.createElement('div');
-  chip.className = 'attach-chip' + (att.uploading ? ' uploading' : '');
+  chip.className = 'lv-attach-chip' + (att.uploading ? ' lv-uploading' : '');
   if (att.kind === 'image' && att.path) {
     const img = document.createElement('img');
-    img.className = 'attach-thumb';
+    img.className = 'lv-attach-thumb';
     img.src = api.workspaceRawUrl({ agent: store.agent, path: att.path });
     img.alt = att.name || '';
     chip.appendChild(img);
   } else {
     const ic = document.createElement('span');
-    ic.className = 'attach-ic';
+    ic.className = 'lv-attach-ic';
     ic.innerHTML = icon(att.kind === 'image' ? 'image' : 'file-text', { size: 16 });
     chip.appendChild(ic);
   }
   const name = document.createElement('span');
-  name.className = 'attach-name';
+  name.className = 'lv-attach-name';
   name.textContent = att.name || att.path || '';
   name.title = name.textContent;
   chip.appendChild(name);
   const rm = document.createElement('button');
   rm.type = 'button';
-  rm.className = 'attach-remove';
+  rm.className = 'lv-attach-remove';
   rm.setAttribute('aria-label', t('composer.removeAttachment'));
   rm.innerHTML = icon('x', { size: 13 });
   rm.addEventListener('click', onRemove);
@@ -3550,7 +3550,7 @@ async function uploadFiles(files) {
 // Attachment views inside a user bubble (live send + history replay).
 function makeAttachmentsBlock(attachments) {
   const wrap = document.createElement('div');
-  wrap.className = 'msg-attachments';
+  wrap.className = 'lv-msg-attachments';
   for (const att of attachments) wrap.appendChild(makeAttachmentView(att));
   return wrap;
 }
@@ -3567,7 +3567,7 @@ function makeAttachmentView(att) {
     a.href = url;
     a.target = '_blank';
     a.rel = 'noopener';
-    a.className = 'msg-attach-image';
+    a.className = 'lv-msg-attach-image';
     a.addEventListener('click', (e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
       e.preventDefault();
@@ -3586,7 +3586,7 @@ function makeAttachmentView(att) {
   // A workspace file opens in the Files panel (rendered in-app: text, md, csv,
   // code, or a download for binaries) instead of forcing a browser download.
   const a = document.createElement('a');
-  a.className = 'msg-attach-file';
+  a.className = 'lv-msg-attach-file';
   if (att.path) {
     a.href = api.workspaceRawUrl({ agent: store.agent, path: att.path, download: true });
     a.addEventListener('click', (e) => {
@@ -3830,12 +3830,12 @@ function renderQueue() {
   if (!sid || !items.length) return;
   if (paused) {
     const note = document.createElement('div');
-    note.className = 'send-queue-note';
+    note.className = 'lv-send-queue-note';
     const text = document.createElement('span');
     text.textContent = t(paused === 'unknown' ? 'queue.unknown' : 'queue.paused');
     const go = document.createElement('button');
     go.type = 'button';
-    go.className = 'btn btn-ghost btn-sm';
+    go.className = 'lv-btn lv-btn-ghost lv-btn-sm';
     go.textContent = t(paused === 'unknown' ? 'queue.resend' : 'queue.sendNow');
     go.addEventListener('click', () => sendQueue.sendNow(sid));
     note.append(text, go);
@@ -3844,7 +3844,7 @@ function renderQueue() {
   const button = (/** @type {string} */ name, /** @type {string} */ key, /** @type {() => void} */ act) => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'send-queue-act';
+    btn.className = 'lv-send-queue-act';
     btn.innerHTML = icon(name, { size: 13 });
     btn.title = t(key);
     btn.setAttribute('aria-label', t(key));
@@ -3853,28 +3853,28 @@ function renderQueue() {
   };
   for (const item of items) {
     const row = document.createElement('div');
-    row.className = 'send-queue-item';
+    row.className = 'lv-send-queue-item';
     row.innerHTML = icon('clock', { size: 13 });
     const names = item.attachments.map((a) => a.name || a.path).join(' · ');
     const text = document.createElement('span');
-    text.className = 'send-queue-text';
+    text.className = 'lv-send-queue-text';
     // Attachments only: their names say what the message is.
-    text.classList.toggle('muted', !item.text);
+    text.classList.toggle('lv-muted', !item.text);
     text.textContent = item.text || names;
     text.title = text.textContent;
     row.append(text);
     if (item.attachments.length) row.append(queuedAttachments(item.attachments, names));
     const onItsWay = sending === item.id;
-    row.classList.toggle('sending', onItsWay);
+    row.classList.toggle('lv-sending', onItsWay);
     // Steering needs a run live in this chat to take it.
     if (store.streaming && !onItsWay) {
       const go = button('zap', 'queue.steerTip', () => void steerQueued(sid, item.id));
-      go.classList.add('send-queue-steer');
+      go.classList.add('lv-send-queue-steer');
       go.insertAdjacentText('beforeend', t('queue.steer'));
       row.append(go);
     }
     const edit = button('pencil', 'queue.edit', () => editQueued(sid, item.id));
-    edit.classList.add('send-queue-edit');
+    edit.classList.add('lv-send-queue-edit');
     edit.disabled = onItsWay || !composerEmpty();
     const drop = button('x', 'queue.withdraw', () => sendQueue.withdraw(sid, item.id));
     drop.disabled = onItsWay;
@@ -3891,14 +3891,14 @@ function renderQueue() {
  */
 function queuedAttachments(atts, names) {
   const wrap = document.createElement('span');
-  wrap.className = 'send-queue-atts';
+  wrap.className = 'lv-send-queue-atts';
   wrap.title = names;
   wrap.setAttribute('role', 'img');
   wrap.setAttribute('aria-label', t('queue.attachments', { n: atts.length, names }));
   const thumbs = atts.filter((a) => a.kind === 'image' && a.path).slice(0, 3);
   for (const att of thumbs) {
     const img = document.createElement('img');
-    img.className = 'send-queue-thumb';
+    img.className = 'lv-send-queue-thumb';
     img.src = api.workspaceRawUrl({ agent: store.agent, path: att.path });
     img.alt = '';
     wrap.append(img);
@@ -3906,7 +3906,7 @@ function queuedAttachments(atts, names) {
   const rest = atts.length - thumbs.length;
   if (rest) {
     const more = document.createElement('span');
-    more.className = 'send-queue-more';
+    more.className = 'lv-send-queue-more';
     // After thumbnails "+N"; files alone, a file icon (and their count).
     if (thumbs.length) more.textContent = `+${rest}`;
     else more.innerHTML = icon('file-text', { size: 13 }) + (rest > 1 ? String(rest) : '');
@@ -3918,9 +3918,9 @@ function queuedAttachments(atts, names) {
 /** Edit only into an empty composer: re-checked as the draft changes. */
 function syncQueueEdit() {
   const busy = !composerEmpty();
-  queueEl?.querySelectorAll('.send-queue-edit').forEach((btn) => {
+  queueEl?.querySelectorAll('.lv-send-queue-edit').forEach((btn) => {
     if (btn instanceof HTMLButtonElement) {
-      btn.disabled = busy || !!btn.closest('.send-queue-item.sending');
+      btn.disabled = busy || !!btn.closest('.lv-send-queue-item.lv-sending');
     }
   });
 }
@@ -4011,13 +4011,13 @@ export function initComposer() {
       if (!attachEnabled()) return;
       if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
       e.preventDefault();
-      composer.classList.add('drag-over');
+      composer.classList.add('lv-drag-over');
     });
     composer.addEventListener('dragleave', (e) => {
-      if (!composer.contains(/** @type {Node} */ (e.relatedTarget))) composer.classList.remove('drag-over');
+      if (!composer.contains(/** @type {Node} */ (e.relatedTarget))) composer.classList.remove('lv-drag-over');
     });
     composer.addEventListener('drop', (e) => {
-      composer.classList.remove('drag-over');
+      composer.classList.remove('lv-drag-over');
       if (!attachEnabled()) return;
       const files = [...(e.dataTransfer?.files || [])];
       if (files.length) {
@@ -4077,7 +4077,7 @@ export function initComposer() {
   // Example prompts (server-rendered or renderEmptyState's) fill the
   // composer for editing — clicking must not fire a send behind your back.
   document.getElementById('transcript')?.addEventListener('click', (e) => {
-    const btn = e.target instanceof Element ? e.target.closest('.empty-example') : null;
+    const btn = e.target instanceof Element ? e.target.closest('.lv-empty-example') : null;
     if (btn) setDraft(btn.textContent);
   });
 

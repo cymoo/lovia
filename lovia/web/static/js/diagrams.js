@@ -1,7 +1,7 @@
 // Mermaid diagram rendering + a fullscreen zoom/pan viewer.
 //
 // Diagrams are always drawn with mermaid's *light* theme onto a fixed light
-// "paper" surface (see `.mermaid-diagram` / `.mermaid-sheet` in styles.css),
+// "paper" surface (see `.lv-mermaid-diagram` / `.lv-mermaid-sheet` in styles.css),
 // even when the app is in dark mode. mermaid's dark theme needs per-diagram
 // colour micromanagement to stay legible; a light surface sidesteps all of it
 // and reads like an embedded figure. `mermaid` is a global from the CDN
@@ -31,7 +31,7 @@ function ensureMermaid() {
     // Delegated, not per-figure: a cloned figure (the Files reader mirrors its
     // viewer) carries no listeners of its own and must still expand.
     document.addEventListener('click', (e) => {
-      const fig = e.target instanceof Element ? e.target.closest('figure.mermaid-diagram') : null;
+      const fig = e.target instanceof Element ? e.target.closest('figure.lv-mermaid-diagram') : null;
       if (fig) openLightbox(fig);
     });
     _ready = true;
@@ -42,12 +42,12 @@ function ensureMermaid() {
 // figure > <svg> + expand button; clicks on either reach the listener above.
 function makeFigure(src, svg) {
   const fig = document.createElement('figure');
-  fig.className = 'mermaid-diagram';
+  fig.className = 'lv-mermaid-diagram';
   fig.dataset.mermaidSrc = src;
   fig.innerHTML = svg;
   const expand = document.createElement('button');
   expand.type = 'button';
-  expand.className = 'mermaid-expand';
+  expand.className = 'lv-mermaid-expand';
   expand.title = 'Expand (zoom & pan)';
   expand.setAttribute('aria-label', 'Expand diagram');
   expand.innerHTML = EXPAND_ICON;
@@ -135,16 +135,16 @@ function openLightbox(fig) {
   clone.style.display = 'block';
 
   const sheet = document.createElement('div'); // light "paper" the diagram sits on
-  sheet.className = 'mermaid-sheet';
+  sheet.className = 'lv-mermaid-sheet';
   sheet.style.transformOrigin = '0 0';
   sheet.appendChild(clone);
 
   // A modal <dialog>: it stacks above another one (the Files reader), and
   // everything that yields Escape to an open dialog yields it here too.
   const overlay = document.createElement('dialog');
-  overlay.className = 'mermaid-lightbox';
+  overlay.className = 'lv-mermaid-lightbox';
   const stage = document.createElement('div');
-  stage.className = 'mermaid-lightbox-stage';
+  stage.className = 'lv-mermaid-lightbox-stage';
   stage.appendChild(sheet);
   overlay.appendChild(stage);
 
@@ -173,11 +173,11 @@ function openLightbox(fig) {
   };
 
   const bar = document.createElement('div');
-  bar.className = 'mermaid-lightbox-bar';
+  bar.className = 'lv-mermaid-lightbox-bar';
   const mk = (label, title, fn) => {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'mermaid-lightbox-btn';
+    b.className = 'lv-mermaid-lightbox-btn';
     b.title = title;
     b.setAttribute('aria-label', title);
     b.innerHTML = label;
@@ -206,14 +206,14 @@ function openLightbox(fig) {
     dragging = true; ox = e.clientX - tx; oy = e.clientY - ty;
     pressedOnScrim = !(e.target instanceof Node && sheet.contains(e.target)); panned = false;
     px = e.clientX; py = e.clientY;
-    stage.setPointerCapture(e.pointerId); stage.classList.add('grabbing');
+    stage.setPointerCapture(e.pointerId); stage.classList.add('lv-grabbing');
   });
   stage.addEventListener('pointermove', (e) => {
     if (!dragging) return;
     if (Math.abs(e.clientX - px) > 4 || Math.abs(e.clientY - py) > 4) panned = true;
     tx = e.clientX - ox; ty = e.clientY - oy; apply();
   });
-  const endDrag = () => { dragging = false; stage.classList.remove('grabbing'); };
+  const endDrag = () => { dragging = false; stage.classList.remove('lv-grabbing'); };
   stage.addEventListener('pointerup', () => {
     endDrag();
     if (pressedOnScrim && !panned) close();

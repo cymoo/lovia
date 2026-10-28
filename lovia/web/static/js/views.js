@@ -166,14 +166,14 @@ function show(next) {
   apply();
   const container = /** @type {HTMLElement} */ (document.getElementById('view'));
   const el = document.createElement('div');
-  el.className = 'view-body';
+  el.className = 'lv-view-body';
   container.replaceChildren(el);
   const mine = ++gen;
   const fail = (/** @type {unknown} */ err) => {
     console.error(`lovia view "${next.id}" failed to render:`, err);
     if (mine !== gen) return;
     const note = document.createElement('p');
-    note.className = 'view-failed';
+    note.className = 'lv-view-failed';
     note.textContent = t('view.failed');
     el.replaceChildren(note);
   };
@@ -219,7 +219,7 @@ function runCleanup(fn) {
 // sidebar's current link.
 function apply() {
   const view = currentView();
-  document.body.classList.toggle('view-open', !!open);
+  document.body.classList.toggle('lv-view-open', !!open);
   const container = document.getElementById('view');
   if (container) container.hidden = !open;
   // The chat underneath stays laid out but out of reach: no focus, no clicks.

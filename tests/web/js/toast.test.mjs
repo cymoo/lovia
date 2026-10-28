@@ -55,9 +55,9 @@ test('rapid mode changes update one element and restart its lifetime', async (t)
   assert.equal(toast('queue', { key: 'mode', timeout: 1500 }), first);
   assert.deepEqual(pills().map((el) => el.textContent), ['queue']);
   tick(500); // original deadline must not dismiss the updated notice
-  assert.ok(first.classList.contains('show'));
+  assert.ok(first.classList.contains('lv-show'));
   tick(1000);
-  assert.ok(!first.classList.contains('show'));
+  assert.ok(!first.classList.contains('lv-show'));
   tick(400);
   assert.equal(pills().length, 0);
 });
@@ -117,7 +117,7 @@ test('keyed updates refresh severity and the screen reader role', async (t) => {
   tick(0);
   assert.equal(toast('failed', { key: 'operation', type: 'error' }), el);
   assert.equal(el.attrs.role, 'alert');
-  assert.ok(el.classList.contains('toast-error'));
+  assert.ok(el.classList.contains('lv-toast-error'));
 });
 
 test('a notice dismissed before its animation frame never reappears', async (t) => {
@@ -125,5 +125,5 @@ test('a notice dismissed before its animation frame never reappears', async (t) 
   const el = toast('dismiss now');
   el.fire('click');
   tick(0);
-  assert.ok(!el.classList.contains('show'));
+  assert.ok(!el.classList.contains('lv-show'));
 });

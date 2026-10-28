@@ -109,10 +109,10 @@ def test_index_renders_example_prompts() -> None:
     # Rendered as clickable chips AND into the welcome template the client
     # restores on "New chat", so they show there too.
     assert res.text.count("Summarize my inbox") == 2
-    # `chip` is the shared pill look; `empty-example` is the behaviour the
+    # `lv-chip` is the shared pill look; `lv-empty-example` is the behaviour the
     # delegated click handler keys off (fill the composer, don't send). Both
-    # matter — a follow-up chip wears `chip` but must NOT wear `empty-example`.
-    assert 'class="chip empty-example"' in res.text
+    # matter — a follow-up chip wears `lv-chip` but must NOT wear `lv-empty-example`.
+    assert 'class="lv-chip lv-empty-example"' in res.text
 
 
 def _app_config(page: str) -> dict:
@@ -168,7 +168,7 @@ def test_assets_index_overrides_the_page_and_fills_the_blocks(tmp_path) -> None:
     assert page.index("js/main.js") < page.index('src="/extra.js"')
     # Each block lands in its region; sidebar_header replaces the title.
     assert _inside(page, "sidebar-header", 'id="logo"')
-    assert 'class="sidebar-title"' not in sidebar
+    assert 'class="lv-sidebar-title"' not in sidebar
     assert _inside(page, "sidebar-nav", 'id="help"')
     assert _inside(page, "topbar-actions", 'id="share"')
     assert _inside(page, "composer", 'id="kb"')
@@ -241,8 +241,10 @@ def test_styles_logo_and_favicon_resolve_like_scripts(tmp_path) -> None:
     assert bundled < head.index('href="https://cdn.example.com/f.css"')
     assert '<link rel="icon" href="/lovia/brand/icon.png" />' in head
     assert "favicon.svg" not in head
-    assert '<img class="sidebar-logo" src="/lovia/ui/logo.svg" alt="lovia" />' in html
-    assert 'class="sidebar-title"' not in html
+    assert (
+        '<img class="lv-sidebar-logo" src="/lovia/ui/logo.svg" alt="lovia" />' in html
+    )
+    assert 'class="lv-sidebar-title"' not in html
 
 
 def test_app_config_carries_the_version() -> None:
@@ -340,8 +342,8 @@ def test_documented_design_tokens_exist() -> None:
     docs = Path(__file__).parents[2] / "docs"
     for lang in ("en", "zh"):
         page = (docs / lang / "web-server.md").read_text(encoding="utf-8")
-        table = page.split("| `--bg`", 1)[1].split("\n\n", 1)[0]
-        tokens = set(re.findall(r"`(--[a-z0-9-]+)`", "| `--bg`" + table))
+        table = page.split("| `--lv-bg`", 1)[1].split("\n\n", 1)[0]
+        tokens = set(re.findall(r"`(--[a-z0-9-]+)`", "| `--lv-bg`" + table))
         assert len(tokens) > 20, lang
         for token in tokens:
             assert f"{token}:" in css, (lang, token)

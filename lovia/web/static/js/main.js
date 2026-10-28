@@ -130,7 +130,7 @@ async function loadAgents() {
       }));
       select.value = store.agent;
       syncAgentTooltip(select);
-      if (switcher) switcher.classList.remove('hidden');
+      if (switcher) switcher.classList.remove('lv-hidden');
       select.addEventListener('change', () => {
         store.agent = select.value;
         syncAgentTooltip(select);
@@ -139,7 +139,7 @@ async function loadAgents() {
         document.getElementById('prompt')?.focus();
       });
     } else if (select) {
-      if (switcher) switcher.classList.add('hidden');
+      if (switcher) switcher.classList.add('lv-hidden');
     }
     store.emit('agents-loaded', store.agents);
   } catch (err) {
@@ -204,12 +204,12 @@ function openShortcutHelp() {
     ['?', t('keys.help')],
   ];
   const body = document.createElement('div');
-  body.className = 'shortcuts-panel';
+  body.className = 'lv-shortcuts-panel';
   const h = document.createElement('h3');
   h.textContent = t('keys.title');
   body.appendChild(h);
   const list = document.createElement('dl');
-  list.className = 'shortcuts-list';
+  list.className = 'lv-shortcuts-list';
   for (const [keys, what] of rows) {
     const dt = document.createElement('dt');
     const kbd = document.createElement('kbd');
@@ -222,7 +222,7 @@ function openShortcutHelp() {
   body.appendChild(list);
   const close = document.createElement('button');
   close.type = 'button';
-  close.className = 'btn btn-ghost';
+  close.className = 'lv-btn lv-btn-ghost';
   close.textContent = t('dialog.close');
   const dialog = showDialog({ body, actions: close });
   close.addEventListener('click', () => dialog.close());
@@ -249,13 +249,13 @@ function initKeyboardShortcuts() {
       if (document.getElementById('context-popover')?.hidden === false) return;
       if (document.getElementById('export-menu')?.hidden === false) return;
       if (menuOpen()) return;
-      if (document.getElementById('sidebar')?.classList.contains('open')) return;
+      if (document.getElementById('sidebar')?.classList.contains('lv-open')) return;
       const filesOpen = document
         .getElementById('files-panel')
-        ?.classList.contains('open');
+        ?.classList.contains('lv-open');
       const viewerOpen = !document
         .getElementById('files-viewer')
-        ?.classList.contains('hidden');
+        ?.classList.contains('lv-hidden');
       const phone = window.matchMedia('(max-width: 720px)').matches;
       // files.js consumes Esc for these: closing the preview, or (on phones)
       // the panel drawer itself.
@@ -352,7 +352,7 @@ window.lovia = lovia;
 
   const info = await infoPromise;
   if (info?.features?.scheduling) {
-    document.getElementById('schedules-btn')?.classList.remove('hidden');
+    document.getElementById('schedules-btn')?.classList.remove('lv-hidden');
   }
   if (info) store.canRewind = !!info.features?.rewind;
   if (info) store.canSuggest = !!info.features?.followups;

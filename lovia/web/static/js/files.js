@@ -83,7 +83,7 @@ function revOf(path) {
 
 // ---- Panel sizing -----------------------------------------------------------
 // The divider on the panel's left edge drags the width (arrow keys nudge it,
-// double-click resets). The width lives in a `--files-w` CSS var and persists
+// double-click resets). The width lives in a `--lv-files-w` CSS var and persists
 // per browser; unset, the stylesheet default applies.
 const WIDTH_KEY = 'lovia-files-w';
 const MIN_W = 300;
@@ -95,8 +95,8 @@ const clampW = (w) =>
 const panelWidth = () => els.panel.getBoundingClientRect().width;
 
 function applyWidth(px) {
-  if (px == null) document.documentElement.style.removeProperty('--files-w');
-  else document.documentElement.style.setProperty('--files-w', `${clampW(px)}px`);
+  if (px == null) document.documentElement.style.removeProperty('--lv-files-w');
+  else document.documentElement.style.setProperty('--lv-files-w', `${clampW(px)}px`);
 }
 
 // Three columns need room. While the panel is open on a viewport too tight
@@ -111,7 +111,7 @@ function claimSpace() {
   }
   const sidebarW =
     parseInt(
-      getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'),
+      getComputedStyle(document.documentElement).getPropertyValue('--lv-sidebar-w'),
       10,
     ) || 272;
   setSidebarAutoCollapsed(window.innerWidth < sidebarW + panelWidth() + 760);
@@ -135,7 +135,7 @@ function initResizer() {
     startX = e.clientX;
     startW = panelWidth();
     rz.setPointerCapture(e.pointerId);
-    document.body.classList.add('files-resizing');
+    document.body.classList.add('lv-files-resizing');
   });
   rz.addEventListener('pointermove', (e) => {
     if (!rz.hasPointerCapture(e.pointerId)) return;
@@ -144,7 +144,7 @@ function initResizer() {
   const endDrag = (e) => {
     if (!rz.hasPointerCapture(e.pointerId)) return;
     rz.releasePointerCapture(e.pointerId);
-    document.body.classList.remove('files-resizing');
+    document.body.classList.remove('lv-files-resizing');
     persistWidth();
   };
   rz.addEventListener('pointerup', endDrag);
@@ -174,17 +174,17 @@ function initResizer() {
 // ---- List / preview split ---------------------------------------------------
 // The divider between the file list and the preview drags the split (arrow
 // keys nudge it, double-click resets) — mirrors initResizer. The viewer height
-// lives in a `--files-viewer-h` CSS var as a *percentage* of the panel (px
+// lives in a `--lv-files-viewer-h` CSS var as a *percentage* of the panel (px
 // would crush the list when the window shrinks) and persists per browser.
 const SPLIT_KEY = 'lovia-files-split';
-const MIN_VIEWER_H = 240; // matches .files-viewer's min-height
+const MIN_VIEWER_H = 240; // matches .lv-files-viewer's min-height
 const MIN_LIST_H = 100; // keep some list visible above the preview
 
 const viewerHeight = () => els.viewer.getBoundingClientRect().height;
 
 function applySplit(pct) {
-  if (pct == null) document.documentElement.style.removeProperty('--files-viewer-h');
-  else document.documentElement.style.setProperty('--files-viewer-h', `${pct}%`);
+  if (pct == null) document.documentElement.style.removeProperty('--lv-files-viewer-h');
+  else document.documentElement.style.setProperty('--lv-files-viewer-h', `${pct}%`);
 }
 
 // Clamp a proposed viewer height (px) so both halves stay usable, then apply
@@ -214,8 +214,8 @@ function syncSplitAria() {
 // violate the px minimums at this panel size (a resize can do the same).
 // The stylesheet default is always in bounds — leave the var unset then.
 function clampSplit() {
-  if (els.viewer.classList.contains('hidden')) return;
-  if (document.documentElement.style.getPropertyValue('--files-viewer-h')) {
+  if (els.viewer.classList.contains('lv-hidden')) return;
+  if (document.documentElement.style.getPropertyValue('--lv-files-viewer-h')) {
     setViewerPx(viewerHeight());
   }
   syncSplitAria();
@@ -243,7 +243,7 @@ function initSplit() {
     startY = e.clientY;
     startH = viewerHeight();
     sp.setPointerCapture(e.pointerId);
-    document.body.classList.add('files-splitting');
+    document.body.classList.add('lv-files-splitting');
   });
   sp.addEventListener('pointermove', (e) => {
     if (!sp.hasPointerCapture(e.pointerId)) return;
@@ -252,7 +252,7 @@ function initSplit() {
   const endDrag = (e) => {
     if (!sp.hasPointerCapture(e.pointerId)) return;
     sp.releasePointerCapture(e.pointerId);
-    document.body.classList.remove('files-splitting');
+    document.body.classList.remove('lv-files-splitting');
     persistSplit();
   };
   sp.addEventListener('pointerup', endDrag);
@@ -284,7 +284,7 @@ function initSplit() {
 // must not overwrite the user's remembered open/closed preference.
 function setOpen(open, { persist = true } = {}) {
   state.open = open && state.available;
-  els.panel.classList.toggle('open', state.open);
+  els.panel.classList.toggle('lv-open', state.open);
   els.btn?.setAttribute('aria-expanded', String(state.open));
   if (persist) localStorage.setItem('lovia-files-open', state.open ? '1' : '0');
   claimSpace();
@@ -303,14 +303,14 @@ function setOpen(open, { persist = true } = {}) {
 // each chat open, which would inflate a naive counter.
 function renderBadge() {
   const n = state.unseen.size;
-  let badge = els.btn?.querySelector('.files-badge');
+  let badge = els.btn?.querySelector('.lv-files-badge');
   if (!n) {
     badge?.remove();
     return;
   }
   if (!badge) {
     badge = document.createElement('span');
-    badge.className = 'files-badge';
+    badge.className = 'lv-files-badge';
     badge.setAttribute('aria-hidden', 'true');
     els.btn?.appendChild(badge);
   }
@@ -355,7 +355,7 @@ function scratchDirFor(agent) {
 function updateVisibility() {
   const agent = store.agents.find((a) => a.name === store.agent);
   state.available = !!agent?.workspace;
-  els.btn?.classList.toggle('hidden', !state.available);
+  els.btn?.classList.toggle('lv-hidden', !state.available);
   if (state.available) scratchDirFor(store.agent); // warm it for the first write
   const phone = window.matchMedia('(max-width: 720px)').matches;
   if (!state.available) {
@@ -373,7 +373,7 @@ function updateVisibility() {
 async function refresh() {
   if (!state.open) return;
   state.stale = false;
-  els.refresh.classList.remove('stale');
+  els.refresh.classList.remove('lv-stale');
   try {
     if (state.mode === 'recent') {
       state.entries = await api.workspaceRecent({ agent: store.agent });
@@ -393,7 +393,7 @@ async function refresh() {
 
 function emptyNode(text) {
   const div = document.createElement('div');
-  div.className = 'files-empty';
+  div.className = 'lv-files-empty';
   div.textContent = text;
   return div;
 }
@@ -432,7 +432,7 @@ function renderProcs() {
   clearTimeout(_procsTimer);
   _procsTimer = null;
   const procs = state.procs;
-  els.procs.classList.toggle('hidden', !procs.length);
+  els.procs.classList.toggle('lv-hidden', !procs.length);
   if (!procs.length) {
     els.procs.replaceChildren();
     return;
@@ -440,11 +440,11 @@ function renderProcs() {
   const frag = document.createDocumentFragment();
   const running = procs.filter((p) => p.status === 'running').length;
   const head = document.createElement('div');
-  head.className = 'files-procs-head';
+  head.className = 'lv-files-procs-head';
   head.textContent = t('procs.title');
   if (running) {
     const count = document.createElement('span');
-    count.className = 'files-procs-count';
+    count.className = 'lv-files-procs-count';
     count.textContent = String(running);
     head.appendChild(count);
   }
@@ -457,18 +457,18 @@ function renderProcs() {
 
 function procRow(p) {
   const row = document.createElement('div');
-  row.className = 'proc-row';
+  row.className = 'lv-proc-row';
 
   const dot = document.createElement('span');
-  dot.className = `proc-dot ${p.status}`;
+  dot.className = `lv-proc-dot lv-${p.status}`;
 
   const main = document.createElement('span');
-  main.className = 'proc-main';
+  main.className = 'lv-proc-main';
   const cmd = document.createElement('span');
-  cmd.className = 'proc-cmd';
+  cmd.className = 'lv-proc-cmd';
   cmd.textContent = p.command;
   const meta = document.createElement('span');
-  meta.className = 'proc-meta';
+  meta.className = 'lv-proc-meta';
   meta.textContent =
     p.status === 'running'
       ? t('procs.running')
@@ -482,7 +482,7 @@ function procRow(p) {
   if (p.status === 'running') {
     const kill = document.createElement('button');
     kill.type = 'button';
-    kill.className = 'btn-icon proc-kill';
+    kill.className = 'lv-btn-icon lv-proc-kill';
     kill.innerHTML = icon('x', { size: 14 });
     kill.title = t('procs.kill');
     kill.setAttribute('aria-label', t('procs.kill'));
@@ -513,11 +513,11 @@ function procRow(p) {
 
 function setMode(mode) {
   state.mode = mode;
-  els.tabRecent.classList.toggle('active', mode === 'recent');
+  els.tabRecent.classList.toggle('lv-active', mode === 'recent');
   els.tabRecent.setAttribute('aria-selected', String(mode === 'recent'));
-  els.tabBrowse.classList.toggle('active', mode === 'browse');
+  els.tabBrowse.classList.toggle('lv-active', mode === 'browse');
   els.tabBrowse.setAttribute('aria-selected', String(mode === 'browse'));
-  els.crumbs.classList.toggle('hidden', mode !== 'browse');
+  els.crumbs.classList.toggle('lv-hidden', mode !== 'browse');
   refresh();
 }
 
@@ -528,7 +528,7 @@ function renderCrumbs() {
   const crumb = (label, path, last) => {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'files-crumb';
+    b.className = 'lv-files-crumb';
     b.textContent = label;
     if (last) b.disabled = true;
     else b.addEventListener('click', () => { state.browsePath = path; refresh(); });
@@ -537,7 +537,7 @@ function renderCrumbs() {
   els.crumbs.appendChild(crumb('~', '', parts.length === 0));
   parts.forEach((part, i) => {
     const sep = document.createElement('span');
-    sep.className = 'files-crumb-sep';
+    sep.className = 'lv-files-crumb-sep';
     sep.textContent = '/';
     els.crumbs.appendChild(sep);
     els.crumbs.appendChild(
@@ -558,21 +558,21 @@ function rowIcon(entry) {
 function rowFor(entry) {
   const row = document.createElement('button');
   row.type = 'button';
-  row.className = 'file-row';
-  if (!entry.is_dir && isTouched(entry.path)) row.classList.add('touched');
-  if (state.viewing?.path === entry.path) row.classList.add('active');
+  row.className = 'lv-file-row';
+  if (!entry.is_dir && isTouched(entry.path)) row.classList.add('lv-touched');
+  if (state.viewing?.path === entry.path) row.classList.add('lv-active');
 
   const ic = document.createElement('span');
-  ic.className = 'file-row-icon';
+  ic.className = 'lv-file-row-icon';
   ic.innerHTML = rowIcon(entry);
 
   const main = document.createElement('span');
-  main.className = 'file-row-main';
+  main.className = 'lv-file-row-main';
   const name = document.createElement('span');
-  name.className = 'file-row-name';
+  name.className = 'lv-file-row-name';
   name.textContent = basename(entry.path);
   const sub = document.createElement('span');
-  sub.className = 'file-row-sub';
+  sub.className = 'lv-file-row-sub';
   const bits = [];
   if (state.mode === 'recent' && dirname(entry.path)) bits.push(dirname(entry.path));
   if (entry.is_dir) bits.push(t('files.folder'));
@@ -598,7 +598,7 @@ function rowFor(entry) {
 
 function groupLabel(text) {
   const div = document.createElement('div');
-  div.className = 'files-group-label';
+  div.className = 'lv-files-group-label';
   div.textContent = text;
   return div;
 }
@@ -644,8 +644,8 @@ function renderList() {
 // ---- Viewer -------------------------------------------------------------------
 function closeViewer() {
   state.viewing = null;
-  els.viewer.classList.add('hidden');
-  els.split?.classList.add('hidden');
+  els.viewer.classList.add('lv-hidden');
+  els.split?.classList.add('lv-hidden');
   els.viewerBody.replaceChildren();
   renderList(); // drop the active highlight
 }
@@ -661,7 +661,7 @@ function viewerErrorText(err) {
 
 function viewerNote(text, action) {
   const note = document.createElement('div');
-  note.className = 'files-note';
+  note.className = 'lv-files-note';
   const span = document.createElement('span');
   span.textContent = text;
   note.appendChild(span);
@@ -670,12 +670,12 @@ function viewerNote(text, action) {
 }
 
 // Markdown/CSV reuse the transcript's typography by rendering inside the same
-// .turn > .body wrapper the chat uses (see styles.css).
+// .lv-turn > .lv-body wrapper the chat uses (see styles.css).
 function bodyWrapper() {
   const turn = document.createElement('div');
-  turn.className = 'turn';
+  turn.className = 'lv-turn';
   const body = document.createElement('div');
-  body.className = 'body';
+  body.className = 'lv-body';
   turn.appendChild(body);
   return { turn, body };
 }
@@ -758,9 +758,9 @@ function renderText(content, path) {
 // with a different base); true otherwise.
 async function openFile(path, { silent = false } = {}) {
   const name = basename(path);
-  const viewerWasHidden = els.viewer.classList.contains('hidden');
-  els.viewer.classList.remove('hidden');
-  els.split?.classList.remove('hidden');
+  const viewerWasHidden = els.viewer.classList.contains('lv-hidden');
+  els.viewer.classList.remove('lv-hidden');
+  els.split?.classList.remove('lv-hidden');
   // First show: the restored split was applied blind (panel geometry unknown
   // until now) — re-clamp it, and give the separator its initial aria value.
   if (viewerWasHidden && els.split) clampSplit();
@@ -773,8 +773,8 @@ async function openFile(path, { silent = false } = {}) {
   els.viewerName.replaceChildren(label);
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
-  els.mdToggle.classList.add('hidden');
-  els.wrapToggle?.classList.add('hidden'); // renderViewerContent re-shows for text
+  els.mdToggle.classList.add('lv-hidden');
+  els.wrapToggle?.classList.add('lv-hidden'); // renderViewerContent re-shows for text
 
   const e = ext(path);
   const kind = IMAGE_EXT.has(e) || e === 'svg'
@@ -794,7 +794,7 @@ async function openFile(path, { silent = false } = {}) {
 
   if (kind === 'image') {
     const img = document.createElement('img');
-    img.className = 'files-img';
+    img.className = 'lv-files-img';
     img.alt = name;
     const rev = revOf(path);
     // SVG included: workspaceImageUrl asks for the form that renders in an
@@ -809,7 +809,7 @@ async function openFile(path, { silent = false } = {}) {
     // inline for exactly this embed (older servers answer 415 — the header's
     // download link still works).
     const embed = document.createElement('embed');
-    embed.className = 'files-frame';
+    embed.className = 'lv-files-frame';
     embed.type = 'application/pdf';
     const rev = revOf(path);
     embed.src =
@@ -848,7 +848,7 @@ async function openFile(path, { silent = false } = {}) {
 
   if (data.binary) {
     const dl = document.createElement('a');
-    dl.className = 'btn btn-ghost btn-sm';
+    dl.className = 'lv-btn lv-btn-ghost lv-btn-sm';
     dl.textContent = t('files.download');
     dl.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
     dl.setAttribute('download', '');
@@ -904,29 +904,29 @@ function syncModal() {
 function syncWrapButton() {
   els.wrapToggle.innerHTML = icon('wrap-text', { size: 15 });
   els.wrapToggle.title = state.wrap ? t('files.nowrap') : t('files.wrap');
-  els.wrapToggle.classList.toggle('active', state.wrap);
+  els.wrapToggle.classList.toggle('lv-active', state.wrap);
 }
 
 function renderViewerContent() {
   const v = state.viewing;
   if (!v) return;
   els.viewerBody.replaceChildren();
-  els.viewerBody.classList.toggle('nowrap', !state.wrap);
+  els.viewerBody.classList.toggle('lv-nowrap', !state.wrap);
   // Wrap toggling only means something for plain text / raw views.
   const textual =
     v.kind === 'text' ||
     v.kind === 'csv' ||
     ((v.kind === 'md' || v.kind === 'html') && v.raw);
-  els.wrapToggle.classList.toggle('hidden', !textual);
+  els.wrapToggle.classList.toggle('lv-hidden', !textual);
   // Copy only means something when there is text content to copy.
-  els.copyContent.classList.toggle('hidden', typeof v.content !== 'string');
+  els.copyContent.classList.toggle('lv-hidden', typeof v.content !== 'string');
 
   if (v.truncated) {
     const more = document.createElement('button');
     more.type = 'button';
     // The class marks it for the reader modal, whose cloned copy delegates
     // back to this same loadMore (a clone carries no listeners of its own).
-    more.className = 'btn btn-ghost btn-sm files-load-more';
+    more.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-files-load-more';
     more.textContent = t('files.loadMore');
     more.addEventListener('click', loadMore);
     els.viewerBody.appendChild(
@@ -935,7 +935,7 @@ function renderViewerContent() {
   }
 
   if (v.kind === 'md' || v.kind === 'html') {
-    els.mdToggle.classList.remove('hidden');
+    els.mdToggle.classList.remove('lv-hidden');
     els.mdToggle.innerHTML = icon(v.raw ? 'file-text' : 'code', { size: 15 });
     els.mdToggle.title = v.raw ? t('files.rendered') : t('files.raw');
   }
@@ -953,7 +953,7 @@ function renderViewerContent() {
     // Agent-authored HTML: an opaque origin that can't touch the parent DOM,
     // the token cookie or storage, and can't navigate itself away.
     els.viewerBody.appendChild(
-      sandboxFrame(v.content, { title: v.name, className: 'files-frame files-frame--html' }),
+      sandboxFrame(v.content, { title: v.name, className: 'lv-files-frame lv-files-frame--html' }),
     );
     return;
   }
@@ -1025,15 +1025,15 @@ function initUpload() {
     if (!state.available) return;
     if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
     e.preventDefault();
-    els.panel.classList.add('drag-over');
+    els.panel.classList.add('lv-drag-over');
   });
   els.panel.addEventListener('dragleave', (e) => {
     if (!els.panel.contains(/** @type {Node} */ (e.relatedTarget))) {
-      els.panel.classList.remove('drag-over');
+      els.panel.classList.remove('lv-drag-over');
     }
   });
   els.panel.addEventListener('drop', (e) => {
-    els.panel.classList.remove('drag-over');
+    els.panel.classList.remove('lv-drag-over');
     if (!state.available) return;
     const files = [...(e.dataTransfer?.files || [])];
     if (files.length) {
@@ -1149,7 +1149,7 @@ export function initFiles() {
   // (a modified click still follows the href into a tab of its own).
   els.modalBody.addEventListener('click', async (e) => {
     const target = e.target instanceof Element ? e.target : null;
-    if (target?.closest('.files-load-more')) {
+    if (target?.closest('.lv-files-load-more')) {
       await loadMore();
       syncModal();
       return;
@@ -1252,7 +1252,7 @@ export function initFiles() {
   });
   store.on('workspace-maybe-stale', () => {
     state.stale = true;
-    if (state.open) els.refresh.classList.add('stale');
+    if (state.open) els.refresh.classList.add('lv-stale');
     // The same tool completions that can change files (shell, output polls,
     // kills) are exactly the moments the process list can change.
     if (state.open) refreshProcs();

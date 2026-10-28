@@ -12,7 +12,7 @@ function container() {
   if (!el) {
     el = document.createElement('div');
     el.id = 'toast-container';
-    el.className = 'toast-container';
+    el.className = 'lv-toast-container';
     el.setAttribute('aria-live', 'polite');
     document.body.appendChild(el);
   }
@@ -51,7 +51,7 @@ export function toast(message, { type = 'info', timeout = DEFAULT_TIMEOUT_MS, ke
     if (!matches) continue;
     clearTimeout(entry.timer);
     entry.type = type;
-    el.className = `toast toast-${type} show`;
+    el.className = `lv-toast lv-toast-${type} lv-show`;
     el.setAttribute('role', type === 'error' ? 'alert' : 'status');
     if (el.textContent !== message) el.textContent = message;
     entry.timer = setTimeout(entry.dismiss, timeout);
@@ -59,7 +59,7 @@ export function toast(message, { type = 'info', timeout = DEFAULT_TIMEOUT_MS, ke
   }
 
   const el = document.createElement('div');
-  el.className = `toast toast-${type}`;
+  el.className = `lv-toast lv-toast-${type}`;
   el.setAttribute('role', type === 'error' ? 'alert' : 'status');
   el.textContent = message;
   if (entries.size >= MAX_TOASTS) {
@@ -72,7 +72,7 @@ export function toast(message, { type = 'info', timeout = DEFAULT_TIMEOUT_MS, ke
     victim.drop();
   }
   host.appendChild(el);
-  requestAnimationFrame(() => { if (!entry.dismissed) el.classList.add('show'); });
+  requestAnimationFrame(() => { if (!entry.dismissed) el.classList.add('lv-show'); });
 
   const drop = () => {
     entry.dismissed = true;
@@ -84,7 +84,7 @@ export function toast(message, { type = 'info', timeout = DEFAULT_TIMEOUT_MS, ke
     if (entry.dismissed) return;
     entry.dismissed = true;
     clearTimeout(entry.timer);
-    el.classList.remove('show');
+    el.classList.remove('lv-show');
     el.addEventListener('transitionend', drop, { once: true });
     entry.timer = setTimeout(drop, 400); // fallback if the transition never fires
   };

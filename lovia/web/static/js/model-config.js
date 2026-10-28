@@ -61,26 +61,26 @@ function el(tag, className, text) {
 }
 
 function field(labelText, control, hintText) {
-  const wrap = el('div', 'cfg-field');
-  const label = el('label', 'cfg-label', labelText);
+  const wrap = el('div', 'lv-cfg-field');
+  const label = el('label', 'lv-cfg-label', labelText);
   // A <label> names one control; a radio group takes its name as aria-label.
   if (control.getAttribute('role') === 'radiogroup') control.setAttribute('aria-label', labelText);
   wrap.append(label, control);
-  if (hintText) wrap.appendChild(el('div', 'cfg-hint', hintText));
+  if (hintText) wrap.appendChild(el('div', 'lv-cfg-hint', hintText));
   return wrap;
 }
 
 function input(value, { mono = false, placeholder = '', type = 'text' } = {}) {
-  const node = /** @type {HTMLInputElement} */ (el('input', 'dialog-input cfg-input'));
+  const node = /** @type {HTMLInputElement} */ (el('input', 'lv-dialog-input lv-cfg-input'));
   node.type = type;
   node.value = value ?? '';
   node.placeholder = placeholder;
-  if (mono) node.classList.add('mono');
+  if (mono) node.classList.add('lv-mono');
   return node;
 }
 
 function ghostBtn(label, onClick) {
-  const btn = el('button', 'btn btn-ghost btn-sm', label);
+  const btn = el('button', 'lv-btn lv-btn-ghost lv-btn-sm', label);
   btn.setAttribute('type', 'button');
   btn.addEventListener('click', onClick);
   return btn;
@@ -133,8 +133,8 @@ function setLeaves(target, snippet) {
  * @param {() => string} flavor Current API flavor, read at click time.
  */
 function extraBodyEditor(initial, flavor) {
-  const node = el('div', 'cfg-extra');
-  const area = /** @type {HTMLTextAreaElement} */ (el('textarea', 'dialog-input cfg-input mono'));
+  const node = el('div', 'lv-cfg-extra');
+  const area = /** @type {HTMLTextAreaElement} */ (el('textarea', 'lv-dialog-input lv-cfg-input lv-mono'));
   area.spellcheck = false;
   area.placeholder = '{ }';
   const hasInitial = initial && Object.keys(initial).length > 0;
@@ -145,7 +145,7 @@ function extraBodyEditor(initial, flavor) {
     area.rows = Math.min(14, Math.max(3, area.value.split('\n').length + 1));
   };
   fit();
-  const err = el('div', 'cfg-hint cfg-extra-error');
+  const err = el('div', 'lv-cfg-hint lv-cfg-extra-error');
   err.hidden = true;
 
   /** @returns {object | null} */
@@ -162,7 +162,7 @@ function extraBodyEditor(initial, flavor) {
   };
   const validate = () => {
     const ok = parse() !== null;
-    area.classList.toggle('invalid', !ok);
+    area.classList.toggle('lv-invalid', !ok);
     err.hidden = ok;
     err.textContent = ok ? '' : t('cfg.extraBodyInvalid');
     return ok;
@@ -172,11 +172,11 @@ function extraBodyEditor(initial, flavor) {
     validate();
   });
 
-  const chips = el('div', 'cfg-extra-chips');
+  const chips = el('div', 'lv-cfg-extra-chips');
   const renderChips = () => {
     chips.replaceChildren();
     for (const [label, snippet] of EXTRA_BODY_SNIPPETS[flavor()] || []) {
-      const chip = el('button', 'chip', label);
+      const chip = el('button', 'lv-chip', label);
       chip.setAttribute('type', 'button');
       chip.addEventListener('click', () => {
         // Adding to broken JSON would silently discard it — fix that first.
@@ -208,17 +208,17 @@ function extraBodyEditor(initial, flavor) {
  * Owns its internal rerenders; safe to rebuild wholesale on tab switches.
  */
 export function buildModelsPane() {
-  const pane = el('div', 'cfg-pane');
+  const pane = el('div', 'lv-cfg-pane');
   /** @type {{ name: 'list' } | { name: 'form', id: string | null }} */
   let view = { name: 'list' };
 
   async function render() {
     if (!cfg()) {
-      pane.replaceChildren(el('div', 'cfg-hint', '…'));
+      pane.replaceChildren(el('div', 'lv-cfg-hint', '…'));
       try {
         await loadConfig();
       } catch (err) {
-        pane.replaceChildren(el('div', 'cfg-error', String(err.message || err)));
+        pane.replaceChildren(el('div', 'lv-cfg-error', String(err.message || err)));
         return;
       }
     }
@@ -229,9 +229,9 @@ export function buildModelsPane() {
     const c = cfg();
     const box = el('div');
 
-    const head = el('div', 'cfg-pane-head');
-    head.appendChild(el('span', 'cfg-pane-title', t('cfg.models')));
-    const add = el('button', 'btn btn-sm', `＋ ${t('cfg.addModel')}`);
+    const head = el('div', 'lv-cfg-pane-head');
+    head.appendChild(el('span', 'lv-cfg-pane-title', t('cfg.models')));
+    const add = el('button', 'lv-btn lv-btn-sm', `＋ ${t('cfg.addModel')}`);
     add.setAttribute('type', 'button');
     add.addEventListener('click', () => {
       view = { name: 'form', id: null };
@@ -240,25 +240,25 @@ export function buildModelsPane() {
     head.appendChild(add);
     box.appendChild(head);
 
-    const list = el('div', 'model-list');
-    if (!c.models.length) list.appendChild(el('div', 'cfg-hint', t('cfg.emptyList')));
+    const list = el('div', 'lv-model-list');
+    if (!c.models.length) list.appendChild(el('div', 'lv-cfg-hint', t('cfg.emptyList')));
     for (const p of c.models) {
-      const row = el('div', 'model-row');
+      const row = el('div', 'lv-model-row');
       row.setAttribute('role', 'button');
       row.tabIndex = 0;
-      const info = el('div', 'model-row-info');
-      const name = el('div', 'model-row-name', profileName(p));
+      const info = el('div', 'lv-model-row-info');
+      const name = el('div', 'lv-model-row-name', profileName(p));
       if (p.id === c.roles.chat) {
-        name.appendChild(el('span', 'badge badge-default', t('cfg.default')));
+        name.appendChild(el('span', 'lv-badge lv-badge-default', t('cfg.default')));
       }
       if (p.vision === 'on') {
-        name.appendChild(el('span', 'badge badge-plain', t('cfg.visionBadge')));
+        name.appendChild(el('span', 'lv-badge lv-badge-plain', t('cfg.visionBadge')));
       }
       const host = hostOf(p.base_url);
-      info.append(name, el('div', 'model-row-meta', host ? `${p.model} · ${host}` : p.model));
+      info.append(name, el('div', 'lv-model-row-meta', host ? `${p.model} · ${host}` : p.model));
       row.appendChild(info);
 
-      const actions = el('div', 'model-row-actions');
+      const actions = el('div', 'lv-model-row-actions');
       // A server-side copy (the key never reaches the page): the way to keep
       // a second parameter set — say, thinking off for aux — on one endpoint.
       actions.appendChild(
@@ -293,11 +293,11 @@ export function buildModelsPane() {
           }
           render();
         });
-        del.classList.add('danger');
+        del.classList.add('lv-danger');
         actions.appendChild(del);
       }
       row.appendChild(actions);
-      row.appendChild(el('span', 'model-row-chev', '›'));
+      row.appendChild(el('span', 'lv-model-row-chev', '›'));
       const open = () => {
         view = { name: 'form', id: p.id };
         render();
@@ -315,7 +315,7 @@ export function buildModelsPane() {
 
     if (c.models.length) box.appendChild(renderRoles());
 
-    const note = el('div', 'cfg-footnote');
+    const note = el('div', 'lv-cfg-footnote');
     note.textContent = c.scope.exists
       ? t('cfg.scopeNote', { label: c.scope.label })
       : t('cfg.scopeNote', { label: c.scope.label }) + ' ' + t('cfg.scopeUnsaved');
@@ -325,12 +325,12 @@ export function buildModelsPane() {
 
   function renderRoles() {
     const c = cfg();
-    const box = el('div', 'cfg-roles');
-    box.appendChild(el('div', 'cfg-pane-title', t('cfg.roles')));
+    const box = el('div', 'lv-cfg-roles');
+    box.appendChild(el('div', 'lv-cfg-pane-title', t('cfg.roles')));
 
     const roleRow = (labelText, current, emptyLabel, role, hint) => {
       const select = /** @type {HTMLSelectElement} */ (
-        el('select', 'dialog-input cfg-role-select')
+        el('select', 'lv-dialog-input lv-cfg-role-select')
       );
       const none = el('option', '', emptyLabel);
       none.setAttribute('value', '');
@@ -350,10 +350,10 @@ export function buildModelsPane() {
           select.value = cfg()?.roles?.[role] || '';
         }
       });
-      const row = el('div', 'cfg-role-row');
-      row.appendChild(el('label', 'cfg-role-label', labelText));
+      const row = el('div', 'lv-cfg-role-row');
+      row.appendChild(el('label', 'lv-cfg-role-label', labelText));
       row.appendChild(select);
-      row.appendChild(el('span', 'cfg-role-hint', hint));
+      row.appendChild(el('span', 'lv-cfg-role-hint', hint));
       return row;
     };
 
@@ -371,18 +371,18 @@ export function buildModelsPane() {
     const stored = id ? c.models.find((m) => m.id === id) : null;
     const box = el('div');
 
-    const head = el('div', 'cfg-form-head');
-    const back = el('button', 'btn-icon cfg-back', '‹');
+    const head = el('div', 'lv-cfg-form-head');
+    const back = el('button', 'lv-btn-icon lv-cfg-back', '‹');
     back.setAttribute('type', 'button');
     back.setAttribute('aria-label', t('cfg.backLabel'));
     back.addEventListener('click', () => {
       view = { name: 'list' };
       render();
     });
-    head.append(back, el('span', 'cfg-pane-title', stored ? t('cfg.editModel') : t('cfg.newModel')));
+    head.append(back, el('span', 'lv-cfg-pane-title', stored ? t('cfg.editModel') : t('cfg.newModel')));
     box.appendChild(head);
 
-    const form = el('div', 'cfg-form');
+    const form = el('div', 'lv-cfg-form');
 
     const nameIn = input(stored?.name || '', { placeholder: stored?.model || '' });
     form.appendChild(field(t('cfg.name'), nameIn, t('cfg.nameHint')));
@@ -411,14 +411,14 @@ export function buildModelsPane() {
     /** @type {'keep' | 'edit' | 'clear'} */
     let keyMode = stored?.api_key?.set ? 'keep' : 'edit';
     const keyIn = input('', { type: 'password', placeholder: 'sk-xxx' });
-    const keyBox = el('div', 'cfg-key');
+    const keyBox = el('div', 'lv-cfg-key');
     const renderKey = () => {
       keyBox.replaceChildren();
       if (keyMode === 'keep') {
-        const row = el('div', 'cfg-key-set');
-        row.appendChild(el('span', 'cfg-key-dot'));
+        const row = el('div', 'lv-cfg-key-set');
+        row.appendChild(el('span', 'lv-cfg-key-dot'));
         row.appendChild(
-          el('span', 'cfg-key-mask', t('cfg.apiKeySet', { hint: stored.api_key.hint || '' })),
+          el('span', 'lv-cfg-key-mask', t('cfg.apiKeySet', { hint: stored.api_key.hint || '' })),
         );
         row.appendChild(
           ghostBtn(t('cfg.replace'), () => {
@@ -435,8 +435,8 @@ export function buildModelsPane() {
         );
         keyBox.appendChild(row);
       } else if (keyMode === 'clear') {
-        const row = el('div', 'cfg-key-set');
-        row.appendChild(el('span', 'cfg-key-mask', t('cfg.apiKeyNone')));
+        const row = el('div', 'lv-cfg-key-set');
+        row.appendChild(el('span', 'lv-cfg-key-mask', t('cfg.apiKeyNone')));
         if (stored?.api_key?.set) {
           row.appendChild(
             ghostBtn(t('cfg.keep'), () => {
@@ -472,7 +472,7 @@ export function buildModelsPane() {
     form.appendChild(field(t('cfg.modelId'), modelIn));
 
     // Advanced: context window + vision capability.
-    const adv = /** @type {HTMLDetailsElement} */ (el('details', 'cfg-advanced'));
+    const adv = /** @type {HTMLDetailsElement} */ (el('details', 'lv-cfg-advanced'));
     adv.appendChild(el('summary', '', t('cfg.advanced')));
     const windowIn = input(stored?.context_window ? String(stored.context_window) : '', {
       placeholder: t('cfg.contextWindowAuto'),
@@ -509,14 +509,14 @@ export function buildModelsPane() {
     form.appendChild(adv);
 
     // Test connection — the wizard's probe over HTTP, same classifications.
-    const testRow = el('div', 'cfg-test-row');
-    const testBtn = el('button', 'btn cfg-test-btn', t('cfg.test'));
+    const testRow = el('div', 'lv-cfg-test-row');
+    const testBtn = el('button', 'lv-btn lv-cfg-test-btn', t('cfg.test'));
     testBtn.setAttribute('type', 'button');
-    const testOut = el('span', 'cfg-test-result');
+    const testOut = el('span', 'lv-cfg-test-result');
     testBtn.addEventListener('click', async () => {
       if (!modelIn.value.trim()) return;
       testBtn.disabled = true;
-      testOut.className = 'cfg-test-result';
+      testOut.className = 'lv-cfg-test-result';
       testOut.textContent = t('cfg.testing');
       try {
         const res = await probe();
@@ -527,7 +527,7 @@ export function buildModelsPane() {
           unverifiable: t('cfg.testUnverifiable'),
         };
         const good = res.outcome === 'ok' || res.outcome === 'unverifiable';
-        testOut.classList.add(good ? 'ok' : 'bad');
+        testOut.classList.add(good ? 'lv-ok' : 'lv-bad');
         const bits = [`${good ? '✓' : '✗'} ${labels[res.outcome]} (${res.detail})`];
         if (res.context_window) {
           bits.push(t('cfg.testWindow', { n: res.context_window.toLocaleString() }));
@@ -535,7 +535,7 @@ export function buildModelsPane() {
         testOut.textContent = bits.join(' · ');
         if (res.note) testOut.title = res.note;
       } catch (err) {
-        testOut.classList.add('bad');
+        testOut.classList.add('lv-bad');
         testOut.textContent = `✗ ${String(err.message || err)}`;
       } finally {
         syncProbeButtons();
@@ -577,17 +577,17 @@ export function buildModelsPane() {
     modelIn.addEventListener('input', syncProbeButtons);
     syncProbeButtons();
 
-    const errBox = el('div', 'cfg-error');
+    const errBox = el('div', 'lv-cfg-error');
     errBox.hidden = true;
 
-    const actions = el('div', 'cfg-form-actions');
-    const cancel = el('button', 'btn btn-ghost', t('cfg.cancel'));
+    const actions = el('div', 'lv-cfg-form-actions');
+    const cancel = el('button', 'lv-btn lv-btn-ghost', t('cfg.cancel'));
     cancel.setAttribute('type', 'button');
     cancel.addEventListener('click', () => {
       view = { name: 'list' };
       render();
     });
-    const save = el('button', 'btn btn-primary', t('cfg.save'));
+    const save = el('button', 'lv-btn lv-btn-primary', t('cfg.save'));
     save.setAttribute('type', 'button');
     save.addEventListener('click', async () => {
       const extraBody = extras.read();
@@ -644,23 +644,23 @@ export function buildModelsPane() {
 // ---- Search pane ----------------------------------------------------------
 
 export function buildSearchPane() {
-  const pane = el('div', 'cfg-pane');
+  const pane = el('div', 'lv-cfg-pane');
 
   (async () => {
     if (!cfg()) {
       try {
         await loadConfig();
       } catch (err) {
-        pane.replaceChildren(el('div', 'cfg-error', String(err.message || err)));
+        pane.replaceChildren(el('div', 'lv-cfg-error', String(err.message || err)));
         return;
       }
     }
     const c = cfg();
     pane.replaceChildren();
-    pane.appendChild(el('div', 'cfg-pane-title', t('cfg.searchTitle')));
-    const form = el('div', 'cfg-form');
+    pane.appendChild(el('div', 'lv-cfg-pane-title', t('cfg.searchTitle')));
+    const form = el('div', 'lv-cfg-form');
 
-    const select = /** @type {HTMLSelectElement} */ (el('select', 'dialog-input'));
+    const select = /** @type {HTMLSelectElement} */ (el('select', 'lv-dialog-input'));
     for (const [val, label] of [
       ['auto', t('cfg.searchAuto')],
       ['tavily', t('cfg.searchTavily')],
@@ -677,14 +677,14 @@ export function buildSearchPane() {
     /** @type {'keep' | 'edit' | 'clear'} */
     let keyMode = c.search.tavily_api_key.set ? 'keep' : 'edit';
     const keyIn = input('', { type: 'password', placeholder: t('cfg.apiKeyNone') });
-    const keyBox = el('div', 'cfg-key');
+    const keyBox = el('div', 'lv-cfg-key');
     const renderKey = () => {
       keyBox.replaceChildren();
       if (keyMode === 'keep') {
-        const row = el('div', 'cfg-key-set');
-        row.appendChild(el('span', 'cfg-key-dot'));
+        const row = el('div', 'lv-cfg-key-set');
+        row.appendChild(el('span', 'lv-cfg-key-dot'));
         row.appendChild(
-          el('span', 'cfg-key-mask', t('cfg.apiKeySet', { hint: c.search.tavily_api_key.hint || '' })),
+          el('span', 'lv-cfg-key-mask', t('cfg.apiKeySet', { hint: c.search.tavily_api_key.hint || '' })),
         );
         row.appendChild(
           ghostBtn(t('cfg.replace'), () => {
@@ -701,8 +701,8 @@ export function buildSearchPane() {
         );
         keyBox.appendChild(row);
       } else if (keyMode === 'clear') {
-        const row = el('div', 'cfg-key-set');
-        row.appendChild(el('span', 'cfg-key-mask', t('cfg.apiKeyNone')));
+        const row = el('div', 'lv-cfg-key-set');
+        row.appendChild(el('span', 'lv-cfg-key-mask', t('cfg.apiKeyNone')));
         row.appendChild(
           ghostBtn(t('cfg.keep'), () => {
             keyMode = 'keep';
@@ -726,10 +726,10 @@ export function buildSearchPane() {
     renderKey();
     form.appendChild(field(t('cfg.tavilyKey'), keyBox, t('cfg.apiKeyNote')));
 
-    const errBox = el('div', 'cfg-error');
+    const errBox = el('div', 'lv-cfg-error');
     errBox.hidden = true;
-    const actions = el('div', 'cfg-form-actions');
-    const save = el('button', 'btn btn-primary', t('cfg.save'));
+    const actions = el('div', 'lv-cfg-form-actions');
+    const save = el('button', 'lv-btn lv-btn-primary', t('cfg.save'));
     save.setAttribute('type', 'button');
     save.addEventListener('click', async () => {
       const body = { backend: select.value };
@@ -763,16 +763,16 @@ export function buildSearchPane() {
  * applies immediately — the server rebuilds the agent on every write.
  */
 export function buildSkillsPane() {
-  const pane = el('div', 'cfg-pane');
+  const pane = el('div', 'lv-cfg-pane');
 
   async function render() {
-    pane.replaceChildren(el('div', 'cfg-hint', '…'));
+    pane.replaceChildren(el('div', 'lv-cfg-hint', '…'));
     let scan;
     try {
       if (!cfg()) await loadConfig();
       scan = await api.getSkills();
     } catch (err) {
-      pane.replaceChildren(el('div', 'cfg-error', String(err.message || err)));
+      pane.replaceChildren(el('div', 'lv-cfg-error', String(err.message || err)));
       return;
     }
     const c = cfg();
@@ -798,24 +798,24 @@ export function buildSkillsPane() {
     };
 
     pane.replaceChildren();
-    pane.appendChild(el('div', 'cfg-pane-title', t('cfg.skillsTitle')));
-    pane.appendChild(el('div', 'cfg-hint skills-intro', t('cfg.skillsIntro')));
+    pane.appendChild(el('div', 'lv-cfg-pane-title', t('cfg.skillsTitle')));
+    pane.appendChild(el('div', 'lv-cfg-hint lv-skills-intro', t('cfg.skillsIntro')));
 
-    const list = el('div', 'model-list');
+    const list = el('div', 'lv-model-list');
     if (!scan.roots.length) {
-      list.appendChild(el('div', 'cfg-hint', t('cfg.skillsNone')));
+      list.appendChild(el('div', 'lv-cfg-hint', t('cfg.skillsNone')));
     }
     for (const root of scan.roots) {
-      const row = el('div', 'model-row skills-root');
-      if (!root.exists) row.classList.add('off');
-      const info = el('div', 'model-row-info');
+      const row = el('div', 'lv-model-row lv-skills-root');
+      if (!root.exists) row.classList.add('lv-off');
+      const info = el('div', 'lv-model-row-info');
 
-      const name = el('div', 'model-row-name');
-      name.appendChild(el('code', 'skills-path', root.path));
+      const name = el('div', 'lv-model-row-name');
+      name.appendChild(el('code', 'lv-skills-path', root.path));
       if (root.kind !== 'custom') {
-        name.appendChild(el('span', 'badge badge-plain', t('cfg.skillsDefaultBadge')));
+        name.appendChild(el('span', 'lv-badge lv-badge-plain', t('cfg.skillsDefaultBadge')));
       }
-      const meta = el('div', 'model-row-meta');
+      const meta = el('div', 'lv-model-row-meta');
       if (!root.exists) meta.textContent = t('cfg.skillsMissing');
       else if (!root.skills.length && !root.problems.length)
         meta.textContent = t('cfg.skillsEmpty');
@@ -828,27 +828,27 @@ export function buildSkillsPane() {
       info.append(name, meta);
 
       if (root.skills.length || root.problems.length) {
-        const details = el('details', 'skills-details');
+        const details = el('details', 'lv-skills-details');
         details.appendChild(el('summary', '', t('cfg.skillsShow')));
         /** Rows whose description may need the expand toggle. */
         const rows = [];
         for (const s of root.skills) {
-          const item = el('div', 'skills-item');
-          const head = el('div', 'skills-item-head');
-          head.appendChild(el('span', 'skills-item-name', s.name));
+          const item = el('div', 'lv-skills-item');
+          const head = el('div', 'lv-skills-item-head');
+          head.appendChild(el('span', 'lv-skills-item-name', s.name));
           if (s.shadowed) {
-            head.appendChild(el('span', 'badge badge-plain', t('cfg.skillsShadowed')));
+            head.appendChild(el('span', 'lv-badge lv-badge-plain', t('cfg.skillsShadowed')));
           }
           // Descriptions are trigger prose and can run long — clamp to two
           // lines so a root stays scannable, and expand in place rather than
           // into a tooltip, which would put the text out of reach of a
           // selection.
-          const desc = el('div', 'skills-item-desc', s.description);
-          const more = el('button', 'skills-item-more', t('cfg.skillsMore'));
+          const desc = el('div', 'lv-skills-item-desc', s.description);
+          const more = el('button', 'lv-skills-item-more', t('cfg.skillsMore'));
           more.setAttribute('type', 'button');
           more.setAttribute('aria-expanded', 'false');
           more.addEventListener('click', () => {
-            const open = item.classList.toggle('open');
+            const open = item.classList.toggle('lv-open');
             more.textContent = t(open ? 'cfg.skillsLess' : 'cfg.skillsMore');
             more.setAttribute('aria-expanded', String(open));
           });
@@ -862,33 +862,33 @@ export function buildSkillsPane() {
         details.addEventListener('toggle', () => {
           if (!details.open) return;
           for (const { item, desc } of rows) {
-            if (item.classList.contains('open')) continue;
-            item.classList.toggle('clamped', desc.scrollHeight > desc.clientHeight + 1);
+            if (item.classList.contains('lv-open')) continue;
+            item.classList.toggle('lv-clamped', desc.scrollHeight > desc.clientHeight + 1);
           }
         });
         for (const p of root.problems) {
           details.appendChild(
-            el('div', 'skills-item skills-item-problem', `${p.dir}: ${p.error}`),
+            el('div', 'lv-skills-item lv-skills-item-problem', `${p.dir}: ${p.error}`),
           );
         }
         info.appendChild(details);
       }
       row.appendChild(info);
 
-      const actions = el('div', 'model-row-actions');
+      const actions = el('div', 'lv-model-row-actions');
       const del = ghostBtn(t('cfg.skillsRemove'), () =>
         save(dirs.filter((d) => d !== root.path)),
       );
-      del.classList.add('danger');
+      del.classList.add('lv-danger');
       actions.appendChild(del);
       row.appendChild(actions);
       list.appendChild(row);
     }
     pane.appendChild(list);
 
-    const addRow = el('div', 'skills-add');
+    const addRow = el('div', 'lv-skills-add');
     const pathIn = input('', { mono: true, placeholder: t('cfg.skillsPathPlaceholder') });
-    const addBtn = el('button', 'btn btn-sm', `＋ ${t('cfg.skillsAdd')}`);
+    const addBtn = el('button', 'lv-btn lv-btn-sm', `＋ ${t('cfg.skillsAdd')}`);
     addBtn.setAttribute('type', 'button');
     const submit = () => {
       const value = pathIn.value.trim();
@@ -916,7 +916,7 @@ export function buildSkillsPane() {
       );
     }
 
-    const note = el('div', 'cfg-footnote');
+    const note = el('div', 'lv-cfg-footnote');
     note.textContent = c.scope.exists
       ? t('cfg.scopeNote', { label: c.scope.label })
       : t('cfg.scopeNote', { label: c.scope.label }) + ' ' + t('cfg.scopeUnsaved');
@@ -930,14 +930,14 @@ export function buildSkillsPane() {
 // ---- About pane -----------------------------------------------------------
 
 export function buildAboutPane() {
-  const pane = el('div', 'cfg-pane');
-  pane.appendChild(el('div', 'cfg-pane-title', t('settings.tabAbout')));
-  const rows = el('div', 'cfg-about');
+  const pane = el('div', 'lv-cfg-pane');
+  pane.appendChild(el('div', 'lv-cfg-pane-title', t('settings.tabAbout')));
+  const rows = el('div', 'lv-cfg-about');
   const row = (label, value) => {
-    const r = el('div', 'cfg-about-row');
-    r.appendChild(el('span', 'cfg-about-label', label));
+    const r = el('div', 'lv-cfg-about-row');
+    r.appendChild(el('span', 'lv-cfg-about-label', label));
     if (value instanceof HTMLElement) r.appendChild(value);
-    else r.appendChild(el('span', 'cfg-about-value', value));
+    else r.appendChild(el('span', 'lv-cfg-about-value', value));
     return r;
   };
   rows.appendChild(row(t('cfg.aboutVersion'), store.serverInfo?.version || '—'));
@@ -950,14 +950,14 @@ export function buildAboutPane() {
       ),
     );
   }
-  const link = /** @type {HTMLAnchorElement} */ (el('a', 'cfg-about-link', 'github.com/cymoo/lovia'));
+  const link = /** @type {HTMLAnchorElement} */ (el('a', 'lv-cfg-about-link', 'github.com/cymoo/lovia'));
   link.href = 'https://github.com/cymoo/lovia';
   link.target = '_blank';
   link.rel = 'noreferrer';
   rows.appendChild(row(t('cfg.aboutDocs'), link));
   pane.appendChild(rows);
   if (store.canConfigureModels) {
-    pane.appendChild(el('div', 'cfg-footnote', t('cfg.aboutConfigNote')));
+    pane.appendChild(el('div', 'lv-cfg-footnote', t('cfg.aboutConfigNote')));
   }
   return pane;
 }
@@ -975,7 +975,7 @@ function chipLabel() {
 
 function updateChip() {
   if (!_chip) return;
-  const label = _chip.querySelector('.model-chip-label');
+  const label = _chip.querySelector('.lv-model-chip-label');
   if (label) label.textContent = chipLabel();
   const p = activeProfile();
   _chip.title = p ? t('cfg.chip', { name: p.model }) : t('cfg.chipSetup');
@@ -1024,16 +1024,16 @@ async function openChipMenu() {
     }
   }
   const c = cfg();
-  const menu = el('div', 'model-chip-menu');
+  const menu = el('div', 'lv-model-chip-menu');
   menu.setAttribute('role', 'menu');
-  menu.appendChild(el('div', 'model-chip-menu-title', t('cfg.switchTitle')));
+  menu.appendChild(el('div', 'lv-model-chip-menu-title', t('cfg.switchTitle')));
   for (const p of c.models) {
-    const item = el('button', 'model-chip-item');
+    const item = el('button', 'lv-model-chip-item');
     item.setAttribute('type', 'button');
     item.setAttribute('role', 'menuitem');
-    item.appendChild(el('span', 'model-chip-item-name', profileName(p)));
-    if (p.vision === 'on') item.appendChild(el('span', 'model-chip-item-sub', t('cfg.visionBadge')));
-    if (p.id === c.roles.chat) item.appendChild(el('span', 'model-chip-item-check', '✓'));
+    item.appendChild(el('span', 'lv-model-chip-item-name', profileName(p)));
+    if (p.vision === 'on') item.appendChild(el('span', 'lv-model-chip-item-sub', t('cfg.visionBadge')));
+    if (p.id === c.roles.chat) item.appendChild(el('span', 'lv-model-chip-item-check', '✓'));
     item.addEventListener('click', async () => {
       closeChipMenu();
       try {
@@ -1044,10 +1044,10 @@ async function openChipMenu() {
     });
     menu.appendChild(item);
   }
-  menu.appendChild(el('div', 'model-chip-menu-divider'));
-  const manage = el('button', 'model-chip-item manage');
+  menu.appendChild(el('div', 'lv-model-chip-menu-divider'));
+  const manage = el('button', 'lv-model-chip-item lv-manage');
   manage.setAttribute('type', 'button');
-  manage.appendChild(el('span', 'model-chip-item-name', t('cfg.manageModels')));
+  manage.appendChild(el('span', 'lv-model-chip-item-name', t('cfg.manageModels')));
   manage.addEventListener('click', async () => {
     closeChipMenu();
     const { openSettings } = await import('./settings.js');
@@ -1061,15 +1061,15 @@ async function openChipMenu() {
 }
 
 function initModelChip() {
-  const inner = document.querySelector('.composer-inner');
+  const inner = document.querySelector('.lv-composer-inner');
   const ring = document.getElementById('context-ring');
   if (!inner || _chip) return;
-  const chip = el('button', 'model-chip');
+  const chip = el('button', 'lv-model-chip');
   chip.id = 'model-chip';
   chip.setAttribute('type', 'button');
   chip.setAttribute('aria-haspopup', 'menu');
   chip.setAttribute('aria-expanded', 'false');
-  chip.appendChild(el('span', 'model-chip-label', chipLabel()));
+  chip.appendChild(el('span', 'lv-model-chip-label', chipLabel()));
   chip.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (!store.configured) {

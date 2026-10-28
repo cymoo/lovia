@@ -28,7 +28,7 @@ function resolveTheme(pref) {
 // The static <meta name="theme-color" media=…> pair in the template follows
 // the OS. Once JS owns the theme (saved preference may oppose the OS), browser
 // chrome must follow the *resolved* theme: swap the pair for one meta fed from
-// the live --bg token, so it also stays right if the palette ever changes.
+// the live --lv-bg token, so it also stays right if the palette ever changes.
 function syncThemeColor() {
   document
     .querySelectorAll('meta[name="theme-color"][media]')
@@ -41,7 +41,7 @@ function syncThemeColor() {
     meta.name = 'theme-color';
     document.head.appendChild(meta);
   }
-  const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--lv-bg').trim();
   if (bg) meta.content = bg;
 }
 
@@ -85,20 +85,20 @@ const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
 
 function openSidebar() {
   sidebarOpen = true;
-  document.getElementById('sidebar')?.classList.add('open');
-  overlay?.classList.add('open');
+  document.getElementById('sidebar')?.classList.add('lv-open');
+  overlay?.classList.add('lv-open');
 }
 
 /** Close the phone drawer (a no-op on desktop, where it never opens). */
 export function closeSidebar() {
   sidebarOpen = false;
-  document.getElementById('sidebar')?.classList.remove('open');
-  overlay?.classList.remove('open');
+  document.getElementById('sidebar')?.classList.remove('lv-open');
+  overlay?.classList.remove('lv-open');
 }
 
 function syncSidebar() {
   document.body.classList.toggle(
-    'sidebar-collapsed',
+    'lv-sidebar-collapsed',
     !isPhone() && (store.sidebarCollapsed || sidebarAutoCollapsed),
   );
 }
@@ -157,19 +157,19 @@ export function initSidebarToggle() {
 export function showDialog({ body, actions, onClose, stack = false } = {}) {
   if (!stack) {
     const existing = /** @type {HTMLDialogElement | null} */ (
-      document.querySelector('dialog.custom-dialog')
+      document.querySelector('dialog.lv-custom-dialog')
     );
     if (existing) existing.close();
   }
 
   const dialog = document.createElement('dialog');
-  dialog.className = 'custom-dialog';
+  dialog.className = 'lv-custom-dialog';
 
   const content = document.createElement('div');
-  content.className = 'dialog-content';
+  content.className = 'lv-dialog-content';
 
   const bodyEl = document.createElement('div');
-  bodyEl.className = 'dialog-body';
+  bodyEl.className = 'lv-dialog-body';
   // A string is treated as plain text, never HTML — callers pass an element
   // when they need markup.
   if (typeof body === 'string') bodyEl.textContent = body;
@@ -178,7 +178,7 @@ export function showDialog({ body, actions, onClose, stack = false } = {}) {
 
   if (actions) {
     const actionsEl = document.createElement('div');
-    actionsEl.className = 'dialog-actions';
+    actionsEl.className = 'lv-dialog-actions';
     if (typeof actions === 'string') actionsEl.innerHTML = actions;
     else if (actions instanceof HTMLElement) actionsEl.appendChild(actions);
     content.appendChild(actionsEl);
@@ -193,7 +193,7 @@ export function showDialog({ body, actions, onClose, stack = false } = {}) {
   });
 
   // Click on the backdrop dismisses the dialog (Esc already does). The dialog
-  // box wraps its content exactly — padding lives on .dialog-content, the
+  // box wraps its content exactly — padding lives on .lv-dialog-content, the
   // <dialog> has none — so a pointer event whose target is the <dialog> itself
   // landed on the backdrop. Track the press origin so a text selection that
   // begins inside an input and releases on the backdrop isn't read as a
@@ -226,12 +226,12 @@ export function confirmDialog(message) {
     actions.style.justifyContent = 'flex-end';
 
     const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'btn btn-ghost';
+    cancelBtn.className = 'lv-btn lv-btn-ghost';
     cancelBtn.textContent = t('dialog.cancel');
     cancelBtn.addEventListener('click', () => dialog.close('cancel'));
 
     const okBtn = document.createElement('button');
-    okBtn.className = 'btn btn-primary';
+    okBtn.className = 'lv-btn lv-btn-primary';
     okBtn.textContent = t('dialog.ok');
     okBtn.addEventListener('click', () => dialog.close('ok'));
 
@@ -277,7 +277,7 @@ export function promptDialog(message, defaultValue = '', { stack = false } = {})
     const input = document.createElement('input');
     input.type = 'text';
     input.value = defaultValue;
-    input.className = 'dialog-input';
+    input.className = 'lv-dialog-input';
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') submit();
     });
@@ -289,12 +289,12 @@ export function promptDialog(message, defaultValue = '', { stack = false } = {})
     actions.style.justifyContent = 'flex-end';
 
     const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'btn btn-ghost';
+    cancelBtn.className = 'lv-btn lv-btn-ghost';
     cancelBtn.textContent = t('dialog.cancel');
     cancelBtn.addEventListener('click', () => dialog.close(''));
 
     const okBtn = document.createElement('button');
-    okBtn.className = 'btn btn-primary';
+    okBtn.className = 'lv-btn lv-btn-primary';
     okBtn.textContent = t('dialog.save');
     okBtn.addEventListener('click', submit);
 
@@ -323,11 +323,11 @@ let _segments = 0;
 export function segmented(options, value, onChange) {
   const name = `seg-${++_segments}`;
   const wrap = document.createElement('div');
-  wrap.className = 'seg-control';
+  wrap.className = 'lv-seg-control';
   wrap.setAttribute('role', 'radiogroup');
   for (const [val, label, glyph] of options) {
     const opt = document.createElement('label');
-    opt.className = 'seg-btn';
+    opt.className = 'lv-seg-btn';
     const radio = document.createElement('input');
     radio.type = 'radio';
     radio.name = name;
@@ -369,20 +369,20 @@ export function openMenu(at, items) {
   if (toggledShut) return () => {};
   const restoreFocus = opener ?? /** @type {HTMLElement | null} */ (document.activeElement);
   const menu = document.createElement('div');
-  menu.className = 'popup-menu';
+  menu.className = 'lv-popup-menu';
   menu.setAttribute('role', 'menu');
   menu.popover = 'manual';
   for (const item of items) {
     if (!item) {
       const sep = document.createElement('div');
-      sep.className = 'popup-menu-sep';
+      sep.className = 'lv-popup-menu-sep';
       sep.setAttribute('role', 'separator');
       menu.append(sep);
       continue;
     }
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'popup-menu-item' + (item.danger ? ' danger' : '');
+    b.className = 'lv-popup-menu-item' + (item.danger ? ' lv-danger' : '');
     b.setAttribute('role', 'menuitem');
     b.tabIndex = -1;
     b.innerHTML = item.icon || '';
@@ -498,18 +498,18 @@ export function openImageLightbox(src, { alt = '', downloadHref = null } = {}) {
     window.open(src, '_blank', 'noopener');
     return;
   }
-  dialog.className = 'lightbox';
+  dialog.className = 'lv-lightbox';
 
   // A relative frame sizes to the image and anchors the action bar to its
   // corner, instead of relying on the dialog's UA positioning.
   const frame = document.createElement('div');
-  frame.className = 'lightbox-frame';
+  frame.className = 'lv-lightbox-frame';
 
   const bar = document.createElement('div');
-  bar.className = 'lightbox-bar';
+  bar.className = 'lv-lightbox-bar';
   if (downloadHref) {
     const dl = document.createElement('a');
-    dl.className = 'lightbox-btn';
+    dl.className = 'lv-lightbox-btn';
     dl.href = downloadHref;
     dl.setAttribute('download', '');
     dl.title = t('lightbox.download');
@@ -519,7 +519,7 @@ export function openImageLightbox(src, { alt = '', downloadHref = null } = {}) {
   }
   const close = document.createElement('button');
   close.type = 'button';
-  close.className = 'lightbox-btn';
+  close.className = 'lv-lightbox-btn';
   close.title = t('lightbox.close');
   close.setAttribute('aria-label', t('lightbox.close'));
   close.innerHTML = icon('x', { size: 18 });
@@ -527,7 +527,7 @@ export function openImageLightbox(src, { alt = '', downloadHref = null } = {}) {
   bar.appendChild(close);
 
   const img = document.createElement('img');
-  img.className = 'lightbox-img';
+  img.className = 'lv-lightbox-img';
   img.src = src;
   img.alt = alt;
 

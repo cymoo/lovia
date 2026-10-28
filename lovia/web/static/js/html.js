@@ -25,10 +25,10 @@ export const MAX_SEND = 4000;
 
 // The chat's design tokens, handed to the page as CSS variables.
 const TOKENS = [
-  '--bg', '--surface', '--surface-2', '--border', '--ink', '--ink-2', '--muted',
-  '--accent', '--accent-soft', '--accent-text', '--sans', '--mono', '--radius',
-  '--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5', '--chart-6',
-  '--chart-7', '--chart-8', '--chart-text', '--chart-title', '--chart-axis', '--chart-grid',
+  '--lv-bg', '--lv-surface', '--lv-surface-2', '--lv-border', '--lv-ink', '--lv-ink-2', '--lv-muted',
+  '--lv-accent', '--lv-accent-soft', '--lv-accent-text', '--lv-sans', '--lv-mono', '--lv-radius',
+  '--lv-chart-1', '--lv-chart-2', '--lv-chart-3', '--lv-chart-4', '--lv-chart-5', '--lv-chart-6',
+  '--lv-chart-7', '--lv-chart-8', '--lv-chart-text', '--lv-chart-title', '--lv-chart-axis', '--lv-chart-grid',
 ];
 
 // Runs in the frame before the page's own code: reports the content height
@@ -87,7 +87,7 @@ export function buildSrcdoc(html, { theme, tokens }) {
     '<meta charset="utf-8">' +
     `<meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">` +
     `<style>:root{${vars};color-scheme:${theme === 'dark' ? 'dark' : 'light'};` +
-    'color:var(--ink);font-family:var(--sans)}</style>' +
+    'color:var(--lv-ink);font-family:var(--lv-sans)}</style>' +
     `<script>${BOOTSTRAP}</script></head><body>${html}`
   );
 }
@@ -176,11 +176,11 @@ function renderHtml(el, props, ctx) {
     started.add(el);
     const frame = sandboxFrame(doc(), {
       title: title || L.page,
-      className: 'html-frame',
+      className: 'lv-html-frame',
       colorScheme: ctx.theme === 'dark' ? 'dark' : 'light',
     });
     stop = listenToFrame(frame, {
-      resize: (h) => frame.style.setProperty('--page-height', `${h}px`),
+      resize: (h) => frame.style.setProperty('--lv-page-height', `${h}px`),
       // ctx.send wants a live user activation, but that is page-wide: a
       // keypress in the composer would let a page's timer post. Focus
       // inside the frame shows the gesture was the user's, in this page.
@@ -195,12 +195,12 @@ function renderHtml(el, props, ctx) {
     run();
   } else {
     const paused = document.createElement('div');
-    paused.className = 'html-paused';
+    paused.className = 'lv-html-paused';
     const note = document.createElement('span');
     note.textContent = L.paused;
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'btn btn-primary btn-sm';
+    btn.className = 'lv-btn lv-btn-primary lv-btn-sm';
     btn.textContent = L.run;
     btn.addEventListener('click', run, { once: true });
     paused.append(note, btn);

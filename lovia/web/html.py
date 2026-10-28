@@ -41,8 +41,8 @@ def show_html(
 
     The page has no network: no CDN scripts, fonts, remote images, or fetch —
     inline everything. No storage, alert(), or form submission either. Style
-    it with the chat's CSS variables (var(--ink), var(--surface),
-    var(--border), var(--accent), var(--chart-1) … var(--chart-8)) so it
+    it with the chat's CSS variables (var(--lv-ink), var(--lv-surface),
+    var(--lv-border), var(--lv-accent), var(--lv-chart-1) … var(--lv-chart-8)) so it
     matches light and dark themes. A button can ask a follow-up as the user:
     lovia.send("Break March down by region"). Never ask for passwords or
     personal data. Don't repeat the page's content in your reply.

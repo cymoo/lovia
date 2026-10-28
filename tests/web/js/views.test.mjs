@@ -119,9 +119,9 @@ test('opening a view shows it, titles it, and records it beside the session', ()
   page.nav = [nav, other, plain];
 
   openView('exec/perf');
-  assert.deepEqual(seen, [['view-body', 'perf']]);
+  assert.deepEqual(seen, [['lv-view-body', 'perf']]);
   assert.equal(currentView(), 'exec/perf');
-  assert.ok(page.bodyClasses.has('view-open'));
+  assert.ok(page.bodyClasses.has('lv-view-open'));
   assert.equal(page.view.hidden, false);
   assert.equal(page.title.hidden, false);
   assert.equal(page.title.textContent, 'Execution');
@@ -134,7 +134,7 @@ test('opening a view shows it, titles it, and records it beside the session', ()
 
   closeView();
   assert.equal(currentView(), null);
-  assert.ok(!page.bodyClasses.has('view-open'));
+  assert.ok(!page.bodyClasses.has('lv-view-open'));
   assert.ok(!page.chat.inert && !page.composer.inert);
   assert.equal(page.view.hidden, true);
   assert.equal(location.search, '?session=s1');
@@ -203,12 +203,12 @@ test('a render that throws or rejects shows the failure note', async () => {
       },
     });
     openView('boom');
-    assert.equal(page.view.children[0].children[0].className, 'view-failed');
+    assert.equal(page.view.children[0].children[0].className, 'lv-view-failed');
 
     registerView('later', { render: async () => Promise.reject(new Error('y')) });
     openView('later');
     await tick();
-    assert.equal(page.view.children[0].children[0].className, 'view-failed');
+    assert.equal(page.view.children[0].children[0].className, 'lv-view-failed');
   } finally {
     console.error = quiet;
   }

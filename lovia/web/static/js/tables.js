@@ -190,33 +190,33 @@ function renderTable(el, props, ctx) {
   let count = null;
   if (rows.length > FILTER_MIN_ROWS) {
     const bar = document.createElement('div');
-    bar.className = 'table-bar';
+    bar.className = 'lv-table-bar';
     input = document.createElement('input');
     input.type = 'search';
     input.placeholder = L.filter;
     input.setAttribute('aria-label', L.filter);
     count = document.createElement('span');
-    count.className = 'table-count';
+    count.className = 'lv-table-count';
     bar.append(input, count);
     body.append(bar);
   }
 
   const scroll = document.createElement('div');
-  scroll.className = 'table-scroll';
+  scroll.className = 'lv-table-scroll';
   const table = document.createElement('table');
-  table.className = 'data-table';
+  table.className = 'lv-data-table';
   const headRow = table.createTHead().insertRow();
   const ths = columns.map((name, i) => {
     const th = document.createElement('th');
     th.scope = 'col';
-    if (numeric[i]) th.className = 'num';
+    if (numeric[i]) th.className = 'lv-num';
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.title = L.sort(name);
     const label = document.createElement('span');
     label.textContent = name;
     const arrow = document.createElement('span');
-    arrow.className = 'sort-arrow';
+    arrow.className = 'lv-sort-arrow';
     arrow.setAttribute('aria-hidden', 'true');
     btn.append(label, arrow);
     btn.addEventListener('click', () => {
@@ -236,7 +236,7 @@ function renderTable(el, props, ctx) {
   body.append(scroll);
 
   const pager = document.createElement('div');
-  pager.className = 'table-pager';
+  pager.className = 'lv-table-pager';
   const prev = document.createElement('button');
   const next = document.createElement('button');
   const where = document.createElement('span');
@@ -245,7 +245,7 @@ function renderTable(el, props, ctx) {
     [next, L.next, 'chevron-right', 1],
   ])) {
     b.type = 'button';
-    b.className = 'tool-action';
+    b.className = 'lv-tool-action';
     b.title = label;
     b.setAttribute('aria-label', label);
     b.innerHTML = icon(name, { size: 12 });
@@ -268,7 +268,7 @@ function renderTable(el, props, ctx) {
     const slice = view.slice(start, start + PAGE_SIZE);
     if (!slice.length) {
       const td = document.createElement('td');
-      td.className = 'table-empty';
+      td.className = 'lv-table-empty';
       td.colSpan = columns.length;
       td.textContent = rows.length ? L.noMatch : L.empty;
       const tr = document.createElement('tr');
@@ -280,7 +280,7 @@ function renderTable(el, props, ctx) {
           const tr = document.createElement('tr');
           r.forEach((v, i) => {
             const td = tr.insertCell();
-            if (numeric[i]) td.className = 'num';
+            if (numeric[i]) td.className = 'lv-num';
             td.textContent = cellText(v);
           });
           return tr;
@@ -293,7 +293,7 @@ function renderTable(el, props, ctx) {
       // Only the sorted column declares it; the others omit the attribute.
       if (dir) th.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
       else th.removeAttribute('aria-sort');
-      /** @type {HTMLElement} */ (th.querySelector('.sort-arrow')).textContent =
+      /** @type {HTMLElement} */ (th.querySelector('.lv-sort-arrow')).textContent =
         dir === 1 ? '↑' : dir === -1 ? '↓' : '';
     });
     if (count) count.textContent = L.count(view.length, rows.length);
@@ -320,7 +320,7 @@ export function tableSnapshot(props) {
   const { title, columns, rows } = normalizeTable(props);
   const numeric = numericColumns(rows, columns.length);
   const cell = (/** @type {string} */ tag, /** @type {string} */ text, /** @type {number} */ i) =>
-    `<${tag}${numeric[i] ? ' class="num"' : ''}>${escapeHtml(text)}</${tag}>`;
+    `<${tag}${numeric[i] ? ' class="lv-num"' : ''}>${escapeHtml(text)}</${tag}>`;
   const head = columns.map((c, i) => cell('th', c, i)).join('');
   const body = rows.map((r) => `<tr>${r.map((v, i) => cell('td', cellText(v), i)).join('')}</tr>`);
   const table = `<table><thead><tr>${head}</tr></thead><tbody>${body.join('')}</tbody></table>`;

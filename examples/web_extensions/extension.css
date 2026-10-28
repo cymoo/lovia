@@ -8,17 +8,17 @@
   width: 100%;
   padding: 7px 10px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--lv-radius-sm);
   background: none;
-  color: var(--ink-2);
+  color: var(--lv-ink-2);
   font: inherit;
   font-size: 13.5px;
   text-align: left;
   cursor: pointer;
 }
 .acme-nav:hover {
-  background: var(--surface-3);
-  color: var(--ink);
+  background: var(--lv-surface-3);
+  color: var(--lv-ink);
 }
 
 .acme-working,
@@ -27,7 +27,7 @@
   align-items: center;
   gap: 6px;
   margin-right: 6px;
-  color: var(--muted);
+  color: var(--lv-muted);
   font-size: 12px;
 }
 .acme-working[hidden],
@@ -37,8 +37,8 @@
 .acme-spinner {
   width: 10px;
   height: 10px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
+  border: 2px solid var(--lv-border-strong);
+  border-top-color: var(--lv-accent);
   border-radius: 50%;
   animation: acme-spin 0.8s linear infinite;
 }
@@ -53,17 +53,17 @@
   align-self: center;
   margin-right: 4px;
   padding: 4px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--lv-border);
   border-radius: 999px;
-  background: var(--surface);
-  color: var(--ink-2);
+  background: var(--lv-surface);
+  color: var(--lv-ink-2);
   font: inherit;
   font-size: 12.5px;
   cursor: pointer;
 }
 .acme-chip:hover {
-  border-color: var(--accent);
-  color: var(--accent-text);
+  border-color: var(--lv-accent);
+  color: var(--lv-accent-text);
 }
 
 .acme-hits {
@@ -75,30 +75,30 @@
   margin-top: 6px;
 }
 .acme-hits a {
-  color: var(--accent-text);
+  color: var(--lv-accent-text);
   font-weight: 500;
 }
 .acme-hits p {
   margin: 2px 0 0;
-  color: var(--muted);
+  color: var(--lv-muted);
 }
 
 /* The docs view (registerView('docs', …)). */
 .acme-docs {
-  max-width: var(--content-w);
+  max-width: var(--lv-content-w);
   margin: 0 auto;
   padding: 24px 20px;
   line-height: 1.6;
 }
 .acme-docs a {
-  color: var(--accent-text);
+  color: var(--lv-accent-text);
 }
 .acme-filter {
   width: 100%;
   padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--ink);
+  border: 1px solid var(--lv-border);
+  border-radius: var(--lv-radius-sm);
+  background: var(--lv-surface);
+  color: var(--lv-ink);
   font: inherit;
 }

@@ -233,8 +233,8 @@ Good to know:
   types that need code or map data (`custom`, `map`).
 - For house conventions — preferred chart types, units, titles — write them
   into the instructions or a Skill. No code is needed.
-- The palette and inks are CSS variables (`--chart-1` … `--chart-8`,
-  `--chart-text`, `--chart-title`, `--chart-axis`, `--chart-grid`). Override
+- The palette and inks are CSS variables (`--lv-chart-1` … `--lv-chart-8`,
+  `--lv-chart-text`, `--lv-chart-title`, `--lv-chart-axis`, `--lv-chart-grid`). Override
   them in the `head` block of
   [your own template](web-server.md#customizing-the-page) to match a brand.
 
@@ -276,9 +276,9 @@ What the page can and can't do:
   cookies, storage, or access to the chat), and its policy blocks every
   request: no `fetch`, CDN scripts, web fonts, or remote images. Links don't
   navigate.
-- It matches the chat's look through CSS variables: `var(--ink)`,
-  `var(--surface)`, `var(--border)`, `var(--accent)`, `var(--chart-1)` …
-  `var(--chart-8)`, in light and dark themes.
+- It matches the chat's look through CSS variables: `var(--lv-ink)`,
+  `var(--lv-surface)`, `var(--lv-border)`, `var(--lv-accent)`, `var(--lv-chart-1)` …
+  `var(--lv-chart-8)`, in light and dark themes.
 - A button can ask a follow-up as the user: `lovia.send("Break it down by
   region")`. This works only from a real click inside the page.
 - The card grows with the page, up to most of the screen, and has full screen

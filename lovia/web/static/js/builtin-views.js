@@ -99,7 +99,7 @@ function renderStartedChat(el, tool) {
   el.replaceChildren();
   if (tool.isError) {
     const notice = document.createElement('div');
-    notice.className = 'tool-ui-notice';
+    notice.className = 'lv-tool-ui-notice';
     notice.textContent = tool.result ?? '';
     el.append(notice);
     return;
@@ -108,7 +108,7 @@ function renderStartedChat(el, tool) {
   if (!chat) return;
   const open = document.createElement('button');
   open.type = 'button';
-  open.className = 'btn btn-ghost btn-sm chat-link';
+  open.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-chat-link';
   open.innerHTML = icon('square-pen', { size: 14 });
   const title = document.createElement('span');
   title.textContent = chat.title || t('session.newChat');

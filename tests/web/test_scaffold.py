@@ -34,9 +34,9 @@ def test_writes_files_that_mirror_the_bundled_page(tmp_path: Path) -> None:
     assert not re.search(r"^\s*--", theme, re.M)
     # Colors per theme, shared tokens on :root.
     root, light, dark = re.findall(r"\{([^{}]*)\}", theme)
-    assert "--radius:" in root and "--accent:" not in root
-    assert "/* --accent: #2d8a6e; */" in light
-    assert "/* --accent: #3ecb8f; */" in dark
+    assert "--lv-radius:" in root and "--lv-accent:" not in root
+    assert "/* --lv-accent: #2d8a6e; */" in light
+    assert "/* --lv-accent: #3ecb8f; */" in dark
 
     extension = (tmp_path / "ui" / "extension.js").read_text()
     ref = re.search(r'reference path="([^"]+)"', extension)

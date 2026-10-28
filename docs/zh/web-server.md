@@ -192,36 +192,39 @@ block、文案、新增语言），`examples/33_web_extensions.py` 通过 `windo
 layer）中的规则总会压过内置规则，不管选择器的优先级如何，不需要 `!important`。
 
 更换主题时，覆盖 `styles.css` 开头的设计变量。两个主题各有一套取值，所以要分别设置；
-直接写在 `:root` 上的变量对两个主题都生效。`--accent-hover`、`--accent-soft`、
-`--accent-text` 由 `--accent` 推导，换品牌色通常只需设 `--accent`，需要时再单独覆盖：
+直接写在 `:root` 上的变量对两个主题都生效。`--lv-accent-hover`、`--lv-accent-soft`、
+`--lv-accent-text` 由 `--lv-accent` 推导，换品牌色通常只需设 `--lv-accent`，需要时再单独覆盖：
 
 ```css
 /* ui/theme.css */
-[data-theme="light"] { --accent: #6d28d9; }
-[data-theme="dark"]  { --accent: #a78bfa; }
-:root { --sans: "Inter", system-ui, sans-serif; --radius: 8px; }
+[data-theme="light"] { --lv-accent: #6d28d9; }
+[data-theme="dark"]  { --lv-accent: #a78bfa; }
+:root { --lv-sans: "Inter", system-ui, sans-serif; --lv-radius: 8px; }
 ```
 
 | 变量 | 作用 |
 | --- | --- |
-| `--bg`、`--surface`、`--surface-2`、`--surface-3`、`--border`、`--border-strong` | 画布、面板、卡片、悬停态及其边框 |
-| `--sidebar-surface` | 侧栏背景 |
-| `--ink`、`--ink-2`、`--muted`、`--muted-2` | 文字，由深到浅 |
-| `--accent`、`--accent-hover`、`--accent-soft`、`--accent-text` | 品牌色及其衍生色（后三个默认由 `--accent` 推导） |
-| `--user-surface`、`--user-border` | 用户消息气泡 |
-| `--chart-1` … `--chart-8` | 图表系列颜色 |
-| `--warn`、`--danger`、`--ok` | 状态色 |
-| `--sans`、`--mono` | 字体 |
-| `--radius-xs` … `--radius-xl` | 圆角 |
-| `--sidebar-w`、`--content-w` | 侧栏宽度、对话区的阅读宽度 |
+| `--lv-bg`、`--lv-surface`、`--lv-surface-2`、`--lv-surface-3`、`--lv-border`、`--lv-border-strong` | 画布、面板、卡片、悬停态及其边框 |
+| `--lv-sidebar-surface` | 侧栏背景 |
+| `--lv-ink`、`--lv-ink-2`、`--lv-muted`、`--lv-muted-2` | 文字，由深到浅 |
+| `--lv-accent`、`--lv-accent-hover`、`--lv-accent-soft`、`--lv-accent-text` | 品牌色及其衍生色（后三个默认由 `--lv-accent` 推导） |
+| `--lv-user-surface`、`--lv-user-border` | 用户消息气泡 |
+| `--lv-chart-1` … `--lv-chart-8` | 图表系列颜色 |
+| `--lv-warn`、`--lv-danger`、`--lv-ok` | 状态色 |
+| `--lv-sans`、`--lv-mono` | 字体 |
+| `--lv-radius-xs` … `--lv-radius-xl` | 圆角 |
+| `--lv-sidebar-w`、`--lv-content-w` | 侧栏宽度、对话区的阅读宽度 |
 
 要定位某个区域，就选它的 `data-part`：
 
 ```css
 [data-part="export"] { display: none; }                                   /* 去掉导出菜单 */
 [data-part="tool"][data-tool="read_process_output"] { display: none; }   /* 隐藏某个工具的卡片 */
-[data-part="turn"][data-role="user"] .bubble { border-radius: 4px; }
+[data-part="turn"][data-role="user"] .lv-bubble { border-radius: 4px; }
 ```
+
+页面自己的类名都以 `lv-` 开头、变量都以 `--lv-` 开头，所以扩展里的工具类框架（比如 Tailwind 的
+`.table`、`--radius-sm`）不会误改页面样式。类名本身仍是内部实现，定位区域请用 `data-part`。
 
 | 区域 | `data-part` |
 | --- | --- |
@@ -523,6 +526,8 @@ lovia.registerView('dashboard', {
 - 框架只管 `el`：页面其他部分通过 `window.lovia` 操作，不要渲染进 lovia 的元素里。
 - Lit、Vue 的 `vue.esm-browser.prod.js` 用法相同。需要编译器的框架（Svelte、JSX）也可以用，
   只要你自己构建，再把产物列进 `scripts`。
+- 视图可以用 Tailwind（或基于它的 shadcn/ui）写样式：lovia 的 `lv-` 类名和变量不会与它的工具类、
+  主题变量撞名。不要引入它的全局重置 Preflight（会改掉整个页面的样式），需要时把重置限定在视图元素内。
 
 [`examples/33_web_extensions.py`](../../examples/33_web_extensions.py) 的文档视图就是这样画的。
 

@@ -86,9 +86,9 @@ test('toTsv defuses strings a spreadsheet would run as formulas', () => {
 test('tableSnapshot: every row, escaped, numbers right-aligned, title as caption', () => {
   const rows = Array.from({ length: 45 }, (_, i) => [`<b>${i}</b>`, i]);
   const html = String(tableSnapshot({ title: 'A & B', columns: ['name', 'n'], rows }, /** @type {any} */ ({})));
-  assert.match(html, /^<figure class="table"><figcaption>A &amp; B<\/figcaption><table>/);
-  assert.match(html, /<th>name<\/th><th class="num">n<\/th>/);
-  assert.match(html, /<tr><td>&lt;b&gt;44&lt;\/b&gt;<\/td><td class="num">44<\/td><\/tr>/);
+  assert.match(html, /^<figure class="lv-table"><figcaption>A &amp; B<\/figcaption><table>/);
+  assert.match(html, /<th>name<\/th><th class="lv-num">n<\/th>/);
+  assert.match(html, /<tr><td>&lt;b&gt;44&lt;\/b&gt;<\/td><td class="lv-num">44<\/td><\/tr>/);
   assert.equal(html.match(/<tr>/g)?.length, 46); // the heading row + all 45, unpaged
   assert.doesNotMatch(String(tableSnapshot({ columns: ['a'], rows: [] }, /** @type {any} */ ({}))), /figcaption/);
 });

@@ -206,37 +206,42 @@ selectors' specificity — no `!important` needed.
 
 Retheme by overriding the design tokens at the top of `styles.css`. Each theme
 has its own values, so set yours per theme; a token set on `:root` applies to
-both. `--accent-hover`, `--accent-soft` and `--accent-text` derive from
-`--accent`, so a new brand color is usually just `--accent` — override a tint
+both. `--lv-accent-hover`, `--lv-accent-soft` and `--lv-accent-text` derive from
+`--lv-accent`, so a new brand color is usually just `--lv-accent` — override a tint
 only when it needs to differ:
 
 ```css
 /* ui/theme.css */
-[data-theme="light"] { --accent: #6d28d9; }
-[data-theme="dark"]  { --accent: #a78bfa; }
-:root { --sans: "Inter", system-ui, sans-serif; --radius: 8px; }
+[data-theme="light"] { --lv-accent: #6d28d9; }
+[data-theme="dark"]  { --lv-accent: #a78bfa; }
+:root { --lv-sans: "Inter", system-ui, sans-serif; --lv-radius: 8px; }
 ```
 
 | Tokens | What they set |
 | --- | --- |
-| `--bg`, `--surface`, `--surface-2`, `--surface-3`, `--border`, `--border-strong` | Canvas, panels, cards, hover, and their borders |
-| `--sidebar-surface` | The sidebar's background |
-| `--ink`, `--ink-2`, `--muted`, `--muted-2` | Text, from primary to faint |
-| `--accent`, `--accent-hover`, `--accent-soft`, `--accent-text` | The brand color and its tints (the last three derive from `--accent`) |
-| `--user-surface`, `--user-border` | The user's message bubble |
-| `--chart-1` … `--chart-8` | Chart series colors |
-| `--warn`, `--danger`, `--ok` | Status colors |
-| `--sans`, `--mono` | Font stacks |
-| `--radius-xs` … `--radius-xl` | Corner radii |
-| `--sidebar-w`, `--content-w` | Sidebar width, the transcript's reading width |
+| `--lv-bg`, `--lv-surface`, `--lv-surface-2`, `--lv-surface-3`, `--lv-border`, `--lv-border-strong` | Canvas, panels, cards, hover, and their borders |
+| `--lv-sidebar-surface` | The sidebar's background |
+| `--lv-ink`, `--lv-ink-2`, `--lv-muted`, `--lv-muted-2` | Text, from primary to faint |
+| `--lv-accent`, `--lv-accent-hover`, `--lv-accent-soft`, `--lv-accent-text` | The brand color and its tints (the last three derive from `--lv-accent`) |
+| `--lv-user-surface`, `--lv-user-border` | The user's message bubble |
+| `--lv-chart-1` … `--lv-chart-8` | Chart series colors |
+| `--lv-warn`, `--lv-danger`, `--lv-ok` | Status colors |
+| `--lv-sans`, `--lv-mono` | Font stacks |
+| `--lv-radius-xs` … `--lv-radius-xl` | Corner radii |
+| `--lv-sidebar-w`, `--lv-content-w` | Sidebar width, the transcript's reading width |
 
 To target a region, select its `data-part`:
 
 ```css
 [data-part="export"] { display: none; }                                   /* no Export menu */
 [data-part="tool"][data-tool="read_process_output"] { display: none; }   /* hide one tool's cards */
-[data-part="turn"][data-role="user"] .bubble { border-radius: 4px; }
+[data-part="turn"][data-role="user"] .lv-bubble { border-radius: 4px; }
 ```
+
+The page's own class names all start with `lv-` and its tokens with `--lv-`, so
+a utility framework in your extension (Tailwind's `.table` or `--radius-sm`,
+say) can't restyle the page by accident. The class names themselves stay
+internal; select regions by `data-part`.
 
 | Region | `data-part` |
 | --- | --- |
@@ -585,6 +590,10 @@ lovia.registerView('dashboard', {
 - Lit and Vue's `vue.esm-browser.prod.js` work the same way. A framework that
   needs a compiler (Svelte, JSX) works too, if you build it yourself and list
   the output in `scripts`.
+- Tailwind (or shadcn/ui on it) can style a view: lovia's `lv-` names never
+  meet its utilities or theme variables. Leave out Preflight, its global reset,
+  which would restyle the whole page; scope a reset to the view's element
+  instead.
 
 [`examples/33_web_extensions.py`](../../examples/33_web_extensions.py) draws
 its docs view this way.

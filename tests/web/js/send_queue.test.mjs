@@ -9,8 +9,9 @@ import { test } from 'node:test';
 import { createSendQueue } from '../../../lovia/web/static/js/send-queue.js';
 
 /** A scripted server and page: tests set `live`, `records`, `ready`, and
- * queue up what each send answers. */
-function fixture() {
+ * queue up what each send answers; `host` overrides any of its hooks.
+ * @param {Partial<import('../../../lovia/web/static/js/send-queue.js').QueueHost>} [host] */
+function fixture(host = {}) {
   const s = {
     live: /** @type {Array<{ session_id: string, run_id: string }>} */ ([]),
     records: /** @type {Record<string, string>} */ ({}),
@@ -28,6 +29,7 @@ function fixture() {
       return typeof answer === 'function' ? answer() : answer;
     },
     changed: () => {},
+    ...host,
   });
   return { s, q };
 }
@@ -329,6 +331,33 @@ test('a steer with no answer goes back paused as unknown, never resent alone', a
   q.sendNow('c'); // the user checked the chat and chose to send it
   await settled();
   assert.deepEqual(s.sent, ['A']);
+});
+
+test('a pause that lands during the check stops the send', async () => {
+  /** @type {() => void} */
+  let release = () => {};
+  const gate = new Promise((r) => (release = () => r(undefined)));
+  // The check of R's outcome is still out when the steer's answer is lost.
+  const { s, q } = fixture({
+    runRecord: async () => {
+      await gate;
+      return { status: 'completed' };
+    },
+  });
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  await settled();
+  const taken = q.withdraw('c', q.view('c').items[0].id); // A is steered…
+  assert.ok(taken);
+  s.live = []; // …R ends, and the queue starts its check
+  void q.pump('c');
+  await settled();
+  q.putBack('c', taken.item, taken.after, true);
+  release();
+  await settled();
+  assert.deepEqual(s.sent, []); // neither A (R may hold it) nor B behind it
+  assert.equal(q.view('c').paused, 'unknown');
 });
 
 test('withdrawing the last item clears a pause', async () => {

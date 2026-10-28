@@ -109,6 +109,9 @@ export function createSendQueue(host) {
         }
         if (v === 'wait') continue; // unless woken meanwhile, done for now
         if (!host.ready(sid)) return; // the page moved on during the check
+        // …or the queue did: a steer whose answer was lost may have put its
+        // item back, paused, while the check ran.
+        if (q.paused || !q.items.length) return;
         const head = q.items[0];
         q.sending = head.id; // past withdrawing: it is on its way
         host.changed(sid);

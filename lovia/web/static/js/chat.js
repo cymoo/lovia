@@ -1711,6 +1711,7 @@ function stampRefs(refs) {
 
 // ---- Mid-run injection: queued user turns awaiting confirmation ----------
 let _queuedTurns = [];   // FIFO of muted user-turn nodes (one per pending inject)
+const _drained = new WeakSet(); // the ones a run's user_injected confirmed
 let _pendingResend = []; // { message, node } pairs that raced a run's end (see runStream)
 
 // True when an assistant turn carries no rendered content yet (just opened, or
@@ -2416,6 +2417,7 @@ async function applyEvent({ event, data }) {
       }
       const queued = _queuedTurns.shift();
       if (queued) {
+        _drained.add(queued);
         confirmQueuedTurn(queued);
       } else {
         // Injected elsewhere (e.g. another tab): render above the fresh bubble.
@@ -3658,6 +3660,8 @@ async function steer(message) {
     const status = /** @type {{ status?: number }} */ (err).status;
     if (!(status && status < 500)) outcome = 'unknown';
   }
+  // The run drew it before the answer came back: that is the answer.
+  if (node && _drained.has(node)) return { node, outcome: 'accepted' };
   const i = _queuedTurns.indexOf(node);
   if (i >= 0) _queuedTurns.splice(i, 1);
   return { node, outcome };

@@ -264,6 +264,52 @@ test('wake-ups during a pass coalesce: one send in flight', async () => {
   assert.deepEqual(s.sent, ['A']); // B waits on RA, which is live
 });
 
+test('withdraw hands back the item and the run its queue waited on', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  await settled();
+  const [a] = q.view('c').items;
+  assert.deepEqual(q.withdraw('c', a.id), { item: a, after: 'R' });
+  assert.equal(q.withdraw('c', a.id), null); // already out
+  assert.deepEqual(q.view('c').items.map((i) => i.text), ['B']);
+});
+
+test('a steer no run took goes back to the head, after its old run', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  s.records.R = 'running';
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  await settled();
+  const taken = q.withdraw('c', q.view('c').items[1].id);
+  assert.ok(taken);
+  // The inject raced R's end: B rejoins at the head and waits on R as before.
+  q.putBack('c', taken.item, taken.after);
+  assert.deepEqual(q.view('c').items.map((i) => i.text), ['B', 'A']);
+  s.live = [];
+  s.records.R = 'completed';
+  await wake(q);
+  assert.deepEqual(s.sent, ['B']);
+});
+
+test('put back into an emptied queue still honours a run that failed', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  q.enqueue('c', 'A', 'R');
+  await settled();
+  const taken = q.withdraw('c', q.view('c').items[0].id);
+  assert.ok(taken);
+  assert.deepEqual(q.chats(), []);
+  s.live = [];
+  s.records.R = 'failed';
+  q.putBack('c', taken.item, taken.after);
+  await settled();
+  assert.deepEqual(s.sent, []);
+  assert.equal(q.view('c').paused, 'failed');
+});
+
 test('withdrawing the last item clears a pause', async () => {
   const { s, q } = fixture();
   s.records.R = 'failed';

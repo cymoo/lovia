@@ -2618,28 +2618,8 @@ button.question-option:hover {
 .attach-tray[hidden] {
   display: none;
 }
-/* Mid-run: Send steers the run (zap) or queues after it (clock). */
-.btn-composer-mode {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 38px; /* share the send button's center on the bottom-aligned row */
-  border-radius: 50%;
-  color: var(--muted);
-  transition:
-    background var(--t-fast),
-    color var(--t-fast);
-}
-.btn-composer-mode:hover {
-  background: var(--surface-3);
-  color: var(--ink);
-}
-.btn-composer-mode[hidden] {
-  display: none;
-}
-/* Messages queued until the run completes, one line each, above the input. */
+/* Messages queued until the run completes, one line each, above the input;
+   each can be steered into the live run, edited, or withdrawn. */
 .send-queue {
   display: flex;
   flex-direction: column;
@@ -2676,18 +2656,24 @@ button.question-option:hover {
   white-space: nowrap;
   color: var(--ink);
 }
-.send-queue-drop {
+.send-queue-act {
   flex-shrink: 0;
   display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 3px;
   border-radius: 6px;
   color: var(--muted);
 }
-.send-queue-drop:hover:not(:disabled) {
+.send-queue-steer {
+  padding: 3px 8px 3px 6px;
+  font-size: 12px;
+}
+.send-queue-act:hover:not(:disabled) {
   background: var(--surface-3);
   color: var(--ink);
 }
-.send-queue-drop:disabled {
+.send-queue-act:disabled {
   opacity: 0.4;
 }
 .attach-chip {

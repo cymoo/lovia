@@ -151,13 +151,37 @@ export function createSendQueue(host) {
       host.changed(sid);
       void pump(sid);
     },
-    /** @param {string} sid @param {number} id */
+    /**
+     * Take item `id` out — never the one on its way — to drop, edit or steer.
+     * Returns it with the run its queue waited on, for `putBack`.
+     * @param {string} sid
+     * @param {number} id
+     * @returns {{ item: QueuedItem, after: string | null } | null}
+     */
     withdraw(sid, id) {
       const q = queues.get(sid);
-      if (!q || q.sending === id) return;
-      q.items = q.items.filter((it) => it.id !== id);
+      const item = q?.items.find((it) => it.id === id);
+      if (!q || !item || q.sending === id) return null;
+      const after = q.after;
+      q.items = q.items.filter((it) => it !== item);
       if (!q.items.length) q.paused = null;
       settle(sid);
+      return { item, after };
+    },
+    /**
+     * Return a withdrawn item to the head — a steer no run took. An emptied
+     * queue waits on its old run again, so the item goes only if that run
+     * completed, as it would have had it stayed.
+     * @param {string} sid
+     * @param {QueuedItem} item
+     * @param {string | null} after
+     */
+    putBack(sid, item, after) {
+      const q = queue(sid);
+      if (!q.items.length) q.after = after;
+      q.items.unshift(item);
+      host.changed(sid);
+      void pump(sid);
     },
     /** Send the head now, whatever its run did — the paused queue's way on. */
     sendNow(/** @type {string} */ sid) {

@@ -2917,7 +2917,8 @@ function enterStreamingUI() {
     stopBtn.title = t('composer.stopTip');
   }
   scrollBtn?.classList.add('live');
-  syncComposerMode();
+  if (promptEl) promptEl.placeholder = t('composer.queuePlaceholder');
+  renderQueue(); // its Steer buttons need a live run
   updateSendEnabled();
   // Keep screen readers from re-announcing every 60 ms streaming re-render;
   // they pick the transcript back up once the turn settles.
@@ -2941,7 +2942,7 @@ function exitStreamingUI(status = 'detached') {
     promptEl.placeholder = t('composer.placeholder');
     promptEl.focus();
   }
-  syncComposerMode(); // the mode button is a mid-run control
+  renderQueue(); // no live run: no Steer
   updateSendEnabled();
   document.getElementById('transcript')?.setAttribute('aria-busy', 'false');
   updateRegenButton();
@@ -3418,17 +3419,17 @@ function updateSendEnabled() {
     // a greyed Send next to Stop reads as two competing controls.
     // What Send does now, said on the button too: the placeholder that says
     // it is gone once there is text. Queuing waits for the run to be named.
-    const queue = composerMode() === 'queue';
     sendBtn.hidden = !hasText;
-    sendBtn.disabled = !hasText || (queue && !_shownRunId);
-    sendBtn.title = t(queue ? 'composer.queueTip' : 'composer.steerTip');
-    sendBtn.setAttribute('aria-label', t(queue ? 'composer.queueSend' : 'composer.steerSend'));
+    sendBtn.disabled = !hasText || !_shownRunId;
+    sendBtn.title = t('composer.queueTip');
+    sendBtn.setAttribute('aria-label', t('composer.queueSend'));
   } else {
     sendBtn.hidden = false;
     sendBtn.disabled = !(hasText || pendingReady().length);
     sendBtn.title = t('composer.sendTip');
     sendBtn.setAttribute('aria-label', t('composer.send'));
   }
+  syncQueueEdit();
 }
 
 function syncAttachButton() {
@@ -3625,72 +3626,68 @@ export async function sendText(message) {
     await runStream(message);
     return;
   }
-  // Queue it: the server drains it at the next turn start, or seeds the
-  // next run if this one ends first. Show a muted bubble (with a cancel
-  // affordance) until the run confirms it or the user withdraws it.
+  const { node, accepted } = await steer(message);
+  // Raced the run's end: keep the bubble muted and deliver the message
+  // as its own turn once the stream settles — the next run re-injects it
+  // (drainPendingResend) or it seeds a fresh run (resumePendingResend).
+  if (!accepted) _pendingResend.push({ message, node });
+}
+
+/**
+ * Steer `message` into the live run: the server drains it at the next turn
+ * start, or seeds the next run if this one ends first. A muted bubble (with a
+ * cancel affordance) shows it until the run confirms it or the user withdraws
+ * it. `accepted` false: no run took it; the caller owns the bubble.
+ * @param {string} message
+ * @returns {Promise<{ node: HTMLElement | null, accepted: boolean }>}
+ */
+async function steer(message) {
   const node = appendUserTurn(message, { queued: true });
-  if (node) _queuedTurns.push(node);
+  if (node) _queuedTurns.push(node); // before the await: its drain may beat the answer
   let res = null;
   try {
     res = await api.inject({ session_id: store.sessionId, message });
   } catch { /* network error → treat as no active run */ }
   if (res?.accepted) {
     if (node) addWithdrawButton(node, res.id);
-  } else {
-    // Raced the run's end: keep the bubble muted and deliver the message
-    // as its own turn once the stream settles — the next run re-injects it
-    // (drainPendingResend) or it seeds a fresh run (resumePendingResend).
-    const i = _queuedTurns.indexOf(node);
-    if (i >= 0) _queuedTurns.splice(i, 1);
-    _pendingResend.push({ message, node });
+    return { node, accepted: true };
   }
+  const i = _queuedTurns.indexOf(node);
+  if (i >= 0) _queuedTurns.splice(i, 1);
+  return { node, accepted: false };
 }
 
 // ---- Queued messages: sent once the run on screen completes (#308) -------
-// While a run streams, the composer either steers it (the message joins its
-// next turn, above) or queues the message to start a run of its own after
-// this one completes (send-queue.js). Which is the user's standing choice —
-// the mode button flips it, ⌥/Alt+Enter flips one send.
-const MODE_KEY = 'lovia-composer-mode';
-const modeBtn = /** @type {HTMLButtonElement | null} */ (document.getElementById('composer-mode'));
+// While a run streams, the composer queues a message to start a run of its
+// own after this one completes (send-queue.js), in the strip above the input.
+// Steering — the message joins the run's next turn (above) — is decided per
+// message: ⌥/Alt+Enter as it is sent, or the strip's Steer once queued.
 const queueEl = document.getElementById('send-queue');
-let _flipOnce = false;
+let _steerOnce = false;
 // The open chat is drawn, not mid-switch: a queued message may join it.
 let _viewReady = true;
 
-/** @returns {'steer' | 'queue'} */
-function composerMode() {
-  try {
-    return localStorage.getItem(MODE_KEY) === 'queue' ? 'queue' : 'steer';
-  } catch {
-    return 'steer';
-  }
+/**
+ * Steer a queued item into the live run. Out of the queue first, so the queue
+ * can't also send it; back to its head if no run took it.
+ * @param {string} sid
+ * @param {number} id
+ */
+async function steerQueued(sid, id) {
+  const taken = sendQueue.withdraw(sid, id);
+  if (!taken) return;
+  _resumeAutoScroll();
+  const { node, accepted } = await steer(taken.item.text);
+  if (accepted) return;
+  node?.remove();
+  sendQueue.putBack(sid, taken.item, taken.after);
 }
 
-function syncComposerMode() {
-  const queue = composerMode() === 'queue';
-  if (modeBtn) {
-    modeBtn.hidden = !store.streaming;
-    modeBtn.innerHTML = icon(queue ? 'clock' : 'zap', { size: 16 });
-    const label = t(queue ? 'composer.modeQueue' : 'composer.modeSteer');
-    modeBtn.title = label;
-    modeBtn.setAttribute('aria-label', label);
-  }
-  if (promptEl && store.streaming) {
-    promptEl.placeholder = t(queue ? 'composer.queuePlaceholder' : 'composer.steerPlaceholder');
-  }
-}
-
-function toggleComposerMode() {
-  const next = composerMode() === 'queue' ? 'steer' : 'queue';
-  try {
-    localStorage.setItem(MODE_KEY, next);
-  } catch { /* the choice lasts this page only */ }
-  syncComposerMode();
-  updateSendEnabled();
-  toast(t(next === 'queue' ? 'composer.nowQueue' : 'composer.nowSteer'), {
-    key: 'composer-mode', timeout: 1500,
-  });
+/** Back into the empty composer, to be edited and sent again. */
+function editQueued(/** @type {string} */ sid, /** @type {number} */ id) {
+  if (promptEl?.value.trim()) return; // never over a draft
+  const taken = sendQueue.withdraw(sid, id);
+  if (taken) setDraft(taken.item.text);
 }
 
 /**
@@ -3763,6 +3760,16 @@ function renderQueue() {
     note.append(text, go);
     queueEl.append(note);
   }
+  const button = (/** @type {string} */ name, /** @type {string} */ key, /** @type {() => void} */ act) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'send-queue-act';
+    btn.innerHTML = icon(name, { size: 13 });
+    btn.title = t(key);
+    btn.setAttribute('aria-label', t(key));
+    btn.addEventListener('click', act);
+    return btn;
+  };
   for (const item of items) {
     const row = document.createElement('div');
     row.className = 'send-queue-item';
@@ -3771,17 +3778,34 @@ function renderQueue() {
     text.className = 'send-queue-text';
     text.textContent = item.text;
     text.title = item.text;
-    const drop = document.createElement('button');
-    drop.type = 'button';
-    drop.className = 'send-queue-drop';
-    drop.innerHTML = icon('x', { size: 13 });
-    drop.title = t('queue.withdraw');
-    drop.setAttribute('aria-label', t('queue.withdraw'));
-    drop.disabled = sending === item.id;
-    drop.addEventListener('click', () => sendQueue.withdraw(sid, item.id));
-    row.append(text, drop);
+    row.append(text);
+    const onItsWay = sending === item.id;
+    row.classList.toggle('sending', onItsWay);
+    // Steering needs a run live in this chat to take it.
+    if (store.streaming && !onItsWay) {
+      const go = button('zap', 'queue.steerTip', () => void steerQueued(sid, item.id));
+      go.classList.add('send-queue-steer');
+      go.insertAdjacentText('beforeend', t('queue.steer'));
+      row.append(go);
+    }
+    const edit = button('pencil', 'queue.edit', () => editQueued(sid, item.id));
+    edit.classList.add('send-queue-edit');
+    edit.disabled = onItsWay || !!promptEl?.value.trim();
+    const drop = button('x', 'queue.withdraw', () => sendQueue.withdraw(sid, item.id));
+    drop.disabled = onItsWay;
+    row.append(edit, drop);
     queueEl.append(row);
   }
+}
+
+/** Edit only into an empty composer: re-checked as the draft changes. */
+function syncQueueEdit() {
+  const draft = !!promptEl?.value.trim();
+  queueEl?.querySelectorAll('.send-queue-edit').forEach((btn) => {
+    if (btn instanceof HTMLButtonElement) {
+      btn.disabled = draft || !!btn.closest('.send-queue-item.sending');
+    }
+  });
 }
 
 // Every wake-up goes through the queue's one pump, which asks the server
@@ -3806,7 +3830,6 @@ store.on('reset-chat-view', () => {
   _viewReady = true;
   renderQueue();
 });
-modeBtn?.addEventListener('click', toggleComposerMode);
 
 // UI components (components.js) see the page through this context, and may
 // post a message for the user — only from a real click/keypress, so a
@@ -3922,11 +3945,11 @@ export function initComposer() {
   restoreDraft(); // the new-chat draft; a URL-restored session re-restores on switch
   promptEl?.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || coarsePointer) return;
-    // ⌥/Alt+Enter mid-run: this one message the other way (steer ⇄ queue),
+    // ⌥/Alt+Enter mid-run: steer this message instead of queuing it,
     // whichever Enter preference is set.
     if (e.altKey && store.streaming) {
       e.preventDefault();
-      _flipOnce = true;
+      _steerOnce = true;
       composer?.requestSubmit();
       return;
     }
@@ -3952,8 +3975,8 @@ export function initComposer() {
     if (store.streaming) {
       // Mid-run — text only; attachments need a fresh turn of their own.
       if (!message) return;
-      const queue = (composerMode() === 'queue') !== _flipOnce;
-      _flipOnce = false;
+      const queue = !_steerOnce;
+      _steerOnce = false;
       // A message queues behind the run on screen, which its stream names
       // as it is admitted: until then the text stays put (Send is disabled).
       if (queue && !(store.sessionId && _shownRunId)) return;
@@ -3968,7 +3991,7 @@ export function initComposer() {
       await sendText(message);
       return;
     }
-    _flipOnce = false;
+    _steerOnce = false;
 
     const attachments = pendingReady();
     if (!message && !attachments.length) return;

@@ -352,21 +352,22 @@ A graceful server shutdown retains the main Run's Checkpoint so it can resume
 after restart. Process-local approval and SSE subscription state is not
 restored, nor are Shell background processes or background subagents.
 
-Text sent while a Run is active does one of two things, set by the button
-beside Stop (it shows only while a Run is active, and remembers your choice):
+Text sent while a Run is active does one of two things, decided per message:
 
-- **Steer** (⚡, the default): the text joins the Run at its next Turn. If the
-  Run finishes first, the text starts the next Run in order.
-- **Queue** (⏱): the text waits above the composer and is sent as its own Run
-  once the active Run has *completed*. Several queued messages go one at a
+- **Queue** (Enter): the text waits above the composer and is sent as its own
+  Run once the active Run has *completed*. Several queued messages go one at a
   time, each after the previous one's Run completes. A Run that fails or is
   stopped pauses the queue; **Send now** or withdrawing the message moves on.
   Queued messages are held by the browser tab: they go only while their chat
   is open there, and a reload drops them.
+- **Steer** (⌥/Alt+Enter, or **Steer** on a queued message): the text joins
+  the Run at its next Turn. If the Run finishes first, text sent with
+  ⌥/Alt+Enter starts the next Run in order; a queued message steered too late
+  returns to the head of the queue.
 
-⌥/Alt+Enter sends one message the other way without changing the setting.
-Attachments are neither steered nor queued: they wait for the active Run to
-finish.
+A queued message can also go back to the composer for editing (when the
+composer is empty), or be withdrawn. Attachments are neither steered nor
+queued: they wait for the active Run to finish.
 
 ## Branching a chat
 

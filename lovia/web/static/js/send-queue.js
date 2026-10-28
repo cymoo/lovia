@@ -109,6 +109,9 @@ export function createSendQueue(host) {
         }
         if (v === 'wait') continue; // unless woken meanwhile, done for now
         if (!host.ready(sid)) return; // the page moved on during the check
+        // …or the queue did: a steer whose answer was lost may have put its
+        // item back, paused, while the check ran.
+        if (q.paused || !q.items.length) return;
         const head = q.items[0];
         q.sending = head.id; // past withdrawing: it is on its way
         host.changed(sid);
@@ -151,13 +154,40 @@ export function createSendQueue(host) {
       host.changed(sid);
       void pump(sid);
     },
-    /** @param {string} sid @param {number} id */
+    /**
+     * Take item `id` out — never the one on its way — to drop, edit or steer.
+     * Returns it with the run its queue waited on, for `putBack`.
+     * @param {string} sid
+     * @param {number} id
+     * @returns {{ item: QueuedItem, after: string | null } | null}
+     */
     withdraw(sid, id) {
       const q = queues.get(sid);
-      if (!q || q.sending === id) return;
-      q.items = q.items.filter((it) => it.id !== id);
+      const item = q?.items.find((it) => it.id === id);
+      if (!q || !item || q.sending === id) return null;
+      const after = q.after;
+      q.items = q.items.filter((it) => it !== item);
       if (!q.items.length) q.paused = null;
       settle(sid);
+      return { item, after };
+    },
+    /**
+     * Return a withdrawn item to the head — a steer no run took. An emptied
+     * queue waits on its old run again, so the item goes only if that run
+     * completed, as it would have had it stayed. `unsure`: the steer got no
+     * answer and may have landed, so the queue pauses as `unknown` instead.
+     * @param {string} sid
+     * @param {QueuedItem} item
+     * @param {string | null} after
+     * @param {boolean} [unsure]
+     */
+    putBack(sid, item, after, unsure = false) {
+      const q = queue(sid);
+      if (!q.items.length) q.after = after;
+      q.items.unshift(item);
+      if (unsure) q.paused = 'unknown';
+      host.changed(sid);
+      void pump(sid);
     },
     /** Send the head now, whatever its run did — the paused queue's way on. */
     sendNow(/** @type {string} */ sid) {

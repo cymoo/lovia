@@ -9,8 +9,9 @@ import { test } from 'node:test';
 import { createSendQueue } from '../../../lovia/web/static/js/send-queue.js';
 
 /** A scripted server and page: tests set `live`, `records`, `ready`, and
- * queue up what each send answers. */
-function fixture() {
+ * queue up what each send answers; `host` overrides any of its hooks.
+ * @param {Partial<import('../../../lovia/web/static/js/send-queue.js').QueueHost>} [host] */
+function fixture(host = {}) {
   const s = {
     live: /** @type {Array<{ session_id: string, run_id: string }>} */ ([]),
     records: /** @type {Record<string, string>} */ ({}),
@@ -28,6 +29,7 @@ function fixture() {
       return typeof answer === 'function' ? answer() : answer;
     },
     changed: () => {},
+    ...host,
   });
   return { s, q };
 }
@@ -262,6 +264,100 @@ test('wake-ups during a pass coalesce: one send in flight', async () => {
   await settled();
   await settled();
   assert.deepEqual(s.sent, ['A']); // B waits on RA, which is live
+});
+
+test('withdraw hands back the item and the run its queue waited on', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  await settled();
+  const [a] = q.view('c').items;
+  assert.deepEqual(q.withdraw('c', a.id), { item: a, after: 'R' });
+  assert.equal(q.withdraw('c', a.id), null); // already out
+  assert.deepEqual(q.view('c').items.map((i) => i.text), ['B']);
+});
+
+test('a steer no run took goes back to the head, after its old run', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  s.records.R = 'running';
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  await settled();
+  const taken = q.withdraw('c', q.view('c').items[1].id);
+  assert.ok(taken);
+  // The inject raced R's end: B rejoins at the head and waits on R as before.
+  q.putBack('c', taken.item, taken.after);
+  assert.deepEqual(q.view('c').items.map((i) => i.text), ['B', 'A']);
+  s.live = [];
+  s.records.R = 'completed';
+  await wake(q);
+  assert.deepEqual(s.sent, ['B']);
+});
+
+test('put back into an emptied queue still honours a run that failed', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  q.enqueue('c', 'A', 'R');
+  await settled();
+  const taken = q.withdraw('c', q.view('c').items[0].id);
+  assert.ok(taken);
+  assert.deepEqual(q.chats(), []);
+  s.live = [];
+  s.records.R = 'failed';
+  q.putBack('c', taken.item, taken.after);
+  await settled();
+  assert.deepEqual(s.sent, []);
+  assert.equal(q.view('c').paused, 'failed');
+});
+
+test('a steer with no answer goes back paused as unknown, never resent alone', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  await settled();
+  const taken = q.withdraw('c', q.view('c').items[0].id);
+  assert.ok(taken);
+  // The inject's response was lost: R may already hold A.
+  q.putBack('c', taken.item, taken.after, true);
+  assert.equal(q.view('c').paused, 'unknown');
+  s.live = [];
+  s.records.R = 'completed';
+  await wake(q);
+  assert.deepEqual(s.sent, []); // R completing doesn't send A a second time
+
+  q.sendNow('c'); // the user checked the chat and chose to send it
+  await settled();
+  assert.deepEqual(s.sent, ['A']);
+});
+
+test('a pause that lands during the check stops the send', async () => {
+  /** @type {() => void} */
+  let release = () => {};
+  const gate = new Promise((r) => (release = () => r(undefined)));
+  // The check of R's outcome is still out when the steer's answer is lost.
+  const { s, q } = fixture({
+    runRecord: async () => {
+      await gate;
+      return { status: 'completed' };
+    },
+  });
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  await settled();
+  const taken = q.withdraw('c', q.view('c').items[0].id); // A is steered…
+  assert.ok(taken);
+  s.live = []; // …R ends, and the queue starts its check
+  void q.pump('c');
+  await settled();
+  q.putBack('c', taken.item, taken.after, true);
+  release();
+  await settled();
+  assert.deepEqual(s.sent, []); // neither A (R may hold it) nor B behind it
+  assert.equal(q.view('c').paused, 'unknown');
 });
 
 test('withdrawing the last item clears a pause', async () => {

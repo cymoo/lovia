@@ -186,6 +186,8 @@ class ChatRequest(BaseModel):
 class InjectRequest(BaseModel):
     session_id: str
     message: str = Field(max_length=10_000_000)
+    # As ChatRequest.attachments: they ride the steer into the run.
+    attachments: list[Attachment] | None = Field(default=None, max_length=20)
 
 
 class InjectCancelRequest(BaseModel):

@@ -307,7 +307,7 @@ test('a steer no run took goes back to the head, after its old run', async () =>
   const taken = q.withdraw('c', q.view('c').items[1].id);
   assert.ok(taken);
   // The inject raced R's end: B rejoins at the head and waits on R as before.
-  q.putBack('c', taken.item.text, taken.after);
+  q.putBack('c', taken.item, taken.after);
   assert.deepEqual(q.view('c').items.map((i) => i.text), ['B', 'A']);
   s.live = [];
   s.records.R = 'completed';
@@ -325,7 +325,7 @@ test('put back into an emptied queue still honours a run that failed', async () 
   assert.deepEqual(q.chats(), []);
   s.live = [];
   s.records.R = 'failed';
-  q.putBack('c', taken.item.text, taken.after);
+  q.putBack('c', taken.item, taken.after);
   await settled();
   assert.deepEqual(s.sent, []);
   assert.equal(q.view('c').paused, 'failed');
@@ -340,7 +340,7 @@ test('a steer with no answer goes back paused as unknown, never resent alone', a
   const taken = q.withdraw('c', q.view('c').items[0].id);
   assert.ok(taken);
   // The inject's response was lost: R may already hold A.
-  q.putBack('c', taken.item.text, taken.after, true);
+  q.putBack('c', taken.item, taken.after, true);
   assert.equal(q.view('c').paused, 'unknown');
   s.live = [];
   s.records.R = 'completed';
@@ -373,7 +373,7 @@ for (const status of ['completed', 'failed', 'cancelled']) {
     s.live = []; // …R ends, and the queue starts its check
     void q.pump('c');
     await settled();
-    q.putBack('c', taken.item.text, taken.after, true);
+    q.putBack('c', taken.item, taken.after, true);
     release();
     await settled();
     assert.deepEqual(s.sent, []); // neither A (R may hold it) nor B behind it
@@ -407,6 +407,23 @@ test('withdraw hands an item back with its attachments', async () => {
   await settled();
   const taken = q.withdraw('c', q.view('c').items[0].id);
   assert.deepEqual(taken?.item.attachments, atts);
+});
+
+test('a steer put back keeps its attachments, and they go with it (#326)', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  const atts = [{ path: 'uploads/a.png', kind: 'image', name: 'a.png' }];
+  q.enqueue('c', 'look', 'R', atts);
+  await settled();
+  const taken = q.withdraw('c', q.view('c').items[0].id);
+  assert.ok(taken);
+  q.putBack('c', taken.item, taken.after); // no run took the steer
+  assert.deepEqual(q.view('c').items[0].attachments, atts);
+  s.live = [];
+  s.records.R = 'completed';
+  await wake(q);
+  assert.deepEqual(s.sent, ['look']);
+  assert.equal(s.items[0].attachments, atts);
 });
 
 test('withdrawing an unsure head lifts its pause from the next item (#323)', async () => {

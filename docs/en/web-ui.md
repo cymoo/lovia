@@ -352,26 +352,25 @@ A graceful server shutdown retains the main Run's Checkpoint so it can resume
 after restart. Process-local approval and SSE subscription state is not
 restored, nor are Shell background processes or background subagents.
 
-Text sent while a Run is active does one of two things, decided per message:
+A message sent while a Run is active does one of two things, decided per message:
 
-- **Queue** (Enter): the text waits above the composer and is sent as its own
+- **Queue** (Enter): the message waits above the composer and is sent as its own
   Run once the active Run has *completed*. Several queued messages go one at a
   time, each after the previous one's Run completes. A Run that fails or is
   stopped pauses the queue; **Send now** or withdrawing the message moves on.
   Queued messages are held by the browser tab: they go only while their chat
   is open there, and a reload drops them.
-- **Steer** (⌥/Alt+Enter, or **Steer** on a queued message): the text joins
-  the Run at its next Turn. If the Run finishes first, text sent with
+- **Steer** (⌥/Alt+Enter, or **Steer** on a queued message): the message joins
+  the Run at its next Turn. If the Run finishes first, one sent with
   ⌥/Alt+Enter starts the next Run in order; a queued message steered too late
   returns to the head of the queue. A steer that gets no answer (e.g. the
   network dropped) may have landed, so it is never resent on its own: it waits
   at the head of the queue, paused, for you to check the chat.
 
-Attachments can be added while a Run is active: they go with a queued
-message. A steer is text-only, so a message with attachments can only be
-queued. Send waits for any upload still in progress. A queued message can also
-go back to the composer for editing — text and attachments, when the composer
-and its tray are empty — or be withdrawn.
+Attachments can be added while a Run is active: they go with the message,
+queued or steered. Send waits for any upload still in progress. A queued
+message can also go back to the composer for editing — text and attachments,
+when the composer and its tray are empty — or be withdrawn.
 
 ## Branching a chat
 

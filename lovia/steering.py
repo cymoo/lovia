@@ -34,8 +34,7 @@ from typing import Union
 from .parts import ContentPart
 
 # Content accepted for injection — the same shape as ``InputEntry.content`` and
-# ``messages.user()``. The web layer only pushes plain ``str``; the wider type
-# is free future-proofing for multimodal injection.
+# ``messages.user()``: plain text, or parts (the web UI's steers with attachments).
 InjectedContent = Union[str, list[ContentPart]]
 
 

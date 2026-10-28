@@ -22,7 +22,8 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ...agent import Agent
-from ..attachments import build_user_input
+from ...messages import user
+from ..attachments import build_user_input, user_content
 from ..errors import WebError
 from ..run_deps import RunTrigger, build_run_deps
 from ..schemas import (
@@ -167,11 +168,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
         agent = resolve_agent(meta, req.agent)
         is_new = meta is None
-        # Build the turn input once — this validates attachments (dropping any
+        # Build the message once — this validates attachments (dropping any
         # that are missing or escape the workspace), so an attachments-only
-        # request whose attachments are all invalid reads as empty here.
-        user_input = build_user_input(req, agent)
-        empty = isinstance(user_input, str) and not user_input.strip()
+        # request whose attachments are all invalid reads as empty here. It
+        # starts a run, or steers the live one.
+        content = user_content(req.message, req.attachments, agent)
+        empty = isinstance(content, str) and not content.strip()
         # An empty turn is only meaningful as a pure attach to a live run;
         # rejecting it otherwise before the upsert avoids littering empty rows.
         if empty and deps.supervisor.get(sid) is None:
@@ -200,8 +202,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # each — a message never meant to steer is refused instead.
             if req.busy == "reject":
                 raise _busy()
-            if req.message.strip():
-                live.inject(req.message)
+            if not empty:
+                live.inject(content)
             return EventSourceResponse(
                 forward(live.attach(with_snapshot=True), sid=sid, run_id=live.record_id)
             )
@@ -231,7 +233,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             ctrl = await deps.supervisor.start(
                 session_id=sid,
                 agent=agent,
-                input=user_input,
+                input=content if isinstance(content, str) else [user(content)],
                 is_new=is_new,
                 title_message=req.message,
                 client=client,
@@ -253,7 +255,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
 
     @router.post("/api/chat/inject")
     async def chat_inject(req: InjectRequest) -> dict[str, Any]:
-        """Queue a message into the active run for ``session_id``.
+        """Queue a message, with any attachments, into the active run for ``session_id``.
 
         ``{"accepted": true, "id": <token>}`` when a run is live (drained at the
         next turn start; the token withdraws it via ``/uninject``).
@@ -261,12 +263,15 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         so the client can fall back to a normal stream without losing the message.
         """
         message = req.message.strip()
-        if not message:
+        if not message and not req.attachments:
             raise WebError(422, "invalid_request", "empty message")
         ctrl = deps.supervisor.get(req.session_id)
         if ctrl is None:
             return {"accepted": False}
-        return {"accepted": True, "id": ctrl.inject(message)}
+        content = user_content(message, req.attachments, ctrl.agent)
+        if not content:  # attachments only, and none of them usable
+            raise WebError(422, "invalid_request", "empty message")
+        return {"accepted": True, "id": ctrl.inject(content)}
 
     @router.post("/api/chat/uninject")
     async def chat_uninject(req: InjectCancelRequest) -> dict[str, bool]:

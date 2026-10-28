@@ -12,7 +12,7 @@ import { api } from './api.js';
 import { store } from './store.js';
 import { t } from './i18n.js';
 import { toast } from './toast.js';
-import { confirmDialog } from './ui.js';
+import { confirmDialog, segmented } from './ui.js';
 
 /** Fetch (or refresh) the masked config document into store.modelConfig. */
 export async function loadConfig() {
@@ -63,6 +63,8 @@ function el(tag, className, text) {
 function field(labelText, control, hintText) {
   const wrap = el('div', 'cfg-field');
   const label = el('label', 'cfg-label', labelText);
+  // A <label> names one control; a radio group takes its name as aria-label.
+  if (control.getAttribute('role') === 'radiogroup') control.setAttribute('aria-label', labelText);
   wrap.append(label, control);
   if (hintText) wrap.appendChild(el('div', 'cfg-hint', hintText));
   return wrap;
@@ -75,41 +77,6 @@ function input(value, { mono = false, placeholder = '', type = 'text' } = {}) {
   node.placeholder = placeholder;
   if (mono) node.classList.add('mono');
   return node;
-}
-
-/**
- * A pill-track segmented control (the files-panel tabs pattern).
- * @param {[string, string][]} options [value, label] pairs.
- * @param {string} value Selected value.
- * @param {(value: string) => void} [onChange]
- */
-function segmented(options, value, onChange) {
-  const wrap = el('div', 'seg-control');
-  wrap.setAttribute('role', 'tablist');
-  const sync = () => {
-    for (const b of wrap.children) {
-      const btn = /** @type {HTMLButtonElement} */ (b);
-      const active = btn.dataset.value === wrap.dataset.value;
-      btn.classList.toggle('active', active);
-      btn.setAttribute('aria-selected', active ? 'true' : 'false');
-    }
-  };
-  wrap.dataset.value = value;
-  for (const [val, label] of options) {
-    const btn = el('button', 'seg-btn', label);
-    btn.setAttribute('type', 'button');
-    btn.setAttribute('role', 'tab');
-    btn.dataset.value = val;
-    btn.addEventListener('click', () => {
-      if (wrap.dataset.value === val) return;
-      wrap.dataset.value = val;
-      sync();
-      onChange?.(val);
-    });
-    wrap.appendChild(btn);
-  }
-  sync();
-  return wrap;
 }
 
 function ghostBtn(label, onClick) {

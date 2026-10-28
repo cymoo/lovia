@@ -310,6 +310,38 @@ export function promptDialog(message, defaultValue = '', { stack = false } = {})
   });
 }
 
+// ---- Segmented control -------------------------------------------------
+let _segments = 0;
+
+/**
+ * A few mutually exclusive choices, all in view on a pill track. Native radios
+ * underneath, so arrow keys and radiogroup semantics come for free.
+ * @param {[string, string, string?][]} options value, label, optional icon name
+ * @param {string} value Selected value.
+ * @param {(value: string) => void} [onChange]
+ */
+export function segmented(options, value, onChange) {
+  const name = `seg-${++_segments}`;
+  const wrap = document.createElement('div');
+  wrap.className = 'seg-control';
+  wrap.setAttribute('role', 'radiogroup');
+  for (const [val, label, glyph] of options) {
+    const opt = document.createElement('label');
+    opt.className = 'seg-btn';
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = name;
+    radio.value = val;
+    radio.checked = val === value;
+    radio.addEventListener('change', () => onChange?.(val));
+    opt.append(radio);
+    if (glyph) opt.insertAdjacentHTML('beforeend', icon(glyph, { size: 14 }));
+    opt.append(label);
+    wrap.append(opt);
+  }
+  return wrap;
+}
+
 // ---- Popup menu --------------------------------------------------------
 /**
  * @typedef {{ label: string, icon?: string, danger?: boolean, onSelect: () => void }} MenuItem

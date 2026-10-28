@@ -3392,35 +3392,6 @@ dialog.custom-dialog::backdrop {
   }
 }
 
-/* -- pause/resume switch (the one inline row action) -- */
-.sched-switch {
-  position: relative;
-  width: 30px;
-  height: 18px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: var(--surface-3);
-  box-shadow: inset 0 0 0 1px var(--border-strong);
-  transition: background var(--t-fast), box-shadow var(--t-fast);
-}
-.sched-switch[aria-checked="true"] {
-  background: var(--accent);
-  box-shadow: none;
-}
-.sched-switch-knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--surface);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
-  transition: transform var(--t-fast);
-}
-.sched-switch[aria-checked="true"] .sched-switch-knob {
-  transform: translateX(12px);
-}
 
 /* -- detail view -- */
 .sched-detail {
@@ -5398,90 +5369,37 @@ body.files-splitting {
   min-width: 150px;
 }
 
-/* Segmented control (settings.js segmented): native radios, drawn as one
-   track with the chosen segment raised. */
-.segmented {
-  display: inline-flex;
-  flex-shrink: 0;
-  padding: 3px;
-  gap: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-}
-.segmented label {
-  position: relative; /* holds its hidden radio */
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: var(--radius-xs);
-  font-size: 13px;
-  color: var(--muted);
-  white-space: nowrap;
+.settings-row:has(.switch) {
   cursor: pointer;
-  transition:
-    background var(--t-fast),
-    color var(--t-fast),
-    box-shadow var(--t-fast);
-}
-.segmented label:hover {
-  color: var(--ink);
-}
-.segmented input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-.segmented label:has(:checked) {
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: var(--shadow-xs), 0 0 0 1px var(--border);
-}
-[data-theme="dark"] .segmented label:has(:checked) {
-  background: var(--surface-3);
-}
-.segmented label:has(:focus-visible) {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
-/* On/off switch (settings.js toggle): a checkbox with role="switch". */
+/* On/off switch — a role="switch" button holding its knob (settings toggles,
+   a schedule's pause/resume). */
 .switch {
-  appearance: none;
   position: relative;
   flex-shrink: 0;
-  width: 34px;
-  height: 20px;
-  margin: 0;
+  width: 32px;
+  height: 18px;
   border-radius: 999px;
   background: var(--border-strong);
-  cursor: pointer;
   transition: background var(--t-med) var(--ease);
 }
-.switch::after {
-  content: "";
+.switch[aria-checked="true"] {
+  background: var(--accent);
+}
+.switch-knob {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
   transition: transform var(--t-med) var(--ease);
 }
-.switch:checked {
-  background: var(--accent);
-}
-.switch:checked::after {
+.switch[aria-checked="true"] .switch-knob {
   transform: translateX(14px);
-}
-.switch:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.settings-row:has(.switch) {
-  cursor: pointer;
 }
 
 /* ---- Long-transcript performance -------------------------------------------------------------------- */
@@ -6038,32 +5956,54 @@ body.files-splitting {
   font-size: 12px;
   font-family: var(--mono);
 }
+/* Segmented control (ui.js segmented): a pill track of native radios, the
+   chosen one raised — the files-panel tabs' look. */
 .seg-control {
   display: inline-flex;
+  flex-shrink: 0;
   gap: 2px;
   padding: 3px;
   background: var(--surface-2);
   border-radius: 999px;
+}
+.cfg-field .seg-control {
   margin-top: 6px;
 }
 .seg-btn {
-  border: 0;
-  background: transparent;
+  position: relative; /* holds its hidden radio */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--muted);
   padding: 4px 13px;
   border-radius: 999px;
-  font: inherit;
   font-size: 12.5px;
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
 }
-.seg-btn.active {
+.seg-btn:hover {
+  color: var(--ink-2);
+}
+.seg-btn input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.seg-btn:has(:checked) {
   background: var(--surface);
   color: var(--ink);
   font-weight: 560;
   box-shadow: var(--shadow-xs);
 }
-[data-theme="dark"] .seg-btn.active {
+[data-theme="dark"] .seg-btn:has(:checked) {
   background: var(--surface-3);
+}
+.seg-btn:has(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .cfg-test-row {
   display: flex;

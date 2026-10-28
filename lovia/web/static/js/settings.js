@@ -3,11 +3,10 @@
 // (localStorage: language, theme, text size, Enter behavior, notifications,
 // sound); Models/Search edit the server's config.json through model-config.js
 // and appear only when the server reports features.model_config.
-import { showDialog, setThemePref, themePref } from './ui.js';
+import { segmented, showDialog, setThemePref, themePref } from './ui.js';
 import { t, languages, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
-import { icon } from './icons.js';
 import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
 
 const NOTIF_KEY = 'lovia-notify';
@@ -150,41 +149,27 @@ function select(options, value) {
 }
 
 /**
- * A segmented control for a few mutually exclusive choices, all in view. Native
- * radios underneath, so arrow keys and form semantics come for free.
- * @param {string} name
- * @param {[string, string, string?][]} options value, label, optional icon name
- * @param {string} value
- * @param {(value: string) => void} onChange
+ * An on/off switch (the schedules list's). `onChange` gets the new state, and
+ * `set` to put it back when the change didn't take.
+ * @param {boolean} checked
+ * @param {(on: boolean, set: (on: boolean) => void) => void} onChange
  */
-function segmented(name, options, value, onChange) {
-  const el = document.createElement('div');
-  el.className = 'segmented';
-  el.setAttribute('role', 'radiogroup');
-  for (const [val, label, glyph] of options) {
-    const opt = document.createElement('label');
-    const input = document.createElement('input');
-    input.type = 'radio';
-    input.name = name;
-    input.value = val;
-    input.checked = val === value;
-    input.addEventListener('change', () => onChange(val));
-    opt.append(input);
-    if (glyph) opt.insertAdjacentHTML('beforeend', icon(glyph, { size: 14 }));
-    opt.append(label);
-    el.append(opt);
-  }
-  return el;
-}
-
-/** An on/off switch: a checkbox drawn as one, announced as one. */
-function toggle(checked) {
-  const el = document.createElement('input');
-  el.type = 'checkbox';
-  el.className = 'switch';
-  el.setAttribute('role', 'switch');
-  el.checked = checked;
-  return el;
+function toggle(checked, onChange) {
+  const sw = document.createElement('button');
+  sw.type = 'button';
+  sw.className = 'switch';
+  sw.setAttribute('role', 'switch');
+  const set = (on) => sw.setAttribute('aria-checked', String(on));
+  set(checked);
+  const knob = document.createElement('span');
+  knob.className = 'switch-knob';
+  sw.append(knob);
+  sw.addEventListener('click', () => {
+    const on = sw.getAttribute('aria-checked') !== 'true';
+    set(on);
+    onChange(on, set);
+  });
+  return sw;
 }
 
 function buildGeneralPane() {
@@ -204,7 +189,6 @@ function buildGeneralPane() {
 
   // Theme — applies live.
   const theme = segmented(
-    'theme',
     [
       ['light', t('settings.themeLight'), 'sun'],
       ['dark', t('settings.themeDark'), 'moon'],
@@ -217,7 +201,6 @@ function buildGeneralPane() {
 
   // Message text size — applies live.
   const textSize = segmented(
-    'text-size',
     [
       ['sm', t('settings.textSmall')],
       ['md', t('settings.textDefault')],
@@ -246,9 +229,8 @@ function buildGeneralPane() {
 
   // Desktop notifications for finished background runs.
   if (typeof Notification !== 'undefined') {
-    const notif = toggle(notificationsEnabled());
-    notif.addEventListener('change', async () => {
-      if (!notif.checked) {
+    const notif = toggle(notificationsEnabled(), async (on, set) => {
+      if (!on) {
         localStorage.setItem(NOTIF_KEY, '0');
         return;
       }
@@ -256,7 +238,7 @@ function buildGeneralPane() {
       if (perm === 'granted') {
         localStorage.setItem(NOTIF_KEY, '1');
       } else {
-        notif.checked = false;
+        set(false);
         toast(t('settings.notifDenied'), { type: 'error' });
       }
     });
@@ -264,19 +246,17 @@ function buildGeneralPane() {
   }
 
   // Completion sound — play a preview when switched on so it's not a mystery.
-  const sound = toggle(soundEnabled());
-  sound.addEventListener('change', () => {
-    localStorage.setItem(SOUND_KEY, sound.checked ? '1' : '0');
-    if (sound.checked) playCompletionSound();
+  const sound = toggle(soundEnabled(), (on) => {
+    localStorage.setItem(SOUND_KEY, on ? '1' : '0');
+    if (on) playCompletionSound();
   });
   panel.appendChild(field(t('settings.sound'), sound));
 
   // Follow-up chips — only offered when the server can actually produce them,
   // so this is never a switch that does nothing (same guard as notifications).
   if (store.canSuggest) {
-    const followups = toggle(followupsEnabled());
-    followups.addEventListener('change', () => {
-      localStorage.setItem(FOLLOWUPS_KEY, followups.checked ? '1' : '0');
+    const followups = toggle(followupsEnabled(), (on) => {
+      localStorage.setItem(FOLLOWUPS_KEY, on ? '1' : '0');
     });
     panel.appendChild(field(t('settings.followups'), followups));
   }

@@ -316,13 +316,13 @@ export async function openSchedulesDialog() {
     // Pause/resume — the one action worth keeping on the row; everything else
     // lives in the detail view. A lapsed one-shot gets no switch (see isDone).
     if (!isDone(s)) {
-      const sw = el('button', 'sched-switch');
+      const sw = el('button', 'switch');
       sw.type = 'button';
       sw.setAttribute('role', 'switch');
       sw.setAttribute('aria-checked', String(s.active));
       sw.title = s.active ? t('sched.pause') : t('sched.resume');
       sw.setAttribute('aria-label', sw.title);
-      sw.append(el('span', 'sched-switch-knob'));
+      sw.append(el('span', 'switch-knob'));
       sw.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {

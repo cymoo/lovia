@@ -54,94 +54,94 @@
 <script id="app-config" type="application/json">{{ app_config | tojson }}</script>
 
 <!-- Sidebar overlay (mobile) -->
-<div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
+<div class="lv-sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
 
 <!-- Sidebar -->
-<aside class="sidebar" id="sidebar" data-part="sidebar">
-  <div class="sidebar-head" data-part="sidebar-header">
-    {% block sidebar_header %}{% if logo %}<img class="sidebar-logo" src="{{ logo }}" alt="{{ title }}" />{% else %}<span class="sidebar-title">{{ title }}</span>{% endif %}{% endblock %}
-    <div class="sidebar-head-actions">
-      <button id="sidebar-collapse" class="btn-icon sidebar-collapse-btn" type="button" title="Collapse sidebar" aria-label="Collapse sidebar" data-i18n-title="nav.collapse" data-i18n-aria="nav.collapse"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
+<aside class="lv-sidebar" id="sidebar" data-part="sidebar">
+  <div class="lv-sidebar-head" data-part="sidebar-header">
+    {% block sidebar_header %}{% if logo %}<img class="lv-sidebar-logo" src="{{ logo }}" alt="{{ title }}" />{% else %}<span class="lv-sidebar-title">{{ title }}</span>{% endif %}{% endblock %}
+    <div class="lv-sidebar-head-actions">
+      <button id="sidebar-collapse" class="lv-btn-icon lv-sidebar-collapse-btn" type="button" title="Collapse sidebar" aria-label="Collapse sidebar" data-i18n-title="nav.collapse" data-i18n-aria="nav.collapse"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
     </div>
   </div>
-  <div class="agent-switcher" id="agent-switcher" data-part="agent-switcher">
-    <label class="agent-label" for="agent-select">Agent</label>
-    <select id="agent-select" class="agent-select" aria-label="Select agent"></select>
+  <div class="lv-agent-switcher" id="agent-switcher" data-part="agent-switcher">
+    <label class="lv-agent-label" for="agent-select">Agent</label>
+    <select id="agent-select" class="lv-agent-select" aria-label="Select agent"></select>
   </div>
   <!-- App-level destinations up top (the ChatGPT/Claude pattern): starting a
        chat, what the agent remembers, what it runs on a schedule. All
        cross-chat concerns — the per-chat topbar stays chat-scoped. -->
-  <nav class="sidebar-nav" aria-label="App" data-part="sidebar-nav">
-    <button id="new-chat" class="sidebar-nav-item" type="button" title="New chat" aria-label="New chat" data-part="new-chat" data-i18n-title="nav.newChat" data-i18n-aria="nav.newChat">
+  <nav class="lv-sidebar-nav" aria-label="App" data-part="sidebar-nav">
+    <button id="new-chat" class="lv-sidebar-nav-item" type="button" title="New chat" aria-label="New chat" data-part="new-chat" data-i18n-title="nav.newChat" data-i18n-aria="nav.newChat">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>
       <span data-i18n="nav.newChat">New chat</span>
     </button>
-    <button id="memory-btn" class="sidebar-nav-item hidden" type="button" title="What the agent remembers about you" aria-haspopup="dialog" data-part="memory" data-i18n-title="nav.memoryTitle">
+    <button id="memory-btn" class="lv-sidebar-nav-item lv-hidden" type="button" title="What the agent remembers about you" aria-haspopup="dialog" data-part="memory" data-i18n-title="nav.memoryTitle">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg>
       <span data-i18n="nav.memory">Memory</span>
     </button>
-    <button id="schedules-btn" class="sidebar-nav-item hidden" type="button" title="Runs on a schedule" aria-haspopup="dialog" data-part="schedules">
+    <button id="schedules-btn" class="lv-sidebar-nav-item lv-hidden" type="button" title="Runs on a schedule" aria-haspopup="dialog" data-part="schedules">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       <span data-i18n="nav.schedules">Scheduled runs</span>
     </button>
-    <button id="settings-btn" class="sidebar-nav-item" type="button" title="Settings" aria-haspopup="dialog" data-part="settings" data-i18n-title="nav.settings">
+    <button id="settings-btn" class="lv-sidebar-nav-item" type="button" title="Settings" aria-haspopup="dialog" data-part="settings" data-i18n-title="nav.settings">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
       <span data-i18n="nav.settings">Settings</span>
     </button>
     {% block sidebar_nav %}{% endblock %}
   </nav>
-  <div class="sidebar-section-label" data-part="sessions-label" data-i18n="nav.chats">Chats</div>
-  <div class="sidebar-search" data-part="sessions-search">
-    <input type="search" id="session-search" class="search-input" placeholder="Filter…" aria-label="Filter chats" autocomplete="off" data-i18n-placeholder="nav.filterChats" data-i18n-aria="nav.filterChats" />
+  <div class="lv-sidebar-section-label" data-part="sessions-label" data-i18n="nav.chats">Chats</div>
+  <div class="lv-sidebar-search" data-part="sessions-search">
+    <input type="search" id="session-search" class="lv-search-input" placeholder="Filter…" aria-label="Filter chats" autocomplete="off" data-i18n-placeholder="nav.filterChats" data-i18n-aria="nav.filterChats" />
   </div>
-  <nav id="sessions-list" class="sessions-list" aria-label="Chat sessions" data-part="sessions"></nav>
+  <nav id="sessions-list" class="lv-sessions-list" aria-label="Chat sessions" data-part="sessions"></nav>
   {% block sidebar_footer %}{% endblock %}
 </aside>
 
 <!-- Main -->
-<main class="page">
-<div class="chat-main">
-  <header class="topbar" data-part="topbar">
-    <button id="sidebar-expand" class="btn-icon sidebar-expand-btn" type="button" title="Show sidebar" aria-label="Show sidebar" data-i18n-title="nav.expand" data-i18n-aria="nav.expand"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
-    <button id="sidebar-toggle" class="btn-icon hamburger-btn" type="button" aria-label="Toggle sidebar">
-      <span class="hamburger"></span>
+<main class="lv-page">
+<div class="lv-chat-main">
+  <header class="lv-topbar" data-part="topbar">
+    <button id="sidebar-expand" class="lv-btn-icon lv-sidebar-expand-btn" type="button" title="Show sidebar" aria-label="Show sidebar" data-i18n-title="nav.expand" data-i18n-aria="nav.expand"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
+    <button id="sidebar-toggle" class="lv-btn-icon lv-hamburger-btn" type="button" aria-label="Toggle sidebar">
+      <span class="lv-hamburger"></span>
     </button>
-    <h1 id="chat-title" class="chat-title" data-part="chat-title" data-i18n="session.newChat">New chat</h1>
+    <h1 id="chat-title" class="lv-chat-title" data-part="chat-title" data-i18n="session.newChat">New chat</h1>
     <!-- The open view's title (views.js); the chat's title keeps updating underneath. -->
-    <h1 id="view-title" class="chat-title" hidden></h1>
-    <div class="topbar-actions" data-part="topbar-actions">
+    <h1 id="view-title" class="lv-chat-title" hidden></h1>
+    <div class="lv-topbar-actions" data-part="topbar-actions">
       {% block topbar_actions %}{% endblock %}
       <!-- The chat this one was branched from; shown only on a branch. -->
-      <button id="origin-btn" class="btn btn-ghost btn-sm origin-link" type="button" hidden data-part="origin"></button>
+      <button id="origin-btn" class="lv-btn lv-btn-ghost lv-btn-sm lv-origin-link" type="button" hidden data-part="origin"></button>
       <!-- This chat's background subagent tasks; shown only when it has any. -->
-      <div class="export-wrap" id="tasks-wrap" style="display:none" data-part="tasks">
-        <button id="tasks-btn" class="btn btn-ghost btn-sm" type="button" aria-haspopup="menu" aria-controls="tasks-popover" aria-expanded="false"></button>
-        <div class="tasks-popover" id="tasks-popover" role="menu" hidden aria-label="Background tasks"></div>
+      <div class="lv-export-wrap" id="tasks-wrap" style="display:none" data-part="tasks">
+        <button id="tasks-btn" class="lv-btn lv-btn-ghost lv-btn-sm" type="button" aria-haspopup="menu" aria-controls="tasks-popover" aria-expanded="false"></button>
+        <div class="lv-tasks-popover" id="tasks-popover" role="menu" hidden aria-label="Background tasks"></div>
       </div>
-      <div class="export-wrap" id="export-wrap" style="display:none" data-part="export">
-        <button id="export-btn" class="btn btn-ghost btn-sm" type="button" title="Export chat" aria-haspopup="menu" aria-expanded="false" data-i18n-title="topbar.export"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg><span data-i18n="topbar.export">Export</span></button>
-        <div class="export-menu" id="export-menu" role="menu" hidden>
-          <button type="button" class="export-menu-item" role="menuitem" data-format="md">Markdown</button>
-          <button type="button" class="export-menu-item" role="menuitem" data-format="html">HTML</button>
-          <button type="button" class="export-menu-item" role="menuitem" data-format="json">JSON</button>
-          <button type="button" class="export-menu-item" role="menuitem" data-format="txt" data-i18n="topbar.exportText">Text</button>
+      <div class="lv-export-wrap" id="export-wrap" style="display:none" data-part="export">
+        <button id="export-btn" class="lv-btn lv-btn-ghost lv-btn-sm" type="button" title="Export chat" aria-haspopup="menu" aria-expanded="false" data-i18n-title="topbar.export"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg><span data-i18n="topbar.export">Export</span></button>
+        <div class="lv-export-menu" id="export-menu" role="menu" hidden>
+          <button type="button" class="lv-export-menu-item" role="menuitem" data-format="md">Markdown</button>
+          <button type="button" class="lv-export-menu-item" role="menuitem" data-format="html">HTML</button>
+          <button type="button" class="lv-export-menu-item" role="menuitem" data-format="json">JSON</button>
+          <button type="button" class="lv-export-menu-item" role="menuitem" data-format="txt" data-i18n="topbar.exportText">Text</button>
         </div>
       </div>
       <!-- Rightmost: the toggle sits next to the panel it opens. (Theme
            lives in Settings — an app-level concern; the topbar stays
            chat-scoped.) -->
-      <button id="files-btn" class="btn-icon hidden" type="button" title="Files" aria-label="Workspace files" aria-expanded="false" aria-controls="files-panel" data-part="files-toggle" data-i18n-title="topbar.files" data-i18n-aria="topbar.files">
+      <button id="files-btn" class="lv-btn-icon lv-hidden" type="button" title="Files" aria-label="Workspace files" aria-expanded="false" aria-controls="files-panel" data-part="files-toggle" data-i18n-title="topbar.files" data-i18n-aria="topbar.files">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
       </button>
     </div>
   </header>
 
   <!-- A deployer's view (lovia.registerView), covering the chat below. -->
-  <section id="view" class="view" aria-labelledby="view-title" data-part="view" hidden></section>
+  <section id="view" class="lv-view" aria-labelledby="view-title" data-part="view" hidden></section>
 
-  <div id="chat-region" class="chat-region">
-    <section id="transcript" class="transcript" aria-live="polite" data-part="transcript">
-      <div class="empty-state" id="empty-state" data-part="welcome">
+  <div id="chat-region" class="lv-chat-region">
+    <section id="transcript" class="lv-transcript" aria-live="polite" data-part="transcript">
+      <div class="lv-empty-state" id="empty-state" data-part="welcome">
         {% block welcome %}
         {% if empty_title is none %}
         <h2 data-i18n="welcome.title">Where shall we begin?</h2>
@@ -160,51 +160,51 @@
         </ul>
         {% endif %}
         {% if empty_examples %}
-        <div class="empty-examples">
+        <div class="lv-empty-examples">
           {% for example in empty_examples %}
-          <button type="button" class="chip empty-example">{{ example }}</button>
+          <button type="button" class="lv-chip lv-empty-example">{{ example }}</button>
           {% endfor %}
         </div>
         {% endif %}
         {% endblock %}
       </div>
     </section>
-    <aside id="todo-panel" class="todo-panel hidden" aria-label="Current plan" aria-live="polite" data-part="todo-panel"></aside>
-    <button id="scroll-bottom" class="scroll-bottom-btn" type="button" aria-label="Scroll to latest" title="Scroll to latest">
+    <aside id="todo-panel" class="lv-todo-panel lv-hidden" aria-label="Current plan" aria-live="polite" data-part="todo-panel"></aside>
+    <button id="scroll-bottom" class="lv-scroll-bottom-btn" type="button" aria-label="Scroll to latest" title="Scroll to latest">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
     </button>
   </div>
 
-  <form id="composer" class="composer" autocomplete="off" data-part="composer">
+  <form id="composer" class="lv-composer" autocomplete="off" data-part="composer">
     <!-- Messages queued to send once the running run completes. -->
-    <div id="send-queue" class="send-queue" aria-label="Queued messages" data-i18n-aria="queue.label" hidden></div>
+    <div id="send-queue" class="lv-send-queue" aria-label="Queued messages" data-i18n-aria="queue.label" hidden></div>
     <!-- Pending uploads for the next send (thumbnails / file chips). -->
-    <div id="attach-tray" class="attach-tray" aria-label="Attachments" hidden></div>
-    <div class="composer-inner">
+    <div id="attach-tray" class="lv-attach-tray" aria-label="Attachments" hidden></div>
+    <div class="lv-composer-inner">
       <!-- Attach button: uploads to the workspace; hidden until the agent has
            one (same switch as the Files panel). -->
-      <button id="attach" class="btn-attach" type="button" aria-label="Attach image or file" title="Attach image or file" hidden data-part="attach" data-i18n-title="composer.attach" data-i18n-aria="composer.attach">
+      <button id="attach" class="lv-btn-attach" type="button" aria-label="Attach image or file" title="Attach image or file" hidden data-part="attach" data-i18n-title="composer.attach" data-i18n-aria="composer.attach">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
       </button>
-      <label class="vh" for="prompt" data-i18n="composer.message">message</label>
+      <label class="lv-vh" for="prompt" data-i18n="composer.message">message</label>
       <textarea id="prompt" name="prompt" rows="1" placeholder="Send a message…" data-i18n-placeholder="composer.placeholder"></textarea>
       {% block composer_actions %}{% endblock %}
       <!-- Context ring: how full the model's window is, once a turn reports
            usage. Click for details (tokens, cache, model). Sits in the action
            cluster by Send — the composer's left edge is reserved for the
            upcoming attach button. -->
-      <button id="context-ring" class="context-ring hidden" type="button"
+      <button id="context-ring" class="lv-context-ring lv-hidden" type="button"
               aria-haspopup="dialog" aria-expanded="false" aria-controls="context-popover" data-part="context-ring">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-          <circle class="context-ring-track" cx="12" cy="12" r="9.5" pathLength="100"/>
-          <circle class="context-ring-fill" cx="12" cy="12" r="9.5" pathLength="100"/>
+          <circle class="lv-context-ring-track" cx="12" cy="12" r="9.5" pathLength="100"/>
+          <circle class="lv-context-ring-fill" cx="12" cy="12" r="9.5" pathLength="100"/>
         </svg>
       </button>
-      <div id="context-popover" class="context-popover" role="dialog" aria-label="Context details" hidden>
-        <div class="context-popover-rows"></div>
+      <div id="context-popover" class="lv-context-popover" role="dialog" aria-label="Context details" hidden>
+        <div class="lv-context-popover-rows"></div>
       </div>
-      <button id="stop" class="btn btn-danger" type="button" aria-label="Stop" style="display:none" data-i18n="composer.stop" data-i18n-aria="composer.stop">Stop</button>
-      <button id="send" class="btn-send" type="submit" aria-label="Send message" title="Send (Enter)" disabled data-i18n-aria="composer.send">
+      <button id="stop" class="lv-btn lv-btn-danger" type="button" aria-label="Stop" style="display:none" data-i18n="composer.stop" data-i18n-aria="composer.stop">Stop</button>
+      <button id="send" class="lv-btn-send" type="submit" aria-label="Send message" title="Send (Enter)" disabled data-i18n-aria="composer.send">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
       </button>
     </div>
@@ -212,59 +212,59 @@
 </div>
 
 <!-- Files panel — read-only window into the agent's workspace -->
-<aside id="files-panel" class="files-panel" aria-label="Workspace files" data-part="files-panel">
-  <div id="files-resizer" class="files-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel (arrow keys; double-click resets)" aria-controls="files-panel" tabindex="0"></div>
-  <div class="files-head">
-    <div class="files-tabs" role="tablist" aria-label="File view">
-      <button id="files-tab-recent" class="files-tab active" type="button" role="tab" aria-selected="true" data-i18n="files.recent">Recent</button>
-      <button id="files-tab-browse" class="files-tab" type="button" role="tab" aria-selected="false" data-i18n="files.browse">Browse</button>
+<aside id="files-panel" class="lv-files-panel" aria-label="Workspace files" data-part="files-panel">
+  <div id="files-resizer" class="lv-files-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel (arrow keys; double-click resets)" aria-controls="files-panel" tabindex="0"></div>
+  <div class="lv-files-head">
+    <div class="lv-files-tabs" role="tablist" aria-label="File view">
+      <button id="files-tab-recent" class="lv-files-tab lv-active" type="button" role="tab" aria-selected="true" data-i18n="files.recent">Recent</button>
+      <button id="files-tab-browse" class="lv-files-tab" type="button" role="tab" aria-selected="false" data-i18n="files.browse">Browse</button>
     </div>
-    <div class="files-head-actions">
-      <button id="files-upload" class="btn-icon" type="button" title="Upload to workspace" aria-label="Upload files to the workspace" data-i18n-title="files.upload" data-i18n-aria="files.upload"></button>
-      <button id="files-refresh" class="btn-icon" type="button" title="Refresh" aria-label="Refresh files" data-i18n-title="files.refresh" data-i18n-aria="files.refresh"></button>
-      <button id="files-close" class="btn-icon" type="button" title="Close" aria-label="Close files panel" data-i18n-title="files.close" data-i18n-aria="files.close"></button>
+    <div class="lv-files-head-actions">
+      <button id="files-upload" class="lv-btn-icon" type="button" title="Upload to workspace" aria-label="Upload files to the workspace" data-i18n-title="files.upload" data-i18n-aria="files.upload"></button>
+      <button id="files-refresh" class="lv-btn-icon" type="button" title="Refresh" aria-label="Refresh files" data-i18n-title="files.refresh" data-i18n-aria="files.refresh"></button>
+      <button id="files-close" class="lv-btn-icon" type="button" title="Close" aria-label="Close files panel" data-i18n-title="files.close" data-i18n-aria="files.close"></button>
     </div>
   </div>
-  <nav id="files-crumbs" class="files-crumbs hidden" aria-label="Directory path"></nav>
-  <div class="files-search">
-    <input type="search" id="files-filter" class="search-input" placeholder="Filter files…" aria-label="Filter files" autocomplete="off" data-i18n-placeholder="files.filter" data-i18n-aria="files.filter" />
+  <nav id="files-crumbs" class="lv-files-crumbs lv-hidden" aria-label="Directory path"></nav>
+  <div class="lv-files-search">
+    <input type="search" id="files-filter" class="lv-search-input" placeholder="Filter files…" aria-label="Filter files" autocomplete="off" data-i18n-placeholder="files.filter" data-i18n-aria="files.filter" />
   </div>
-  <section id="files-procs" class="files-procs hidden" aria-label="Background processes"></section>
-  <div id="files-list" class="files-list"></div>
-  <div id="files-split" class="files-split hidden" role="separator" aria-orientation="horizontal" aria-label="Resize file preview (arrow keys; double-click resets)" aria-controls="files-viewer" aria-valuemin="0" aria-valuemax="100" aria-valuenow="58" tabindex="0"></div>
-  <section id="files-viewer" class="files-viewer hidden" aria-label="File preview">
-    <div class="files-viewer-head">
-      <span id="files-viewer-name" class="files-viewer-name" title=""></span>
-      <div class="files-viewer-actions">
-        <button id="files-md-toggle" class="btn-icon hidden" type="button" title="Toggle rendered / raw" aria-label="Toggle rendered or raw markdown"></button>
-        <button id="files-wrap-toggle" class="btn-icon hidden" type="button" title="Toggle line wrap" aria-label="Toggle line wrap"></button>
-        <button id="files-attach" class="btn-icon" type="button" title="Attach to chat" aria-label="Attach this file to the chat" data-i18n-title="files.attach" data-i18n-aria="files.attach"></button>
-        <button id="files-copy" class="btn-icon" type="button" title="Copy content" aria-label="Copy file content" data-i18n-title="files.copyContent" data-i18n-aria="files.copyContent"></button>
-        <button id="files-fullscreen" class="btn-icon" type="button" title="Expand view" aria-haspopup="dialog" aria-label="Open file in the reader" data-i18n-title="files.fullscreen" data-i18n-aria="files.fullscreen"></button>
-        <a id="files-download" class="btn-icon" title="Download" aria-label="Download file" download data-i18n-title="files.download" data-i18n-aria="files.download"></a>
-        <button id="files-viewer-close" class="btn-icon" type="button" title="Close file" aria-label="Close file preview"></button>
+  <section id="files-procs" class="lv-files-procs lv-hidden" aria-label="Background processes"></section>
+  <div id="files-list" class="lv-files-list"></div>
+  <div id="files-split" class="lv-files-split lv-hidden" role="separator" aria-orientation="horizontal" aria-label="Resize file preview (arrow keys; double-click resets)" aria-controls="files-viewer" aria-valuemin="0" aria-valuemax="100" aria-valuenow="58" tabindex="0"></div>
+  <section id="files-viewer" class="lv-files-viewer lv-hidden" aria-label="File preview">
+    <div class="lv-files-viewer-head">
+      <span id="files-viewer-name" class="lv-files-viewer-name" title=""></span>
+      <div class="lv-files-viewer-actions">
+        <button id="files-md-toggle" class="lv-btn-icon lv-hidden" type="button" title="Toggle rendered / raw" aria-label="Toggle rendered or raw markdown"></button>
+        <button id="files-wrap-toggle" class="lv-btn-icon lv-hidden" type="button" title="Toggle line wrap" aria-label="Toggle line wrap"></button>
+        <button id="files-attach" class="lv-btn-icon" type="button" title="Attach to chat" aria-label="Attach this file to the chat" data-i18n-title="files.attach" data-i18n-aria="files.attach"></button>
+        <button id="files-copy" class="lv-btn-icon" type="button" title="Copy content" aria-label="Copy file content" data-i18n-title="files.copyContent" data-i18n-aria="files.copyContent"></button>
+        <button id="files-fullscreen" class="lv-btn-icon" type="button" title="Expand view" aria-haspopup="dialog" aria-label="Open file in the reader" data-i18n-title="files.fullscreen" data-i18n-aria="files.fullscreen"></button>
+        <a id="files-download" class="lv-btn-icon" title="Download" aria-label="Download file" download data-i18n-title="files.download" data-i18n-aria="files.download"></a>
+        <button id="files-viewer-close" class="lv-btn-icon" type="button" title="Close file" aria-label="Close file preview"></button>
       </div>
     </div>
-    <div id="files-viewer-body" class="files-viewer-body"></div>
+    <div id="files-viewer-body" class="lv-files-viewer-body"></div>
   </section>
 </aside>
 </main>
 
 <!-- Reader modal: the file viewer's content at a comfortable, centered
      measure. A native dialog — Esc, backdrop, and focus trap for free. -->
-<dialog id="file-modal" class="file-modal" aria-label="File reader">
-  <div class="file-modal-head">
-    <span id="file-modal-name" class="file-modal-name"></span>
-    <button id="file-modal-close" class="btn-icon" type="button" title="Close" aria-label="Close reader"></button>
+<dialog id="file-modal" class="lv-file-modal" aria-label="File reader">
+  <div class="lv-file-modal-head">
+    <span id="file-modal-name" class="lv-file-modal-name"></span>
+    <button id="file-modal-close" class="lv-btn-icon" type="button" title="Close" aria-label="Close reader"></button>
   </div>
-  <div id="file-modal-body" class="file-modal-body"></div>
+  <div id="file-modal-body" class="lv-file-modal-body"></div>
 </dialog>
 
 <!-- Screen-reader live regions. They live OUTSIDE #transcript because the
      transcript carries aria-busy while streaming, which would mute anything
      announced from within it (pending approvals, the finished reply). -->
-<div id="sr-status" class="vh" role="status"></div>
-<div id="sr-alert" class="vh" role="alert"></div>
+<div id="sr-status" class="lv-vh" role="status"></div>
+<div id="sr-alert" class="lv-vh" role="alert"></div>
 
 <!-- Templates -->
 <!-- The welcome view the client restores on "New chat": the same block as
@@ -272,75 +272,75 @@
 <template id="tmpl-welcome">{{ self.welcome() }}</template>
 
 <template id="tmpl-turn">
-  <article class="turn" data-part="turn">
-    <div class="bubble"></div>
+  <article class="lv-turn" data-part="turn">
+    <div class="lv-bubble"></div>
   </article>
 </template>
 
 <template id="tmpl-tool">
-  <details class="tool" data-part="tool">
+  <details class="lv-tool" data-part="tool">
     <summary>
-      <span class="tool-name"></span>
-      <span class="tool-args"></span>
+      <span class="lv-tool-name"></span>
+      <span class="lv-tool-args"></span>
     </summary>
-    <div class="tool-params"></div>
-    <div class="tool-result-box">
-      <pre class="tool-result"></pre>
+    <div class="lv-tool-params"></div>
+    <div class="lv-tool-result-box">
+      <pre class="lv-tool-result"></pre>
     </div>
   </details>
 </template>
 
 <template id="tmpl-approval">
-  <div class="approval">
-    <div class="approval-head">Awaiting your decision</div>
-    <div class="approval-call">
-      <code class="approval-name"></code>
-      <div class="approval-args tool-params"></div>
+  <div class="lv-approval">
+    <div class="lv-approval-head">Awaiting your decision</div>
+    <div class="lv-approval-call">
+      <code class="lv-approval-name"></code>
+      <div class="lv-approval-args lv-tool-params"></div>
     </div>
-    <div class="approval-actions">
-      <button type="button" class="btn btn-ghost decline">Deny</button>
-      <button type="button" class="btn btn-primary approve">Approve</button>
+    <div class="lv-approval-actions">
+      <button type="button" class="lv-btn lv-btn-ghost lv-decline">Deny</button>
+      <button type="button" class="lv-btn lv-btn-primary lv-approve">Approve</button>
     </div>
   </div>
 </template>
 
 <template id="tmpl-question">
-  <div class="question">
-    <div class="question-head">The agent needs your answer</div>
-    <div class="question-text"></div>
-    <div class="question-options"></div>
-    <form class="question-free">
-      <textarea class="question-input" rows="1"></textarea>
-      <button type="submit" class="btn btn-primary question-send">Send</button>
+  <div class="lv-question">
+    <div class="lv-question-head">The agent needs your answer</div>
+    <div class="lv-question-text"></div>
+    <div class="lv-question-options"></div>
+    <form class="lv-question-free">
+      <textarea class="lv-question-input" rows="1"></textarea>
+      <button type="submit" class="lv-btn lv-btn-primary lv-question-send">Send</button>
     </form>
   </div>
 </template>
 
 <template id="tmpl-handoff">
-  <div class="handoff-banner">
-    <span class="handoff-text"></span>
+  <div class="lv-handoff-banner">
+    <span class="lv-handoff-text"></span>
   </div>
 </template>
 
 <template id="tmpl-context-compacted">
-  <div class="context-notice">
-    <div class="context-row">
-      <svg class="context-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <div class="lv-context-notice">
+    <div class="lv-context-row">
+      <svg class="lv-context-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <polyline points="4 14 10 14 10 20"/>
         <polyline points="20 10 14 10 14 4"/>
         <line x1="14" y1="10" x2="21" y2="3"/>
         <line x1="3" y1="21" x2="10" y2="14"/>
       </svg>
-      <span class="context-title">Context compacted</span>
-      <span class="context-trigger"></span>
+      <span class="lv-context-title">Context compacted</span>
+      <span class="lv-context-trigger"></span>
     </div>
-    <div class="context-stats"></div>
-    <div class="context-detail"></div>
+    <div class="lv-context-stats"></div>
+    <div class="lv-context-detail"></div>
   </div>
 </template>
 
 <template id="tmpl-copy-btn">
-  <button type="button" class="btn-copy" title="Copy as Markdown" aria-label="Copy message">
+  <button type="button" class="lv-btn-copy" title="Copy as Markdown" aria-label="Copy message">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
       <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
@@ -349,23 +349,23 @@
 </template>
 
 <template id="tmpl-retry">
-  <div class="retry-row">
-    <button type="button" class="btn btn-primary btn-sm retry-btn">Retry</button>
+  <div class="lv-retry-row">
+    <button type="button" class="lv-btn lv-btn-primary lv-btn-sm lv-retry-btn">Retry</button>
   </div>
 </template>
 
 <template id="tmpl-skeleton">
-  <div class="chat-skeleton" aria-hidden="true">
-    <div class="skeleton-turn user"><span class="skeleton-line" style="width:36%"></span></div>
-    <div class="skeleton-turn">
-      <span class="skeleton-line" style="width:72%"></span>
-      <span class="skeleton-line" style="width:90%"></span>
-      <span class="skeleton-line" style="width:58%"></span>
+  <div class="lv-chat-skeleton" aria-hidden="true">
+    <div class="lv-skeleton-turn lv-user"><span class="lv-skeleton-line" style="width:36%"></span></div>
+    <div class="lv-skeleton-turn">
+      <span class="lv-skeleton-line" style="width:72%"></span>
+      <span class="lv-skeleton-line" style="width:90%"></span>
+      <span class="lv-skeleton-line" style="width:58%"></span>
     </div>
-    <div class="skeleton-turn user"><span class="skeleton-line" style="width:28%"></span></div>
-    <div class="skeleton-turn">
-      <span class="skeleton-line" style="width:80%"></span>
-      <span class="skeleton-line" style="width:50%"></span>
+    <div class="lv-skeleton-turn lv-user"><span class="lv-skeleton-line" style="width:28%"></span></div>
+    <div class="lv-skeleton-turn">
+      <span class="lv-skeleton-line" style="width:80%"></span>
+      <span class="lv-skeleton-line" style="width:50%"></span>
     </div>
   </div>
 </template>

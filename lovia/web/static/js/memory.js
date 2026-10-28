@@ -17,7 +17,7 @@ let btn = null;
 
 function updateVisibility() {
   const agent = store.agents.find((a) => a.name === store.agent);
-  btn?.classList.toggle('hidden', !agent?.memory);
+  btn?.classList.toggle('lv-hidden', !agent?.memory);
 }
 
 const droppedLines = (content) =>
@@ -25,39 +25,39 @@ const droppedLines = (content) =>
 
 async function openMemoryDialog() {
   const panel = document.createElement('div');
-  panel.className = 'memory-panel';
+  panel.className = 'lv-memory-panel';
   // Name the agent only when there's more than one to tell apart.
   const who = store.agents.length > 1 && store.agent ? ` — ${store.agent}` : '';
   panel.innerHTML = `
-    <div class="memory-head">
+    <div class="lv-memory-head">
       <h3>${t('memory.title')}${who}</h3>
-      <button type="button" class="btn-icon memory-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
+      <button type="button" class="lv-btn-icon lv-memory-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
     </div>
-    <p class="memory-hint">${t('memory.hint')}</p>
-    <label class="vh" for="memory-editor">${t('memory.editorLabel')}</label>
-    <textarea id="memory-editor" class="dialog-input memory-editor" spellcheck="false"
+    <p class="lv-memory-hint">${t('memory.hint')}</p>
+    <label class="lv-vh" for="memory-editor">${t('memory.editorLabel')}</label>
+    <textarea id="memory-editor" class="lv-dialog-input lv-memory-editor" spellcheck="false"
       placeholder="${t('memory.placeholder')}" disabled></textarea>
-    <div class="memory-foot">
-      <span class="memory-meter">${t('memory.loading')}</span>
-      <div class="memory-actions">
-        <button type="button" class="btn btn-ghost memory-dream" disabled
+    <div class="lv-memory-foot">
+      <span class="lv-memory-meter">${t('memory.loading')}</span>
+      <div class="lv-memory-actions">
+        <button type="button" class="lv-btn lv-btn-ghost lv-memory-dream" disabled
           title="${t('memory.dream')}">${icon('sparkles', { size: 14 })} ${t('memory.dream')}</button>
-        <button type="button" class="btn btn-ghost memory-cancel">${t('dialog.cancel')}</button>
-        <button type="button" class="btn btn-primary memory-save" disabled>${t('dialog.save')}</button>
+        <button type="button" class="lv-btn lv-btn-ghost lv-memory-cancel">${t('dialog.cancel')}</button>
+        <button type="button" class="lv-btn lv-btn-primary lv-memory-save" disabled>${t('dialog.save')}</button>
       </div>
     </div>`;
 
-  const editor = /** @type {HTMLTextAreaElement} */ (panel.querySelector('.memory-editor'));
-  const meter = panel.querySelector('.memory-meter');
-  const saveBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.memory-save'));
-  const dreamBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.memory-dream'));
+  const editor = /** @type {HTMLTextAreaElement} */ (panel.querySelector('.lv-memory-editor'));
+  const meter = panel.querySelector('.lv-memory-meter');
+  const saveBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.lv-memory-save'));
+  const dreamBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.lv-memory-dream'));
   let budget = 0;
   let dreamedAt = null;
 
   const dialog = showDialog({ body: panel });
-  dialog.classList.add('dialog-wide');
-  panel.querySelector('.memory-close').addEventListener('click', () => dialog.close());
-  panel.querySelector('.memory-cancel').addEventListener('click', () => dialog.close());
+  dialog.classList.add('lv-dialog-wide');
+  panel.querySelector('.lv-memory-close').addEventListener('click', () => dialog.close());
+  panel.querySelector('.lv-memory-cancel').addEventListener('click', () => dialog.close());
 
   const syncMeter = () => {
     const used = editor.value.length;
@@ -72,7 +72,7 @@ async function openMemoryDialog() {
     if (dreamedAt)
       bits.push(t('memory.dreamedAt', { when: new Date(dreamedAt * 1000).toLocaleDateString() }));
     meter.textContent = bits.join(' · ');
-    meter.classList.toggle('warn', dropped > 0 || used > budget);
+    meter.classList.toggle('lv-warn', dropped > 0 || used > budget);
   };
 
   async function save() {
@@ -123,7 +123,7 @@ async function openMemoryDialog() {
     editor.setSelectionRange(editor.value.length, editor.value.length);
   } catch (err) {
     meter.textContent = err.message || t('memory.loadFailed');
-    meter.classList.add('warn');
+    meter.classList.add('lv-warn');
     return;
   }
 

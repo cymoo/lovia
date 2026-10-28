@@ -2,5 +2,5 @@
    lovia already keeps a pressed action visible in the accent colour — a 👎
    reads better in the danger one. */
 [data-part="message-actions"] [data-action="acme-down"][aria-pressed="true"] {
-  color: var(--danger);
+  color: var(--lv-danger);
 }

@@ -30,7 +30,7 @@ test('normalizePage needs html; the title is optional', () => {
 test('buildSrcdoc: CSP, tokens and bootstrap come before the page', () => {
   const doc = buildSrcdoc(page, {
     theme: 'dark',
-    tokens: { '--ink': '#eee', '--bad': 'red</style><script>x()</script>', '--empty': '' },
+    tokens: { '--lv-ink': '#eee', '--bad': 'red</style><script>x()</script>', '--empty': '' },
   });
   const csp = doc.indexOf(`content="${FRAME_CSP}"`);
   const boot = doc.indexOf('ui/notifications/size-changed');
@@ -38,7 +38,7 @@ test('buildSrcdoc: CSP, tokens and bootstrap come before the page', () => {
   assert.ok(csp > 0 && csp < boot && boot < body, 'policy, then bootstrap, then the page');
   assert.ok(doc.endsWith(page)); // the page itself is passed through verbatim
   assert.match(doc, /<html data-theme="dark">/);
-  assert.match(doc, /--ink:#eee/);
+  assert.match(doc, /--lv-ink:#eee/);
   assert.doesNotMatch(doc.slice(0, body), /<\/style><script>x/); // a token can't close <style>
   assert.doesNotMatch(doc, /--empty/);
   assert.match(buildSrcdoc(page, { theme: 'sepia', tokens: {} }), /data-theme="light"/);
@@ -102,7 +102,7 @@ test('non-JSON-RPC or unknown messages are ignored', () => {
 
 test('htmlSnapshot: a note and the escaped source, no frame', () => {
   const html = String(htmlSnapshot({ html: page, title: 'Explorer' }, /** @type {any} */ ({ lang: 'en' })));
-  assert.match(html, /^<figure class="html"><figcaption>Explorer<\/figcaption><p>Interactive page/);
+  assert.match(html, /^<figure class="lv-html"><figcaption>Explorer<\/figcaption><p>Interactive page/);
   assert.match(html, /<pre><code class="language-html">&lt;script&gt;evil\(\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<iframe|<script/);
 });

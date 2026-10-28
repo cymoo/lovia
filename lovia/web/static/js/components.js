@@ -246,7 +246,7 @@ function teardown(m) {
  */
 function notice(m, text) {
   const div = document.createElement('div');
-  div.className = 'tool-ui-notice';
+  div.className = 'lv-tool-ui-notice';
   div.textContent = text;
   m.el.replaceChildren(div);
 }

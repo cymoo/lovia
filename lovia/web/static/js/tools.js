@@ -148,7 +148,7 @@ export function fillParams(container, args) {
   if (!container || !args) return;
   const addBlock = (text) => {
     const div = document.createElement('div');
-    div.className = 'param-val block';
+    div.className = 'lv-param-val lv-block';
     div.textContent = text;
     container.appendChild(div);
   };
@@ -170,10 +170,10 @@ export function fillParams(container, args) {
     if (isDiff && (k === 'old' || k === 'new')) {
       const old = k === 'old';
       const key = document.createElement('div');
-      key.className = 'param-key';
+      key.className = 'lv-param-key';
       key.textContent = old ? t('tool.old') : t('tool.new');
       const value = document.createElement('div');
-      value.className = `param-val block ${old ? 'diff-old' : 'diff-new'}`;
+      value.className = `lv-param-val lv-block ${old ? 'lv-diff-old' : 'lv-diff-new'}`;
       value.textContent = v;
       container.append(key, value);
       continue;
@@ -182,10 +182,10 @@ export function fillParams(container, args) {
     const block = val.includes('\n') || val.length > 80;
     if (block && typeof v !== 'string') val = JSON.stringify(v, null, 2);
     const key = document.createElement('div');
-    key.className = 'param-key';
+    key.className = 'lv-param-key';
     key.textContent = k;
     const value = document.createElement('div');
-    value.className = block ? 'param-val block' : 'param-val';
+    value.className = block ? 'lv-param-val lv-block' : 'lv-param-val';
     value.textContent = val;
     container.append(key, value);
   }
@@ -210,7 +210,7 @@ export function toolPath(args) {
 function toolActionBtn(iconName, title) {
   const b = document.createElement('button');
   b.type = 'button';
-  b.className = 'tool-action';
+  b.className = 'lv-tool-action';
   b.title = title;
   b.setAttribute('aria-label', title);
   b.innerHTML = icon(iconName, { size: 12 });
@@ -238,20 +238,20 @@ function toolDescription(call) {
  */
 export function buildToolNode(call) {
   const node = cloneTemplate('tmpl-tool');
-  node.querySelector('.tool-name').textContent = call.name;
+  node.querySelector('.lv-tool-name').textContent = call.name;
   const desc = toolDescription(call);
-  node.querySelector('.tool-args').textContent = formatArgs(
+  node.querySelector('.lv-tool-args').textContent = formatArgs(
     call.arguments,
     desc ? ['description'] : undefined,
   );
   if (desc) {
     const sub = document.createElement('span');
-    sub.className = 'tool-desc';
+    sub.className = 'lv-tool-desc';
     sub.textContent = desc;
     sub.title = desc; // ellipsized subtitle stays readable on hover
     node.querySelector('summary')?.appendChild(sub);
   }
-  fillParams(node.querySelector('.tool-params'), call.arguments);
+  fillParams(node.querySelector('.lv-tool-params'), call.arguments);
   node.dataset.tool = call.name;
   // Identity, so a card already on screen can be recognised rather than drawn
   // twice — see chat.js appendTool.
@@ -272,7 +272,7 @@ export function buildToolNode(call) {
   if (path && PATH_TOOLS.has(call.name)) {
     node.dataset.toolPath = path;
     const open = toolActionBtn('folder', t('tool.openInFiles'));
-    open.classList.add('tool-open-file');
+    open.classList.add('lv-tool-open-file');
     open.addEventListener('click', (e) => {
       // Inside <summary>: don't let the click also toggle the card.
       e.preventDefault();
@@ -326,22 +326,22 @@ function applySummary(node) {
     }
     if (text !== null) break;
   }
-  let el = summary.querySelector(':scope > .tool-summary');
+  let el = summary.querySelector(':scope > .lv-tool-summary');
   if (text === null) {
     el?.remove();
-    node.classList.remove('tool--summary');
+    node.classList.remove('lv-tool--summary');
     return;
   }
   if (!el) {
     el = document.createElement('span');
-    el.className = 'tool-summary';
-    summary.querySelector('.tool-args')?.after(el);
+    el.className = 'lv-tool-summary';
+    summary.querySelector('.lv-tool-args')?.after(el);
   }
   el.textContent = text;
   // The call it stands for, on hover.
   /** @type {HTMLElement} */ (el).title =
-    `${state.name} ${node.querySelector('.tool-args')?.textContent ?? ''}`.trim();
-  node.classList.add('tool--summary');
+    `${state.name} ${node.querySelector('.lv-tool-args')?.textContent ?? ''}`.trim();
+  node.classList.add('lv-tool--summary');
 }
 
 // Re-apply a view registered late (a slow extension) to the cards on screen
@@ -367,7 +367,7 @@ export function findToolNode(id) {
   if (known?.isConnected) return known;
   const escaped = window.CSS?.escape ? CSS.escape(id) : id.replace(/["\\]/g, '\\$&');
   return /** @type {HTMLElement | null} */ (
-    document.querySelector(`#transcript .tool[data-call-id="${escaped}"]`)
+    document.querySelector(`#transcript .lv-tool[data-call-id="${escaped}"]`)
   );
 }
 
@@ -423,9 +423,9 @@ function splitReadFileHeader(node, text, isError) {
 // Idempotent across repeated result updates; a fetch failure degrades each
 // image to a small chip instead of a broken-image glyph.
 function renderToolImages(node, images) {
-  const box = node.querySelector('.tool-result-box');
+  const box = node.querySelector('.lv-tool-result-box');
   if (!box) return;
-  let strip = box.querySelector('.tool-result-images');
+  let strip = box.querySelector('.lv-tool-result-images');
   if (!images?.length) {
     strip?.remove();
     return;
@@ -434,7 +434,7 @@ function renderToolImages(node, images) {
   if (!callId || !store.sessionId) return;
   if (!strip) {
     strip = document.createElement('div');
-    strip.className = 'tool-result-images';
+    strip.className = 'lv-tool-result-images';
     box.append(strip);
   }
   // The image IS the payload — surface it instead of hiding it behind the
@@ -445,13 +445,13 @@ function renderToolImages(node, images) {
   strip.replaceChildren();
   for (const im of images) {
     const img = document.createElement('img');
-    img.className = 'tool-result-image';
+    img.className = 'lv-tool-result-image';
     img.loading = 'lazy';
     img.alt = t('tool.image');
     img.src = api.toolImageUrl(store.sessionId, callId, im.index ?? 0);
     img.addEventListener('error', () => {
       const chip = document.createElement('span');
-      chip.className = 'tool-image-chip';
+      chip.className = 'lv-tool-image-chip';
       chip.innerHTML = icon('image', { size: 13 }); // our own SVG, trusted
       const label = document.createElement('span');
       // textContent, not markup: mime_type is tool-supplied text.
@@ -471,7 +471,7 @@ function renderToolImages(node, images) {
 // view's `render`. Idempotent across repeated updates; with neither, any UI
 // is torn down.
 function syncToolUi(node, live) {
-  const box = node.querySelector('.tool-result-box');
+  const box = node.querySelector('.lv-tool-result-box');
   const state = states.get(node);
   if (!box || !state) return;
   let comp = state.isError || state.result === undefined
@@ -480,14 +480,14 @@ function syncToolUi(node, live) {
   if (!comp && toolViewField(state.name, 'render')) {
     comp = { kind: TOOL_VIEW_KIND, props: toolInfo(state) };
   }
-  let el = /** @type {HTMLElement | null} */ (node.querySelector(':scope > .tool-ui'));
+  let el = /** @type {HTMLElement | null} */ (node.querySelector(':scope > .lv-tool-ui'));
   if (!comp) {
     if (el) {
       unmountComponent(el);
       el.remove();
     }
-    node.classList.remove('tool--ui', 'show-source');
-    node.querySelector('.tool-source')?.remove();
+    node.classList.remove('lv-tool--ui', 'lv-show-source');
+    node.querySelector('.lv-tool-source')?.remove();
     delete node.dataset.ui;
     return;
   }
@@ -495,19 +495,19 @@ function syncToolUi(node, live) {
   liftStep(node); // the component is the payload: out of a folded group, before it mounts
   if (!el) {
     el = document.createElement('div');
-    el.className = 'tool-ui';
+    el.className = 'lv-tool-ui';
     box.before(el); // outside the box, clear of its hover actions
   }
-  node.classList.add('tool--ui');
+  node.classList.add('lv-tool--ui');
   node.open = true; // the component IS the payload, like the image strip
-  if (!node.querySelector('.tool-source')) {
+  if (!node.querySelector('.lv-tool-source')) {
     const src = toolActionBtn('code', t('tool.source'));
-    src.classList.add('tool-source');
+    src.classList.add('lv-tool-source');
     src.addEventListener('click', (e) => {
       e.preventDefault(); // inside <summary>: don't toggle the card
       e.stopPropagation();
       node.open = true;
-      node.classList.toggle('show-source');
+      node.classList.toggle('lv-show-source');
     });
     node.querySelector('summary')?.appendChild(src);
   }
@@ -537,12 +537,12 @@ export function setToolResult(node, result, isError, images, live = false) {
   node.dataset.status = isError ? 'error' : 'done';
   renderToolImages(node, images);
   refreshTool(node, live);
-  const pre = /** @type {HTMLElement | null} */ (node.querySelector('.tool-result'));
+  const pre = /** @type {HTMLElement | null} */ (node.querySelector('.lv-tool-result'));
   if (!pre) return;
   const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);
   if (!text.trim()) {
     pre.style.display = 'none';
-    node.querySelector('.tool-result-meta')?.remove();
+    node.querySelector('.lv-tool-result-meta')?.remove();
     return;
   }
   // Undo the hide above: a card replayed while its call was still pending got
@@ -560,15 +560,15 @@ export function setToolResult(node, result, isError, images, live = false) {
   } else {
     pre.innerHTML = linkifyText(text);
   }
-  if (isError) node.classList.add('error');
+  if (isError) node.classList.add('lv-error');
 
-  const box = node.querySelector('.tool-result-box');
+  const box = node.querySelector('.lv-tool-result-box');
   if (!box) return;
-  let metaEl = box.querySelector('.tool-result-meta');
+  let metaEl = box.querySelector('.lv-tool-result-meta');
   if (meta) {
     if (!metaEl) {
       metaEl = document.createElement('div');
-      metaEl.className = 'tool-result-meta';
+      metaEl.className = 'lv-tool-result-meta';
       pre.before(metaEl);
     }
     metaEl.textContent =
@@ -578,10 +578,10 @@ export function setToolResult(node, result, isError, images, live = false) {
   } else {
     metaEl?.remove(); // idempotent across repeated result updates
   }
-  let actions = box.querySelector('.tool-result-actions');
+  let actions = box.querySelector('.lv-tool-result-actions');
   if (!actions) {
     actions = document.createElement('div');
-    actions.className = 'tool-result-actions';
+    actions.className = 'lv-tool-result-actions';
     box.prepend(actions);
   }
   actions.replaceChildren(); // idempotent across repeated result updates
@@ -589,7 +589,7 @@ export function setToolResult(node, result, isError, images, live = false) {
   if (text.length > 1500 || text.split('\n').length > RESULT_EXPANDABLE_LINES) {
     const expand = toolActionBtn('maximize-2', t('tool.expand'));
     expand.addEventListener('click', () => {
-      const on = pre.classList.toggle('expanded');
+      const on = pre.classList.toggle('lv-expanded');
       expand.title = on ? t('tool.collapse') : t('tool.expand');
     });
     actions.append(expand);

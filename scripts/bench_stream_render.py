@@ -228,7 +228,7 @@ def bench_live(page, window_s: float) -> None:
         "() => { const p = window.__bench; p.end = performance.now(); return p; }"
     )
     n = page.evaluate(
-        "() => document.querySelector('#transcript .turn.assistant .body')?.textContent.length ?? 0"
+        "() => document.querySelector('#transcript .lv-turn.lv-assistant .lv-body')?.textContent.length ?? 0"
     )
     elapsed = p["end"] - p["t0"]
     print("| metric | value |\n| --- | ---: |")

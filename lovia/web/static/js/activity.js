@@ -22,8 +22,8 @@ import { toolLabel } from './tool-views.js';
  */
 export function isStep(node) {
   const c = node.classList;
-  if (c.contains('reasoning') || c.contains('approval-auto')) return true;
-  return c.contains('tool') && !c.contains('tool--ui') && !node.querySelector('.tool-result-images');
+  if (c.contains('lv-reasoning') || c.contains('lv-approval-auto')) return true;
+  return c.contains('lv-tool') && !c.contains('lv-tool--ui') && !node.querySelector('.lv-tool-result-images');
 }
 
 /**
@@ -48,31 +48,31 @@ export function summarize(steps, max = 4) {
 }
 
 /** @param {HTMLElement} group */
-const stepsOf = (group) => /** @type {HTMLElement} */ (group.querySelector(':scope > .activity-steps'));
+const stepsOf = (group) => /** @type {HTMLElement} */ (group.querySelector(':scope > .lv-activity-steps'));
 
 /** @param {Element | null} node @returns {HTMLDetailsElement | null} */
 function groupOf(node) {
   const group = node?.parentElement?.parentElement;
-  return group?.classList.contains('activity') ? /** @type {HTMLDetailsElement} */ (group) : null;
+  return group?.classList.contains('lv-activity') ? /** @type {HTMLDetailsElement} */ (group) : null;
 }
 
 /** @param {boolean} open */
 function makeGroup(open) {
   const group = document.createElement('details');
-  group.className = 'activity';
+  group.className = 'lv-activity';
   group.dataset.part = 'activity';
   group.open = open;
   const summary = document.createElement('summary');
   summary.innerHTML =
-    `<span class="activity-icon">${icon('layers', { size: 14 })}</span>` +
-    '<span class="activity-label"></span>';
+    `<span class="lv-activity-icon">${icon('layers', { size: 14 })}</span>` +
+    '<span class="lv-activity-label"></span>';
   // A click or keypress on the summary is the user's say; programmatic
   // open/close (sealActivity) must not override it.
   summary.addEventListener('click', () => {
     group.dataset.userToggled = '';
   });
   const steps = document.createElement('div');
-  steps.className = 'activity-steps';
+  steps.className = 'lv-activity-steps';
   group.append(summary, steps);
   return group;
 }
@@ -81,9 +81,9 @@ function makeGroup(open) {
 function relabel(group) {
   const steps = [...stepsOf(group).children].map((n) => {
     const tool = /** @type {HTMLElement} */ (n).dataset.tool;
-    return { reasoning: n.classList.contains('reasoning'), tool: tool && toolLabel(tool) };
+    return { reasoning: n.classList.contains('lv-reasoning'), tool: tool && toolLabel(tool) };
   });
-  const label = group.querySelector('.activity-label');
+  const label = group.querySelector('.lv-activity-label');
   if (label) label.textContent = summarize(steps).join(' · ');
 }
 
@@ -104,7 +104,7 @@ function normalize(group) {
  */
 export function placeStep(bubble, node, before) {
   const prev = before ? before.previousElementSibling : bubble.lastElementChild;
-  if (prev?.classList.contains('activity')) {
+  if (prev?.classList.contains('lv-activity')) {
     stepsOf(/** @type {HTMLElement} */ (prev)).append(node);
     relabel(/** @type {HTMLElement} */ (prev));
   } else if (prev && isStep(prev)) {
@@ -123,7 +123,7 @@ export function placeStep(bubble, node, before) {
  * @param {HTMLElement | null} bubble
  */
 export function sealActivity(bubble) {
-  for (const group of bubble?.querySelectorAll(':scope > .activity[open]') ?? []) {
+  for (const group of bubble?.querySelectorAll(':scope > .lv-activity[open]') ?? []) {
     const g = /** @type {HTMLDetailsElement} */ (group);
     if ('userToggled' in g.dataset || g.querySelector('[data-status="awaiting"]')) continue;
     g.open = false;

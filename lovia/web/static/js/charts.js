@@ -263,12 +263,12 @@ function themeFromCss() {
   const cs = getComputedStyle(document.documentElement);
   const v = (/** @type {string} */ name) => cs.getPropertyValue(name).trim();
   const color = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => v(`--chart-${i}`)).filter(Boolean);
-  const text = v('--chart-text');
-  const strong = v('--chart-title');
-  const axis = v('--chart-axis');
-  const grid = v('--chart-grid');
+  const text = v('--lv-chart-text');
+  const strong = v('--lv-chart-title');
+  const axis = v('--lv-chart-axis');
+  const grid = v('--lv-chart-grid');
   // Adjacent fills (slices, tiles) part with a hairline of the card surface.
-  const gap = { itemStyle: { borderColor: v('--surface'), borderWidth: 2 } };
+  const gap = { itemStyle: { borderColor: v('--lv-surface'), borderWidth: 2 } };
   const axisTheme = {
     axisLine: { lineStyle: { color: axis } },
     axisTick: { lineStyle: { color: axis } },
@@ -334,10 +334,10 @@ function chartSvg(chart, heading) {
   const cs = getComputedStyle(document.documentElement);
   const v = (/** @type {string} */ name) => xml(cs.getPropertyValue(name).trim());
   const font = xml(getComputedStyle(document.body).fontFamily);
-  const style = (/** @type {string} */ text, size = 12, weight = 400, fill = v('--chart-text')) =>
+  const style = (/** @type {string} */ text, size = 12, weight = 400, fill = v('--lv-chart-text')) =>
     text.split('\n').filter(Boolean).map((s) => ({ s, size, weight, fill }));
   const lines = [
-    ...style(heading?.text ?? '', 14, 600, v('--chart-title')),
+    ...style(heading?.text ?? '', 14, 600, v('--lv-chart-title')),
     ...style(heading?.subtext ?? ''),
   ];
   let y = 0;
@@ -353,7 +353,7 @@ function chartSvg(chart, heading) {
   const height = chart.getHeight() + top;
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-    `<rect width="100%" height="100%" fill="${v('--surface')}"/>${text}` +
+    `<rect width="100%" height="100%" fill="${v('--lv-surface')}"/>${text}` +
     chart.renderToSVGString().replace(/<svg\b/, `<svg y="${top}"`) +
     '</svg>';
   return { svg, width, height };
@@ -398,7 +398,7 @@ function renderChart(el, props, ctx) {
     chart?.dispose();
     chart = null;
     const div = document.createElement('div');
-    div.className = 'tool-ui-notice';
+    div.className = 'lv-tool-ui-notice';
     div.textContent = L.failed;
     fig.replaceWith(div);
   };

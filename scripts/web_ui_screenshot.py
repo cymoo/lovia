@@ -390,12 +390,12 @@ def shoot(url: str, out: Path) -> None:
         page.click("#new-chat")
         page.fill("#prompt", PROMPT)
         page.click("#send")
-        page.wait_for_selector("#followups .followup", timeout=60_000)
+        page.wait_for_selector("#followups .lv-followup", timeout=60_000)
         page.wait_for_selector(f"#chat-title:has-text('{TITLE}')")
 
         page.click("#files-btn")
         page.locator("#files-list").get_by_text("report.md", exact=True).first.click()
-        page.wait_for_selector("#files-viewer:not(.hidden)")
+        page.wait_for_selector("#files-viewer:not(.lv-hidden)")
         page.wait_for_timeout(2500)  # the run-finished toast fades
 
         encoder = browser.new_page()  # about:blank: no page CSP around data: URLs

@@ -4,14 +4,14 @@
 /* Brand color, per theme: a token set on :root would apply to both. Its
    hover / soft / text tints derive from it. */
 [data-theme="light"] {
-  --accent: #4f46e5;
+  --lv-accent: #4f46e5;
 }
 [data-theme="dark"] {
-  --accent: #818cf8;
+  --lv-accent: #818cf8;
 }
 :root {
-  --radius: 10px;
-  --radius-lg: 14px;
+  --lv-radius: 10px;
+  --lv-radius-lg: 14px;
 }
 
 /* This deployment has no use for exporting chats. A tool's cards hide the
@@ -26,14 +26,14 @@
   align-items: center;
   gap: 10px;
   padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  color: var(--ink-2);
+  border-radius: var(--lv-radius-sm);
+  color: var(--lv-ink-2);
   font-size: 13.5px;
   text-decoration: none;
 }
 .acme-nav-link:hover {
-  background: var(--surface-3);
-  color: var(--ink);
+  background: var(--lv-surface-3);
+  color: var(--lv-ink);
 }
 
 .acme-status {
@@ -42,9 +42,9 @@
   gap: 6px;
   margin-right: 4px;
   padding: 4px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--lv-border);
   border-radius: 999px;
-  color: var(--muted);
+  color: var(--lv-muted);
   font-size: 12px;
   text-decoration: none;
 }
@@ -52,7 +52,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--lv-ok);
 }
 /* The top bar is tight on phones: keep just the dot. */
 @media (max-width: 720px) {
@@ -63,7 +63,7 @@
 
 .acme-notice {
   margin-top: 18px;
-  color: var(--accent-text);
+  color: var(--lv-accent-text);
   font-size: 13px;
 }
 
@@ -73,7 +73,7 @@
   gap: 10px;
   margin-top: auto;
   padding: 12px 14px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
+  border-top: 1px solid var(--lv-border);
+  color: var(--lv-muted);
   font-size: 12.5px;
 }

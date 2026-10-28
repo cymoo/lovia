@@ -367,9 +367,9 @@ function fmtElapsed(sec) {
 // re-rendering the sidebar; it stops itself when no task is running.
 let _taskTicker = null;
 function syncTaskTicker() {
-  if (_taskTicker != null || !document.querySelector('.task-elapsed[data-started]')) return;
+  if (_taskTicker != null || !document.querySelector('.lv-task-elapsed[data-started]')) return;
   _taskTicker = setInterval(() => {
-    const els = document.querySelectorAll('.task-elapsed[data-started]');
+    const els = document.querySelectorAll('.lv-task-elapsed[data-started]');
     if (!els.length) {
       clearInterval(_taskTicker);
       _taskTicker = null;
@@ -412,7 +412,7 @@ function renderTasksButton() {
       // Inside a task session: the same topbar slot becomes the way home —
       // plain navigation, so drop the menu semantics along with the popover.
       tasksBtn.dataset.parent = parentId;
-      tasksBtn.classList.remove('attention');
+      tasksBtn.classList.remove('lv-attention');
       tasksBtn.textContent = `← ${t('task.backToParent')}`;
       tasksBtn.removeAttribute('aria-haspopup');
       tasksBtn.removeAttribute('aria-controls');
@@ -428,10 +428,10 @@ function renderTasksButton() {
   }
   const liveCount = tasks.filter((s) => store.runsBySession?.has(s.id)).length;
   const attention = tasks.some((s) => taskState(s) === 'approval');
-  tasksBtn.classList.toggle('attention', attention);
+  tasksBtn.classList.toggle('lv-attention', attention);
   tasksBtn.innerHTML = '';
   const dot = document.createElement('span');
-  dot.className = `task-dot ${attention ? 'approval' : liveCount ? 'running' : 'completed'}`;
+  dot.className = `lv-task-dot ${attention ? 'lv-approval' : liveCount ? 'lv-running' : 'lv-completed'}`;
   const label = document.createElement('span');
   label.textContent = liveCount
     ? t('nav.tasksRunning', { n: liveCount })
@@ -449,24 +449,24 @@ function buildTaskRow(s) {
   const state = taskState(s);
   const row = document.createElement('button');
   row.type = 'button';
-  row.className = 'tasks-popover-row';
+  row.className = 'lv-tasks-popover-row';
   row.setAttribute('role', 'menuitem');
   const d = document.createElement('span');
-  d.className = `task-dot ${state}`;
+  d.className = `lv-task-dot lv-${state}`;
   const m = /^\[([^\]]{1,8})\]\s*(.*)$/.exec(s.title || '');
   const title = document.createElement('span');
-  title.className = 'tasks-popover-title';
+  title.className = 'lv-tasks-popover-title';
   title.textContent = m ? m[2] || s.id : s.title || s.id;
   row.append(d);
   if (m) {
     const tag = document.createElement('span');
-    tag.className = 'task-tag';
+    tag.className = 'lv-task-tag';
     tag.textContent = m[1];
     row.append(tag);
   }
   row.append(title);
   const trail = document.createElement('span');
-  trail.className = 'task-elapsed';
+  trail.className = 'lv-task-elapsed';
   const live = store.runsBySession?.get(s.id);
   if (live?.started_at) {
     trail.dataset.started = String(live.started_at);
@@ -525,7 +525,7 @@ function renderSessions() {
   const chats = store.sessions.filter((s) => !s.parent_id);
   if (!chats.length) {
     const empty = document.createElement('div');
-    empty.className = 'sessions-empty';
+    empty.className = 'lv-sessions-empty';
     empty.textContent = t(sessionSearch?.value.trim() ? 'nav.noMatches' : 'nav.noChats');
     sessionsList.appendChild(empty);
     return;
@@ -541,38 +541,38 @@ function renderSessions() {
     const group = groupOf(s);
     if (headed && group !== prevGroup) {
       const head = document.createElement('div');
-      head.className = 'session-group';
+      head.className = 'lv-session-group';
       head.textContent = t(`nav.group.${group}`);
       sessionsList.appendChild(head);
     }
     prevGroup = group;
     const item = document.createElement('div');
-    item.className = 'session-item';
-    if (s.id === store.sessionId) item.classList.add('active');
-    if (store.activeRuns?.has(s.id)) item.classList.add('running');
-    if (s.pinned) item.classList.add('pinned');
+    item.className = 'lv-session-item';
+    if (s.id === store.sessionId) item.classList.add('lv-active');
+    if (store.activeRuns?.has(s.id)) item.classList.add('lv-running');
+    if (s.pinned) item.classList.add('lv-pinned');
     item.dataset.id = s.id;
 
     const main = document.createElement('button');
     main.type = 'button';
-    main.className = 'session-main';
+    main.className = 'lv-session-main';
     main.title = sidebarTooltip(s);
     // A branch starts with its source's title: mark it apart.
     if (s.origin_kind === 'fork') {
       const mark = document.createElement('span');
-      mark.className = 'session-branch';
+      mark.className = 'lv-session-branch';
       mark.setAttribute('aria-hidden', 'true');
       mark.innerHTML = icon('git-branch', { size: 12 });
       main.appendChild(mark);
     }
     const title = document.createElement('span');
-    title.className = 'session-title';
+    title.className = 'lv-session-title';
     title.textContent = s.title || t('session.newChat');
     main.appendChild(title);
     // Which brain a chat belongs to — only worth pixels when there's a choice.
     if (store.agents.length > 1 && s.agent) {
       const chip = document.createElement('span');
-      chip.className = 'session-agent';
+      chip.className = 'lv-session-agent';
       chip.textContent = s.agent;
       main.appendChild(chip);
     }
@@ -586,7 +586,7 @@ function renderSessions() {
   if (_hasMore) {
     const more = document.createElement('button');
     more.type = 'button';
-    more.className = 'sessions-more';
+    more.className = 'lv-sessions-more';
     more.textContent = t('nav.viewAll');
     more.addEventListener('click', () =>
       openAllSessionsDialog(sessionSearch?.value.trim() || ''),
@@ -621,14 +621,14 @@ export function updateSessionTitle(sessionId, title) {
   // Update the DOM directly without full re-render. Both lists key rows by
   // session id and can be on screen at once (the all-chats dialog sits over the
   // sidebar), so a rename from either has to repaint both.
-  const rows = `.session-item[data-id="${sessionId}"], .all-chats-item[data-id="${sessionId}"]`;
+  const rows = `.lv-session-item[data-id="${sessionId}"], .lv-all-chats-item[data-id="${sessionId}"]`;
   document.querySelectorAll(rows).forEach((row) => {
-    const titleEl = row.querySelector('.session-title, .all-chats-title');
+    const titleEl = row.querySelector('.lv-session-title, .lv-all-chats-title');
     if (titleEl) titleEl.textContent = label;
-    const main = /** @type {HTMLElement | null} */ (row.querySelector('.session-main, .all-chats-main'));
+    const main = /** @type {HTMLElement | null} */ (row.querySelector('.lv-session-main, .lv-all-chats-main'));
     if (main) {
       // Same text the rows render with.
-      main.title = s && main.classList.contains('session-main') ? sidebarTooltip(s) : title || sessionId;
+      main.title = s && main.classList.contains('lv-session-main') ? sidebarTooltip(s) : title || sessionId;
     }
   });
 
@@ -666,7 +666,7 @@ function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, s
           label: t('session.stop'),
           icon: icon('square', { size: 14 }),
           onSelect: async () => {
-            if (await stopRun(s.id)) row.classList.remove('running');
+            if (await stopRun(s.id)) row.classList.remove('lv-running');
           },
         }]
       : []),
@@ -676,7 +676,7 @@ function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, s
       onSelect: async () => {
         const pinned = await togglePin(s);
         // Restate in place — neither list re-sorts a row out from under the pointer.
-        if (pinned !== null) row.classList.toggle('pinned', pinned);
+        if (pinned !== null) row.classList.toggle('lv-pinned', pinned);
       },
     },
     {
@@ -697,7 +697,7 @@ function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, s
 
   const more = document.createElement('button');
   more.type = 'button';
-  more.className = 'session-more';
+  more.className = 'lv-session-more';
   more.title = t('session.actions');
   more.setAttribute('aria-label', t('session.actions'));
   more.setAttribute('aria-haspopup', 'menu');
@@ -902,7 +902,7 @@ export async function switchSession(id) {
   } catch (err) {
     if (store.sessionId !== id) return; // superseded; don't clobber the new view
     const errState = document.createElement('div');
-    errState.className = 'empty-state';
+    errState.className = 'lv-empty-state';
     const h2 = document.createElement('h2');
     h2.textContent = t('chat.couldntLoad');
     const p = document.createElement('p');
@@ -942,16 +942,16 @@ export function startNewChat() {
 // current filter and keeps paging it.
 function openAllSessionsDialog(query = '') {
   const panel = document.createElement('div');
-  panel.className = 'all-chats-panel';
+  panel.className = 'lv-all-chats-panel';
   panel.innerHTML = `
-    <div class="all-chats-head">
+    <div class="lv-all-chats-head">
       <h3>${t('nav.allChats')}</h3>
-      <button type="button" class="btn-icon all-chats-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
+      <button type="button" class="lv-btn-icon lv-all-chats-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
     </div>
-    <div class="all-chats-list" role="list"></div>
-    <button type="button" class="btn btn-ghost btn-sm all-chats-more" hidden>${t('nav.loadMore')}</button>`;
-  const listEl = panel.querySelector('.all-chats-list');
-  const moreBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.all-chats-more'));
+    <div class="lv-all-chats-list" role="list"></div>
+    <button type="button" class="lv-btn lv-btn-ghost lv-btn-sm lv-all-chats-more" hidden>${t('nav.loadMore')}</button>`;
+  const listEl = panel.querySelector('.lv-all-chats-list');
+  const moreBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.lv-all-chats-more'));
   let offset = 0;
   let loading = false;
 
@@ -959,21 +959,21 @@ function openAllSessionsDialog(query = '') {
   // is flat, with no Pinned group to say it.
   function rowFor(s) {
     const row = document.createElement('div');
-    row.className = 'all-chats-item';
+    row.className = 'lv-all-chats-item';
     row.dataset.id = s.id;
-    if (s.id === store.sessionId) row.classList.add('active');
-    if (store.activeRuns?.has(s.id)) row.classList.add('running');
-    if (s.pinned) row.classList.add('pinned');
+    if (s.id === store.sessionId) row.classList.add('lv-active');
+    if (store.activeRuns?.has(s.id)) row.classList.add('lv-running');
+    if (s.pinned) row.classList.add('lv-pinned');
 
     const main = document.createElement('button');
     main.type = 'button';
-    main.className = 'all-chats-main';
+    main.className = 'lv-all-chats-main';
     main.title = s.title || s.id;
     const title = document.createElement('span');
-    title.className = 'all-chats-title';
+    title.className = 'lv-all-chats-title';
     title.textContent = s.title || t('session.newChat');
     const time = document.createElement('span');
-    time.className = 'all-chats-time';
+    time.className = 'lv-all-chats-time';
     time.textContent = formatTimeSmart(s.updated_at);
     time.title = formatDateTime(s.updated_at);
     main.append(title, time);
@@ -983,7 +983,7 @@ function openAllSessionsDialog(query = '') {
     });
 
     const pinMark = document.createElement('span');
-    pinMark.className = 'session-pin';
+    pinMark.className = 'lv-session-pin';
     pinMark.setAttribute('aria-hidden', 'true');
     pinMark.innerHTML = PIN_SVG;
     row.append(main, pinMark, rowActions(s, row, {
@@ -999,12 +999,12 @@ function openAllSessionsDialog(query = '') {
 
   /** Show the empty notice only while the list really has no rows. */
   function syncEmpty() {
-    const empty = listEl.querySelector('.sessions-empty');
-    if (listEl.querySelector('.all-chats-item')) {
+    const empty = listEl.querySelector('.lv-sessions-empty');
+    if (listEl.querySelector('.lv-all-chats-item')) {
       empty?.remove();
     } else if (!empty) {
       const el = document.createElement('div');
-      el.className = 'sessions-empty';
+      el.className = 'lv-sessions-empty';
       el.textContent = t('nav.none');
       listEl.appendChild(el);
     }
@@ -1033,8 +1033,8 @@ function openAllSessionsDialog(query = '') {
   }
 
   const dialog = showDialog({ body: panel });
-  dialog.classList.add('dialog-wide');
-  panel.querySelector('.all-chats-close').addEventListener('click', () => dialog.close());
+  dialog.classList.add('lv-dialog-wide');
+  panel.querySelector('.lv-all-chats-close').addEventListener('click', () => dialog.close());
   moreBtn.addEventListener('click', loadPage);
   loadPage();
 }
@@ -1079,7 +1079,7 @@ function initExportMenu() {
     e.stopPropagation();
     menu.hidden ? open() : close();
   });
-  menu.querySelectorAll('.export-menu-item').forEach((/** @type {HTMLElement} */ it) => {
+  menu.querySelectorAll('.lv-export-menu-item').forEach((/** @type {HTMLElement} */ it) => {
     it.addEventListener('click', () => {
       close();
       exportSession(it.dataset.format);

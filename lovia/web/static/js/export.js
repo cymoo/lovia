@@ -101,14 +101,14 @@ function renderMessage(m, toolNames = {}, snapshots = new Map()) {
   // A UI component is part of the answer instead: its snapshot, shown.
   if (m.role === 'tool') {
     const snapshot = m.tool_call_id && snapshots.get(m.tool_call_id);
-    if (snapshot) return `<section class="msg msg-component">${snapshot}</section>`;
+    if (snapshot) return `<section class="lv-msg lv-msg-component">${snapshot}</section>`;
     const result = contentText(m.content);
     if (!result.trim()) return '';
     const name = (m.tool_call_id && toolNames[m.tool_call_id]) || m.name || '';
     const label = name ? `Tool result: ${escapeHtml(name)}` : 'Tool result';
     return (
-      `<section class="msg msg-tool"><details><summary class="tool-label">${label}</summary>` +
-      `<pre class="tool-output">${escapeHtml(result)}</pre></details></section>`
+      `<section class="lv-msg lv-msg-tool"><details><summary class="lv-tool-label">${label}</summary>` +
+      `<pre class="lv-tool-output">${escapeHtml(result)}</pre></details></section>`
     );
   }
 
@@ -117,19 +117,19 @@ function renderMessage(m, toolNames = {}, snapshots = new Map()) {
   if (!text.trim() && !m.reasoning && !tools.length) return '';
 
   const role = (m.role || '').replace(/^\w/, (c) => c.toUpperCase());
-  const out = [`<section class="msg msg-${(m.role || 'assistant').toLowerCase()}">`];
-  out.push(`<div class="msg-role">${escapeHtml(role)}</div>`);
+  const out = [`<section class="lv-msg lv-msg-${(m.role || 'assistant').toLowerCase()}">`];
+  out.push(`<div class="lv-msg-role">${escapeHtml(role)}</div>`);
   if (m.reasoning) {
     out.push(
-      `<details class="msg-reasoning"><summary class="reasoning-label">💭 Thinking</summary>${mdToHtml(m.reasoning)}</details>`,
+      `<details class="lv-msg-reasoning"><summary class="lv-reasoning-label">💭 Thinking</summary>${mdToHtml(m.reasoning)}</details>`,
     );
   }
-  if (text.trim()) out.push(`<div class="msg-body">${mdToHtml(text)}</div>`);
+  if (text.trim()) out.push(`<div class="lv-msg-body">${mdToHtml(text)}</div>`);
   for (const tc of tools) {
     // Build the <pre><code> directly (escaped) rather than a ```json fence: it's
     // robust to backticks in the arguments and still highlighted by the pass below.
     out.push(
-      `<details class="msg-tool"><summary class="tool-label">Tool: ${escapeHtml(tc.name || '')}</summary>` +
+      `<details class="lv-msg-tool"><summary class="lv-tool-label">Tool: ${escapeHtml(tc.name || '')}</summary>` +
         `<pre><code class="language-json">${escapeHtml(tc.arguments || '')}</code></pre></details>`,
     );
   }
@@ -187,7 +187,7 @@ export async function buildExportDoc(data, theme = 'light') {
     `<!doctype html>\n<html lang="en" data-theme="${theme}">\n<head>\n` +
     `<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n` +
     `<title>${escapeHtml(heading)}</title>\n<style>${EXPORT_CSS}</style>\n</head>\n` +
-    `<body>\n<main class="export">\n<h1 class="export-title">${escapeHtml(heading)}</h1>\n` +
+    `<body>\n<main class="lv-export">\n<h1 class="lv-export-title">${escapeHtml(heading)}</h1>\n` +
     `${frag.innerHTML}\n</main>\n</body>\n</html>`
   );
 }
@@ -228,98 +228,98 @@ export async function exportSessionHtml(sessionId, title) {
 // keeps the file dependency-free. hljs colors mirror static/styles.css.
 const EXPORT_CSS = `
 :root, [data-theme="light"] {
-  --bg:#fff; --surface:#fff; --surface-2:#f0f2f5; --border:#e4e7ec;
-  --ink:#16181d; --ink-2:#3d424c; --muted:#6b7280; --muted-2:#9aa1ad;
-  --accent:#2d8a6e; --accent-text:#1c6b54; --user-surface:#eaf1f9; --user-border:#d3e0ef;
+  --lv-bg:#fff; --lv-surface:#fff; --lv-surface-2:#f0f2f5; --lv-border:#e4e7ec;
+  --lv-ink:#16181d; --lv-ink-2:#3d424c; --lv-muted:#6b7280; --lv-muted-2:#9aa1ad;
+  --lv-accent:#2d8a6e; --lv-accent-text:#1c6b54; --lv-user-surface:#eaf1f9; --lv-user-border:#d3e0ef;
 }
 [data-theme="dark"] {
-  --bg:#0d0e12; --surface:#16181e; --surface-2:#1d2027; --border:#262a33;
-  --ink:#e6e8ec; --ink-2:#bfc3cd; --muted:#8b909b; --muted-2:#656b78;
-  --accent:#3ecb8f; --accent-text:#53d19c; --user-surface:#1b2942; --user-border:#2d4166;
+  --lv-bg:#0d0e12; --lv-surface:#16181e; --lv-surface-2:#1d2027; --lv-border:#262a33;
+  --lv-ink:#e6e8ec; --lv-ink-2:#bfc3cd; --lv-muted:#8b909b; --lv-muted-2:#656b78;
+  --lv-accent:#3ecb8f; --lv-accent-text:#53d19c; --lv-user-surface:#1b2942; --lv-user-border:#2d4166;
 }
 * { box-sizing:border-box; }
 body {
-  margin:0; background:var(--bg); color:var(--ink); line-height:1.65;
+  margin:0; background:var(--lv-bg); color:var(--lv-ink); line-height:1.65;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   font-size:15px; -webkit-font-smoothing:antialiased;
 }
-.export { max-width:760px; margin:0 auto; padding:48px 22px 72px; }
-.export-title {
+.lv-export { max-width:760px; margin:0 auto; padding:48px 22px 72px; }
+.lv-export-title {
   font-size:26px; font-weight:700; letter-spacing:-0.02em; margin:0 0 32px;
-  padding-bottom:14px; border-bottom:1px solid var(--border);
+  padding-bottom:14px; border-bottom:1px solid var(--lv-border);
 }
-.msg { margin:0 0 30px; }
-.msg-role {
+.lv-msg { margin:0 0 30px; }
+.lv-msg-role {
   font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.07em;
-  color:var(--muted); margin-bottom:9px;
+  color:var(--lv-muted); margin-bottom:9px;
 }
-.msg-body, .msg-reasoning, .msg-tool { font-size:15px; }
-.msg-user .msg-body {
-  background:var(--user-surface); border:1px solid var(--user-border);
+.lv-msg-body, .lv-msg-reasoning, .lv-msg-tool { font-size:15px; }
+.lv-msg-user .lv-msg-body {
+  background:var(--lv-user-surface); border:1px solid var(--lv-user-border);
   border-radius:12px; padding:2px 16px;
 }
-.msg-reasoning {
-  border-left:2px solid var(--accent); padding:2px 0 2px 14px; margin-bottom:12px;
-  color:var(--muted); font-size:14px;
+.lv-msg-reasoning {
+  border-left:2px solid var(--lv-accent); padding:2px 0 2px 14px; margin-bottom:12px;
+  color:var(--lv-muted); font-size:14px;
 }
-.reasoning-label {
+.lv-reasoning-label {
   font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;
-  color:var(--accent-text); margin:4px 0;
+  color:var(--lv-accent-text); margin:4px 0;
 }
-.msg-tool { margin-top:12px; }
-.tool-label { font-size:12px; font-weight:600; color:var(--muted); margin-bottom:4px; }
+.lv-msg-tool { margin-top:12px; }
+.lv-tool-label { font-size:12px; font-weight:600; color:var(--lv-muted); margin-bottom:4px; }
 /* Reasoning / tool blocks are <details>, collapsed by default. */
 summary { cursor:pointer; user-select:none; }
-summary::marker { color:var(--muted-2); }
-summary.tool-label:hover { color:var(--ink-2); }
+summary::marker { color:var(--lv-muted-2); }
+summary.lv-tool-label:hover { color:var(--lv-ink-2); }
 /* summary is the first child of a <details>, so the first *content* child is :nth-child(2). */
-.msg-body > :first-child, .msg-reasoning > :nth-child(2) { margin-top:0; }
-.msg-body > :last-child { margin-bottom:0; }
+.lv-msg-body > :first-child, .lv-msg-reasoning > :nth-child(2) { margin-top:0; }
+.lv-msg-body > :last-child { margin-bottom:0; }
 p { margin:0 0 14px; }
 h1,h2,h3,h4 { line-height:1.3; margin:24px 0 12px; font-weight:650; }
 h1 { font-size:22px; } h2 { font-size:19px; } h3 { font-size:17px; }
-a { color:var(--accent-text); text-decoration:underline; text-underline-offset:2px; }
+a { color:var(--lv-accent-text); text-decoration:underline; text-underline-offset:2px; }
 ul,ol { margin:0 0 14px; padding-left:24px; }
 li { margin:4px 0; }
 blockquote {
-  margin:0 0 14px; padding:2px 0 2px 16px; border-left:3px solid var(--border);
-  color:var(--muted);
+  margin:0 0 14px; padding:2px 0 2px 16px; border-left:3px solid var(--lv-border);
+  color:var(--lv-muted);
 }
-hr { border:none; border-top:1px solid var(--border); margin:24px 0; }
+hr { border:none; border-top:1px solid var(--lv-border); margin:24px 0; }
 table { border-collapse:collapse; margin:0 0 14px; font-size:14px; display:block; overflow-x:auto; }
-th,td { border:1px solid var(--border); padding:6px 11px; text-align:left; }
+th,td { border:1px solid var(--lv-border); padding:6px 11px; text-align:left; }
 th[align=center],td[align=center] { text-align:center; }
 th[align=right],td[align=right] { text-align:right; }
-th { background:var(--surface-2); font-weight:600; }
+th { background:var(--lv-surface-2); font-weight:600; }
 /* UI component snapshots (tables.js / charts.js). */
 figure { margin:0; }
 figcaption { font-weight:600; margin:0 0 8px; }
-figcaption span { display:block; font-size:13px; font-weight:400; color:var(--muted); }
+figcaption span { display:block; font-size:13px; font-weight:400; color:var(--lv-muted); }
 figure img { display:block; max-width:100%; height:auto; }
-th.num, td.num { text-align:right; font-variant-numeric:tabular-nums; }
+th.lv-num, td.lv-num { text-align:right; font-variant-numeric:tabular-nums; }
 code {
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   font-size:0.88em;
 }
 :not(pre) > code {
-  background:var(--surface-2); border:1px solid var(--border);
+  background:var(--lv-surface-2); border:1px solid var(--lv-border);
   padding:1.5px 5px; border-radius:5px;
 }
 pre {
-  background:var(--surface-2); border:1px solid var(--border); border-radius:10px;
+  background:var(--lv-surface-2); border:1px solid var(--lv-border); border-radius:10px;
   padding:14px 16px; overflow-x:auto; margin:0 0 14px; line-height:1.6;
 }
 pre code { background:none; border:none; padding:0; font-size:13px; }
 /* highlight.js — mirrors static/styles.css */
-.hljs { color:var(--ink-2); background:transparent; }
+.hljs { color:var(--lv-ink-2); background:transparent; }
 .hljs-keyword,.hljs-selector-tag,.hljs-type { color:#7b3fa3; }
 .hljs-string,.hljs-addition { color:#2d7a4a; }
-.hljs-comment,.hljs-quote { color:var(--muted-2); font-style:italic; }
+.hljs-comment,.hljs-quote { color:var(--lv-muted-2); font-style:italic; }
 .hljs-number,.hljs-literal { color:#b05e2a; }
 .hljs-title,.hljs-name,.hljs-function { color:#3b5ea0; }
 .hljs-attr,.hljs-attribute { color:#b8860b; }
 .hljs-built_in { color:#2d8a6e; }
-.hljs-meta { color:var(--muted); }
+.hljs-meta { color:var(--lv-muted); }
 [data-theme="dark"] .hljs-keyword,[data-theme="dark"] .hljs-selector-tag,[data-theme="dark"] .hljs-type { color:#b7a4f0; }
 [data-theme="dark"] .hljs-string,[data-theme="dark"] .hljs-addition { color:#83d69b; }
 [data-theme="dark"] .hljs-number,[data-theme="dark"] .hljs-literal { color:#e0a56a; }

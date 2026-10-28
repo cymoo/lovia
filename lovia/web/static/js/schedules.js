@@ -110,7 +110,7 @@ const TRIGGER_HINTS = {
 // (converted to an epoch timestamp on submit).
 function buildExprInput(kind) {
   const el = document.createElement('input');
-  el.className = 'dialog-input sched-expr';
+  el.className = 'lv-dialog-input lv-sched-expr';
   if (kind === 'every') {
     el.type = 'number';
     el.min = '1';
@@ -191,9 +191,9 @@ function el(tag, cls = '', text) {
 // One line of a schedule's fire history (a persisted run record):
 // time · outcome on the left, duration/tokens/open-chat on the right.
 function runLine(r, onOpenSession) {
-  const line = el('div', 'sched-run');
-  const when = el('span', 'sched-run-when', formatDateTime(r.started_at));
-  const status = el('span', `sched-run-status ${r.status}`);
+  const line = el('div', 'lv-sched-run');
+  const when = el('span', 'lv-sched-run-when', formatDateTime(r.started_at));
+  const status = el('span', `lv-sched-run-status lv-${r.status}`);
   status.textContent =
     {
       completed: t('sched.stCompleted'),
@@ -203,7 +203,7 @@ function runLine(r, onOpenSession) {
       running: t('sched.stRunning'),
     }[r.status] || r.status;
   if (r.error) status.title = r.error;
-  const tail = el('span', 'sched-run-tail');
+  const tail = el('span', 'lv-sched-run-tail');
   if (r.finished_at && r.finished_at > r.started_at) {
     const secs = r.finished_at - r.started_at;
     tail.append(
@@ -214,7 +214,7 @@ function runLine(r, onOpenSession) {
     tail.append(el('span', '', `${r.usage.total_tokens.toLocaleString()} tok`));
   }
   if (r.session_id) {
-    const link = el('button', 'sched-last-run', '↗');
+    const link = el('button', 'lv-sched-last-run', '↗');
     link.type = 'button';
     link.title = t('sched.lastRunTitle');
     link.setAttribute('aria-label', t('sched.lastRunTitle'));
@@ -227,24 +227,24 @@ function runLine(r, onOpenSession) {
 
 /** Open the Schedules dialog: list, inspect, create, edit, and run schedules. */
 export async function openSchedulesDialog() {
-  const panel = el('div', 'schedules-panel');
+  const panel = el('div', 'lv-schedules-panel');
   panel.innerHTML = `
-    <div class="schedules-head">
-      <div class="schedules-head-lead">
-        <button type="button" class="btn-icon sched-back" hidden aria-label="${t('sched.back')}">${icon('chevron-left', { size: 16 })}</button>
-        <h3 class="sched-title"></h3>
+    <div class="lv-schedules-head">
+      <div class="lv-schedules-head-lead">
+        <button type="button" class="lv-btn-icon lv-sched-back" hidden aria-label="${t('sched.back')}">${icon('chevron-left', { size: 16 })}</button>
+        <h3 class="lv-sched-title"></h3>
       </div>
-      <div class="schedules-head-actions">
-        <button type="button" class="btn btn-ghost btn-sm sched-new">${icon('plus', { size: 14 })}<span>${t('sched.new')}</span></button>
-        <button type="button" class="btn-icon sched-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
+      <div class="lv-schedules-head-actions">
+        <button type="button" class="lv-btn lv-btn-ghost lv-btn-sm lv-sched-new">${icon('plus', { size: 14 })}<span>${t('sched.new')}</span></button>
+        <button type="button" class="lv-btn-icon lv-sched-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
       </div>
     </div>
-    <div class="sched-view"></div>`;
+    <div class="lv-sched-view"></div>`;
 
-  const backBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.sched-back'));
-  const newBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.sched-new'));
-  const titleEl = panel.querySelector('.sched-title');
-  const viewEl = panel.querySelector('.sched-view');
+  const backBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.lv-sched-back'));
+  const newBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.lv-sched-new'));
+  const titleEl = panel.querySelector('.lv-sched-title');
+  const viewEl = panel.querySelector('.lv-sched-view');
 
   /** @type {any[]} */
   let rows = [];
@@ -299,30 +299,30 @@ export async function openSchedulesDialog() {
 
   function rowEl(s) {
     const st = statusOf(s, firing);
-    const item = el('div', `sched-item ${st}`);
+    const item = el('div', `lv-sched-item lv-${st}`);
     item.tabIndex = 0;
     item.setAttribute('role', 'button');
 
-    const dot = el('span', `sched-dot ${st}`);
+    const dot = el('span', `lv-sched-dot lv-${st}`);
     dot.title = statusLabel(st);
 
-    const main = el('div', 'sched-item-main');
-    const prompt = el('div', 'sched-item-prompt', s.input);
+    const main = el('div', 'lv-sched-item-main');
+    const prompt = el('div', 'lv-sched-item-prompt', s.input);
     prompt.title = s.input;
-    const meta = el('div', 'sched-item-meta', rowMeta(s, st));
+    const meta = el('div', 'lv-sched-item-meta', rowMeta(s, st));
     main.append(prompt, meta);
 
-    const side = el('div', 'sched-item-side');
+    const side = el('div', 'lv-sched-item-side');
     // Pause/resume — the one action worth keeping on the row; everything else
     // lives in the detail view. A lapsed one-shot gets no switch (see isDone).
     if (!isDone(s)) {
-      const sw = el('button', 'switch');
+      const sw = el('button', 'lv-switch');
       sw.type = 'button';
       sw.setAttribute('role', 'switch');
       sw.setAttribute('aria-checked', String(s.active));
       sw.title = s.active ? t('sched.pause') : t('sched.resume');
       sw.setAttribute('aria-label', sw.title);
-      sw.append(el('span', 'switch-knob'));
+      sw.append(el('span', 'lv-switch-knob'));
       sw.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
@@ -334,7 +334,7 @@ export async function openSchedulesDialog() {
       });
       side.append(sw);
     }
-    const chev = el('span', 'sched-chevron');
+    const chev = el('span', 'lv-sched-chevron');
     chev.innerHTML = icon('chevron-right', { size: 14 });
     side.append(chev);
 
@@ -354,9 +354,9 @@ export async function openSchedulesDialog() {
   }
 
   function listView() {
-    const wrap = el('div', 'sched-list');
+    const wrap = el('div', 'lv-sched-list');
     if (!rows.length) {
-      if (loaded) wrap.append(el('div', 'sched-empty', t('sched.none')));
+      if (loaded) wrap.append(el('div', 'lv-sched-empty', t('sched.none')));
       return wrap;
     }
     for (const s of rows) wrap.append(rowEl(s));
@@ -367,21 +367,21 @@ export async function openSchedulesDialog() {
 
   function detailView(s) {
     const st = statusOf(s, firing);
-    const wrap = el('div', 'sched-detail');
+    const wrap = el('div', 'lv-sched-detail');
 
-    const statusRow = el('div', 'sched-detail-status');
-    const badge = el('span', `sched-badge ${st}`);
-    badge.append(el('span', `sched-dot ${st}`), document.createTextNode(statusLabel(st)));
+    const statusRow = el('div', 'lv-sched-detail-status');
+    const badge = el('span', `lv-sched-badge lv-${st}`);
+    badge.append(el('span', `lv-sched-dot lv-${st}`), document.createTextNode(statusLabel(st)));
     statusRow.append(badge);
     if (st === 'done' && s.finished_reason) {
-      const why = el('span', 'sched-finished-reason', s.finished_reason);
+      const why = el('span', 'lv-sched-finished-reason', s.finished_reason);
       why.title = s.finished_reason;
       statusRow.append(why);
     }
 
-    const prompt = el('div', 'sched-detail-prompt', s.input);
+    const prompt = el('div', 'lv-sched-detail-prompt', s.input);
 
-    const facts = el('dl', 'sched-facts');
+    const facts = el('dl', 'lv-sched-facts');
     const fact = (label, value, title) => {
       const dd = el('dd', '', value);
       if (title) dd.title = title;
@@ -400,9 +400,9 @@ export async function openSchedulesDialog() {
     if (nets.length) fact(t('sched.safetyNet'), nets.join(' · '));
     if (store.agents.length > 1 && s.agent) fact(t('sched.agentLabel'), s.agent);
 
-    const actions = el('div', 'sched-detail-actions');
+    const actions = el('div', 'lv-sched-detail-actions');
     const act = (label, iconName, fn, cls = '') => {
-      const b = el('button', `btn btn-ghost btn-sm sched-act ${cls}`);
+      const b = el('button', `lv-btn lv-btn-ghost lv-btn-sm lv-sched-act ${cls}`);
       b.type = 'button';
       b.innerHTML = icon(iconName, { size: 14 });
       b.append(el('span', '', label));
@@ -449,22 +449,22 @@ export async function openSchedulesDialog() {
         view = { name: 'list' };
         refresh(); // a 404 just means it's already gone — the list will agree
       },
-      'danger',
+      'lv-danger',
     );
 
-    const history = el('div', 'sched-history');
+    const history = el('div', 'lv-sched-history');
     api
       .scheduleRuns(s.id)
       .then((runs) => {
         if (!wrap.isConnected) return; // the view moved on meanwhile
         history.replaceChildren(...runs.map((r) => runLine(r, openSession)));
         if (!runs.length) {
-          history.append(el('div', 'sched-history-empty', t('sched.historyNone')));
+          history.append(el('div', 'lv-sched-history-empty', t('sched.historyNone')));
         }
       })
       .catch(() => {
         if (!wrap.isConnected) return;
-        history.append(el('div', 'sched-history-empty', t('sched.historyFailed')));
+        history.append(el('div', 'lv-sched-history-empty', t('sched.historyFailed')));
       });
 
     wrap.append(
@@ -472,7 +472,7 @@ export async function openSchedulesDialog() {
       prompt,
       facts,
       actions,
-      el('div', 'sched-section-title', t('sched.history')),
+      el('div', 'lv-sched-section-title', t('sched.history')),
       history,
     );
     return wrap;
@@ -481,16 +481,16 @@ export async function openSchedulesDialog() {
   // ---- form view -----------------------------------------------------------
 
   function formView(editing) {
-    const form = el('form', 'sched-form');
+    const form = el('form', 'lv-sched-form');
     const input = /** @type {HTMLTextAreaElement} */ (
-      el('textarea', 'dialog-input sched-input')
+      el('textarea', 'lv-dialog-input lv-sched-input')
     );
     input.rows = 5;
     input.required = true;
     input.placeholder = t('sched.promptPlaceholder');
 
     const untilInput = /** @type {HTMLInputElement} */ (
-      el('input', 'dialog-input sched-until')
+      el('input', 'lv-dialog-input lv-sched-until')
     );
     untilInput.type = 'text';
     untilInput.maxLength = 2000;
@@ -499,15 +499,15 @@ export async function openSchedulesDialog() {
     // Safety nets, both optional (empty = unbounded). Editing these is the
     // release valve for a schedule whose max_fires ran out — resuming alone
     // would re-trip after one fire (fire_count never rewinds).
-    const nets = el('div', 'sched-nets');
+    const nets = el('div', 'lv-sched-nets');
     const netField = (labelText, input) => {
-      const label = el('label', 'sched-net-field');
+      const label = el('label', 'lv-sched-net-field');
       label.append(el('span', '', labelText), input);
       nets.append(label);
       return input;
     };
     const maxFiresInput = /** @type {HTMLInputElement} */ (
-      el('input', 'dialog-input sched-max-fires')
+      el('input', 'lv-dialog-input lv-sched-max-fires')
     );
     maxFiresInput.type = 'number';
     maxFiresInput.min = '1';
@@ -515,14 +515,14 @@ export async function openSchedulesDialog() {
     maxFiresInput.placeholder = t('sched.unlimited');
     netField(t('sched.maxFires'), maxFiresInput);
     const expiresInput = /** @type {HTMLInputElement} */ (
-      el('input', 'dialog-input sched-expires')
+      el('input', 'lv-dialog-input lv-sched-expires')
     );
     expiresInput.type = 'datetime-local';
     netField(t('sched.expires'), expiresInput);
 
-    const row = el('div', 'sched-row');
+    const row = el('div', 'lv-sched-row');
     const agentSel = /** @type {HTMLSelectElement} */ (
-      el('select', 'dialog-input sched-agent')
+      el('select', 'lv-dialog-input lv-sched-agent')
     );
     agentSel.hidden = true;
     agentSel.setAttribute('aria-label', t('sched.agentLabel'));
@@ -539,7 +539,7 @@ export async function openSchedulesDialog() {
       agentSel.value = store.agent ?? store.agents[0].name;
     }
     const kindSel = /** @type {HTMLSelectElement} */ (
-      el('select', 'dialog-input sched-kind')
+      el('select', 'lv-dialog-input lv-sched-kind')
     );
     kindSel.setAttribute('aria-label', t('sched.triggerKind'));
     for (const kind of ['every', 'cron', 'at']) {
@@ -548,10 +548,10 @@ export async function openSchedulesDialog() {
       opt.textContent = t(`sched.${kind}`);
       kindSel.append(opt);
     }
-    const exprWrap = el('span', 'sched-expr-wrap');
+    const exprWrap = el('span', 'lv-sched-expr-wrap');
     row.append(agentSel, kindSel, exprWrap);
 
-    const hintEl = el('div', 'sched-hint');
+    const hintEl = el('div', 'lv-sched-hint');
     // Live preview: while typing a cron expression, the hint line leads with
     // its plain-words reading ("weekdays at 09:00 — min hour …").
     const syncHint = () => {
@@ -574,12 +574,12 @@ export async function openSchedulesDialog() {
       syncHint();
     });
 
-    const foot = el('div', 'sched-form-foot');
-    const cancelBtn = el('button', 'btn btn-ghost btn-sm', t('sched.cancel'));
+    const foot = el('div', 'lv-sched-form-foot');
+    const cancelBtn = el('button', 'lv-btn lv-btn-ghost lv-btn-sm', t('sched.cancel'));
     cancelBtn.type = 'button';
     const submitBtn = el(
       'button',
-      'btn btn-primary btn-sm',
+      'lv-btn lv-btn-primary lv-btn-sm',
       editing ? t('sched.save') : t('sched.add'),
     );
     submitBtn.type = 'submit';
@@ -691,11 +691,11 @@ export async function openSchedulesDialog() {
       viewEl.replaceChildren(detailView(s));
     } else if (view.name === 'form') {
       viewEl.replaceChildren(formView(view.editing));
-      /** @type {HTMLTextAreaElement} */ (viewEl.querySelector('.sched-input'))?.focus();
+      /** @type {HTMLTextAreaElement} */ (viewEl.querySelector('.lv-sched-input'))?.focus();
     } else {
-      const prevScroll = viewEl.querySelector('.sched-list')?.scrollTop ?? 0;
+      const prevScroll = viewEl.querySelector('.lv-sched-list')?.scrollTop ?? 0;
       viewEl.replaceChildren(listView());
-      viewEl.querySelector('.sched-list').scrollTop = prevScroll;
+      viewEl.querySelector('.lv-sched-list').scrollTop = prevScroll;
     }
   }
 
@@ -705,7 +705,7 @@ export async function openSchedulesDialog() {
       await loadData();
     } catch {
       if (view.name === 'list' && !loaded) {
-        viewEl.replaceChildren(el('div', 'sched-empty', t('sched.loadFailed')));
+        viewEl.replaceChildren(el('div', 'lv-sched-empty', t('sched.loadFailed')));
       }
       return;
     }
@@ -736,8 +736,8 @@ export async function openSchedulesDialog() {
       clearTimeout(refreshTimer);
     },
   });
-  dialog.classList.add('dialog-wide');
-  panel.querySelector('.sched-close').addEventListener('click', () => dialog.close());
+  dialog.classList.add('lv-dialog-wide');
+  panel.querySelector('.lv-sched-close').addEventListener('click', () => dialog.close());
 
   render(); // paint the shell immediately…
   refresh(); // …then fill it

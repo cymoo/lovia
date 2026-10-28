@@ -26,7 +26,7 @@ const LABELS = {
 
 /**
  * Build a card into `el`. `kind` is added as a class, for the component's own
- * styles (`.chart .figure-body`, …).
+ * styles (`.lv-chart .lv-figure-body`, …).
  * @param {HTMLElement} el
  * @param {{ kind: string, heading: { text: string, subtext?: string } | null, lang: string }} opts
  * @returns {Figure}
@@ -34,13 +34,13 @@ const LABELS = {
 export function figure(el, { kind, heading, lang }) {
   const L = LABELS[/** @type {'en' | 'zh'} */ (lang)] || LABELS.en;
   const fig = document.createElement('div');
-  fig.className = `figure ${kind}`;
+  fig.className = `lv-figure lv-${kind}`;
   const head = document.createElement('div');
-  head.className = 'figure-head';
+  head.className = 'lv-figure-head';
   if (heading) {
     const titles = document.createElement('div');
-    titles.className = 'figure-heading';
-    for (const [cls, text] of [['figure-title', heading.text], ['figure-subtitle', heading.subtext]]) {
+    titles.className = 'lv-figure-heading';
+    for (const [cls, text] of [['lv-figure-title', heading.text], ['lv-figure-subtitle', heading.subtext]]) {
       if (!text) continue;
       const div = document.createElement('div');
       div.className = cls;
@@ -52,10 +52,10 @@ export function figure(el, { kind, heading, lang }) {
     fig.setAttribute('aria-label', heading.text);
   }
   const tools = document.createElement('div');
-  tools.className = 'figure-tools';
+  tools.className = 'lv-figure-tools';
   head.append(tools);
   const body = document.createElement('div');
-  body.className = 'figure-body';
+  body.className = 'lv-figure-body';
   fig.append(head, body);
   el.append(fig);
 
@@ -65,7 +65,7 @@ export function figure(el, { kind, heading, lang }) {
   const tool = (label, face, action) => {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'tool-action';
+    b.className = 'lv-tool-action';
     b.title = label;
     b.setAttribute('aria-label', label);
     b.textContent = face;
@@ -112,7 +112,7 @@ export function staticFigure(kind, heading, inner) {
       (heading.subtext ? `<span>${escapeHtml(heading.subtext)}</span>` : '') +
       '</figcaption>'
     : '';
-  return `<figure class="${kind}">${caption}${inner}</figure>`;
+  return `<figure class="lv-${kind}">${caption}${inner}</figure>`;
 }
 
 /**

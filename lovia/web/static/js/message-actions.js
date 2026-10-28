@@ -88,7 +88,7 @@ function setGlyph(el, action) {
   else if (glyph.trimStart().startsWith('<svg')) el.innerHTML = glyph;
   else {
     el.textContent = glyph || action.label;
-    el.classList.add('msg-action--text');
+    el.classList.add('lv-msg-action--text');
   }
 }
 
@@ -116,7 +116,7 @@ export function messageActionButtons(describe, message = describe) {
     if (!ask(id, action.when, msg, true)) continue;
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'msg-action';
+    btn.className = 'lv-msg-action';
     btn.dataset.action = id;
     btn.title = action.label;
     btn.setAttribute('aria-label', action.label);

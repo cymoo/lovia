@@ -16,15 +16,15 @@ const STYLE = `
 .x-table { font-size: 13px; }
 .x-table-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .x-table-bar strong { flex: 1; }
-.x-table-bar input { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--surface); color: var(--ink); font: inherit; }
+.x-table-bar input { padding: 4px 8px; border: 1px solid var(--lv-border); border-radius: 6px;
+  background: var(--lv-surface); color: var(--lv-ink); font: inherit; }
 .x-table table { width: 100%; border-collapse: collapse; }
-.x-table th, .x-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
-.x-table th { cursor: pointer; user-select: none; color: var(--muted); font-weight: 600; white-space: nowrap; }
+.x-table th, .x-table td { padding: 6px 8px; border-bottom: 1px solid var(--lv-border); text-align: left; }
+.x-table th { cursor: pointer; user-select: none; color: var(--lv-muted); font-weight: 600; white-space: nowrap; }
 .x-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.x-table button { padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--surface); color: var(--ink); cursor: pointer; font: inherit; }
-.x-table-foot { margin-top: 6px; color: var(--muted); font-size: 12px; }
+.x-table button { padding: 2px 8px; border: 1px solid var(--lv-border); border-radius: 6px;
+  background: var(--lv-surface); color: var(--lv-ink); cursor: pointer; font: inherit; }
+.x-table-foot { margin-top: 6px; color: var(--lv-muted); font-size: 12px; }
 `;
 
 function ensureStyle() {

@@ -181,8 +181,8 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
   tooltip 都会被去掉；需要代码或地图数据的系列类型（`custom`、`map`）也不支持。
 - 团队的作图约定（偏好的图表类型、单位、标题写法等）写进 instructions 或一个 Skill 即可，
   不需要写代码。
-- 配色和文字颜色都是 CSS 变量（`--chart-1` … `--chart-8`、`--chart-text`、
-  `--chart-title`、`--chart-axis`、`--chart-grid`），在[自定义模板](web-server.md#定制页面)
+- 配色和文字颜色都是 CSS 变量（`--lv-chart-1` … `--lv-chart-8`、`--lv-chart-text`、
+  `--lv-chart-title`、`--lv-chart-axis`、`--lv-chart-grid`），在[自定义模板](web-server.md#定制页面)
   的 `head` 块中覆盖即可匹配品牌风格。
 
 ## 表格
@@ -212,8 +212,8 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 
 - 访问不到应用，也连不上网络。页面运行在不透明源中（没有 cookie、存储，也碰不到聊天内容），
   其安全策略拦下所有请求：没有 `fetch`、CDN 脚本、网络字体和远程图片。链接不会跳转。
-- 可以通过 CSS 变量和聊天界面保持一致：`var(--ink)`、`var(--surface)`、`var(--border)`、
-  `var(--accent)`、`var(--chart-1)` … `var(--chart-8)`，浅色和深色主题都适用。
+- 可以通过 CSS 变量和聊天界面保持一致：`var(--lv-ink)`、`var(--lv-surface)`、`var(--lv-border)`、
+  `var(--lv-accent)`、`var(--lv-chart-1)` … `var(--lv-chart-8)`，浅色和深色主题都适用。
 - 按钮可以以用户身份追问：`lovia.send("按地区拆开看")`。只有在页面内真实点击时才会生效。
 - 卡片随页面内容变高，最多占据大半个屏幕；支持全屏查看和下载 HTML。
 - 重新打开聊天时，页面要点击 **运行** 才会启动，这样陷入死循环的页面不会在每次打开时卡住聊天。

@@ -35,8 +35,8 @@ test('a component with a snapshot draws as it, sanitized, in place of the raw ou
       result('c2', '{"lovia_ui": {"kind": "snap", "props": {"n": 2}}}'),
     ],
   });
-  assert.match(doc, /<section class="msg msg-component">\[clean\]<p>1<\/p><\/section>/);
-  assert.match(doc, /<section class="msg msg-component">\[clean\]<p>2<\/p><\/section>/);
+  assert.match(doc, /<section class="lv-msg lv-msg-component">\[clean\]<p>1<\/p><\/section>/);
+  assert.match(doc, /<section class="lv-msg lv-msg-component">\[clean\]<p>2<\/p><\/section>/);
   assert.doesNotMatch(doc, /tool-output/);
   assert.match(doc, /Tool: show_it/); // the call's arguments stay on record
 });
@@ -52,7 +52,7 @@ test('no snapshot, an unknown kind, or plain output keeps the raw <pre>', async 
       result('c', 'just text'),
     ],
   });
-  assert.equal(doc.match(/class="tool-output"/g)?.length, 3);
+  assert.equal(doc.match(/class="lv-tool-output"/g)?.length, 3);
   assert.doesNotMatch(doc, /msg-component/);
 });
 
@@ -64,7 +64,7 @@ test('without DOMPurify, snapshots are skipped rather than embedded unsanitized'
       messages: [call('c1', '{}'), result('c1', '{"lovia_ui": {"kind": "snap", "props": {"n": 3}}}')],
     });
     assert.doesNotMatch(doc, /msg-component/);
-    assert.match(doc, /class="tool-output"/);
+    assert.match(doc, /class="lv-tool-output"/);
   } finally {
     globalThis.DOMPurify = purify;
   }

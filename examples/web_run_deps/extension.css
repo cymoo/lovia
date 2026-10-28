@@ -8,10 +8,10 @@
 .acme-kb select,
 .acme-user select {
   padding: 3px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--ink-2);
+  border: 1px solid var(--lv-border);
+  border-radius: var(--lv-radius-sm);
+  background: var(--lv-surface);
+  color: var(--lv-ink-2);
   font: inherit;
   font-size: 12.5px;
 }
@@ -21,7 +21,7 @@
   align-items: center;
   gap: 8px;
   padding: 12px 14px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
+  border-top: 1px solid var(--lv-border);
+  color: var(--lv-muted);
   font-size: 12.5px;
 }

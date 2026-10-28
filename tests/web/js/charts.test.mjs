@@ -278,7 +278,7 @@ test('chartSnapshot: SSR to an SVG data image, heading as caption, disposed', as
   assert.equal(calls.option.animation, false);
   assert.equal(calls.option.title, undefined); // lifted into the caption
   assert.equal(calls.disposed, 1);
-  assert.match(html, /^<figure class="chart"><figcaption>Sales &lt;Q1&gt;<span>EUR<\/span><\/figcaption><img /);
+  assert.match(html, /^<figure class="lv-chart"><figcaption>Sales &lt;Q1&gt;<span>EUR<\/span><\/figcaption><img /);
   const src = /src="([^"]+)"/.exec(html)?.[1] ?? '';
   assert.ok(src.startsWith('data:image/svg+xml;charset=utf-8,'));
   assert.match(decodeURIComponent(src.split(',')[1]), /<text>Jan & "Feb"<\/text>/);

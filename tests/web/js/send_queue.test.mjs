@@ -310,6 +310,27 @@ test('put back into an emptied queue still honours a run that failed', async () 
   assert.equal(q.view('c').paused, 'failed');
 });
 
+test('a steer with no answer goes back paused as unknown, never resent alone', async () => {
+  const { s, q } = fixture();
+  s.live = [{ session_id: 'c', run_id: 'R' }];
+  q.enqueue('c', 'A', 'R');
+  q.enqueue('c', 'B', 'R');
+  await settled();
+  const taken = q.withdraw('c', q.view('c').items[0].id);
+  assert.ok(taken);
+  // The inject's response was lost: R may already hold A.
+  q.putBack('c', taken.item, taken.after, true);
+  assert.equal(q.view('c').paused, 'unknown');
+  s.live = [];
+  s.records.R = 'completed';
+  await wake(q);
+  assert.deepEqual(s.sent, []); // R completing doesn't send A a second time
+
+  q.sendNow('c'); // the user checked the chat and chose to send it
+  await settled();
+  assert.deepEqual(s.sent, ['A']);
+});
+
 test('withdrawing the last item clears a pause', async () => {
   const { s, q } = fixture();
   s.records.R = 'failed';

@@ -3626,35 +3626,41 @@ export async function sendText(message) {
     await runStream(message);
     return;
   }
-  const { node, accepted } = await steer(message);
+  const { node, outcome } = await steer(message);
   // Raced the run's end: keep the bubble muted and deliver the message
   // as its own turn once the stream settles — the next run re-injects it
   // (drainPendingResend) or it seeds a fresh run (resumePendingResend).
-  if (!accepted) _pendingResend.push({ message, node });
+  if (outcome !== 'accepted') _pendingResend.push({ message, node });
 }
 
 /**
  * Steer `message` into the live run: the server drains it at the next turn
  * start, or seeds the next run if this one ends first. A muted bubble (with a
  * cancel affordance) shows it until the run confirms it or the user withdraws
- * it. `accepted` false: no run took it; the caller owns the bubble.
+ * it. Unless `accepted`, the caller owns the bubble: `refused` — no run took
+ * it; `unknown` — no answer (network, or a 5xx a proxy may have sent after
+ * the server took it), so the run may hold it.
  * @param {string} message
- * @returns {Promise<{ node: HTMLElement | null, accepted: boolean }>}
+ * @returns {Promise<{ node: HTMLElement | null, outcome: 'accepted' | 'refused' | 'unknown' }>}
  */
 async function steer(message) {
   const node = appendUserTurn(message, { queued: true });
   if (node) _queuedTurns.push(node); // before the await: its drain may beat the answer
-  let res = null;
+  /** @type {'accepted' | 'refused' | 'unknown'} */
+  let outcome = 'refused';
   try {
-    res = await api.inject({ session_id: store.sessionId, message });
-  } catch { /* network error → treat as no active run */ }
-  if (res?.accepted) {
-    if (node) addWithdrawButton(node, res.id);
-    return { node, accepted: true };
+    const res = await api.inject({ session_id: store.sessionId, message });
+    if (res?.accepted) {
+      if (node) addWithdrawButton(node, res.id);
+      return { node, outcome: 'accepted' };
+    }
+  } catch (err) {
+    const status = /** @type {{ status?: number }} */ (err).status;
+    if (!(status && status < 500)) outcome = 'unknown';
   }
   const i = _queuedTurns.indexOf(node);
   if (i >= 0) _queuedTurns.splice(i, 1);
-  return { node, accepted: false };
+  return { node, outcome };
 }
 
 // ---- Queued messages: sent once the run on screen completes (#308) -------
@@ -3669,7 +3675,9 @@ let _viewReady = true;
 
 /**
  * Steer a queued item into the live run. Out of the queue first, so the queue
- * can't also send it; back to its head if no run took it.
+ * can't also send it; back to its head if no run took it. With no answer the
+ * run may hold it — its drain then draws it from the server — so it goes back
+ * paused as unknown: resending on our own could run it twice.
  * @param {string} sid
  * @param {number} id
  */
@@ -3677,10 +3685,10 @@ async function steerQueued(sid, id) {
   const taken = sendQueue.withdraw(sid, id);
   if (!taken) return;
   _resumeAutoScroll();
-  const { node, accepted } = await steer(taken.item.text);
-  if (accepted) return;
+  const { node, outcome } = await steer(taken.item.text);
+  if (outcome === 'accepted') return;
   node?.remove();
-  sendQueue.putBack(sid, taken.item, taken.after);
+  sendQueue.putBack(sid, taken.item, taken.after, outcome === 'unknown');
 }
 
 /** Back into the empty composer, to be edited and sent again. */

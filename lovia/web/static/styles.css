@@ -1064,6 +1064,27 @@ body.lv-sidebar-collapsed .lv-sidebar-expand-btn {
   color: var(--lv-muted);
   animation: lv-fade-up var(--lv-t-slow) var(--lv-ease);
 }
+/* An empty chat on a wide screen: the composer sits right under the welcome
+   and the pair is centred, a little above the middle — instead of a heading
+   mid-screen and a composer far below it. Keyed on the welcome being in the
+   transcript, so it holds for an overridden `welcome` block too, and lets go
+   the moment the first message replaces it. Phones keep the composer at the
+   bottom, by the keyboard. The setup hero has its own call to action. */
+@media (min-width: 721px) {
+  .lv-chat-main:has(#empty-state:not(.lv-setup-hero)) {
+    justify-content: center;
+    padding-bottom: 10vh;
+  }
+  .lv-chat-main:has(#empty-state:not(.lv-setup-hero)) > .lv-chat-region {
+    flex: 0 1 auto;
+  }
+  .lv-chat-main:has(#empty-state:not(.lv-setup-hero)) .lv-transcript {
+    padding-bottom: 20px;
+  }
+  .lv-chat-main:has(#empty-state:not(.lv-setup-hero)) .lv-empty-state {
+    margin-top: 0;
+  }
+}
 .lv-empty-state h2 {
   margin: 0 0 10px;
   font-size: clamp(26px, 3.4vw, 32px);

@@ -1287,6 +1287,14 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* Actions lead, metadata trails: a hidden timestamp must not leave a gap
+   before the icons that stay in view (the latest reply's). */
+.lv-turn-footer :is(.lv-timestamp, .lv-duration, .lv-usage) {
+  order: 1;
+}
+.lv-turn-footer .lv-timestamp {
+  margin-left: 4px;
+}
 .lv-turn-footer .lv-duration::before,
 .lv-turn-footer .lv-usage::before {
   content: "\00b7";
@@ -1324,6 +1332,10 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 }
 .lv-turn .lv-body > :first-child {
   margin-top: 0;
+}
+/* The answer after its working steps starts a new beat, not a caption. */
+.lv-bubble > :is(.lv-activity, .lv-tool, .lv-reasoning) + .lv-body {
+  margin-top: 18px;
 }
 .lv-turn .lv-body > :last-child {
   margin-bottom: 0;
@@ -3390,6 +3402,13 @@ dialog.lv-custom-dialog::backdrop {
   font-size: 13.5px;
   text-align: center;
   padding: 42px 0;
+}
+.lv-sched-empty-hint {
+  max-width: 360px;
+  margin: 6px auto 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-wrap: pretty;
 }
 .lv-sched-item {
   display: grid;
@@ -5571,6 +5590,13 @@ body.lv-files-splitting {
   color: var(--lv-ink);
   background: var(--lv-surface-2);
 }
+/* The latest finished reply keeps its actions in view — that is where copy,
+   branch and regenerate get reached for. The metadata (time, duration) still
+   whispers. Earlier replies show theirs on hover. */
+.lv-turn.lv-assistant:not(.lv-streaming):last-of-type :is(.lv-btn-copy, .lv-btn-branch, .lv-btn-regen, .lv-msg-action) {
+  opacity: 1;
+  pointer-events: auto;
+}
 /* After the rules above, or they would win: no hover on touch. */
 @media (hover: none) {
   .lv-btn-edit,
@@ -6192,6 +6218,18 @@ body.lv-files-splitting {
 .lv-model-chip:hover {
   background: var(--lv-surface-2);
   color: var(--lv-ink-2);
+}
+/* A small caret: quiet, but says the label opens a menu. */
+.lv-model-chip::after {
+  content: "";
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  margin: 0 1px 3px 2px;
+  border-right: 1.4px solid currentColor;
+  border-bottom: 1.4px solid currentColor;
+  transform: rotate(45deg);
+  opacity: 0.6;
 }
 .lv-model-chip-label {
   overflow: hidden;

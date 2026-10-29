@@ -908,11 +908,14 @@ body.lv-view-open #files-btn {
   backdrop-filter: blur(14px) saturate(1.1);
   border-bottom: 1px solid color-mix(in srgb, var(--lv-border) 72%, transparent);
 }
-.lv-topbar .lv-sidebar-expand-btn {
+.lv-topbar :is(.lv-sidebar-expand-btn, .lv-topbar-new-chat) {
   display: none;
 }
-body.lv-sidebar-collapsed .lv-sidebar-expand-btn {
+body.lv-sidebar-collapsed .lv-topbar :is(.lv-sidebar-expand-btn, .lv-topbar-new-chat) {
   display: inline-flex;
+}
+body.lv-sidebar-collapsed .lv-topbar-new-chat {
+  margin: 0 4px 0 -6px; /* pairs with the expand button, apart from the title */
 }
 .lv-chat-title {
   flex: 1;

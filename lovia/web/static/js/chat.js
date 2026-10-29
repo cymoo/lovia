@@ -337,13 +337,14 @@ function dateLabel(ts) {
 }
 
 // `anchorFirst` labels even the very first turn (history replay wants the
-// anchor; a live chat's first message doesn't need a "Today" above it).
+// anchor for an older chat). A first turn from today needs no "Today" above
+// it, live or replayed.
 function maybeDateSeparator(transcriptEl, ts, { anchorFirst = false } = {}) {
   const key = toDate(ts).toDateString();
   if (key === _lastDateKey) return;
   const isFirst = _lastDateKey === null;
   _lastDateKey = key;
-  if (isFirst && !anchorFirst) return;
+  if (isFirst && (!anchorFirst || key === new Date().toDateString())) return;
   const sep = document.createElement('div');
   sep.className = 'lv-date-separator';
   sep.textContent = dateLabel(ts);

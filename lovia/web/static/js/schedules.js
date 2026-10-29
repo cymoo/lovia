@@ -356,7 +356,11 @@ export async function openSchedulesDialog() {
   function listView() {
     const wrap = el('div', 'lv-sched-list');
     if (!rows.length) {
-      if (loaded) wrap.append(el('div', 'lv-sched-empty', t('sched.none')));
+      if (loaded) {
+        const empty = el('div', 'lv-sched-empty', t('sched.none'));
+        empty.append(el('div', 'lv-sched-empty-hint', t('sched.noneHint')));
+        wrap.append(empty);
+      }
       return wrap;
     }
     for (const s of rows) wrap.append(rowEl(s));

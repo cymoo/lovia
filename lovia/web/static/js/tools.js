@@ -7,7 +7,7 @@
 // it as `data-status` — public, like `data-tool`, for deployer CSS.
 
 import { liftStep } from './activity.js';
-import './builtin-views.js';
+import { commandLine } from './builtin-views.js';
 import { api } from './api.js';
 import {
   mountComponent,
@@ -119,9 +119,8 @@ function argEntries(obj) {
 }
 
 // A one-line `(k: v, …)` preview for the tool bubble's summary. The full
-// values live in the expanded card's params rows (fillParams). `omit` drops
-// keys the card already surfaces elsewhere (e.g. shell's description).
-function formatArgs(args, omit) {
+// values live in the expanded card's params rows (fillParams).
+function formatArgs(args) {
   if (!args) return '()';
   let obj;
   try {
@@ -130,7 +129,7 @@ function formatArgs(args, omit) {
     return `(${args})`;
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return `(${args})`;
-  const entries = argEntries(obj).filter(([k]) => !omit?.includes(k));
+  const entries = argEntries(obj);
   if (entries.length === 0) return '()';
   return `(${entries.map(([k, v]) => `${k}: ${argValue(v)}`).join(', ')})`;
 }
@@ -217,15 +216,15 @@ function toolActionBtn(iconName, title) {
   return b;
 }
 
-// The shell tool's optional `description` argument — a model-written one-liner
-// for the user. Shown as a muted subtitle under the summary; the command stays
-// the summary's primary text (the description is the model's claim about the
-// command, not ground truth).
-function toolDescription(call) {
+// A shell card titled by the model's `description` (builtin-views.js) keeps
+// the command line in view as a subtitle: the description is the model's claim
+// about the command, not ground truth. Approval cards lead with the command.
+function shellSubtitle(call) {
   if (call.name !== 'shell') return null;
   try {
-    const d = JSON.parse(call.arguments || '{}').description;
-    return typeof d === 'string' && d.trim() ? d.trim() : null;
+    const args = JSON.parse(call.arguments || '{}');
+    const d = args?.description;
+    return typeof d === 'string' && d.trim() ? commandLine(args) : null;
   } catch {
     return null;
   }
@@ -239,16 +238,13 @@ function toolDescription(call) {
 export function buildToolNode(call) {
   const node = cloneTemplate('tmpl-tool');
   node.querySelector('.lv-tool-name').textContent = call.name;
-  const desc = toolDescription(call);
-  node.querySelector('.lv-tool-args').textContent = formatArgs(
-    call.arguments,
-    desc ? ['description'] : undefined,
-  );
-  if (desc) {
+  node.querySelector('.lv-tool-args').textContent = formatArgs(call.arguments);
+  const command = shellSubtitle(call);
+  if (command) {
     const sub = document.createElement('span');
-    sub.className = 'lv-tool-desc';
-    sub.textContent = desc;
-    sub.title = desc; // ellipsized subtitle stays readable on hover
+    sub.className = 'lv-tool-command';
+    sub.textContent = command;
+    sub.title = command; // ellipsized subtitle stays readable on hover
     node.querySelector('summary')?.appendChild(sub);
   }
   fillParams(node.querySelector('.lv-tool-params'), call.arguments);

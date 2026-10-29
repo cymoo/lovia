@@ -2085,7 +2085,7 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 .lv-tool summary {
   display: flex;
   align-items: center;
-  flex-wrap: wrap; /* a .lv-tool-desc subtitle wraps to its own row */
+  flex-wrap: wrap; /* a .lv-tool-command subtitle wraps to its own row */
   gap: 3px 9px;
   padding: 8px 14px;
   cursor: pointer;
@@ -2143,12 +2143,13 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   color: var(--lv-ink-2);
   font-size: 13px;
 }
-/* The shell card's model-written one-liner: a muted prose subtitle on its own
+/* A described shell card's command line: a muted mono subtitle on its own
    row (order pushes it past the summary's hover actions). */
-.lv-tool summary .lv-tool-desc {
+.lv-tool summary .lv-tool-command {
   order: 10;
   flex-basis: 100%;
   min-width: 0;
+  font-family: var(--lv-mono);
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--lv-muted-2);

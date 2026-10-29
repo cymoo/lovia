@@ -60,7 +60,7 @@ function chartTitle(option) {
  * @returns {string | null}
  */
 export function builtinSummary(name, args) {
-  if (name === 'shell') return args && typeof args === 'object' ? withPrompt(/** @type {any} */ (args).command) : null;
+  if (name === 'shell') return shellSummary(args);
   const spec = TOOLS[name];
   if (!spec) return null;
   const [key, subject] = spec;
@@ -71,10 +71,23 @@ export function builtinSummary(name, args) {
   return what ? `${t(key)} ${what}` : t(key);
 }
 
-// A shell card reads as the command line itself.
-/** @param {unknown} command */
-function withPrompt(command) {
-  const line = str(command);
+// A shell card reads as what the command does when the model said so (its
+// `description`), with the command line beneath it (tools.js); otherwise as
+// the command line itself.
+/** @param {unknown} args */
+function shellSummary(args) {
+  if (!args || typeof args !== 'object') return null;
+  const line = commandLine(args);
+  return line && (str(/** @type {any} */ (args).description) ?? line);
+}
+
+/**
+ * A shell call's command as one `$ …` line, or null without one.
+ * @param {any} args
+ * @returns {string | null}
+ */
+export function commandLine(args) {
+  const line = str(args?.command);
   return line && `$ ${line}`;
 }
 

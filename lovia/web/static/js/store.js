@@ -19,6 +19,7 @@ export const store = {
   agents: [],
   sessions: [],
   activeRuns: new Set(), // session ids with a live background run (sidebar dot)
+  shownRuns: new Set(), // run ids this page streamed (its own, or attached to)
   chatEpoch: 0,
   // Both bundled stores support rewind — assume yes until /api/info says no
   // (custom Session backends may lack it).

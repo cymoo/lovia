@@ -9,7 +9,7 @@ import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
 import { notificationsEnabled, playCompletionSound } from './settings.js';
 import { dateBucket, formatDateTime, formatTimeSmart } from './util.js';
-import { closeView } from './views.js';
+import { closeView, currentView } from './views.js';
 import { OPEN_SESSION_EVENT } from './builtin-views.js';
 
 const sessionsList = document.getElementById('sessions-list');
@@ -105,11 +105,16 @@ async function checkMissedRuns(seen) {
 function _notifyRunFinished(sid, runId, status = 'completed') {
   // Whatever else happens below, this browser has now seen results up to here.
   _markRunsSeen();
-  const run = { id: runId, session_id: sid, status };
+  const run = { run_id: runId, session_id: sid, status };
   const stoppedAt = _recentlyStopped.get(sid);
-  // The chat on screen ends its own stream visibly — no extra notice.
+  // A run this page streamed, in the chat still on screen, showed its own
+  // outcome — no extra notice. Its stream usually ends before this event
+  // arrives, so `streaming` alone misses it. A run the page never streamed
+  // (another tab's, seen by the polling fallback) still gets one.
+  const onScreen = sid === store.sessionId && !document.hidden && !currentView()
+    && store.shownRuns.has(runId);
   if ((stoppedAt && Date.now() - stoppedAt < STOPPED_GRACE_MS)
-    || (sid === store.sessionId && store.streaming)) {
+    || (sid === store.sessionId && store.streaming) || onScreen) {
     runNotices.remember(run);
     return;
   }
@@ -301,7 +306,7 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
         const record = records[0];
         if (!record || record.status === 'running') return; // finish may not be persisted yet
         _pendingRunResults.delete(runId);
-        _notifyRunFinished(pending.sid, record.id, record.status);
+        _notifyRunFinished(pending.sid, record.run_id, record.status);
       }).catch(() => { /* keep the ID for the next refresh */ })
         .finally(() => { pending.loading = false; });
     }

@@ -7,6 +7,7 @@
 // carries reasoning + tool calls per message. A UI component draws as its
 // renderer's static snapshot (components.js), when it has one.
 import { api, apiError } from './api.js';
+import { t } from './i18n.js';
 import { parseEnvelope, snapshotComponent } from './components.js';
 import { TOOL_VIEW_KIND, toolInfo, toolViewField } from './tool-views.js';
 import { toast } from './toast.js';
@@ -216,10 +217,10 @@ export async function exportSessionHtml(sessionId, title) {
     a.download = exportFilename(heading, 'html');
     a.click();
     URL.revokeObjectURL(url);
-    toast('Chat exported');
+    toast(t('toast.exported'));
   } catch (err) {
     console.error('export html:', err);
-    toast('Export failed', { type: 'error' });
+    toast(t('toast.exportFailed'), { type: 'error' });
   }
 }
 

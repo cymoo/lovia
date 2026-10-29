@@ -569,8 +569,9 @@ async def shell(
             default=None,
             description=(
                 "One short sentence, in the conversation's language, saying "
-                "what the command does — shown to the user while it runs. "
-                "Omit for short, self-explanatory commands."
+                "what the command does — shown to the user as the command's "
+                "title. Omit only for a single short, self-explanatory "
+                "command; always give one for chained, piped or long commands."
             ),
         ),
     ] = None,

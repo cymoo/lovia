@@ -17,6 +17,12 @@ import {
 test('a call reads as what it did and to what', () => {
   assert.equal(builtinSummary('read_file', { path: 'src/a.py' }), 'Read file src/a.py');
   assert.equal(builtinSummary('shell', { command: 'ls -la\n  | wc -l' }), '$ ls -la | wc -l');
+  // A described command reads as its description; tools.js keeps the command beneath.
+  assert.equal(
+    builtinSummary('shell', { command: 'ls -la', description: ' List files ' }),
+    'List files',
+  );
+  assert.equal(builtinSummary('shell', { command: 'ls', description: '  ' }), '$ ls');
   assert.equal(builtinSummary('web_search', { query: 'lovia' }), 'Web search “lovia”');
   assert.equal(builtinSummary('web_fetch', { url: 'https://x.dev' }), 'Web fetch https://x.dev');
   // Retired names keep their lines, so older chats read the same.
@@ -39,6 +45,7 @@ test('arguments that do not fit keep the default line', () => {
   assert.equal(builtinSummary('read_file', { file: 'a.py' }), null); // look-alike tool
   assert.equal(builtinSummary('read_file', undefined), null); // unparsable / too large
   assert.equal(builtinSummary('shell', { command: '  ' }), null);
+  assert.equal(builtinSummary('shell', { description: 'List files' }), null); // no command
   assert.equal(builtinSummary('my_tool', { path: 'a' }), null);
 });
 

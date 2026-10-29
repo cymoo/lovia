@@ -11,7 +11,8 @@ const source = readFileSync(new URL('../../../lovia/web/static/js/sessions.js', 
   .replace(/^import .*;$/gm, '')
   .replace(/^export /gm, '');
 const live = (run_id, session_id = run_id) => ({ run_id, session_id });
-const result = (id, status = 'completed') => [{ id, session_id: id, status }];
+// Shaped like the server's RunRecordInfo (`run_id`, not `id`).
+const result = (run_id, status = 'completed', session_id = run_id) => [{ run_id, session_id, status }];
 
 function fixture(t) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -19,7 +20,7 @@ function fixture(t) {
   const history = new Map();
   const requests = [];
   const storage = new Map([['lovia-runs-seen', '10']]);
-  const store = { sessions: [], activeRuns: new Set(), runsBySession: new Map() };
+  const store = { sessions: [], activeRuns: new Set(), runsBySession: new Map(), shownRuns: new Set() };
   const state = { runs: [] };
   const context = {
     document: { title: 'Lovia', hidden: false, getElementById: () => null },
@@ -29,6 +30,7 @@ function fixture(t) {
     },
     store, createRunNotices, console, setTimeout, clearTimeout,
     icon: () => '',
+    currentView: () => null,
     t: (key, params) => ({ key, params }),
     toast: (message) => shown.push(message),
     playCompletionSound: () => {},
@@ -123,4 +125,21 @@ test('cancelled and interrupted outcomes stop retrying without a completion noti
   f.tick();
   assert.deepEqual(f.requests, ['a', 'b']);
   assert.deepEqual(f.shown, []);
+});
+
+test('the open chat gets no notice for a run this page streamed, but does for one it never showed', async (t) => {
+  const f = fixture(t);
+  f.store.sessionId = 'chat';
+  f.store.shownRuns.add('mine');
+  await f.poll([live('mine', 'chat')]);
+  f.history.set('mine', result('mine', 'completed', 'chat'));
+  await f.poll();
+  f.tick();
+  assert.deepEqual(f.shown, []);
+
+  await f.poll([live('theirs', 'chat')]);
+  f.history.set('theirs', result('theirs', 'completed', 'chat'));
+  await f.poll();
+  f.tick();
+  assert.deepEqual(f.shown.map((m) => m.key), ['toast.runFinished']);
 });

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createRunNotices } from '../../../lovia/web/static/js/run-notices.js';
 
-const run = (id, status = 'completed', session_id = 'chat') => ({ id, status, session_id });
+const run = (run_id, status = 'completed', session_id = 'chat') => ({ run_id, status, session_id });
 function fixture(t) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const shown = [];

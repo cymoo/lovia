@@ -2319,6 +2319,7 @@ async function applyEvent({ event, data }) {
       // The run this view follows, by the id its lifecycle events carry: what
       // a message queued now waits on.
       _shownRunId = data.run_id ?? null;
+      if (data.run_id) store.shownRuns.add(data.run_id); // its outcome is on screen
       updateSendEnabled(); // a message can queue behind it now
       _onAdmit?.(data.run_id);
       _onAdmit = null;

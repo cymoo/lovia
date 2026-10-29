@@ -1,7 +1,7 @@
 // Presentation-only batching shared by catch-up history and live completions.
 // Run IDs deduplicate the two paths, including a history response racing an SSE.
 
-/** @typedef {{ id?: string, session_id?: string, status: string }} RunNotice */
+/** Shaped like a /api/runs/history record. @typedef {{ run_id?: string, session_id?: string, status: string }} RunNotice */
 
 /**
  * @param {{ notify: Function, t: Function, titleOf: (sid: string) => string }} deps
@@ -14,8 +14,8 @@ export function createRunNotices({ notify, t, titleOf }) {
 
   /** A resumed run may fail, then complete under the same ID. */
   function remember(/** @type {RunNotice} */ run) {
-    if (!run.id) return true; // older event payloads may lack a stable ID
-    const key = `${run.id}:${run.status}`;
+    if (!run.run_id) return true; // older event payloads may lack a stable ID
+    const key = `${run.run_id}:${run.status}`;
     if (seen.has(key)) return false;
     seen.add(key);
     if (seen.size > 256) seen.delete(seen.values().next().value);

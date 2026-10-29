@@ -632,7 +632,7 @@ function ensureReasoning() {
     details.className = 'lv-reasoning';
     details.open = true;
     const summary = document.createElement('summary');
-    summary.innerHTML = `<span class="lv-reasoning-icon">💭</span><span class="lv-reasoning-label">${t('chat.thinking')}</span>`;
+    summary.innerHTML = `<span class="lv-reasoning-icon">${icon('lightbulb', { size: 14 })}</span><span class="lv-reasoning-label">${t('chat.thinking')}</span>`;
     details.appendChild(summary);
     const content = document.createElement('div');
     content.className = 'lv-reasoning-content';
@@ -2020,7 +2020,7 @@ function renderHistoryWindow({ stickBottom }) {
         details.className = 'lv-reasoning lv-done';
         const summary = document.createElement('summary');
         // History keeps no reasoning duration, hence not 'chat.thought'.
-        summary.innerHTML = `<span class="lv-reasoning-icon">💭</span><span class="lv-reasoning-label">${t('chat.thoughtDone')}</span>`;
+        summary.innerHTML = `<span class="lv-reasoning-icon">${icon('lightbulb', { size: 14 })}</span><span class="lv-reasoning-label">${t('chat.thoughtDone')}</span>`;
         details.appendChild(summary);
         const rc = document.createElement('div');
         rc.className = 'lv-reasoning-content';

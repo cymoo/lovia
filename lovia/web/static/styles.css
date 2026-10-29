@@ -1862,31 +1862,86 @@ body.lv-sidebar-collapsed .lv-sidebar-expand-btn {
   animation: lv-spin 0.7s linear infinite;
   vertical-align: middle;
 }
+/* The steps read as a timeline: one rail down the gutter, a status dot per
+   step (keyed on the public `data-status`, so deployer tool views get it
+   free), no hairlines between rows. A step's details indent past the rail. */
 .lv-activity-steps {
+  --lv-rail-x: 20px;
+  --lv-step-indent: 36px;
+  position: relative;
+  padding: 4px 0;
   border-top: 1px solid var(--lv-border);
+}
+.lv-activity-steps::before {
+  content: "";
+  position: absolute;
+  left: var(--lv-rail-x);
+  top: 18px;
+  bottom: 18px;
+  width: 1px;
+  background: var(--lv-border);
 }
 /* Specific enough to beat the card rules below, the themed ones included. */
 .lv-activity > .lv-activity-steps > :is(.lv-reasoning, .lv-tool, .lv-approval-auto) {
+  position: relative;
   margin: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
-.lv-activity > .lv-activity-steps > :is(.lv-reasoning, .lv-tool, .lv-approval-auto) + * {
-  border-top: 1px solid var(--lv-border);
+.lv-activity > .lv-activity-steps > :is(.lv-reasoning, .lv-tool) > summary {
+  min-height: 32px;
+  padding: 6px 14px 6px var(--lv-step-indent);
 }
 .lv-activity > .lv-activity-steps > .lv-approval-auto {
-  padding: 6px 14px;
+  padding: 6px 14px 6px var(--lv-step-indent);
 }
 /* A thinking row reads like the tool rows beside it, not as a section label. */
 .lv-activity > .lv-activity-steps > .lv-reasoning > summary {
-  min-height: 36px;
   font-size: 13px;
   font-weight: 400;
   letter-spacing: normal;
   text-transform: none;
   color: var(--lv-ink-2);
+}
+/* The dot stands in for the row glyphs. */
+.lv-activity-steps > .lv-reasoning .lv-reasoning-icon,
+.lv-activity-steps > .lv-tool .lv-tool-name::before {
+  display: none;
+}
+.lv-activity-steps > * > :not(summary) {
+  margin-left: var(--lv-step-indent);
+  margin-right: 14px;
+}
+.lv-activity-steps > :is(.lv-reasoning, .lv-tool, .lv-approval-auto)::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  left: calc(var(--lv-rail-x) - 3.5px);
+  top: 12.5px;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lv-muted-2);
+}
+.lv-activity-steps > .lv-tool[data-status="error"]::before {
+  background: var(--lv-danger);
+}
+.lv-activity-steps > .lv-tool[data-status="awaiting"]::before {
+  background: var(--lv-warn);
+}
+/* Still working: a spinning ring, only while the reply streams (a replayed
+   step that never settled must not spin forever). */
+.lv-turn.lv-streaming .lv-activity-steps > :is(.lv-tool[data-status="running"], .lv-reasoning:not(.lv-done))::before {
+  background: var(--lv-surface);
+  border: 2px solid var(--lv-accent);
+  border-top-color: transparent;
+  animation: lv-spin 0.7s linear infinite;
+}
+.lv-activity-steps > .lv-reasoning:not(.lv-done)[open] .lv-reasoning-label::after {
+  display: none; /* the dot already spins */
 }
 
 /* ---- Reasoning -------------------------------------------------------------- */
@@ -1935,10 +1990,9 @@ body.lv-sidebar-collapsed .lv-sidebar-expand-btn {
   background: var(--lv-surface-3);
 }
 .lv-reasoning-icon {
-  font-size: 13px;
-  line-height: 1;
+  display: inline-flex;
   flex-shrink: 0;
-  filter: grayscale(0.3);
+  color: var(--lv-muted-2);
 }
 .lv-reasoning-label {
   flex: 1;

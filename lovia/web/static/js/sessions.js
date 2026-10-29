@@ -1121,6 +1121,7 @@ export function initSessions() {
   initSearch();
 
   document.getElementById('new-chat')?.addEventListener('click', startNewChat);
+  document.getElementById('topbar-new-chat')?.addEventListener('click', startNewChat);
 
   initExportMenu();
   store.on('clear-chat', clearChat);

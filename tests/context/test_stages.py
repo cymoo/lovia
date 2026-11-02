@@ -823,6 +823,56 @@ async def test_truncate_appends_the_note_to_a_running_summary():
     assert state.summary.text == "PRIOR\n\n" + TRUNCATION_NOTE.format(n=4)
 
 
+async def test_truncate_keeps_one_cumulative_note_across_repeats():
+    """A summarizer that stays down must not stack a note per overflow."""
+    body = _chat(4)
+    ctx = make_ctx(body, aggressive=True, protected_from=2, budget=_ROOMY)
+    assert await TruncateHistory().plan(body, ctx) is True
+    ctx.protected_from = 6
+    assert await TruncateHistory().plan(body, ctx) is True
+    assert ctx.state.summary is not None
+    assert ctx.state.summary.covered == 6
+    assert ctx.state.summary.text == TRUNCATION_NOTE.format(n=6)
+
+    state = CompactionState(
+        summary=SummaryState(
+            text="PRIOR\n\n" + TRUNCATION_NOTE.format(n=2),
+            covered=4,
+            fingerprint=fingerprint(body[:4]),
+        )
+    )
+    ctx = make_ctx(body, state=state, aggressive=True, protected_from=6, budget=_ROOMY)
+    assert await TruncateHistory().plan(body, ctx) is True
+    assert state.summary is not None
+    assert state.summary.text == "PRIOR\n\n" + TRUNCATION_NOTE.format(n=4)
+
+
+async def test_truncate_never_cuts_past_the_latest_user_message():
+    """An unanchored frontier (a long tool loop after the request) would
+    drop the request itself behind a note: cap the cut at the latest user
+    message instead."""
+    body = _chat(2) + [user("do it"), call("c1"), out("c1", "r" * 3_000)]
+    ctx = make_ctx(body, aggressive=True, protected_from=6, budget=_ROOMY)
+    assert await TruncateHistory().plan(body, ctx) is True
+    assert ctx.state.summary is not None
+    assert ctx.state.summary.covered == 4
+
+
+async def test_truncate_tail_cut_measures_the_survivors_not_the_view():
+    """Fixed costs (summary, schemas) can exceed the aggressive target on
+    their own; what must fit the target is the tail that survives."""
+    body = _chat(4) + [user("latest")]
+    state = CompactionState(
+        summary=SummaryState(
+            text="S" * 4_000, covered=4, fingerprint=fingerprint(body[:4])
+        )
+    )
+    tight = TokenBudget(window=200, reserve_output=0, trigger=0.75, target=0.5)
+    ctx = make_ctx(body, state=state, aggressive=True, protected_from=4, budget=tight)
+    assert await TruncateHistory().plan(body, ctx) is True
+    assert state.summary is not None and state.summary.covered == 8
+
+
 async def test_truncate_moves_to_the_latest_user_turn_once_the_frontier_is_exhausted():
     """The summary already reaches the protected tail, so the tail itself is
     what overflows: cut up to the latest user message — but never past it."""

@@ -69,8 +69,8 @@ agent = Agent(..., context_policy=NoopContextPolicy())
   始终保持完整 call/result 对）。模型始终能原样看到紧邻上下文。
 - **溢出后备。** 如果 provider 仍然拒绝 prompt（`ContextOverflowError`），策略有一次机会
   渲染更激进的 view（尾部收紧到 10%，阈值降低，目标约为可用窗口 25%，允许截断）并重试本轮。
-  只有重建的 view 明显更小时才重试。错误只会在最新一轮用户消息本身就超窗时向外暴露，
-  其 hint 会说明这一点。
+  只有重建的 view 明显更小时才重试。使用默认阶段时，错误只会在最新一轮用户消息本身就超窗时
+  向外暴露；其 hint 会说明该怎么办。
 
 每次压缩都会发出 [`ContextCompacted` 事件](streaming.md#转移与上下文)，其中带有
 `CompactionNotice`（原因、压缩前后 token、便于阅读的 detail）。Web UI 会实时渲染它，并在重新加载时

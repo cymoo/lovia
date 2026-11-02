@@ -86,8 +86,9 @@ Three guarantees shape the design:
   (`ContextOverflowError`), the policy gets one shot at a more aggressive
   view (tail tightened to 10%, thresholds dropped, target ~25% of usable,
   truncation allowed) and the turn is retried — only when the rebuilt view
-  is meaningfully smaller. The error surfaces only when the latest user
-  turn alone exceeds the window, and says so in its hint.
+  is meaningfully smaller. With the default stages the error surfaces only
+  when the latest user turn alone exceeds the window; its hint says what to
+  do.
 
 Each compaction emits a
 [`ContextCompacted` event](streaming.md#transitions-and-context) with a

@@ -22,6 +22,7 @@ and Anthropic's context-editing primitives:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -543,6 +544,23 @@ TRUNCATION_NOTE = (
 )
 """Stands in for the summary of a span :class:`TruncateHistory` dropped."""
 
+# The note as a trailing pattern on the summary text, so a repeat truncation
+# replaces it (with the cumulative count) instead of stacking another one.
+_NOTE_RE = re.compile(
+    r"(?:^|\n\n)"
+    + re.escape(TRUNCATION_NOTE).replace(re.escape("{n}"), r"(\d+)")
+    + r"\Z"
+)
+
+
+def _with_truncation_note(prior: str | None, dropped: int) -> str:
+    """``prior`` with a single trailing note counting every entry dropped so far."""
+    if prior is not None and (m := _NOTE_RE.search(prior)):
+        dropped += int(m.group(1))
+        prior = prior[: m.start()] or None
+    note = TRUNCATION_NOTE.format(n=dropped)
+    return f"{prior}\n\n{note}" if prior is not None else note
+
 
 class TruncateHistory:
     """Drop what the other stages could not shrink — the overflow-path floor.
@@ -555,16 +573,18 @@ class TruncateHistory:
 
     The decision reuses the summary's coverage frontier: the dropped span is
     recorded as a summary whose text is :data:`TRUNCATION_NOTE` (appended to
-    the running summary when there is one), so rendering, fingerprinting and
-    pair safety are the summary stage's own, and a later successful fold
-    replaces the note with a real summary. The cut is the summary's own
-    frontier, the protected-tail boundary: exactly the span a working
-    summarizer would have folded. Only when that frontier is exhausted (the
-    summary already reaches it, so the tail itself is what overflows) does
-    the cut move up to the latest user message, and only if that gets the
-    view under target. The last entry is never dropped; a view that
-    overflows with a single user turn in it is the user's message being too
-    long, which the runner reports as such.
+    the running summary when there is one; one note, with a cumulative
+    count), so rendering, fingerprinting and pair safety are the summary
+    stage's own, and a later successful fold replaces the note with a real
+    summary. The cut is the summary's own frontier, the protected-tail
+    boundary: exactly the span a working summarizer would have folded, but
+    never past the latest user message — the summary's "Session intent"
+    carries an unanchored request, a note cannot. Only when that frontier is
+    exhausted (the summary already reaches it, so the tail itself is what
+    overflows) does the cut move up to the latest user message, and only if
+    what survives fits the target: otherwise the latest turn is the overflow
+    itself and dropping the context around it would cost recency for
+    nothing. The latest user message is never dropped.
 
     Runs on the aggressive path only. The proactive path has headroom to
     spare: a failed summary there costs at most one provider rejection before
@@ -587,29 +607,31 @@ class TruncateHistory:
                 cut -= 1
             return cut
 
-        chosen = snapped(ctx.protected_from)
+        last_user = next(
+            (
+                i
+                for i in range(len(body) - 1, -1, -1)
+                if isinstance(body[i], InputEntry) and body[i].role == "user"  # type: ignore[union-attr]
+            ),
+            len(body) - 1,
+        )
+        chosen = snapped(min(ctx.protected_from, last_user))
         if chosen <= prior_covered:
-            # Only when it gets the view under target: otherwise the latest
-            # turn is the overflow itself, and dropping the context around it
-            # would cost recency for nothing.
-            last_user = next(
-                (
-                    i
-                    for i in range(len(body) - 1, -1, -1)
-                    if isinstance(body[i], InputEntry) and body[i].role == "user"  # type: ignore[union-attr]
-                ),
-                len(body) - 1,
-            )
             chosen = snapped(last_user)
-            span = render_entries(body[prior_covered:chosen], state)
-            projected = ctx.current_tokens - ctx.calibrated(ctx.counter.count(span))
-            if projected > ctx.budget.target_tokens:
+            # The surviving tail alone, not the view: the summary and the
+            # tool schemas are fixed costs the aggressive target (a quarter
+            # of the failed prompt) may not even cover.
+            tail = ctx.calibrated(
+                ctx.counter.count(render_entries(body[chosen:], state))
+            )
+            if tail > ctx.budget.target_tokens:
                 return False
         if chosen <= prior_covered:
             return False
 
-        note = TRUNCATION_NOTE.format(n=chosen - prior_covered)
-        text = f"{prior.text}\n\n{note}" if prior is not None else note
+        text = _with_truncation_note(
+            prior.text if prior is not None else None, chosen - prior_covered
+        )
         logger.warning(
             "context.truncate: dropping body entries %d..%d without a summary",
             prior_covered,

@@ -922,14 +922,13 @@ class RunLoop:
                     failed_tokens,
                     ctx_result.tokens_after,
                 )
-                # With the default policy the truncate stage has already
-                # dropped everything but the latest user turn, so what is
-                # left is that turn itself — the one thing no policy may cut.
+                # Neutral on purpose: this branch also serves a no-op policy
+                # and custom stage chains, so it can't claim what is left.
                 overflow.hint = overflow.hint or (
-                    "The latest message (with its attachments and the tool "
-                    "schemas) exceeds the model's context window on its own; "
-                    "compaction cannot help. Shorten it, or use a model with "
-                    "a larger window."
+                    "The context policy could not shrink the prompt below the "
+                    "model's context window. If the latest message is large "
+                    "(pasted content, attachments), shorten it; otherwise "
+                    "start a new chat or branch from an earlier turn."
                 )
                 raise
             view = await self._build_view(state, ctx_result)

@@ -922,6 +922,15 @@ class RunLoop:
                     failed_tokens,
                     ctx_result.tokens_after,
                 )
+                # With the default policy the truncate stage has already
+                # dropped everything but the latest user turn, so what is
+                # left is that turn itself — the one thing no policy may cut.
+                overflow.hint = overflow.hint or (
+                    "The latest message (with its attachments and the tool "
+                    "schemas) exceeds the model's context window on its own; "
+                    "compaction cannot help. Shorten it, or use a model with "
+                    "a larger window."
+                )
                 raise
             view = await self._build_view(state, ctx_result)
 

@@ -36,7 +36,7 @@ agent = Agent(..., context_policy=NoopContextPolicy())
 
 ## 压缩机制
 
-每轮模型调用前，策略会按窗口估算 transcript 大小。接近上限时，它会按**低成本优先**的三阶段渲染
+每轮模型调用前，策略会按窗口估算 transcript 大小。接近上限时，它会按**低成本优先**的几个阶段渲染
 出一个更小的 view：
 
 1. **转存巨大工具结果**（`OffloadToolResults`，≥4,000 字符）：在 view 中替换为 400 字符
@@ -45,6 +45,9 @@ agent = Agent(..., context_policy=NoopContextPolicy())
 3. **总结旧历史**（`SummarizeHistory`）：用增量 LLM summary 替换最早的一段历史。summary
    使用结构化章节（session intent、current state、key facts、artifacts、constraints、
    next steps），不会写成随意散文。
+4. **截断**（`TruncateHistory`，仅溢出路径）：provider 已经拒绝了 prompt，而上面三阶段
+   之后仍然超窗——summarizer 持续失败，或者最近一段大到保护不住——就直接丢掉尚未总结的那段，
+   在 view 中留一条简短说明。这是有损的，但另一种结局是该 session 之后每一轮都以同样方式失败。
 
 这些标记会保留配对关系（`call_id`、错误标记），并告诉模型如何取回内容：
 
@@ -65,8 +68,9 @@ agent = Agent(..., context_policy=NoopContextPolicy())
 - **受保护的尾部。** 最近一段内容不会压缩（默认：可用窗口的 20%，至少包含最新用户消息，并且
   始终保持完整 call/result 对）。模型始终能原样看到紧邻上下文。
 - **溢出后备。** 如果 provider 仍然拒绝 prompt（`ContextOverflowError`），策略有一次机会
-  渲染更激进的 view（尾部收紧到 10%，阈值降低，目标约为可用窗口 25%）并重试本轮。只有重建的
-  view 明显更小时才重试，否则错误会向外暴露。
+  渲染更激进的 view（尾部收紧到 10%，阈值降低，目标约为可用窗口 25%，允许截断）并重试本轮。
+  只有重建的 view 明显更小时才重试。错误只会在最新一轮用户消息本身就超窗时向外暴露，
+  其 hint 会说明这一点。
 
 每次压缩都会发出 [`ContextCompacted` 事件](streaming.md#转移与上下文)，其中带有
 `CompactionNotice`（原因、压缩前后 token、便于阅读的 detail）。Web UI 会实时渲染它，并在重新加载时
@@ -81,7 +85,7 @@ Compaction(
     compact_to=0.60,            # 压缩后的目标
     keep_recent_tokens=None,    # 受保护尾部；None = usable // 5
     reserve_output_tokens=16_384,
-    stages=None,                # 你自己的 pipeline；None = 上面三阶段
+    stages=None,                # 你自己的 pipeline；None = 上面四阶段
     summarizer=None,            # 你自己的 Summarizer；None = LLMSummarizer()
     image_tokens=1_600,         # 每个 image part 的固定估算
     store=None,                 # 转存输出用的 ResultStore
@@ -170,7 +174,8 @@ required_sections=...)`，不要 fork 这段实现。
 - **Compaction 不是内存上限。** **transcript** 保留完整输出；只有 view 缩小。失控载荷要在源头由
   [工具输出截断](tools.md#输出截断)限制；那是有损的，且 `recall_tool_result` 也只能看到截断版本。
 - **summary 会花一次模型调用**，用的是本次运行自己的 provider（temperature 0）。连续 summary 失败会
-  触发每次运行的 circuit breaker（aggressive 路径作为 half-open 探测保留），节省不到 ≥10% 时也会跳过。
+  触发每次运行的 circuit breaker（aggressive 路径作为 half-open 探测保留，那里由截断兜底），
+  节省不到 ≥10% 时也会跳过。
   这笔开销记在账上——计入 `RunResult.usage`，也计入 `RunBudget`，并在本轮主调用发出前检查——
   但预算敏感的部署仍需注意：第 N 轮里可能包含一次额外的 LLM 调用。
 - **未知模型的第一次撞墙是一次真实的失败请求。** 正是端点的这次拒绝教会了 lovia 窗口大小；

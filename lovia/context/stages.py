@@ -578,13 +578,16 @@ class TruncateHistory:
     stage's own, and a later successful fold replaces the note with a real
     summary. The cut is the summary's own frontier, the protected-tail
     boundary: exactly the span a working summarizer would have folded, but
-    never past the latest user message — the summary's "Session intent"
-    carries an unanchored request, a note cannot. Only when that frontier is
-    exhausted (the summary already reaches it, so the tail itself is what
-    overflows) does the cut move up to the latest user message, and only if
-    what survives fits the target: otherwise the latest turn is the overflow
-    itself and dropping the context around it would cost recency for
-    nothing. The latest user message is never dropped.
+    never past the *anchor* — the latest user message, or, once the summary
+    already carries that message (a long tool loop; its "Session intent"
+    section holds the request, a note cannot), the newest entry. When the
+    frontier is exhausted or what survives it still does not fit, the cut
+    moves up to the anchor, if *that* fits: otherwise the latest turn is the
+    overflow itself and dropping the context around it would cost recency
+    for nothing. "Fits" is the aggressive target and, when the model's real
+    window is known, half of its usable space — the aggressive budget is
+    sized to the failed prompt, which a session moved to a smaller model can
+    dwarf. The anchor is never dropped.
 
     Runs on the aggressive path only. The proactive path has headroom to
     spare: a failed summary there costs at most one provider rejection before
@@ -607,6 +610,17 @@ class TruncateHistory:
                 cut -= 1
             return cut
 
+        # The surviving tail alone, not the view: the summary and the tool
+        # schemas are fixed costs the aggressive target (a quarter of the
+        # failed prompt) may not even cover.
+        def survivors(cut: int) -> int:
+            return ctx.calibrated(ctx.counter.count(render_entries(body[cut:], state)))
+
+        limit = ctx.budget.target_tokens
+        if ctx.model_window is not None:
+            usable = usable_tokens(ctx.model_window, ctx.budget.reserve_output)
+            limit = min(limit, max(1, usable // 2))
+
         last_user = next(
             (
                 i
@@ -615,17 +629,12 @@ class TruncateHistory:
             ),
             len(body) - 1,
         )
-        chosen = snapped(min(ctx.protected_from, last_user))
-        if chosen <= prior_covered:
-            chosen = snapped(last_user)
-            # The surviving tail alone, not the view: the summary and the
-            # tool schemas are fixed costs the aggressive target (a quarter
-            # of the failed prompt) may not even cover.
-            tail = ctx.calibrated(
-                ctx.counter.count(render_entries(body[chosen:], state))
-            )
-            if tail > ctx.budget.target_tokens:
-                return False
+        anchor = last_user if last_user >= prior_covered else len(body) - 1
+        chosen = snapped(min(ctx.protected_from, anchor))
+        if chosen <= prior_covered or survivors(chosen) > limit:
+            further = snapped(anchor)
+            if further > prior_covered and survivors(further) <= limit:
+                chosen = further
         if chosen <= prior_covered:
             return False
 

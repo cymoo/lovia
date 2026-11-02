@@ -900,15 +900,54 @@ async def test_truncate_leaves_the_tail_alone_when_the_latest_turn_is_the_overfl
     assert state.summary.covered == 4
 
 
-async def test_truncate_stops_at_the_frontier_while_it_still_has_room():
-    """A frontier cut that merely misses the target is not escalated to the
-    tail: the next overflow gets a tighter frontier instead."""
+async def test_truncate_escalates_when_the_frontier_cut_still_does_not_fit():
+    """The run loop retries once: a frontier cut whose survivors still
+    exceed the target would waste it, so the cut moves up to the anchor."""
     body = _chat(4) + [user("latest " + "z" * 1_000)]
     tight = TokenBudget(window=600, reserve_output=0, trigger=0.75, target=0.5)
     ctx = make_ctx(body, aggressive=True, protected_from=2, budget=tight)
     assert await TruncateHistory().plan(body, ctx) is True
     assert ctx.state.summary is not None
+    assert ctx.state.summary.covered == 8
+
+
+async def test_truncate_keeps_the_frontier_cut_when_the_anchor_cut_fits_no_better():
+    """Both cuts miss the target: the frontier cut still shrinks, and the
+    latest turn keeps its context."""
+    body = _chat(4) + [user("latest " + "z" * 4_000)]
+    tight = TokenBudget(window=600, reserve_output=0, trigger=0.75, target=0.5)
+    ctx = make_ctx(body, aggressive=True, protected_from=2, budget=tight)
+    assert await TruncateHistory().plan(body, ctx) is True
+    assert ctx.state.summary is not None
     assert ctx.state.summary.covered == 2
+
+
+async def test_truncate_fits_the_real_model_window_not_the_failed_prompt():
+    """The aggressive budget is sized to the failed prompt; a session moved
+    to a much smaller model must be cut to fit *that* model."""
+    body = _chat(20) + [user("latest")]
+    # Failed prompt ~10k tokens → target ~2.5k; a 10% tail (protected_from)
+    # keeps ~1k, which a 1k-token model cannot take alongside the summary.
+    budget = TokenBudget(window=10_000, reserve_output=0, trigger=0.75, target=0.25)
+    ctx = make_ctx(
+        body, aggressive=True, protected_from=36, budget=budget, model_window=1_000
+    )
+    assert await TruncateHistory().plan(body, ctx) is True
+    assert ctx.state.summary is not None
+    assert ctx.state.summary.covered == 40  # only the latest turn survives
+
+
+async def test_truncate_anchors_on_the_newest_entry_once_the_summary_carries_the_request():
+    """A long tool loop: the summary already covers the only user message,
+    so its position must not pin the cut — the newest entry anchors instead."""
+    body = [user("do it")] + _pairs(10, chars=1_000)
+    state = CompactionState(
+        summary=SummaryState(text="S", covered=11, fingerprint=fingerprint(body[:11]))
+    )
+    ctx = make_ctx(body, state=state, aggressive=True, protected_from=17, budget=_ROOMY)
+    assert await TruncateHistory().plan(body, ctx) is True
+    assert state.summary is not None
+    assert state.summary.covered == 17
 
 
 async def test_truncate_never_splits_a_tool_pair():

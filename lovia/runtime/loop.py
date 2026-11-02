@@ -922,6 +922,14 @@ class RunLoop:
                     failed_tokens,
                     ctx_result.tokens_after,
                 )
+                # Neutral on purpose: this branch also serves a no-op policy
+                # and custom stage chains, so it can't claim what is left.
+                overflow.hint = overflow.hint or (
+                    "The context policy could not shrink the prompt below the "
+                    "model's context window. If the latest message is large "
+                    "(pasted content, attachments), shorten it; otherwise "
+                    "start a new chat or branch from an earlier turn."
+                )
                 raise
             view = await self._build_view(state, ctx_result)
 

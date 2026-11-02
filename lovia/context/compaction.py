@@ -7,9 +7,10 @@ How a call flows:
    that's all that happens — earlier decisions are replayed verbatim, the
    prompt prefix stays byte-stable, and provider prompt caches stay warm.
 2. Over the watermark (or after a provider overflow), stages run in order —
-   offload, clear, summarize — each recording new sticky decisions until the
-   view is under the *compact_to* watermark. The gap between the two is
-   hysteresis: compaction happens in rare bursts, not every turn.
+   offload, clear, summarize, and after an overflow truncate — each recording
+   new sticky decisions until the view is under the *compact_to* watermark.
+   The gap between the two is hysteresis: compaction happens in rare bursts,
+   not every turn.
 3. Token thresholds estimate the *whole* request: cheap per-entry estimates
    plus the tool-schema payload the request carries
    (:meth:`~lovia.context.tokens.TokenCounter.count_tools`), *calibrated*
@@ -44,6 +45,7 @@ from .stages import (
     Stage,
     StageContext,
     SummarizeHistory,
+    TruncateHistory,
 )
 from .summarizer import Summarizer
 from .tokens import TokenBudget, TokenCounter, _validate_watermark
@@ -123,8 +125,8 @@ class Compaction:
                 that compaction never touches. Defaults to 20% of the
                 usable window.
             reserve_output_tokens: Headroom reserved for the model's reply.
-            stages: Stage chain. Defaults to
-                ``[OffloadToolResults(), ClearToolResults(), SummarizeHistory()]``.
+            stages: Stage chain. Defaults to ``[OffloadToolResults(),
+                ClearToolResults(), SummarizeHistory(), TruncateHistory()]``.
             summarizer: Summary backend for the default summarize stage.
                 Ignored when ``stages`` is given explicitly.
             image_tokens: Flat token cost per image for the estimator.
@@ -161,6 +163,7 @@ class Compaction:
                 OffloadToolResults(),
                 ClearToolResults(),
                 SummarizeHistory(summarizer=summarizer),
+                TruncateHistory(),
             ]
         )
         self.store = store
@@ -459,6 +462,8 @@ class Compaction:
             )
         if state.summary is not None:
             detail.append(f"summary covers {_plural(state.summary.covered, 'message')}")
+        if TruncateHistory.name in reasons:
+            detail.append("older messages dropped without a summary")
         return ContextResult(
             entries=view,
             changed=changed,

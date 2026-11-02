@@ -39,7 +39,7 @@ agent = Agent(..., context_policy=NoopContextPolicy())
 ## What Compaction does
 
 Every turn, before the model call, the policy sizes the transcript against
-the window and — under pressure — renders a smaller view in three
+the window and — under pressure — renders a smaller view in
 **cheap-first stages**:
 
 1. **Offload huge tool results** (`OffloadToolResults`, ≥4,000 chars):
@@ -51,6 +51,12 @@ the window and — under pressure — renders a smaller view in three
    summary replaces the oldest span — structured sections (session intent,
    current state, key facts, artifacts, constraints, next steps) rather
    than freeform prose.
+4. **Truncate** (`TruncateHistory`, overflow path only): when the provider
+   has rejected the prompt and the three stages above still leave it over
+   the window — a summarizer that keeps failing, or a recent span too big
+   to protect — the unsummarized span is dropped and a short note takes
+   its place in the view. Lossy, but the alternative is a session that
+   fails the same way on every later turn.
 
 Markers preserve the pairing (`call_id`, error flag) and tell the model how
 to get content back:
@@ -78,9 +84,11 @@ Three guarantees shape the design:
   immediate context verbatim.
 - **Reactive backstop.** If the provider still rejects the prompt
   (`ContextOverflowError`), the policy gets one shot at a more aggressive
-  view (tail tightened to 10%, thresholds dropped, target ~25% of usable)
-  and the turn is retried — only when the rebuilt view is meaningfully
-  smaller; otherwise the error surfaces.
+  view (tail tightened to 10%, thresholds dropped, target ~25% of usable,
+  truncation allowed) and the turn is retried — only when the rebuilt view
+  is meaningfully smaller. With the default stages the error surfaces only
+  when the latest user turn alone exceeds the window; its hint says what to
+  do.
 
 Each compaction emits a
 [`ContextCompacted` event](streaming.md#transitions-and-context) with a
@@ -96,7 +104,7 @@ Compaction(
     compact_to=0.60,            # target after compaction
     keep_recent_tokens=None,    # protected tail; None = usable // 5
     reserve_output_tokens=16_384,
-    stages=None,                # your own pipeline; None = the three above
+    stages=None,                # your own pipeline; None = the four above
     summarizer=None,            # your own Summarizer; None = LLMSummarizer()
     image_tokens=1_600,         # flat estimate per image part
     store=None,                 # ResultStore for offloaded outputs
@@ -208,8 +216,8 @@ content. `lovia/context/policy.py` is a one-screen read.
   by design, and `recall_tool_result` sees the truncated version.
 - **Summaries cost a model call** on the run's own provider (temperature
   0). Repeated summary failures trip a per-run circuit breaker (the
-  aggressive path stays as the half-open probe), and a summary that
-  wouldn't save ≥10% is skipped. The spend is on the books — it counts in
+  aggressive path stays as the half-open probe; truncation covers for it
+  there), and a summary that wouldn't save ≥10% is skipped. The spend is on the books — it counts in
   `RunResult.usage` and against the `RunBudget`, checked before the turn's
   main call goes out — but budget-sensitive deployments should know turn N
   can contain a hidden LLM call.

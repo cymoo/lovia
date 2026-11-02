@@ -44,6 +44,7 @@ from .stages import (
     Stage,
     StageContext,
     SummarizeHistory,
+    TruncateHistory,
 )
 from .store import FileResultStore, InMemoryResultStore, ResultStore
 from .summarizer import LLMSummarizer, Summarizer, transcript_to_text
@@ -73,6 +74,7 @@ __all__ = [
     "SummaryState",
     "TokenBudget",
     "TokenCounter",
+    "TruncateHistory",
     "clear_marker",
     "offload_marker",
     "render_view",

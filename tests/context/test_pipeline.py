@@ -22,6 +22,7 @@ from lovia.context import (
     OffloadRecord,
     SummaryState,
 )
+from lovia.context.stages import TRUNCATION_NOTE
 from lovia.context.state import fingerprint
 from lovia.events import ContextCompacted
 from lovia.transcript import ToolCallEntry, ToolResultEntry, entry_to_dict
@@ -739,13 +740,50 @@ async def test_latest_reported_window_replaces_the_previous_one():
 async def test_reactive_summarizer_failure_is_contained_and_persists_counter():
     # The summarizer's own error stays inside the pipeline (the runner must
     # get to surface the original ContextOverflowError); the failure counter
-    # is still recorded.
+    # is still recorded, and truncation covers for the failed fold.
     pipeline = Compaction(summarizer=FailingSummarizer())
     scratch: dict = {}
     entries = [user("x" * 1_000) for _ in range(4)]
     res = await pipeline.compact(req(entries, overflow=True, scratch=scratch))
-    assert res.compacted is False
+    assert res.reason == "reactive_truncate"
     assert CompactionState.load(scratch).summary_failures == 1
+
+
+async def test_reactive_truncates_when_the_summarizer_keeps_failing():
+    """The overflow-path floor: a prompt the summarizer cannot fold still
+    shrinks, by dropping the unsummarized span behind a note."""
+    pipeline = Compaction(summarizer=FailingSummarizer())
+    scratch: dict = {}
+    entries = [user(f"turn {i} " + "x" * 4_000) for i in range(8)]
+    res = await pipeline.compact(req(entries, overflow=True, scratch=scratch))
+    assert res.compacted is True
+    assert res.reason == "reactive_truncate"
+    assert res.tokens_after is not None and res.tokens_before is not None
+    assert res.tokens_after < res.tokens_before * 0.5
+    assert "older messages dropped without a summary" in res.detail
+    state = CompactionState.load(scratch)
+    assert state.summary is not None
+    assert state.summary.text == TRUNCATION_NOTE.format(n=state.summary.covered)
+    # The view: the note, then the surviving (latest) turn.
+    assert len(res.entries) == 1 + (len(entries) - state.summary.covered)
+    assert "turn 7" in str(res.entries[-1].content)
+
+
+async def test_proactive_path_never_truncates():
+    """Truncation is the overflow floor, not a proactive stage: a tripped
+    summarizer on the proactive path leaves the view alone."""
+    pipeline = _pipeline(
+        context_window=100,
+        compact_at=0.5,
+        compact_to=0.25,
+        summarizer=FailingSummarizer(),
+    )
+    entries = [user("x" * 1_000) for _ in range(4)]
+    scratch: dict = {}
+    for _ in range(5):
+        res = await pipeline.compact(req(entries, scratch=scratch))
+        assert res.compacted is False
+    assert CompactionState.load(scratch).summary is None
 
 
 async def test_proactive_circuit_breaker_stops_after_limit():
@@ -861,8 +899,10 @@ async def test_runner_emits_context_compacted_event():
     compacted = [e for e in events_seen if isinstance(e, ContextCompacted)]
     assert len(compacted) == 1
     assert compacted[0].notice.reactive is True
-    assert compacted[0].notice.reason == "reactive_summary"
-    assert compacted[0].notice.summary == "S."
+    # A toy prompt's aggressive target is below the summary wrapper itself,
+    # so the truncate floor follows the summary here; the summary still leads.
+    assert compacted[0].notice.reason.startswith("reactive_summary")
+    assert compacted[0].notice.summary.startswith("S.")
     assert isinstance(compacted[0].notice.tokens_after, int)
 
 
@@ -880,9 +920,9 @@ async def test_runner_persists_compaction_notice_to_segment_meta():
     ):
         pass
     notice = (await sess.segments("s1"))[-1].meta[NOTICE_META_KEY]
-    assert notice["reason"] == "reactive_summary"
+    assert notice["reason"].startswith("reactive_summary")
     assert notice["reactive"] is True
-    assert notice["summary"] == "S."
+    assert notice["summary"].startswith("S.")
     # The token numbers ride along at the top level now (no nested metadata).
     assert notice["tokens_before"] >= notice["tokens_after"]
 
@@ -908,11 +948,33 @@ async def test_runner_default_policy_recovers_from_overflow():
 
 
 async def test_runner_overflow_on_incompressible_prompt_propagates():
-    """A 2-entry prompt has nothing to compact; the overflow must surface."""
+    """A 2-entry prompt has nothing to compact; the overflow must surface —
+    and say that the latest message itself is the problem."""
     provider = _OverflowOnceProvider()
     agent = Agent(name="t", instructions="x", model=provider)
-    with pytest.raises(ContextOverflowError):
+    with pytest.raises(ContextOverflowError) as exc:
         await Runner.run(agent, "hello")
+    assert exc.value.hint and "could not shrink" in exc.value.hint
+
+
+async def test_runner_recovers_from_overflow_by_truncating_when_summary_fails():
+    """A session whose summarizer is down must not be stuck overflowing: the
+    retry goes out with the unsummarized history dropped."""
+    policy = Compaction(summarizer=FailingSummarizer())
+    provider = _OverflowOnceProvider()
+    agent = Agent(name="t", instructions="be brief", model=provider)
+    sess = await _seeded_session()
+    events_seen: list = []
+    async for ev in Runner.stream(
+        agent, "hello there", context_policy=policy, session=sess, session_id="s1"
+    ):
+        events_seen.append(ev)
+    assert provider.stream_count == 2
+    assert provider.last_input_lengths[1] < provider.last_input_lengths[0]
+    assert "hello after compaction" in (events_seen[-1].result.output or "")
+    compacted = [e for e in events_seen if isinstance(e, ContextCompacted)]
+    assert compacted[0].notice.reason == "reactive_truncate"
+    assert compacted[0].notice.summary is None  # a note is not a summary
 
 
 async def test_reactive_compact_gets_no_stale_calibration_sample():

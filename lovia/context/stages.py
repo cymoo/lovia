@@ -14,12 +14,15 @@ and Anthropic's context-editing primitives:
 2. :class:`ClearToolResults` — replace older tool results with tiny recall
    markers (free).
 3. :class:`SummarizeHistory` — fold the older prefix into a running LLM
-   summary (the only stage that costs inference; last resort).
+   summary (the only stage that costs inference).
+4. :class:`TruncateHistory` — overflow path only: drop what the stages above
+   could not shrink, so no session is stuck overflowing forever.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -36,7 +39,7 @@ from .state import (
 from .summarizer import LLMSummarizer, Summarizer
 from .tokens import TokenBudget, TokenCounter, usable_tokens
 from ..providers.base import context_window as _provider_context_window
-from ..transcript import ToolResultEntry, TranscriptEntry
+from ..transcript import InputEntry, ToolResultEntry, TranscriptEntry
 
 if TYPE_CHECKING:
     from .store import ResultStore
@@ -534,10 +537,127 @@ class SummarizeHistory:
         return folded
 
 
+TRUNCATION_NOTE = (
+    "[{n} earlier messages were dropped without a summary: the context could "
+    "not be compacted any other way. Ask the user if something from them is "
+    "needed.]"
+)
+"""Stands in for the summary of a span :class:`TruncateHistory` dropped."""
+
+# The note as a trailing pattern on the summary text, so a repeat truncation
+# replaces it (with the cumulative count) instead of stacking another one.
+_NOTE_RE = re.compile(
+    r"(?:^|\n\n)"
+    + re.escape(TRUNCATION_NOTE).replace(re.escape("{n}"), r"(\d+)")
+    + r"\Z"
+)
+
+
+def _with_truncation_note(prior: str | None, dropped: int) -> str:
+    """``prior`` with a single trailing note counting every entry dropped so far."""
+    if prior is not None and (m := _NOTE_RE.search(prior)):
+        dropped += int(m.group(1))
+        prior = prior[: m.start()] or None
+    note = TRUNCATION_NOTE.format(n=dropped)
+    return f"{prior}\n\n{note}" if prior is not None else note
+
+
+class TruncateHistory:
+    """Drop what the other stages could not shrink — the overflow-path floor.
+
+    Every stage before this one is bounded by something it cannot control:
+    clearing and offloading only touch tool results, and the summary needs a
+    working summarizer with room for its fold call. When all of them have run
+    and the prompt still exceeds the window, the alternative to this stage is
+    a session that fails the same way on every later turn.
+
+    The decision reuses the summary's coverage frontier: the dropped span is
+    recorded as a summary whose text is :data:`TRUNCATION_NOTE` (appended to
+    the running summary when there is one; one note, with a cumulative
+    count), so rendering, fingerprinting and pair safety are the summary
+    stage's own, and a later successful fold replaces the note with a real
+    summary. The cut is the summary's own frontier, the protected-tail
+    boundary: exactly the span a working summarizer would have folded, but
+    never past the *anchor* — the latest user message, or, once the summary
+    already carries that message (a long tool loop; its "Session intent"
+    section holds the request, a note cannot), the newest entry. When the
+    frontier is exhausted or what survives it still does not fit, the cut
+    moves up to the anchor, if *that* fits: otherwise the latest turn is the
+    overflow itself and dropping the context around it would cost recency
+    for nothing. "Fits" is the aggressive target and, when the model's real
+    window is known, half of its usable space — the aggressive budget is
+    sized to the failed prompt, which a session moved to a smaller model can
+    dwarf. The anchor is never dropped.
+
+    Runs on the aggressive path only. The proactive path has headroom to
+    spare: a failed summary there costs at most one provider rejection before
+    this stage gets its turn.
+    """
+
+    name = "truncate"
+
+    async def plan(self, body: list[TranscriptEntry], ctx: StageContext) -> bool:
+        if not ctx.aggressive or not body:
+            return False
+        state = ctx.state
+        prior = state.summary
+        prior_covered = prior.covered if prior is not None else 0
+        safe = pair_safe_cuts(body)
+
+        def snapped(cut: int) -> int:
+            cut = min(cut, len(body) - 1)
+            while cut > 0 and not safe[cut]:
+                cut -= 1
+            return cut
+
+        # The surviving tail alone, not the view: the summary and the tool
+        # schemas are fixed costs the aggressive target (a quarter of the
+        # failed prompt) may not even cover.
+        def survivors(cut: int) -> int:
+            return ctx.calibrated(ctx.counter.count(render_entries(body[cut:], state)))
+
+        limit = ctx.budget.target_tokens
+        if ctx.model_window is not None:
+            usable = usable_tokens(ctx.model_window, ctx.budget.reserve_output)
+            limit = min(limit, max(1, usable // 2))
+
+        last_user = next(
+            (
+                i
+                for i in range(len(body) - 1, -1, -1)
+                if isinstance(body[i], InputEntry) and body[i].role == "user"  # type: ignore[union-attr]
+            ),
+            len(body) - 1,
+        )
+        anchor = last_user if last_user >= prior_covered else len(body) - 1
+        chosen = snapped(min(ctx.protected_from, anchor))
+        if chosen <= prior_covered or survivors(chosen) > limit:
+            further = snapped(anchor)
+            if further > prior_covered and survivors(further) <= limit:
+                chosen = further
+        if chosen <= prior_covered:
+            return False
+
+        text = _with_truncation_note(
+            prior.text if prior is not None else None, chosen - prior_covered
+        )
+        logger.warning(
+            "context.truncate: dropping body entries %d..%d without a summary",
+            prior_covered,
+            chosen,
+        )
+        state.summary = SummaryState(
+            text=text, covered=chosen, fingerprint=fingerprint(body[:chosen])
+        )
+        return True
+
+
 __all__ = [
     "ClearToolResults",
     "OffloadToolResults",
     "Stage",
     "StageContext",
     "SummarizeHistory",
+    "TRUNCATION_NOTE",
+    "TruncateHistory",
 ]

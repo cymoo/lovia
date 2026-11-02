@@ -1884,7 +1884,9 @@ function alignHistoryStart(idx) {
  */
 export function renderHistory(entries) {
   _historyEntries = Array.isArray(entries) ? entries : [];
-  _historyStale = false;
+  // A re-attach snapshot renders mid-run: the live tail keeps arriving after
+  // it, so that copy is stale from the start.
+  _historyStale = !!store.streaming;
   _historyStart = alignHistoryStart(_historyEntries.length - HISTORY_PAGE);
   renderHistoryWindow({ stickBottom: true });
 }
@@ -1933,16 +1935,18 @@ async function loadEarlierHistory() {
       toast(t('toast.loadChatsFailed'), { type: 'error' });
       data = null;
     }
-    // Superseded: another chat, or this one changed (a run, a redraw)
-    // meanwhile — the fetched history may predate what's on screen now, and
-    // the redraw drew its own button.
-    const superseded =
-      store.chatEpoch !== epoch || store.sessionId !== sessionId || _viewVersion !== version;
-    if (!superseded && btn) {
+    // The button is restored whenever it is still on screen: a run that
+    // started meanwhile bumps the version without redrawing, and would
+    // otherwise leave it stuck on "Loading…" (a redraw swaps in its own).
+    if (btn?.isConnected) {
       btn.textContent = label;
       delete btn.dataset.loading;
       syncLoadEarlier();
     }
+    // Superseded: another chat, or this one changed (a run, a redraw)
+    // meanwhile — the fetched history may predate what's on screen now.
+    const superseded =
+      store.chatEpoch !== epoch || store.sessionId !== sessionId || _viewVersion !== version;
     if (!data || superseded) return;
     _historyEntries = Array.isArray(data.entries) ? data.entries : [];
     _historyStale = false;

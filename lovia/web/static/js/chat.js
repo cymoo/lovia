@@ -1861,6 +1861,11 @@ let _historyStart = 0; // index of the first rendered entry
 // "load earlier" refetches before it redraws; until a run starts, the copy in
 // hand is the history and a chat of thousands of entries needn't travel again.
 let _historyStale = false;
+// Any run activity — another tab's run in this chat, a reconnect's catch-up —
+// may have grown the history behind this copy's back.
+store.on('runs-changed', () => {
+  _historyStale = true;
+});
 
 // Snap a window start back onto the nearest user turn so the window opens on
 // a whole turn — but never further back than a page, and never forward: a

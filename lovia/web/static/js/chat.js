@@ -1857,12 +1857,28 @@ function resumePendingResend() {
 const HISTORY_PAGE = 150; // entries per window step
 let _historyEntries = [];
 let _historyStart = 0; // index of the first rendered entry
+// Turns streamed live since the history loaded aren't in _historyEntries, so
+// "load earlier" refetches before it redraws; until a run starts, the copy in
+// hand is the history and a chat of thousands of entries needn't travel again.
+let _historyStale = false;
+// Any run activity — another tab's run in this chat, a reconnect's catch-up —
+// may have grown the history behind this copy's back.
+store.on('runs-changed', () => {
+  _historyStale = true;
+});
 
-// Snap a window start onto a user turn so a tool result never renders
-// without the call (and turn pairs stay intact).
+// Snap a window start back onto the nearest user turn so the window opens on
+// a whole turn — but never further back than a page, and never forward: a
+// tool loop longer than a page (an agentic chat's normal shape) has no user
+// turn to find, and snapping forward to the next one after the loop both
+// shrank the first window to the last exchange and left "load earlier" with
+// nowhere to go. Mid-turn starts render fine: results are paired from the
+// full history, and an orphan result at the start is skipped.
 function alignHistoryStart(idx) {
   if (idx <= 0) return 0;
-  for (let i = idx; i < _historyEntries.length; i++) {
+  idx = Math.min(idx, _historyEntries.length - 1);
+  const floor = Math.max(0, idx - HISTORY_PAGE);
+  for (let i = idx; i >= floor; i--) {
     if (_historyEntries[i].role === 'user') return i;
   }
   return idx;
@@ -1874,6 +1890,9 @@ function alignHistoryStart(idx) {
  */
 export function renderHistory(entries) {
   _historyEntries = Array.isArray(entries) ? entries : [];
+  // A re-attach snapshot renders mid-run: the live tail keeps arriving after
+  // it, so that copy is stale from the start.
+  _historyStale = !!store.streaming;
   _historyStart = alignHistoryStart(_historyEntries.length - HISTORY_PAGE);
   renderHistoryWindow({ stickBottom: true });
 }
@@ -1883,7 +1902,7 @@ function syncLoadEarlier() {
   const btn = /** @type {HTMLButtonElement | null} */ (
     document.querySelector('#transcript .lv-load-earlier')
   );
-  if (!btn) return;
+  if (!btn || btn.dataset.loading) return;
   btn.disabled = !!store.streaming;
   btn.title = store.streaming ? t('chat.loadEarlierBusy') : '';
 }
@@ -1893,30 +1912,54 @@ function syncLoadEarlier() {
 // stale — even if a whole run began and ended while it was out.
 let _viewVersion = 0;
 
-// "Load earlier" redraws the whole window from _historyEntries, so it first
-// refetches them: turns streamed live since the history loaded aren't in the
-// snapshot and would vanish. History only grows at the tail, so the window's
-// start index holds across the refetch. A redraw mid-stream would wipe the
-// live answer, so the button waits out a run (syncLoadEarlier).
+// "Load earlier" redraws the whole window from _historyEntries, so when a run
+// has streamed turns since they were fetched it refetches them first: those
+// turns aren't in the snapshot and would vanish. History only grows at the
+// tail, so the window's start index holds across the refetch. A redraw
+// mid-stream would wipe the live answer, so the button waits out a run
+// (syncLoadEarlier).
 async function loadEarlierHistory() {
   const el = document.getElementById('transcript');
   const sessionId = store.sessionId;
   if (!el || !sessionId || store.streaming) return;
-  const epoch = store.chatEpoch;
-  const version = _viewVersion;
-  let data;
-  try {
-    data = await api.getSession(sessionId);
-  } catch {
-    toast(t('toast.loadChatsFailed'), { type: 'error' });
-    return;
+  if (_historyStale) {
+    const btn = /** @type {HTMLButtonElement | null} */ (
+      el.querySelector('.lv-load-earlier')
+    );
+    const label = btn?.textContent ?? '';
+    if (btn) {
+      btn.disabled = true;
+      btn.dataset.loading = '1';
+      btn.textContent = t('chat.loadEarlierLoading');
+    }
+    const epoch = store.chatEpoch;
+    const version = _viewVersion;
+    let data;
+    try {
+      data = await api.getSession(sessionId);
+    } catch {
+      toast(t('toast.loadChatsFailed'), { type: 'error' });
+      data = null;
+    }
+    // The button is restored whenever it is still on screen: a run that
+    // started meanwhile bumps the version without redrawing, and would
+    // otherwise leave it stuck on "Loading…" (a redraw swaps in its own).
+    if (btn?.isConnected) {
+      btn.textContent = label;
+      delete btn.dataset.loading;
+      syncLoadEarlier();
+    }
+    // Superseded: another chat, or this one changed (a run, a redraw)
+    // meanwhile — the fetched history may predate what's on screen now.
+    const superseded =
+      store.chatEpoch !== epoch || store.sessionId !== sessionId || _viewVersion !== version;
+    if (!data || superseded) return;
+    _historyEntries = Array.isArray(data.entries) ? data.entries : [];
+    // Still stale: a refetch right after Stop can land before the
+    // interrupted run is persisted, so only a full redraw (renderHistory)
+    // vouches for the copy. Clamp, too — such a refetch is shorter.
+    _historyStart = Math.min(_historyStart, _historyEntries.length);
   }
-  // Superseded: another chat, or this one changed (a run, a redraw) meanwhile —
-  // the fetched history may predate what's on screen now.
-  if (store.chatEpoch !== epoch || store.sessionId !== sessionId || _viewVersion !== version) {
-    return;
-  }
-  _historyEntries = Array.isArray(data.entries) ? data.entries : [];
   const prevHeight = el.scrollHeight;
   const prevTop = el.scrollTop;
   _historyStart = alignHistoryStart(_historyStart - HISTORY_PAGE);
@@ -2912,6 +2955,7 @@ async function* readStream(res, flags) {
 function enterStreamingUI() {
   store.streaming = true;
   _viewVersion++; // the run draws new turns
+  _historyStale = true;
   syncAttachButton();
   syncLoadEarlier();
   document.getElementById('reconnect-row')?.remove(); // superseded by a live stream

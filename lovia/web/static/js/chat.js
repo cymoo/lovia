@@ -1871,6 +1871,7 @@ let _historyStale = false;
 // full history, and an orphan result at the start is skipped.
 function alignHistoryStart(idx) {
   if (idx <= 0) return 0;
+  idx = Math.min(idx, _historyEntries.length - 1);
   const floor = Math.max(0, idx - HISTORY_PAGE);
   for (let i = idx; i >= floor; i--) {
     if (_historyEntries[i].role === 'user') return i;
@@ -1949,7 +1950,10 @@ async function loadEarlierHistory() {
       store.chatEpoch !== epoch || store.sessionId !== sessionId || _viewVersion !== version;
     if (!data || superseded) return;
     _historyEntries = Array.isArray(data.entries) ? data.entries : [];
-    _historyStale = false;
+    // Still stale: a refetch right after Stop can land before the
+    // interrupted run is persisted, so only a full redraw (renderHistory)
+    // vouches for the copy. Clamp, too — such a refetch is shorter.
+    _historyStart = Math.min(_historyStart, _historyEntries.length);
   }
   const prevHeight = el.scrollHeight;
   const prevTop = el.scrollTop;

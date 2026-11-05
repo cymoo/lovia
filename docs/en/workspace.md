@@ -203,6 +203,8 @@ extracts path claims from each command — redirect targets count as writes,
 path-looking arguments as reads — and merges their path-ACL verdicts with
 the static rule verdict, most-restrictive-wins. A command that names a
 denied path (redirects included) is denied even when its binary is allowed.
+On Windows a backslash is a path separator, not an escape, so `C:\data\a.txt`
+is judged as written.
 
 The guard is **advisory and one-sided**: it cannot see `python -c` payloads
 or `$(...)` substitutions, and a missed path falls back to the static

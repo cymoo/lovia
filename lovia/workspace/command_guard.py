@@ -42,6 +42,7 @@ implementing the same session protocol.
 
 from __future__ import annotations
 
+import os
 import shlex
 
 from .policy import FileOp
@@ -87,10 +88,10 @@ def _pathish(token: str) -> str | None:
     Flags are skipped unless they carry a ``=value`` payload (``--out=/x``);
     a ``key=value`` token whose value looks rooted (``of=/dev/x``,
     ``FOO=/etc/x``) yields the value. URLs are never paths. A token counts as
-    path-looking when it contains a ``/`` or a ``.`` or starts with ``~`` —
-    deliberately generous, because a relative false positive resolves inside
-    the root and cannot escalate the decision (see module docstring); bare
-    words like ``install`` stay exempt so a denied *pattern* can't
+    path-looking when it contains a path separator or a ``.`` or starts with
+    ``~`` — deliberately generous, because a relative false positive resolves
+    inside the root and cannot escalate the decision (see module docstring);
+    bare words like ``install`` stay exempt so a denied *pattern* can't
     accidentally match a subcommand name.
     """
     if token.startswith("-"):
@@ -100,11 +101,11 @@ def _pathish(token: str) -> str | None:
         token = rhs
     elif "=" in token:
         _, _, rhs = token.partition("=")
-        if rhs.startswith(("/", "~", ".")):
+        if rhs.startswith(("/", "~", ".")) or os.path.isabs(rhs):
             token = rhs
     if not token or "://" in token:
         return None
-    if "/" in token or "." in token or token.startswith("~"):
+    if "/" in token or os.sep in token or "." in token or token.startswith("~"):
         return token
     return None
 
@@ -121,6 +122,8 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
     """
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
+    if os.name == "nt":
+        lexer.escape = ""  # cmd.exe: a backslash separates path segments
     try:
         tokens = list(lexer)
     except ValueError:

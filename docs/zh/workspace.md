@@ -53,7 +53,7 @@ ACL 有三个决策值，分别作用于两个执行环节：
   [审批通道](tools.md#工具审批)出现，和任何带门禁的工具一样。
 
 **路径规则。** `PathRule(pattern, action, ops={"read","write"})`；pattern 是 glob，有三种寻址形式：
-绝对路径/`~`（匹配解析后路径及其子树）、包含 `/`（工作区相对路径），或纯文件名
+绝对路径/`~`（含 Windows 的 `C:/data`、`C:\data`；匹配解析后路径及其子树）、包含 `/`（工作区相对路径），或纯文件名
 （`.env*`：gitignore 风格，匹配 basename 或任意祖先片段，根内外都适用）。优先级：
 `denied_paths` 最先，然后第一条匹配的 path rule，最后是 mode 默认。
 

@@ -27,6 +27,7 @@ abstracted so one can be added without touching the tools.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from fnmatch import fnmatch
@@ -114,7 +115,7 @@ def _canonical_pattern(pattern: str) -> str | None:
 
 
 def _abs_matches(abs_posix: str, pattern: str) -> bool:
-    """Match a resolved absolute POSIX path against a ``/``- or ``~``-pattern.
+    """Match a resolved absolute POSIX path against an absolute or ``~`` pattern.
 
     Like the relative match, a pattern also covers everything beneath it, so
     ``"~/notes"`` grants/denies the whole subtree.
@@ -128,13 +129,15 @@ def _abs_matches(abs_posix: str, pattern: str) -> bool:
 def _pattern_matches(pattern: str, *, rel: str | None, abs_posix: str) -> bool:
     """Dispatch one ACL pattern by its form.
 
-    ``/``- or ``~``-prefixed patterns match the resolved absolute path.
-    Patterns containing ``/`` are workspace-relative (they never match
-    outside the root). A *bare* pattern names a file or directory wherever
-    it appears — inside or outside the root — so ``denied_paths=(".env*",)``
-    still bites when ``read_outside`` is permissive.
+    ``/``- or ``~``-prefixed patterns, and anything else the host calls
+    absolute (Windows ``C:/data``, ``C:\\data``, UNC), match the resolved
+    absolute path. Patterns containing ``/`` are workspace-relative (they
+    never match outside the root). A *bare* pattern names a file or directory
+    wherever it appears — inside or outside the root — so
+    ``denied_paths=(".env*",)`` still bites when ``read_outside`` is
+    permissive.
     """
-    if pattern.startswith(("/", "~")):
+    if pattern.startswith(("/", "~")) or os.path.isabs(pattern):
         return _abs_matches(abs_posix, pattern)
     if rel is not None:
         return _path_matches(rel, pattern)
@@ -160,9 +163,10 @@ class CommandRule:
 class PathRule:
     """One path-ACL rule: a pattern, a decision, and the ops it covers.
 
-    ``pattern`` starting with ``/`` or ``~`` is matched against the resolved
-    absolute path (and its subtree). A pattern containing ``/`` is
-    workspace-relative and never matches outside the root. A *bare* pattern
+    An absolute ``pattern`` (``/srv``, on Windows ``C:/data``) or one starting
+    with ``~`` is matched against the resolved absolute path (and its
+    subtree). A pattern containing ``/`` is workspace-relative and never
+    matches outside the root. A *bare* pattern
     (``".env*"``, ``"secrets"``) names a file or directory anywhere — inside
     or outside the root (see :func:`_pattern_matches`). ``ops`` restricts the
     rule to reads and/or writes — accepts any iterable of ``"read"`` /

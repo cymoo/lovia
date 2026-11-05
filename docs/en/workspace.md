@@ -64,8 +64,9 @@ Three values, two enforcement points:
   tool.
 
 **Path rules.** `PathRule(pattern, action, ops={"read","write"})`; patterns
-are globs with three addressing forms — absolute/`~` (matches the resolved
-path and its subtree), containing `/` (workspace-relative), or bare
+are globs with three addressing forms — absolute/`~` (including `C:/data` or
+`C:\data` on Windows; matches the resolved path and its subtree), containing
+`/` (workspace-relative), or bare
 (`.env*`: gitignore-style, matches a basename or any ancestor segment,
 inside or outside the root). Precedence: `denied_paths` first, then the
 first matching path rule, then the mode defaults.

@@ -57,8 +57,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: uv sync --extra dev
-      - name: Pytest (shell environment and sockets)
-        run: uv run pytest tests/workspace/test_shell_env.py
+      - name: Pytest (shell environment, sockets, and path patterns)
+        run: uv run pytest tests/workspace/test_shell_env.py tests/workspace/test_policy_windows.py
 
   # The lockfile pins the mcp SDK at 1.x, but the MCP plugin supports 2.x too:
   # rerun its tests (including a real stdio round trip) on the newest 2.x.

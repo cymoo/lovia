@@ -93,11 +93,13 @@ class Tool:
 ```
 
 ```python
-@tool(permission="ask")                                        # 以前 needs_approval=True
-async def send_email(...): ...
+@tool(permission="ask")  # 以前 needs_approval=True
+async def send_email(to: str, body: str) -> str: ...
+
 
 @tool(permission=Verdict("ask", "Sends mail outside the company."))  # 静态理由
-async def send_external(...): ...
+async def send_external(to: str, body: str) -> str: ...
+
 
 def refund_policy(args, ctx):
     cents = args["amount_cents"]
@@ -108,7 +110,7 @@ def refund_policy(args, ctx):
     return "allow"
 
 @tool(permission=refund_policy)
-async def refund(...): ...
+async def refund(order_id: str, amount_cents: int) -> str: ...
 ```
 
 改名的理由：谓词现在能返回 `deny`，`needs_approval` 这个名字就不诚实了；`permission="ask"` 比 `needs_approval=True` 读得更顺，和工作区、MCP 用的是同一套词。`MCP(needs_approval=)`、`schedule_run`、内置工作区工具同步改名；`path_needs_approval(*ops)` → `path_permission(*ops)`，并且 `deny` 时直接返回 deny 判定——模型拿到理由，什么都没执行。session 的强制不变，仍是自定义工具绕不过的底线。
@@ -148,7 +150,7 @@ preflight(call)
 
 ### 通道：决定也带理由
 
-```python
+```text
 @dataclass(frozen=True)
 class Approval:
     """对一次审批请求的决定。和 Verdict 分开：Verdict 是“该不该问”，Approval 是“问了之后的答复”。"""

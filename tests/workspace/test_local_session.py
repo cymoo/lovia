@@ -455,6 +455,113 @@ async def test_grep_reports_nested_relative_paths(tmp_path) -> None:
     assert [m.path for m in await session.grep("needle")] == ["a/b/deep.txt"]
 
 
+async def test_bulk_walks_skip_ask_gated_files(tmp_path) -> None:
+    # A rule's ``ask`` cannot be answered mid-walk, so list / glob / grep leave
+    # the entry out — hidden or not, nested or not, through a symlink or not —
+    # while reading the file by name still asks.
+    (tmp_path / ".env").write_text("TOKEN=synthetic\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / ".env.local").write_text("TOKEN=nested\n", encoding="utf-8")
+    (tmp_path / "ok.txt").write_text("TOKEN=visible\n", encoding="utf-8")
+    (tmp_path / "alias.txt").symlink_to(tmp_path / ".env")
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    assert session.decide_path(".env").action == "ask"
+    assert {m.path for m in await session.grep("TOKEN", include_hidden=True)} == {
+        "ok.txt"
+    }
+    listed = {e.path for e in await session.list_files(".", include_hidden=True)}
+    assert ".env" not in listed and "alias.txt" not in listed and "ok.txt" in listed
+    globbed = {e.path for e in await session.list_files(".", pattern="**/.env*")}
+    assert globbed == set()
+
+
+async def test_listing_an_approved_outside_directory_shows_its_entries(
+    tmp_path,
+) -> None:
+    # The outside directory itself was the approved subject: its entries are
+    # covered by that approval (the same default ask), but a rule-gated file
+    # inside it is still skipped.
+    outside = tmp_path.parent / "shared_dir"
+    outside.mkdir(exist_ok=True)
+    (outside / "notes.txt").write_text("needle\n", encoding="utf-8")
+    # A credential store (baseline deny) and a .env: the preset's .env rule is
+    # inside-only, so out here .env is just another file of the approved
+    # directory, while the credential stays hidden.
+    (outside / "id_rsa").write_text("needle\n", encoding="utf-8")
+    (outside / ".env").write_text("needle\n", encoding="utf-8")
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    assert session.decide_path(str(outside)).action == "ask"  # the tool asks once
+    names = {
+        e.path.rsplit("/", 1)[-1]
+        for e in await session.list_files(str(outside), include_hidden=True)
+    }
+    assert {"notes.txt", ".env"} <= names and "id_rsa" not in names
+    found = {
+        m.path.rsplit("/", 1)[-1]
+        for m in await session.grep("needle", path=str(outside), include_hidden=True)
+    }
+    assert found == {"notes.txt", ".env"}
+
+
+async def test_allowed_commands_still_meet_the_path_rules(tmp_path) -> None:
+    # With the optional allow bundles enabled, the guard still holds the
+    # baseline for them: a credential named bare is denied even for a
+    # name-only command, a protected config named by an output option asks,
+    # and content readers (`cat`) ask on their own — read_file is the reader.
+    from lovia.workspace import DEV_TOOLS, READ_ONLY
+
+    (tmp_path / "id_rsa").write_text("secret", encoding="utf-8")
+    session = await _session(
+        tmp_path,
+        policy=WorkspacePolicy.coding(command_rules=READ_ONLY + DEV_TOOLS),
+    )
+    assert session.decide_command("ls -l id_rsa").action == "deny"
+    assert session.decide_command("cat id_rsa").action == "deny"
+    assert session.decide_command("ls -la").action == "allow"
+    assert session.decide_command("cat README").action == "ask"
+    # Every spelling of "write through an option" stops at the session too.
+    for cmd in (
+        "tree -o .git/config .",
+        "tree '-o.git/config' .",
+        "ls -lo .git/config",
+        "tree in#1 -o .git/config",
+        "git log --output=.git/config",
+        # Reads the guard cannot see: a tree walked by the tool, a glob.
+        "grep -R TOKEN .",
+        "git diff --no-index . /tmp",
+        "ls *",
+    ):
+        assert session.decide_command(cmd).action == "ask", cmd
+    assert session.decide_command("git log --stat").action == "allow"
+
+
+async def test_grep_follows_symlinks_within_an_approved_outside_directory(
+    tmp_path,
+) -> None:
+    outside = tmp_path.parent / "shared_links"
+    outside.mkdir(exist_ok=True)
+    (outside / "notes.txt").write_text("needle\n", encoding="utf-8")
+    link = outside / "alias.txt"
+    if not link.exists():
+        link.symlink_to(outside / "notes.txt")
+    escaping = outside / "escape.txt"
+    if not escaping.exists():
+        escaping.symlink_to(tmp_path.parent / "elsewhere_needle.txt")
+    (tmp_path.parent / "elsewhere_needle.txt").write_text("needle\n", encoding="utf-8")
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    # The link stays within the approved directory: covered. The one that
+    # escapes it does not ride on that approval.
+    found = {
+        m.path.rsplit("/", 1)[-1]
+        for m in await session.grep("needle", path=str(outside))
+    }
+    assert found == {"notes.txt", "alias.txt"}
+    assert [
+        m.path.rsplit("/", 1)[-1]
+        for m in await session.grep("needle", path=str(outside), glob="alias.txt")
+    ] == ["alias.txt"]
+
+
 async def test_grep_skips_denied_directories(tmp_path) -> None:
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets" / "k.txt").write_text("needle\n", encoding="utf-8")
@@ -758,6 +865,30 @@ async def test_workspace_instructions_layout_needs_writes(tmp_path) -> None:
     assert "'tmp/'" not in readonly
 
 
+async def test_workspace_instructions_follow_the_effective_rules(tmp_path) -> None:
+    # Derived from the policy: the baseline's protections are stated, and an
+    # override that lifts the preset's .env rule removes its sentence instead
+    # of leaving a claim the policy no longer enforces.
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "Credential stores" in text and "'~/.ssh'" in text
+    assert "Writes to '.git'" in text
+    assert "'**/.env*' ask the user before being read" in text
+
+    # Protections are baseline; a baseline composed without one drops its
+    # sentence. (User path rules are not described: they are the user's.)
+    from lovia.workspace import CREDENTIAL_PATHS, DANGEROUS_COMMANDS, PROTECTED_CONFIG
+
+    text = Workspace.local(
+        str(tmp_path),
+        mode="coding",
+        baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG,
+    ).instructions()
+    assert ".env*' ask" not in text and "Credential stores" in text
+
+    bare = Workspace.local(str(tmp_path), mode="coding", baseline=()).instructions()
+    assert "Credential stores" not in bare and "Writes to '.git'" not in bare
+
+
 async def test_workspace_instructions_layout_follows_root_kind(tmp_path) -> None:
     # Non-repo roots get the generic placement rule; a .git entry — a dir, or
     # a *file* as in worktrees — switches to the repo's own conventions.
@@ -909,11 +1040,12 @@ async def test_list_files_invalid_glob_pattern(tmp_path) -> None:
 
 
 async def test_glob_skips_hidden_unless_requested(tmp_path) -> None:
-    (tmp_path / ".env").write_text("secret", encoding="utf-8")
+    # A plain dotfile: `.env` would be hidden by the baseline regardless.
+    (tmp_path / ".editorconfig").write_text("root = true", encoding="utf-8")
     session = await _session(tmp_path)
     assert await session.list_files(".", pattern=".*", include_hidden=False) == []
     shown = await session.list_files(".", pattern=".*", include_hidden=True)
-    assert any(e.path == ".env" for e in shown)
+    assert any(e.path == ".editorconfig" for e in shown)
 
 
 async def test_glob_skips_denied_paths(tmp_path) -> None:
@@ -1475,13 +1607,17 @@ async def test_shell_outside_read_claims_escalate_to_ask(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
     # trusted reads anywhere -> stays allow.
     assert session.decide_command("cat /etc/hosts").action == "allow"
-    coding = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    from lovia.workspace import READ_ONLY
+
+    coding = await _session(
+        tmp_path, policy=WorkspacePolicy.coding(command_rules=READ_ONLY)
+    )
     # coding asks for outside reads; the shell tool routes this to approval.
-    # Two conditions ask here (gray command + outside read), so both reasons
-    # are reported and no single grant scope is offered.
-    verdict = coding.decide_command("cat /etc/hosts")
-    assert verdict.action == "ask" and verdict.scope is None
-    assert "no workspace rule allows this command" in verdict.reason
+    # ``ls`` itself is on the (opted-in) allow list, so the outside read is
+    # the one condition: its reason and directory scope ride along.
+    verdict = coding.decide_command("ls /etc/hosts")
+    etc = os.path.realpath("/etc")  # macOS: /private/etc
+    assert verdict.action == "ask" and verdict.scope == f"read:{etc}"
     assert "outside the workspace root" in verdict.reason
 
 

@@ -408,11 +408,18 @@ agent = Agent(
     workspace=Workspace.local(
         ".",
         mode="coding",
-        denied_paths=(".env*",),
-        command_rules=(CommandRule("pytest", "allow"), CommandRule("rm -rf", "deny")),
+        command_rules=(CommandRule("make test", "allow"), CommandRule("gh", "ask")),
     ),
 )
 ```
+
+`coding` vouches for no command itself: the irreversible ask with a reason
+(`git push`, `rm -r`, `sudo`, …), everything else asks once and the user can
+remember it per chat ("always allow `ls`"), and under every mode a baseline
+denies the dangerous (`git push --force`, `rm -rf /`), keeps credential
+stores off-limits and asks before writing `.git` or CI configuration. To run
+inspection and dev tools unprompted, opt in: `command_rules=READ_ONLY +
+DEV_TOOLS` from `lovia.workspace.rules`.
 
 Shell commands inherit a minimal environment, including Windows system,
 shell, temporary-directory, and user-profile variables so sockets and home

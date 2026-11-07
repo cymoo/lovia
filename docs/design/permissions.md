@@ -1,6 +1,6 @@
 # 权限机制重构：少问、问得值、拦住最危险的
 
-> 状态：v2.3 评审通过，PR 1（core：说清楚，v0.9.134）已合入；PR 2（web：记住批准，v0.9.135）已实现；PR 3 待做 · 2026-11-07 · 范围：core（`tools/base.py`、`approvals.py`、`events.py`、`runtime/tool_calls.py`）、`workspace/policy.py`、`lovia/web`（审批卡片、授权）
+> 状态：v2.3 评审通过，PR 1（core：说清楚，v0.9.134）与 PR 2（web：记住批准，v0.9.135）已合入；PR 3（workspace 默认值，v0.9.136）已实现 · 2026-11-07 · 范围：core（`tools/base.py`、`approvals.py`、`events.py`、`runtime/tool_calls.py`）、`workspace/policy.py`、`lovia/web`（审批卡片、授权）
 >
 > 参考：[kits 的 Agent 权限方案调研](https://github.com/cymoo/kits/blob/main/docs/references/agent-permissions.md)。它调研了 OpenCode / Claude Code / Codex / Cursor / Gemini CLI 的做法并做了实测，结论是“把问人从默认路径改成最后一道防线”。本文取其结论，按 lovia 的结构落地：lovia 不是 OpenCode 的宿主，权限判定就在自己的 preflight 里，没有内核可绕、没有事件竞态，所以方案比 kits 更直接。
 >
@@ -9,6 +9,8 @@
 > v2.1（同日）：`.env*` 从 baseline 移到预设层，一行规则就能放开；baseline 拆成三个具名包；命令词匹配改为全平台大小写不敏感，`cmd.exe` 的 `/x` 开关算旗标，规则包补 Windows 条目，顺手修 `dir /b` 被当成路径的误报。
 >
 > v2.2（同日，第二轮评审）：撤回“必含词任意位置”的通用语义（`python -m pip install pytest` 会命中 `python -m pytest`），`CommandRule` 仍是纯前缀，只加一个显式的 `flags=`；剥赋值 / 包装后的结果最多到 `ask`；灰区命令不再自动生成 scope，范围只来自显式规则；授权记录带工作区上下文，写入先于唤醒；`permission` 谓词不再接受 bool。
+>
+> v3（2026-11-08，PR 3 四轮评审之后退一步）：四轮 9 条发现归为两个架构问题——放行命令让 advisory 的词法守卫承担了写判定（`-o x`、`-ox`、`--output=` 拼写永远补不完），以及预设的保护规则放在了能覆盖模式默认值的那一层（`.env*` 两次降低 readonly 的限制）。改法：守卫只做读声明和重定向写声明，带输出样子选项的段**封顶到 ask**（与剥包装同构，不解析路径）；**所有保护进 baseline**（含 `ENV_FILES`），用户层只放 allow/ask 包；instructions 只从顺序无关的 baseline 和模式默认值推导，删掉遮蔽启发式。放开 `.env` 的写法变为 `baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG`。第五、六轮把封顶原则补完整为“**allow 只覆盖字面参数**”：policy 按 shell 语义分词（去引号、`#` 不当注释），短选项组含 `o` 即输出选项，通配符 / 变量 / 命令替换一律封顶；自己遍历目录树的读取工具（`grep -r`、`rg`、`diff -r`、`findstr /s`）移出 `READ_ONLY`——它们不点名就读到 `.env` 和 `id_rsa`，逐文件判定的搜索是 `grep_files`。第七轮（`git diff --no-index`、`sort --files0-from`、`wc`、cmd 的 `^`/`%VAR%`、数字文件名）把这条推到了终点：**直接放行的命令必须打印不出文件内容**。每个内容读取器都有自己不点名读文件的办法，词法守卫永远追不上；元数据类（`ls`、`du`、`stat`、`tree`、`git status/log`）留下，内容类（`cat`、`head`、`tail`、`sort`、`cut`、`wc`、`file`、`type`、`more`、`fc`）回到灰区，`read_file` 才是读取器。这样守卫只对它能做对的两件事负责：重定向写入，和字面路径的拒绝。第九、十轮是局部修正，不动原则：重定向前的数字一律当读声明（分词后分不清 `2>&1` 和 `cat 123 > out`）；带选项的包装词和含展开的命令词不给授权范围（它们不是实际运行的程序）；`git diff` 移出 `READ_ONLY`（非仓库目录下隐式 `--no-index`，会打印未跟踪内容）；baseline 内部由首个匹配改为**全部匹配取最严**（规则包怎么拼都不互相遮蔽，与"只会加严"的承诺一致）。第十一到十五轮全踩同一条缝：规则匹配和授权范围把"段的第一个词"当程序名，而第一个词不是程序的情况有三类——shell 语法、包装程序（`command`/`exec`/`env`/`nice`…）、解释器（`bash -c`、`xargs`）。这五轮我按评审的节奏增量写了一个 shell 解析器（段首保留字 → 中间重定向 → case 分支 → 引号遮罩双次分词），归一化块从 15 行涨到 142 行，每轮又修上一轮引出的 bug。**退一步后收回**：那些行为只让对抗性拼法（`case y in x) :;; y) git push --force`、`rm -r ')'`）命中 deny，而 rules.py 一开始就写明 deny 拦的是点名拼法、baseline 挡的是模型自己的手而非沙箱——存心的模型有 `bash -c`。最终形式约 25 行：分词与守卫一致（标点成独立 token）→ 展开检查作用于原始词表（shell 在哪都展开）→ 丢掉重定向及目标、括号、命令前的控制流词（模型真会写的拼法：`>/dev/null 2>&1`、`(cd x && ls)`、`if cmd`）→ 剥包装（封顶、去范围）→ 规则 → baseline。`for`/`case`/`select` 头和带选项的包装词不给范围。纯语法段（`fi`、`done`）放行，除非有展开。边界写进代码注释和用户文档：到此为止，规则拦的是此后它点名的拼法；`coding` 下漏掉的拼法仍会问，拼法就在卡片上。
 >
 > v2.3（同日，第三轮评审）：撤回全平台大小写不敏感（`git branch -d` 会放行 `-D`），规则包按平台拼装；订正“批量遍历跳过 `ask`”——现有实现只过滤 `deny`，实测 `grep` 会返回 `ask` 文件的内容，列为 PR 3 的代码改动；scope 带上 `flags`；审批“占有”后超时 / 取消不再竞争；补 `Workspace.local(baseline=, shell_default=)` 的 API 变更。
 >
@@ -27,7 +29,7 @@ lovia 的三段式判定（`allow` / `ask` / `deny`）和失败即拒绝的审�
 
 1. 判定结果从 `Decision` 字面量升级为 `Verdict(action, reason, scope)`——多两个字段，一个给人和模型看理由，一个说明“总是允许”会放开多大范围。
 2. `Tool.needs_approval` 改名为 `Tool.permission`，接受 `Decision | Verdict | predicate`。工具作者可以直接说 `"deny"` 并给理由。
-3. 工作区策略加一条 `baseline`（所有预设都生效的硬规则：黑名单命令、密钥路径、受保护配置的写入），**与普通判定取最严格者**，只能加严不能放松。`coding` 预设内置一小组只读命令和开发命令的放行规则、一组不可撤回动作的询问规则，shell 默认档仍是 `ask`，但只剩真正的灰区。
+3. 工作区策略加一条 `baseline`（所有预设都生效的硬规则：黑名单命令、密钥路径、受保护配置的写入），**与普通判定取最严格者**，只能加严不能放松。`coding` 预设内置一组不可撤回动作的询问规则（判错的代价只是多问一句）；只读命令和开发工具的放行包是**可选项**（v3 第八轮改为可选：框架不替任何程序担保，少弹窗靠部署方启用规则包或用户按对话授权），shell 默认档仍是 `ask`。
 4. 审批通道的决定也带理由：`ev.reject(reason=...)`，模型收到的是“用户拒绝了：...”而不是干巴巴的 "not approved"。
 5. 授权（grants）**不进 core**。core 只负责在 `Verdict.scope` 里说清范围；web 在服务端按聊天持久化、按 scope 精确匹配、只对 `ask` 生效、可撤销。非 web 的消费者用 `approval_handler` 五行实现同样的事。
 
@@ -200,13 +202,13 @@ Workspace.local(root, baseline=DANGEROUS_COMMANDS + PROTECTED_CONFIG)   # 这个
 
 注意最后一行摘掉的是**整组** `CREDENTIAL_PATHS`（`~/.aws`、`*.pem` 一起放开），不是只放开 `~/.ssh/config`；只想开一个路径就自己拼：`baseline=DANGEROUS_COMMANDS + PROTECTED_CONFIG + tuple(r for r in CREDENTIAL_PATHS if r.pattern != "~/.ssh")`，再用 `readable=("~/.ssh/config",)` 给到想要的那一个。`Workspace.local` 现在没有 `baseline=` 和 `shell_default=` 参数，两个都是本方案新增的（见“破坏性变更”）。
 
-`.env*` **不在 baseline 里**。它是“通常有密钥”的提示，不是 `~/.ssh` 那种凭据库，用户让 agent 配环境变量、排查启动失败时读 `.env` 再正常不过。所以它放在**预设层**的 `path_rules`（`PathRule(".env*", "ask", reason="Environment files usually hold secrets.")`），三种放开方式都是一行：
+`.env*` **也在 baseline 里**（v3 改回；v2 曾放在预设层，两轮评审各发现一次它降低了 readonly 的限制——这正是“保护规则放在可覆盖层”的结构问题）。规则是 `PathRule("**/.env*", "ask", ops={"read"})`：只管读、只在工作区内（`**/` 是工作区相对的，裸 `.env*` 会匹配到根目录外），而且走 baseline 的合并，所以不可能放松任何模式默认值。用户让 agent 配环境变量、排查启动失败时读 `.env` 再正常不过，放开方式：
 
 | 谁 | 怎么做 |
 |---|---|
-| 聊天里的用户 | 卡片上点“允许”；勾“本对话中总是允许 `.env*`”则这个聊天不再问（scope `read:.env*`） |
-| 部署方 | `Workspace.local(root, path_rules=(PathRule(".env*", "allow"),))` —— 用户规则在预设规则之前，首个命中 |
-| 部署方，连问都不想问 | 同上；想反过来彻底禁止，`denied_paths=(".env*",)` |
+| 聊天里的用户 | 卡片上点“允许”；勾“本对话中总是允许 `**/.env*`”则这个聊天不再问（scope `read:**/.env*`） |
+| 部署方 | `Workspace.local(root, baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG)` —— 不带 `ENV_FILES` 重新拼底线 |
+| 部署方，想反过来彻底禁止 | `denied_paths=(".env*",)` |
 
 **批量遍历要补一条过滤，这是代码改动，不是现状。** architecture.md 写的“遍历中非 `allow` 即跳过”只对符号链接目标成立；`_read_denied()`（`local.py:394`）只过滤 `deny`。实测：`PathRule(".env*", "ask")` 下 `read_file(".env")` 判 `ask`，但 `grep("TOKEN", include_hidden=True)` 直接返回了 `.env` 的内容。默认不扫隐藏文件只是默认值，不是权限。PR 3 要改成：`list` / `glob` / `grep` 的遍历对每个条目检查**自身和解析后目标**的读取判定，非 `allow` 一律跳过、不弹卡片（遍历中没法审批）；用户点名的 `read_file(".env")` 照常走这一次调用的审批。回归用例覆盖 `include_hidden=True`、嵌套目录、符号链接三种。
 
@@ -293,7 +295,7 @@ scope 既是显示文本也是匹配键，精确字符串匹配，不做前缀�
 |---|---|---|
 | 显式 `ask` 规则命中，`grant=True`（默认） | 规则的 pattern，加上 `flags`（有的话） | `shell:git push`、`shell:git push --tags`、`write:.github/workflows` |
 | 显式 `ask` 规则命中，`grant=False` | 无 | `sudo`、`ssh`、`docker`：放开首词等于全放开，内置红名单对这些关掉 |
-| 灰区命令（`shell_default`，没有规则命中） | **无** | `make deploy`、`.venv/bin/python -m x`、`/usr/bin/python3 s.py` 每次都问 |
+| 灰区命令（`shell_default`，没有规则命中） | 命令词 `shell:<cmd>`（v3 改回：框架不再自带放行包后，这是普通用户少弹窗的唯一途径，范围按原样显示、按对话记录、可撤销；参数不确定时无） | `make deploy` → `shell:make`；`cat *`、`FOO=1 ls` → 无 |
 | 工作区外读 / 写（默认档） | op + 目标所在目录（`~` 折叠） | `read:~/notes` |
 | 需要批准的条件不止一个 | 无 | `git push && python deploy.py` |
 | `deny` | 无 | |
@@ -473,6 +475,6 @@ PROTECTED_CONFIG = tuple(
 DEFAULT_BASELINE = DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG
 ```
 
-`.env*` 在预设层而不在这里（见 baseline 一节）。`rm` 的 16 条枚举看着笨，但它说的就是“拦这些写法”，比一条看似万能、实际看不见 `rm -- -rf /` 的规则诚实。v1 里的裸 `sh` / `bash` 拒绝删掉了：前缀规则表达不了“没有参数”，而 `curl x | sh` 里的 `curl` 本身就在灰区，复合命令取最严格，整条照样会问。`bash x.sh`、`bash -c ...`、`powershell -Command ...`、`cmd /c ...` 都在灰区，灰区不生成 scope，不提供“总是允许”。
+`ENV_FILES`（`**/.env*` 读要问）也在这里（见 baseline 一节）。`rm` 的 16 条枚举看着笨，但它说的就是“拦这些写法”，比一条看似万能、实际看不见 `rm -- -rf /` 的规则诚实。v1 里的裸 `sh` / `bash` 拒绝删掉了：前缀规则表达不了“没有参数”，而 `curl x | sh` 里的 `curl` 本身就在灰区，复合命令取最严格，整条照样会问。`bash x.sh`、`bash -c ...`、`powershell -Command ...`、`cmd /c ...` 都在灰区，灰区不生成 scope，不提供“总是允许”。
 
 清单里每一条都要有 `test_policy.py` 的用例：命中、不命中、被 `baseline=()` 关掉。

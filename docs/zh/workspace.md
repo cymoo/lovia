@@ -37,11 +37,33 @@ agent = Agent(
 | 模式 | 根目录内写入 | 根目录外读取 | 根目录外写入 | Shell |
 | --- | --- | --- | --- | --- |
 | `readonly` | deny | deny | deny | none |
-| `coding`（默认） | allow | **ask** | deny | **ask** |
+| `coding`（默认） | allow | **ask** | deny | 不可撤回的带理由问，其余**问**（可按对话记住） |
 | `trusted` | allow | allow | **ask** | allow |
 
+每种模式之下都有一条**底线**（baseline）：危险命令拒绝（`git push --force`、`rm -rf /`、`mkfs` 等），
+凭据库禁止读写（`~/.ssh`、`~/.aws`、`*.pem` 等），写 `.git`、`.github/workflows`、`.vscode`、`.husky`、
+`.lovia` 每次都问，工作区内的 `.env*` 读取前会问。所有*保护*都在底线里——它只会加严，用户层的
+任何规则都不会无意间撤掉一条；底线内部也是集合而非顺序表，命中的每条规则都算、最严者胜，所以
+规则包怎么拼都不会互相遮蔽——去掉某一条就是不带它重新拼底线：
+`baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG` 就让 agent 可以读 `.env`。
+
 可以用 `readable=` / `writable=`（授权）、`denied_paths=`（硬阻断）、完整的 `path_rules=` /
-`command_rules=` 细化预设；也可以用 `policy=WorkspacePolicy(...)` 完全替换（与简写配置项互斥）。
+`command_rules=`（你的规则排在预设规则前面）、`shell_default=`（`coding` 下传 `"allow"` 就是
+“只拦危险的”姿态）、`baseline=`（用下面的规则包自己拼，或 `()` 关掉）细化预设；也可以用
+`policy=WorkspacePolicy(...)` 完全替换（与简写配置项互斥）。
+
+`coding` 自己**不为任何命令担保**：路径守卫是词法的，审计不了程序的选项，所以哪些命令免问是一个选择——
+部署方启用规则包，或用户在审批卡片上按对话决定（“本对话中总是允许 `ls`”；没有规则命中的命令，卡片
+提供的范围就是它的命令词）。规则包在 `lovia.workspace.rules`：`READ_ONLY`（`ls`、`du`、`stat`、`tree`、
+`git status`、`git log` 等；Windows 上是 `dir`、`where` 等——只收录**不打印文件内容**的检查命令：每个
+内容读取器都有自己不点名就读到文件的办法，`grep -r`、`sort --files0-from`、`git diff --no-index`、通配符，
+所以 `cat` 之类留在灰区，逐文件判定的 `read_file` / `grep_files` 才是读取器；git 自己的命令打印的是*已跟踪*
+内容，提交进仓库的密钥是仓库卫生问题，不归底线管——例外是 `git diff`，在非仓库目录里它会像写了
+`--no-index` 一样比较任意两个路径，所以同样留在灰区）、`DEV_TOOLS`（`pytest`、`ruff`、`mypy`、`npm test`、
+`cargo test` 等）、`IRREVERSIBLE`（`git push`、`git reset --hard`、`rm -r`、`sudo`、`docker` 等——要问），
+以及底线的 `DANGEROUS_COMMANDS`、`CREDENTIAL_PATHS`、`PROTECTED_CONFIG`、`ENV_FILES`。放行 `DEV_TOOLS`
+就是信任项目自己的代码在宿主上执行——这是 coding agent 的前提；这类工具的写入不经路径判定，底线管的
+是模型亲手写的命令，不是沙箱。
 
 ## ACL
 
@@ -55,13 +77,34 @@ ACL 有三个决策值，分别作用于两个执行环节：
   `deny` 在调用前就被拒绝并附上理由，模型不用执行就知道为什么。
 
 **路径规则。** `PathRule(pattern, action, ops={"read","write"})`；pattern 是 glob，有三种寻址形式：
-绝对路径/`~`（含 Windows 的 `C:/data`、`C:\data`；匹配解析后路径及其子树）、包含 `/`（工作区相对路径），或纯文件名
+绝对路径/`~`（含 Windows 的 `C:/data`、`C:\data`；匹配解析后路径及其子树）、包含 `/`（工作区相对路径；
+`**/.env*` 表示根目录内任意深度的该文件，根层也算），或纯文件名
 （`.env*`：gitignore 风格，匹配 basename 或任意祖先片段，根内外都适用）。优先级：
 `denied_paths` 最先，然后第一条匹配的 path rule，最后是 mode 默认。
 
 **命令规则。** `CommandRule(pattern, action)` 按**词边界前缀**匹配：`"git push"` 会匹配
-`git push origin`，不会匹配 `git pushx`。复合命令会按 `&&`、`||`、`;`、`|`、`&` 拆段；
-每段分别判断，取**最严格**决策。
+`git push origin`，不会匹配 `git pushx`。`flags=` 列出的词必须*另外*出现在该段的任意位置——
+`CommandRule("git push", "deny", flags=("--force",))` 也能拦下 `git push origin main --force`；
+单字母的 `-f` 被 `-fu` 满足，更长的旗标要整词出现，裸 `--` 之后的词不算。复合命令会按
+`&&`、`||`、`;`、`|`、`&` 拆段；每段分别判断，取**最严格**决策。shell 留给自己的东西（重定向及其目标、括号、
+命令前的 `!` / `if` / `while` / `do`）都不是程序的：`(ls)` 就是 `ls`，`! git push --force` 或
+`git > /dev/null push --force` 照样撞上拒绝。归一化到此为止——规则拦的是此后它点名的拼法；存心藏命令的
+模型有 `bash -c`，而 `coding` 下规则漏掉的拼法仍会问，拼法就在卡片上。allow 规则只覆盖**字面参数**——
+路径守卫能逐个判定的那种——所以三种情况会把一段封顶在 ask，不管它命中了什么规则：段首的 `VAR=value`
+或薄包装（`command`、`exec`、`env`、`nice`、`nohup`、`time`、`timeout N`——`PATH=…` 会改变实际运行的程序）；看起来像输出
+选项的参数（`-o …`、`-oPATH`、`-ro`、`--output=…`、`--log-file`、`--junitxml`——命令可能写到它指向的
+任何地方）；以及会被 shell 展开的参数（`cat *`、`cat $F`、`$(…)`——守卫看不到它展开成的路径）。
+allow 降为 ask，deny 照样生效（`env git push --force`）；这种 ask 不可记忆。模式默认值
+`shell_default="allow"` 不是规则、不为任何命令担保，所以 `trusted` 下 `cat *` 直接运行——这正是 trusted 的意思。
+
+**底线**（`WorkspacePolicy.baseline`）单独判定——命中的每条规则都算、最严者胜——再与上面所有规则取
+最严格者合并，所以用户规则、`command_decider` 或记住的授权都放松不了它，底线规则之间也互不遮蔽。
+规则的 `reason` 就是审批卡片上显示的理由（拒绝时模型
+也会读到）；`grant=False` 让前缀过宽的规则（`sudo`、`ssh`）不提供“总是允许”。
+
+**批量遍历**（`list_files`、`grep_files`）会跳过任何非 `allow` 的条目——`ask` 没法在遍历中回答——
+所以 `.env` 永远不会出现在搜索结果里；点名读取它会问。列出一个你批准过的*根目录外*目录时能看到
+其中的条目（那次批准覆盖了整棵子树），但其中被规则门禁的文件仍会跳过。
 
 **符号链接不作特殊处理**：每个路径都会先完成解析（跟随符号链接、展开 `~`，并将相对路径定位到根目录），
 再根据最终指向的位置应用策略。因此，当 `.venv/bin/python` 指向系统解释器时，只要策略允许访问目标
@@ -153,8 +196,10 @@ Python 包之前先创建 `.venv`，永远不要装进全局环境。
 ## 命令执行控制
 
 静态命令规则看不到路径，所以 session 还会从每条命令里**词法**提取路径声明：重定向目标算写入，
-看起来像路径的参数算读取。它会把这些路径 ACL 判断和静态命令判断合并，取最严格结果。命令只要提到
-被 deny 的路径（包括重定向），即使命令本身被 allow，也会被 deny。Windows 上反斜杠是路径分隔符，
+其余参数（包括 `id_rsa` 这样的裸文件名；命令词本身只在写成路径时才算）算读取。它会把这些路径 ACL
+判断和静态命令判断合并，取最严格结果。命令只要提到被 deny 的路径（包括重定向），即使命令本身被 allow，
+也会被 deny：`cat id_rsa` 和 `read_file("id_rsa")` 过的是同一条凭据规则。守卫不知道程序通过哪个
+*选项*写文件；策略从另一头堵上：带输出样子选项的段永远不会直接放行（见上）。Windows 上反斜杠是路径分隔符，
 不是转义符，所以 `C:\data\a.txt` 会按原样判断。
 
 这个门禁是**启发式的，而且只会收紧权限**：它看不到 `python -c` 里的代码或 `$(...)` 命令替换，

@@ -174,13 +174,14 @@ async def test_list_and_grep_truncate_with_a_note(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_grep_files_include_hidden(tmp_path) -> None:
-    (tmp_path / ".env").write_text("TOKEN=x", encoding="utf-8")
+    # A plain dotfile: `.env` would be skipped by the baseline regardless.
+    (tmp_path / ".notes").write_text("TOKEN=x", encoding="utf-8")
     (tmp_path / "app.py").write_text("TOKEN=x", encoding="utf-8")
     ctx = _ctx(LocalWorkspaceSession(root=str(tmp_path)))
     default = await grep_files.invoke({"pattern": "TOKEN"}, ctx)
     assert [m.path for m in default] == ["app.py"]
     incl = await grep_files.invoke({"pattern": "TOKEN", "include_hidden": True}, ctx)
-    assert {m.path for m in incl} == {".env", "app.py"}
+    assert {m.path for m in incl} == {".notes", "app.py"}
 
 
 @pytest.mark.asyncio

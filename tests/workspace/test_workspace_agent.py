@@ -96,8 +96,10 @@ async def test_full_file_tool_round_trip(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_shell_ask_goes_through_approval(tmp_path) -> None:
+    # ``printf`` is on no allow list, so under coding it asks (``echo`` is
+    # read-only and would run unprompted).
     provider = ScriptedProvider(
-        [call("shell", {"command": "echo hi"}, call_id="sh"), text("done")]
+        [call("shell", {"command": "printf hi"}, call_id="sh"), text("done")]
     )
     agent = Agent(
         name="coder",

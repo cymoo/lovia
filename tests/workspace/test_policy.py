@@ -333,6 +333,18 @@ def test_shell_syntax_is_not_the_programs() -> None:
         assert policy.decide_command(cmd).action == "deny", cmd
     # A redirect target is not an argument: `--` here ends no options.
     assert _opted_in().decide_command("tree > -- -o .git/config").action == "ask"
+    # Quoted or escaped, punctuation is a name, not syntax: `rm -r ')'`
+    # deletes a directory called `)` and meets the rm -r rule.
+    coding = WorkspacePolicy.coding()
+    for cmd in ("rm -r ')'", 'rm -r ")"', "rm -r \\)"):
+        verdict = coding.decide_command(cmd)
+        assert verdict.action == "ask" and verdict.scope == "shell:rm -r", cmd
+    assert policy.decide_command("git commit -m ')'").scope == "shell:git"
+    assert policy.decide_command("git commit -m '>'").scope == "shell:git"
+    assert policy.decide_command("echo '(' ')'").scope == "shell:echo"
+    assert policy.decide_command("git push '--force'").action == "deny"
+    # ...and a quoted reserved word is a program, not the keyword.
+    assert policy.decide_command("'if' ls").scope == "shell:if"
     for cmd in ("! ls", "(ls)", "((ls))", "} ls", "> out ls", ">out ls", "2>&1 ls"):
         verdict = policy.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scope == "shell:ls", cmd

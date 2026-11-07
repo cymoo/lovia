@@ -316,22 +316,62 @@ def _uncertain_word(segment: list[str], command: list[str]) -> str | None:
     return None
 
 
-def _words(segment: str) -> list[str]:
-    """A segment's words as the shell sees them: quotes removed, so
-    ``'-o.git/config'`` is the option it is; operators as words of their
-    own (``(git`` is ``(`` then ``git``, ``2>&1`` is ``2``, ``>&``, ``1``);
-    no comment stripping, because a shell starts a comment only at a word's
-    start and shlex would cut ``input#tag`` in half. Unbalanced quotes fall
-    back to whitespace splitting (the guard gives up on them the same way)."""
+def _tokens(segment: str) -> list[str]:
     lexer = shlex.shlex(segment, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     lexer.commenters = ""
     if os.name == "nt":
         lexer.escape = ""  # cmd.exe: a backslash separates path segments
+    return list(lexer)
+
+
+def _mask_quoted(segment: str) -> str:
+    """The segment with every quoted or escaped character replaced by a
+    letter, quotes and escapes themselves kept, so it lexes into the same
+    tokens — and a token that is still punctuation afterwards was never
+    quoted."""
+    out: list[str] = []
+    quote = ""
+    escaped = False
+    for ch in segment:
+        if escaped:
+            out.append("x")
+            escaped = False
+        elif ch == "\\" and os.name != "nt" and quote != "'":
+            out.append(ch)
+            escaped = True
+        elif quote:
+            if ch == quote:
+                quote = ""
+                out.append(ch)
+            else:
+                out.append("x")
+        elif ch in "'\"":
+            quote = ch
+            out.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _words(segment: str) -> list[tuple[str, bool]]:
+    """A segment's words as the shell sees them, each with whether it was
+    written *plain* — no quotes, no escapes — which is what makes ``)``
+    syntax rather than a name (``rm -r ')'`` deletes a directory called
+    ``)``). Quotes are removed, so ``'-o.git/config'`` is the option it is;
+    operators are words of their own (``(git`` is ``(`` then ``git``,
+    ``2>&1`` is ``2``, ``>&``, ``1``); no comment stripping, because a shell
+    starts a comment only at a word's start and shlex would cut
+    ``input#tag`` in half. Unbalanced quotes fall back to whitespace
+    splitting, nothing plain (the guard gives up on them the same way)."""
     try:
-        return list(lexer)
+        words = _tokens(segment)
+        masked = _tokens(_mask_quoted(segment))
     except ValueError:
-        return segment.split()
+        return [(w, False) for w in segment.split()]
+    if len(masked) != len(words):  # should not happen; be conservative
+        return [(w, False) for w in words]
+    return [(w, w == m) for w, m in zip(words, masked)]
 
 
 # What the shell keeps for itself, by its grammar — a closed set, unlike the
@@ -350,27 +390,27 @@ _LOOP_HEADS = frozenset({"for", "select"})
 _OPERATOR_CHARS = frozenset("()<>&|;")
 
 
-def _is_redirect(word: str) -> bool:
-    return bool(word) and set(word) <= _OPERATOR_CHARS and ("<" in word or ">" in word)
+def _is_redirect(word: str, plain: bool) -> bool:
+    return plain and set(word) <= _OPERATOR_CHARS and ("<" in word or ">" in word)
 
 
-def _program_words(lexed: list[str]) -> list[str]:
+def _program_words(lexed: list[tuple[str, bool]]) -> list[str]:
     """The words the program receives: the segment minus what the shell
     keeps (redirections with their targets, grouping parentheses, a
-    ``case`` pattern)."""
+    ``case`` pattern). Only a *plain* token is the shell's."""
     words: list[str] = []
     depth = 0
     skip = False
-    for i, word in enumerate(lexed):
+    for i, (word, plain) in enumerate(lexed):
         if skip:
             skip = False  # a redirection's target
-        elif _is_redirect(word):
+        elif _is_redirect(word, plain):
             skip = True
-        elif word.isdigit() and i + 1 < len(lexed) and _is_redirect(lexed[i + 1]):
+        elif word.isdigit() and i + 1 < len(lexed) and _is_redirect(*lexed[i + 1]):
             pass  # the fd of `2>&1`
-        elif set(word) == {"("}:
+        elif plain and set(word) == {"("}:
             depth += len(word)
-        elif set(word) == {")"}:
+        elif plain and set(word) == {")"}:
             for _ in word:
                 if depth:
                     depth -= 1
@@ -381,22 +421,24 @@ def _program_words(lexed: list[str]) -> list[str]:
     return words
 
 
-def _strip_wrappers(lexed: list[str]) -> tuple[list[str], list[str]]:
+def _strip_wrappers(lexed: list[tuple[str, bool]]) -> tuple[list[str], list[str]]:
     """Return ``(command words, wrappers)``: what the program receives once
     the shell's own syntax and any wrappers are gone, and the wrappers —
     syntax is not reported, since it changes nothing about what runs."""
-    if lexed and lexed[0] == "case":
+    if lexed and lexed[0] == ("case", True):
         # `case WORD in [(]PATTERN) command`: the command follows the first
-        # `)`, whatever the pattern looks like; without one, a header alone.
-        if ")" not in lexed:
+        # plain `)`, whatever the pattern looks like; without one, a header.
+        if (")", True) not in lexed:
             return [], []
-        lexed = lexed[lexed.index(")") + 1 :]
+        lexed = lexed[lexed.index((")", True)) + 1 :]
+    # A reserved word is one only when written plain: `'if'` is a program.
+    plain_words = [w for w, p in lexed if p]
     words = _program_words(lexed)
     if os.name == "nt" and words and words[0].startswith("@"):  # cmd.exe: `@echo`
         words = [words[0][1:], *words[1:]] if len(words[0]) > 1 else words[1:]
-    if words and words[0] in _LOOP_HEADS:
+    if words and words[0] in _LOOP_HEADS and words[0] in plain_words:
         return [], []
-    while words and words[0] in _RESERVED:
+    while words and words[0] in _RESERVED and words[0] in plain_words:
         words = words[1:]
     stripped: list[str] = []
     while words:
@@ -753,7 +795,7 @@ class WorkspacePolicy:
     def _decide_segment(self, segment: str) -> Verdict:
         lexed = _words(segment)
         words, stripped = _strip_wrappers(lexed)
-        uncertain = _uncertain_word(lexed, words)
+        uncertain = _uncertain_word([w for w, _ in lexed], words)
         if not words:
             # Syntax alone (`fi`, `esac`, `for f in a b`) runs nothing —
             # unless the shell expands something in it (`for f in $(…)`).

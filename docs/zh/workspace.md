@@ -86,7 +86,8 @@ ACL 有三个决策值，分别作用于两个执行环节：
 `git push origin`，不会匹配 `git pushx`。`flags=` 列出的词必须*另外*出现在该段的任意位置——
 `CommandRule("git push", "deny", flags=("--force",))` 也能拦下 `git push origin main --force`；
 单字母的 `-f` 被 `-fu` 满足，更长的旗标要整词出现，裸 `--` 之后的词不算。复合命令会按
-`&&`、`||`、`;`、`|`、`&` 拆段；每段分别判断，取**最严格**决策。allow 规则只覆盖**字面参数**——
+`&&`、`||`、`;`、`|`、`&` 拆段；每段分别判断，取**最严格**决策。命令前的 shell 语法（`!`、`(`、`{`、
+`if` / `while` / `do`、前置重定向）会被跨过：`(ls)` 就是 `ls`，`! git push --force` 照样撞上拒绝。allow 规则只覆盖**字面参数**——
 路径守卫能逐个判定的那种——所以三种情况会把一段封顶在 ask，不管它命中了什么规则：段首的 `VAR=value`
 或薄包装（`command`、`exec`、`env`、`nice`、`nohup`、`time`、`timeout N`——`PATH=…` 会改变实际运行的程序）；看起来像输出
 选项的参数（`-o …`、`-oPATH`、`-ro`、`--output=…`、`--log-file`、`--junitxml`——命令可能写到它指向的

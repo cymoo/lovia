@@ -117,7 +117,9 @@ segment — `CommandRule("git push", "deny", flags=("--force",))` stops `git
 push origin main --force` too; a one-letter `-f` is satisfied by `-fu`,
 anything longer must appear as that word, and words after a bare `--` never
 count. Compound commands are split on `&&`, `||`, `;`, `|`, `&`; each segment
-is judged and the **most restrictive** decision wins. An allow rule covers
+is judged and the **most restrictive** decision wins. Shell syntax before
+the command (`!`, `(`, `{`, `if` / `while` / `do`, a leading redirect) is
+stepped over: `(ls)` is `ls`, and `! git push --force` meets the deny. An allow rule covers
 **literal arguments only** — what the path guard can judge one by one — so
 three things cap a segment at `ask` whatever rule it matched: a leading
 `VAR=value` or thin wrapper (`command`, `exec`, `env`, `nice`, `nohup`,

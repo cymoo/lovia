@@ -315,11 +315,12 @@ def _uncertain_word(words: list[str]) -> str | None:
 
 def _words(segment: str) -> list[str]:
     """A segment's words as the shell sees them: quotes removed, so
-    ``'-o.git/config'`` is the option it is; no comment stripping, because
-    a shell starts a comment only at a word's start and shlex would cut
-    ``input#tag`` in half. Unbalanced quotes fall back to whitespace
-    splitting (the guard gives up on them the same way)."""
-    lexer = shlex.shlex(segment, posix=True)
+    ``'-o.git/config'`` is the option it is; operators as words of their
+    own (``(git`` is ``(`` then ``git``, ``2>&1`` is ``2``, ``>&``, ``1``);
+    no comment stripping, because a shell starts a comment only at a word's
+    start and shlex would cut ``input#tag`` in half. Unbalanced quotes fall
+    back to whitespace splitting (the guard gives up on them the same way)."""
+    lexer = shlex.shlex(segment, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     lexer.commenters = ""
     if os.name == "nt":
@@ -330,10 +331,52 @@ def _words(segment: str) -> list[str]:
         return segment.split()
 
 
+# Shell syntax that may stand before the command in a segment — a closed set,
+# the shell's grammar, unlike the programs that follow it. It names no
+# program and changes nothing about the one that runs, so it is stepped
+# over and the command's own verdict stands (``! ls`` and ``(ls)`` are
+# ``ls``; ``! git push --force`` meets the deny). ``for`` / ``case`` /
+# ``select`` head a clause that runs no command of its own: the whole segment
+# is syntax.
+_RESERVED = frozenset(
+    "! { } ( ) if then else elif fi while until do done esac function coproc".split()
+)
+_CLAUSE_HEADS = frozenset({"for", "case", "select"})
+_OPERATOR_CHARS = frozenset("()<>&|;")
+
+
+def _strip_syntax(words: list[str]) -> list[str]:
+    """Step over the shell syntax before a segment's command."""
+    while words:
+        head = words[0]
+        if os.name == "nt" and head.startswith("@"):  # cmd.exe: `@echo`
+            head = head[1:]
+            words = [head, *words[1:]] if head else words[1:]
+            continue
+        if head in _CLAUSE_HEADS:
+            return []
+        if head in _RESERVED:
+            words = words[1:]
+        elif set(head) <= _OPERATOR_CHARS:
+            # `>` / `<&` take the next word as their target; `(` does not.
+            target = 1 if ("<" in head or ">" in head) else 0
+            words = words[1 + target :]
+        elif head.isdigit() and len(words) > 1 and set(words[1]) <= _OPERATOR_CHARS:
+            words = words[1:]  # the fd of `2>&1`; the operator goes next
+        else:
+            break
+    return words
+
+
 def _strip_wrappers(words: list[str]) -> tuple[list[str], list[str]]:
-    """Return ``(remaining words, stripped words)``."""
+    """Return ``(remaining words, stripped words)``: the command after any
+    shell syntax and wrappers, and the wrappers — syntax is not reported,
+    since it changes nothing about what runs (see ``_strip_syntax``)."""
     stripped: list[str] = []
     while words:
+        words = _strip_syntax(words)
+        if not words:
+            break
         head = words[0]
         name, eq, _ = head.partition("=")
         if eq and name.isidentifier():  # VAR=value

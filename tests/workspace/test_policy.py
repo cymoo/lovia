@@ -313,6 +313,36 @@ def test_wrapped_commands_are_at_most_asked_and_never_grantable() -> None:
     assert policy.decide_command("env -i git status").action == "allow"  # shell_default
 
 
+def test_shell_syntax_before_the_command_is_stepped_over() -> None:
+    # `!`, `(`, `{`, a control-flow word or a leading redirect names no
+    # program: the command after it is the command, so the baseline meets
+    # it and the scope on offer is its word — never `shell:!`.
+    policy = WorkspacePolicy()
+    for cmd in (
+        "! git push --force",
+        "(git push --force)",
+        "( ! git push --force )",
+        "{ git push --force; }",
+        "if git push --force; then :; fi",
+        "while git push --force; do :; done",
+        "do git push --force",
+    ):
+        assert policy.decide_command(cmd).action == "deny", cmd
+    for cmd in ("! ls", "(ls)", "((ls))", "} ls", "> out ls", ">out ls", "2>&1 ls"):
+        verdict = policy.decide_command(cmd)
+        assert verdict.action == "ask" and verdict.scope == "shell:ls", cmd
+    # Syntax changes nothing about what runs, so an allow rule still holds
+    # through it — unlike a wrapper.
+    opted = _opted_in()
+    assert opted.decide_command("(ls)").action == "allow"
+    assert opted.decide_command("! git status").action == "allow"
+    assert opted.decide_command("env ls").action == "ask"
+    # A `for` / `case` head runs no command of its own: syntax throughout.
+    for cmd in ("for f in *", "case x in", "select x in a b"):
+        verdict = policy.decide_command(cmd)
+        assert verdict.action == "ask" and verdict.scope is None, cmd
+
+
 def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
     # The guard cannot know which option a program writes through, so the
     # policy never allows a segment that names one — whatever the spelling.

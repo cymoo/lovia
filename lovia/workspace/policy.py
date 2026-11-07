@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import posixpath
 import re
+import shlex
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from functools import lru_cache
@@ -265,10 +266,12 @@ _THIN_WRAPPERS = frozenset({"env", "nice", "nohup", "time", "call"})
 
 # The same principle for arguments: a word that looks like an output option
 # means the command may write wherever that option points, which the lexical
-# path guard cannot see (``sort -o x``, ``-ox``, ``--output=x``, ``--output
-# x`` — a table of spellings is only ever one short). Rather than parse it,
-# never *allow* such a segment outright; a false hit (``ls -o``, ``ssh -o``)
-# costs one question.
+# path guard cannot see (``sort -o x``, ``-ox``, ``-ro x``, ``'-ox'``,
+# ``--output=x``, ``--output x`` — a table of spellings is only ever one
+# short). Rather than parse it, never *allow* such a segment outright: a long
+# option starting ``--out`` / ``--log-file`` / ``--junit``, or a short-option
+# group with an ``o`` anywhere in it. A false hit (``ls -o``, ``grep -o``,
+# ``ssh -o``) costs one question.
 _OUTPUT_LIKE = ("--out", "--log-file", "--junit")
 
 
@@ -279,9 +282,23 @@ def _names_output_option(words: list[str]) -> str | None:
         if word.startswith("--"):
             if word.startswith(_OUTPUT_LIKE):
                 return word
-        elif word.startswith("-o"):
+        elif word.startswith("-") and "o" in word.partition("=")[0]:
             return word
     return None
+
+
+def _words(segment: str) -> list[str]:
+    """A segment's words as the shell sees them: quotes removed, so
+    ``'-o.git/config'`` is the option it is. Unbalanced quotes fall back to
+    whitespace splitting (the guard gives up on them the same way)."""
+    lexer = shlex.shlex(segment, posix=True)
+    lexer.whitespace_split = True
+    if os.name == "nt":
+        lexer.escape = ""  # cmd.exe: a backslash separates path segments
+    try:
+        return list(lexer)
+    except ValueError:
+        return segment.split()
 
 
 def _strip_wrappers(words: list[str]) -> tuple[list[str], list[str]]:
@@ -621,7 +638,7 @@ class WorkspacePolicy:
         return merge_verdicts(*(self._decide_segment(seg) for seg in segments))
 
     def _decide_segment(self, segment: str) -> Verdict:
-        words, stripped = _strip_wrappers(segment.split())
+        words, stripped = _strip_wrappers(_words(segment))
         verdict = self._decide_words(segment, words)
         output = _names_output_option(words)
         if stripped or output:

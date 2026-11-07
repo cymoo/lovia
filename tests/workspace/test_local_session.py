@@ -511,8 +511,14 @@ async def test_allowed_commands_still_meet_the_path_rules(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.coding())
     assert session.decide_command("cat id_rsa").action == "deny"
     assert session.decide_command("cat README").action == "allow"
-    assert session.decide_command("sort -o .git/config in.txt").action == "ask"
-    assert session.decide_command("git diff --output=.git/config").action == "ask"
+    # Every spelling of "write through an option" stops at the session too.
+    for cmd in (
+        "sort -o .git/config in.txt",
+        "sort '-o.git/config' in.txt",
+        "sort -ro .git/config in.txt",
+        "git diff --output=.git/config",
+    ):
+        assert session.decide_command(cmd).action == "ask", cmd
     assert session.decide_command("git diff --stat").action == "allow"
 
 

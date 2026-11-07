@@ -287,6 +287,9 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
     for cmd in (
         "sort -o .git/config in.txt",
         "sort -o.git/config in.txt",
+        "sort '-o.git/config' in.txt",  # quoted: words as the shell sees them
+        "sort -ro .git/config in.txt",  # combined short options
+        "sort -r -o=.git/config in.txt",
         "git diff --output=.git/config",
         "git diff --output .git/config",
         "tree -o out.txt .",
@@ -308,6 +311,9 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
     [
         "-o {p}",
         "-o{p}",
+        "'-o{p}'",
+        "-ro {p}",
+        "-xo{p}",
         "--output={p}",
         "--output {p}",
         "--log-file={p}",

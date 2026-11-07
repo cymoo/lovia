@@ -85,6 +85,12 @@ def _path_matches(rel_path: str, pattern: str) -> bool:
     pat = pattern.rstrip("/")
     if not pat:
         return False
+    if pat.startswith("**/"):
+        # gitignore's ``**/foo``: foo at any depth, the root included — the
+        # way to name a file anywhere *inside* the workspace without the
+        # bare form's reach outside it.
+        pat = pat[3:]
+        return _path_matches(rel_path, pat) or _path_matches(rel_path, "*/" + pat)
     if "/" in pat:
         return fnmatch(rel_path, pat) or fnmatch(rel_path, pat + "/*")
     return any(fnmatch(segment, pat) for segment in rel_path.split("/"))

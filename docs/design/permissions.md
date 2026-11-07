@@ -205,7 +205,7 @@ Workspace.local(root, baseline=DANGEROUS_COMMANDS + PROTECTED_CONFIG)   # 这个
 | 谁 | 怎么做 |
 |---|---|
 | 聊天里的用户 | 卡片上点“允许”；勾“本对话中总是允许 `.env*`”则这个聊天不再问（scope `read:.env*`） |
-| 部署方 | `Workspace.local(root, path_rules=(PathRule(".env*", "allow"),))` —— 用户规则在预设规则之前，首个命中 |
+| 部署方 | `Workspace.local(root, path_rules=(PathRule("**/.env*", "allow"),))` —— 用户规则在预设规则之前，首个命中。预设用的是 `**/.env*`（工作区内任意深度），不是裸的 `.env*`：裸 pattern 根目录外也匹配，会把 readonly 的外部读取拒绝降成 ask |
 | 部署方，连问都不想问 | 同上；想反过来彻底禁止，`denied_paths=(".env*",)` |
 
 **批量遍历要补一条过滤，这是代码改动，不是现状。** architecture.md 写的“遍历中非 `allow` 即跳过”只对符号链接目标成立；`_read_denied()`（`local.py:394`）只过滤 `deny`。实测：`PathRule(".env*", "ask")` 下 `read_file(".env")` 判 `ask`，但 `grep("TOKEN", include_hidden=True)` 直接返回了 `.env` 的内容。默认不扫隐藏文件只是默认值，不是权限。PR 3 要改成：`list` / `glob` / `grep` 的遍历对每个条目检查**自身和解析后目标**的读取判定，非 `allow` 一律跳过、不弹卡片（遍历中没法审批）；用户点名的 `read_file(".env")` 照常走这一次调用的审批。回归用例覆盖 `include_hidden=True`、嵌套目录、符号链接三种。

@@ -42,8 +42,8 @@ agent = Agent(
 
 每种模式之下都有一条**底线**（baseline）：危险命令拒绝（`git push --force`、`rm -rf /`、`mkfs` 等），
 凭据库禁止读写（`~/.ssh`、`~/.aws`、`*.pem` 等），写 `.git`、`.github/workflows`、`.vscode`、`.husky`、
-`.lovia` 每次都问。`.env*` 读取前会问（这是预设规则，不在底线里——`path_rules=(PathRule(".env*", "allow"),)`
-一行就能放开）。
+`.lovia` 每次都问。工作区内的 `.env*` 读取前会问（这是预设规则，不在底线里——
+`path_rules=(PathRule("**/.env*", "allow"),)` 一行就能放开；根目录外和写入仍按模式自身的规则，不受它影响）。
 
 可以用 `readable=` / `writable=`（授权）、`denied_paths=`（硬阻断）、完整的 `path_rules=` /
 `command_rules=`（你的规则排在预设规则前面）、`shell_default=`（`coding` 下传 `"allow"` 就是
@@ -68,7 +68,8 @@ ACL 有三个决策值，分别作用于两个执行环节：
   `deny` 在调用前就被拒绝并附上理由，模型不用执行就知道为什么。
 
 **路径规则。** `PathRule(pattern, action, ops={"read","write"})`；pattern 是 glob，有三种寻址形式：
-绝对路径/`~`（含 Windows 的 `C:/data`、`C:\data`；匹配解析后路径及其子树）、包含 `/`（工作区相对路径），或纯文件名
+绝对路径/`~`（含 Windows 的 `C:/data`、`C:\data`；匹配解析后路径及其子树）、包含 `/`（工作区相对路径；
+`**/.env*` 表示根目录内任意深度的该文件，根层也算），或纯文件名
 （`.env*`：gitignore 风格，匹配 basename 或任意祖先片段，根内外都适用）。优先级：
 `denied_paths` 最先，然后第一条匹配的 path rule，最后是 mode 默认。
 

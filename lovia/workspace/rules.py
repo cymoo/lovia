@@ -217,15 +217,17 @@ DEFAULT_BASELINE: tuple[PathRule | CommandRule, ...] = (
 
 ENV_FILES: tuple[PathRule, ...] = (
     PathRule(
-        ".env*",
+        "**/.env*",
         "ask",
         ops=frozenset({"read"}),
         reason="Environment files usually hold secrets.",
     ),
 )
-"""Preset-level, not baseline: a one-line ``path_rules=`` override lifts it.
-Reads only — writes keep following the mode (``readonly`` still denies them,
-``coding`` still denies them outside the root)."""
+"""Preset-level, not baseline: ``path_rules=(PathRule("**/.env*", "allow"),)``
+lifts it. Reads only, and inside the workspace only (``**/`` is
+workspace-relative, the bare ``.env*`` would reach outside) — so neither the
+mode's write rule nor its outside-root rule is ever loosened: ``readonly``
+still denies outside reads, ``coding`` still denies outside writes."""
 
 __all__ = [
     "CREDENTIAL_PATHS",

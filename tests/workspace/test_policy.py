@@ -354,22 +354,36 @@ def test_coding_preset_composes_the_bundles_after_user_rules() -> None:
     # .env* asks at the preset level, and a user path rule lifts it.
     assert (
         policy.decide_path(rel=".env", abs_posix="/ws/.env", op="read").scope
-        == "read:.env*"
+        == "read:**/.env*"
     )
-    lifted = WorkspacePolicy.coding(path_rules=(PathRule(".env*", "allow"),))
+    lifted = WorkspacePolicy.coding(path_rules=(PathRule("**/.env*", "allow"),))
     assert (
         lifted.decide_path(rel=".env", abs_posix="/ws/.env", op="read").action
         == "allow"
     )
 
 
-def test_env_files_rule_gates_reads_only() -> None:
-    # The preset rule is about reading secrets; writes keep following the
-    # mode, so it must not lift readonly's deny (or coding's outside deny)
-    # to an ask that a direct session call would then let through.
+def test_env_files_rule_gates_inside_reads_only() -> None:
+    # The preset rule is about reading secrets *inside* the workspace; writes
+    # and outside reads keep following the mode, so it must not lift
+    # readonly's denies to an ask that a direct session call lets through.
     ro = WorkspacePolicy.readonly()
     assert ro.decide_path(rel=".env", abs_posix="/ws/.env", op="write").action == "deny"
     assert ro.decide_path(rel=".env", abs_posix="/ws/.env", op="read").action == "ask"
+    assert (
+        ro.decide_path(
+            rel="sub/.env.local", abs_posix="/ws/sub/.env.local", op="read"
+        ).action
+        == "ask"
+    )
+    assert (
+        ro.decide_path(rel=None, abs_posix="/srv/app/.env", op="read").action == "deny"
+    )
+    # Outside, coding falls to its own default (ask with the directory scope).
+    outside = WorkspacePolicy.coding().decide_path(
+        rel=None, abs_posix="/srv/app/.env", op="read"
+    )
+    assert outside.action == "ask" and outside.scope == "read:/srv/app"
     coding = WorkspacePolicy.coding()
     assert (
         coding.decide_path(rel=None, abs_posix="/srv/app/.env", op="write").action
@@ -675,6 +689,17 @@ def test_path_matches_bare_pattern_hits_any_segment() -> None:
     assert _path_matches("sub/.env", ".env*")
     assert _path_matches("a/secrets/b", "secrets")
     assert not _path_matches("src/app.py", ".env*")
+
+
+def test_path_matches_double_star_prefix_includes_the_root() -> None:
+    # gitignore's ``**/foo``: any depth, the root included — and relative,
+    # so it never reaches outside the workspace (see _pattern_matches).
+    assert _path_matches(".env", "**/.env*")
+    assert _path_matches("sub/.env.local", "**/.env*")
+    assert not _path_matches("env.txt", "**/.env*")
+    from lovia.workspace.policy import _pattern_matches
+
+    assert not _pattern_matches("**/.env*", rel=None, abs_posix="/srv/.env")
 
 
 def test_path_matches_slash_pattern_covers_subtree() -> None:

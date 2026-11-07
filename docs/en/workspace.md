@@ -47,9 +47,10 @@ model sees them and adapts).
 Under every mode the **baseline** holds: dangerous commands are denied
 (`git push --force`, `rm -rf /`, `mkfs`, …), credential stores are off-limits
 (`~/.ssh`, `~/.aws`, `*.pem`, …), and writes to `.git`, `.github/workflows`,
-`.vscode`, `.husky`, `.lovia` ask every time. `.env*` files ask before being
-read (a preset rule, not baseline — `path_rules=(PathRule(".env*", "allow"),)`
-lifts it).
+`.vscode`, `.husky`, `.lovia` ask every time. `.env*` files inside the
+workspace ask before being read (a preset rule, not baseline —
+`path_rules=(PathRule("**/.env*", "allow"),)` lifts it; outside the root and
+for writes the mode's own rule applies unchanged).
 
 Refine any preset with `readable=` / `writable=` (grants), `denied_paths=`
 (hard blocks), full `path_rules=` / `command_rules=` (yours come before the
@@ -87,7 +88,8 @@ Three values, two enforcement points:
 **Path rules.** `PathRule(pattern, action, ops={"read","write"})`; patterns
 are globs with three addressing forms — absolute/`~` (including `C:/data` or
 `C:\data` on Windows; matches the resolved path and its subtree), containing
-`/` (workspace-relative), or bare
+`/` (workspace-relative; `**/.env*` names a file at any depth inside the
+root, the root itself included), or bare
 (`.env*`: gitignore-style, matches a basename or any ancestor segment,
 inside or outside the root). Precedence: `denied_paths` first, then the
 first matching path rule, then the mode defaults.

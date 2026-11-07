@@ -484,6 +484,10 @@ async def test_listing_an_approved_outside_directory_shows_its_entries(
     outside = tmp_path.parent / "shared_dir"
     outside.mkdir(exist_ok=True)
     (outside / "notes.txt").write_text("needle\n", encoding="utf-8")
+    # A credential store (baseline deny) and a .env: the preset's .env rule is
+    # inside-only, so out here .env is just another file of the approved
+    # directory, while the credential stays hidden.
+    (outside / "id_rsa").write_text("needle\n", encoding="utf-8")
     (outside / ".env").write_text("needle\n", encoding="utf-8")
     session = await _session(tmp_path, policy=WorkspacePolicy.coding())
     assert session.decide_path(str(outside)).action == "ask"  # the tool asks once
@@ -491,12 +495,12 @@ async def test_listing_an_approved_outside_directory_shows_its_entries(
         e.path.rsplit("/", 1)[-1]
         for e in await session.list_files(str(outside), include_hidden=True)
     }
-    assert "notes.txt" in names and ".env" not in names
+    assert {"notes.txt", ".env"} <= names and "id_rsa" not in names
     found = {
         m.path.rsplit("/", 1)[-1]
         for m in await session.grep("needle", path=str(outside), include_hidden=True)
     }
-    assert found == {"notes.txt"}
+    assert found == {"notes.txt", ".env"}
 
 
 async def test_grep_skips_denied_directories(tmp_path) -> None:
@@ -809,12 +813,19 @@ async def test_workspace_instructions_follow_the_effective_rules(tmp_path) -> No
     text = Workspace.local(str(tmp_path), mode="coding").instructions()
     assert "Credential stores" in text and "'~/.ssh'" in text
     assert "Writes to '.git'" in text
-    assert "'.env*' ask the user before being read" in text
+    assert "'**/.env*' ask the user before being read" in text
 
-    lifted = Workspace.local(
-        str(tmp_path), mode="coding", path_rules=(PathRule(".env*", "allow"),)
-    ).instructions()
-    assert ".env*" not in lifted
+    # Lifted by the same pattern, by a broader one, or denied outright: the
+    # sentence goes either way.
+    for override in (
+        PathRule("**/.env*", "allow"),
+        PathRule("*", "allow"),
+        PathRule(".env*", "deny"),
+    ):
+        text = Workspace.local(
+            str(tmp_path), mode="coding", path_rules=(override,)
+        ).instructions()
+        assert ".env*' ask" not in text, override
 
     bare = Workspace.local(str(tmp_path), mode="coding", baseline=()).instructions()
     assert "Credential stores" not in bare and "Writes to '.git'" not in bare

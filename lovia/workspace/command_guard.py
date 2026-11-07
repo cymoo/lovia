@@ -62,9 +62,12 @@ __all__ = ["extract_path_claims"]
 # that write their target, the plain input redirection, and heredoc/herestring
 # forms whose "target" is a delimiter or literal, not a path.
 _REDIRECT_WRITE = {">", ">>", "&>", "&>>", ">&", ">|"}
-_REDIRECT_READ = {"<"}
+_REDIRECT_READ = {"<", "<&"}
 _HEREDOC = {"<<", "<<-", "<<<"}
 _REDIRECTS = _REDIRECT_WRITE | _REDIRECT_READ | _HEREDOC
+# Only after these can a number be a file descriptor (`2>&1`, `<&0`);
+# `>123` writes a file called 123.
+_FD_DUP = {">&", "<&"}
 _PUNCTUATION = set("();<>|&")
 # A cmd.exe switch: one or two letters after a slash, optionally qualified
 # (``/a:d``). Longer slash-words (``/Users/neo``) are paths.
@@ -154,6 +157,7 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
     claims: list[tuple[FileOp, str]] = []
     pending: FileOp | None = None  # op of a redirect waiting for its target
     skip_next = False  # heredoc delimiter / herestring literal
+    fd_dup = False  # the pending redirect is `>&` / `<&`
     at_start = True  # the next word is a segment's command word
 
     for i, token in enumerate(tokens):
@@ -168,15 +172,17 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
                 pending = "read"
             else:
                 at_start = True  # ; | || & && ( — a new segment starts
+            fd_dup = token in _FD_DUP
             continue
         if skip_next:
             skip_next = False
             continue
         if pending is not None:
             op, pending = pending, None
-            # `2>&1` tokenizes as `2`, `>&`, `1`: a pure-digit (or `-`)
-            # target is an fd duplication, not a file.
-            if not (token.isdigit() or token == "-" or _is_pseudo_device(token)):
+            # `2>&1` tokenizes as `2`, `>&`, `1`: after `>&` / `<&` a digit
+            # (or `-`) is a descriptor, not a file; after `>` it is a file.
+            dup = fd_dup and (token.isdigit() or token == "-")
+            if not (dup or _is_pseudo_device(token)):
                 claims.append((op, token))
             continue
         if token.isdigit() and i + 1 < len(tokens) and tokens[i + 1] in _REDIRECTS:

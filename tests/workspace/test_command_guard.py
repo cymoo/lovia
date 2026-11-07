@@ -18,6 +18,11 @@ def test_input_redirect_is_a_read_claim() -> None:
 def test_fd_duplications_are_not_claims() -> None:
     assert extract_path_claims("git status 2>&1") == [("read", "status")]
     assert extract_path_claims("echo hi >&2") == [("read", "hi")]
+    assert extract_path_claims("cmd <&0") == []
+    # ...but `>123` writes a file called 123 (which may be a symlink to
+    # anything): only after `>&` / `<&` is a number a descriptor.
+    assert extract_path_claims("echo x >123") == [("read", "x"), ("write", "123")]
+    assert extract_path_claims("echo x > 123") == [("read", "x"), ("write", "123")]
 
 
 def test_pseudo_devices_are_not_claims() -> None:

@@ -363,6 +363,23 @@ def test_coding_preset_composes_the_bundles_after_user_rules() -> None:
     )
 
 
+def test_env_files_rule_gates_reads_only() -> None:
+    # The preset rule is about reading secrets; writes keep following the
+    # mode, so it must not lift readonly's deny (or coding's outside deny)
+    # to an ask that a direct session call would then let through.
+    ro = WorkspacePolicy.readonly()
+    assert ro.decide_path(rel=".env", abs_posix="/ws/.env", op="write").action == "deny"
+    assert ro.decide_path(rel=".env", abs_posix="/ws/.env", op="read").action == "ask"
+    coding = WorkspacePolicy.coding()
+    assert (
+        coding.decide_path(rel=None, abs_posix="/srv/app/.env", op="write").action
+        == "deny"
+    )
+    assert coding.decide_path(rel=".env", abs_posix="/ws/.env", op="write").action == (
+        "allow"
+    )
+
+
 def test_trusted_preset_interrupts_only_for_the_baseline() -> None:
     policy = WorkspacePolicy.trusted()
     assert policy.decide_command("git push origin main").action == "allow"

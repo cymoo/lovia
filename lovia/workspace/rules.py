@@ -216,9 +216,16 @@ DEFAULT_BASELINE: tuple[PathRule | CommandRule, ...] = (
 """What ``WorkspacePolicy.baseline`` holds unless told otherwise."""
 
 ENV_FILES: tuple[PathRule, ...] = (
-    PathRule(".env*", "ask", reason="Environment files usually hold secrets."),
+    PathRule(
+        ".env*",
+        "ask",
+        ops=frozenset({"read"}),
+        reason="Environment files usually hold secrets.",
+    ),
 )
-"""Preset-level, not baseline: a one-line ``path_rules=`` override lifts it."""
+"""Preset-level, not baseline: a one-line ``path_rules=`` override lifts it.
+Reads only — writes keep following the mode (``readonly`` still denies them,
+``coding`` still denies them outside the root)."""
 
 __all__ = [
     "CREDENTIAL_PATHS",

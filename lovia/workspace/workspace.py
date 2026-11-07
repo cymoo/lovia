@@ -338,9 +338,19 @@ def _describe_rules(policy: WorkspacePolicy) -> list[str]:
             f"Writes to {', '.join(repr(p) for p in guarded_writes)} ask the "
             "user first: they change how tools behave."
         )
-    asked_reads = [
-        r.pattern for r in policy.path_rules if r.action == "ask" and "read" in r.ops
-    ]
+    # First match wins, so a rule only counts if no earlier rule for the same
+    # pattern (or ``denied_paths`` entry) already covers reads — the
+    # documented ``PathRule(".env*", "allow")`` override must silence the
+    # sentence. Overlapping-but-different patterns can't be settled
+    # statically; identical patterns are the override idiom.
+    asked_reads: list[str] = []
+    seen: set[str] = set(policy.denied_paths)
+    for r in policy.path_rules:
+        if "read" not in r.ops:
+            continue
+        if r.action == "ask" and r.pattern not in seen:
+            asked_reads.append(r.pattern)
+        seen.add(r.pattern)
     if asked_reads:
         lines.append(
             f"Files matching {', '.join(repr(p) for p in asked_reads)} ask the "

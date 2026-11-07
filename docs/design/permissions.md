@@ -200,7 +200,7 @@ Workspace.local(root, baseline=DANGEROUS_COMMANDS + PROTECTED_CONFIG)   # 这个
 
 注意最后一行摘掉的是**整组** `CREDENTIAL_PATHS`（`~/.aws`、`*.pem` 一起放开），不是只放开 `~/.ssh/config`；只想开一个路径就自己拼：`baseline=DANGEROUS_COMMANDS + PROTECTED_CONFIG + tuple(r for r in CREDENTIAL_PATHS if r.pattern != "~/.ssh")`，再用 `readable=("~/.ssh/config",)` 给到想要的那一个。`Workspace.local` 现在没有 `baseline=` 和 `shell_default=` 参数，两个都是本方案新增的（见“破坏性变更”）。
 
-`.env*` **不在 baseline 里**。它是“通常有密钥”的提示，不是 `~/.ssh` 那种凭据库，用户让 agent 配环境变量、排查启动失败时读 `.env` 再正常不过。所以它放在**预设层**的 `path_rules`（`PathRule(".env*", "ask", reason="Environment files usually hold secrets.")`），三种放开方式都是一行：
+`.env*` **不在 baseline 里**。它是“通常有密钥”的提示，不是 `~/.ssh` 那种凭据库，用户让 agent 配环境变量、排查启动失败时读 `.env` 再正常不过。所以它放在**预设层**的 `path_rules`（`PathRule(".env*", "ask", ops={"read"}, reason="Environment files usually hold secrets.")`——只管读；写仍跟随模式，否则 `readonly` 的写拒绝会被它降成 ask），三种放开方式都是一行：
 
 | 谁 | 怎么做 |
 |---|---|

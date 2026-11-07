@@ -802,6 +802,24 @@ async def test_workspace_instructions_layout_needs_writes(tmp_path) -> None:
     assert "'tmp/'" not in readonly
 
 
+async def test_workspace_instructions_follow_the_effective_rules(tmp_path) -> None:
+    # Derived from the policy: the baseline's protections are stated, and an
+    # override that lifts the preset's .env rule removes its sentence instead
+    # of leaving a claim the policy no longer enforces.
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "Credential stores" in text and "'~/.ssh'" in text
+    assert "Writes to '.git'" in text
+    assert "'.env*' ask the user before being read" in text
+
+    lifted = Workspace.local(
+        str(tmp_path), mode="coding", path_rules=(PathRule(".env*", "allow"),)
+    ).instructions()
+    assert ".env*" not in lifted
+
+    bare = Workspace.local(str(tmp_path), mode="coding", baseline=()).instructions()
+    assert "Credential stores" not in bare and "Writes to '.git'" not in bare
+
+
 async def test_workspace_instructions_layout_follows_root_kind(tmp_path) -> None:
     # Non-repo roots get the generic placement rule; a .git entry — a dir, or
     # a *file* as in worktrees — switches to the repo's own conventions.

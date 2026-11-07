@@ -277,7 +277,8 @@ _THIN_WRAPPERS = frozenset({"env", "nice", "nohup", "time", "call"})
 # * a glob, variable or substitution — the shell turns it into paths the
 #   guard never sees (``cat *`` reads ``id_rsa``; ``cat $F``; ``$(…)``).
 _OUTPUT_LIKE = ("--out", "--log-file", "--junit")
-_EXPANSION_CHARS = frozenset("*?[{$`")
+# cmd.exe expands `%VAR%` and strips the `^` escape (`type .e^nv` is `.env`).
+_EXPANSION_CHARS = frozenset("*?[{$`" + ("%^" if os.name == "nt" else ""))
 
 
 def _uncertain_argument(words: list[str]) -> str | None:

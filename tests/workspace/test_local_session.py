@@ -504,24 +504,27 @@ async def test_listing_an_approved_outside_directory_shows_its_entries(
 
 
 async def test_allowed_commands_still_meet_the_path_rules(tmp_path) -> None:
-    # `cat` and `sort` run without a prompt under coding, so the guard must
-    # hold the baseline for them: a credential named bare, and a protected
-    # config written through an output option.
+    # The guard holds the baseline for the commands coding runs unprompted:
+    # a credential named bare is denied even for a name-only command, a
+    # protected config named by an output option asks, and content readers
+    # (`cat`) ask on their own — read_file is the reader.
     (tmp_path / "id_rsa").write_text("secret", encoding="utf-8")
     session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    assert session.decide_command("ls -l id_rsa").action == "deny"
     assert session.decide_command("cat id_rsa").action == "deny"
-    assert session.decide_command("cat README").action == "allow"
+    assert session.decide_command("ls -la").action == "allow"
+    assert session.decide_command("cat README").action == "ask"
     # Every spelling of "write through an option" stops at the session too.
     for cmd in (
-        "sort -o .git/config in.txt",
-        "sort '-o.git/config' in.txt",
-        "sort -ro .git/config in.txt",
-        "sort in#1 -o .git/config",
+        "tree -o .git/config .",
+        "tree '-o.git/config' .",
+        "ls -lo .git/config",
+        "tree in#1 -o .git/config",
         "git diff --output=.git/config",
         # Reads the guard cannot see: a tree walked by the tool, a glob.
         "grep -R TOKEN .",
-        "cat *",
-        "head id_rs?",
+        "git diff --no-index . /tmp",
+        "ls *",
     ):
         assert session.decide_command(cmd).action == "ask", cmd
     assert session.decide_command("git diff --stat").action == "allow"
@@ -1601,9 +1604,9 @@ async def test_shell_outside_read_claims_escalate_to_ask(tmp_path) -> None:
     assert session.decide_command("cat /etc/hosts").action == "allow"
     coding = await _session(tmp_path, policy=WorkspacePolicy.coding())
     # coding asks for outside reads; the shell tool routes this to approval.
-    # ``cat`` itself is on the read-only allow list, so the outside read is
+    # ``ls`` itself is on the read-only allow list, so the outside read is
     # the one condition: its reason and directory scope ride along.
-    verdict = coding.decide_command("cat /etc/hosts")
+    verdict = coding.decide_command("ls /etc/hosts")
     etc = os.path.realpath("/etc")  # macOS: /private/etc
     assert verdict.action == "ask" and verdict.scope == f"read:{etc}"
     assert "outside the workspace root" in verdict.reason

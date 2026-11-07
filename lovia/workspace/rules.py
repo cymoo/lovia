@@ -28,14 +28,26 @@ from .policy import CommandRule, PathRule
 _NT = os.name == "nt"
 
 # ---------------------------------------------------------------------------
-# Green: read-only inspection, and the dev tools a coding agent lives in.
+# Green: inspection that prints no file contents, and the dev tools a coding
+# agent lives in.
+#
+# The line is "prints no file contents", not "reads nothing": the path guard
+# is lexical, and every content reader has its own way to reach a file it
+# never names on the command line (`grep -r`, `sort --files0-from`, `file
+# -f`, `git diff --no-index`, a glob) — a list of those is only ever one
+# program short. Names, sizes, times and exit codes (`ls`, `du`, `stat`,
+# `test`, `git status`) leak nothing the baseline guards; reading contents is
+# `read_file`, which judges the file it opens, or a command the user is
+# asked about. Git's own commands print *tracked* content (`git show`,
+# `git log -p`): a secret committed to the repository is reachable through
+# any git command and is repository hygiene, not the baseline's hand.
 # ---------------------------------------------------------------------------
 
 READ_ONLY_COMMON: tuple[CommandRule, ...] = tuple(
     CommandRule(p, "allow")
     for p in (
         "git status",
-        "git diff",
+        "git diff",  # `--no-index` reads arbitrary files: asked (IRREVERSIBLE_COMMON)
         "git log",
         "git show",
         "git blame",
@@ -44,20 +56,10 @@ READ_ONLY_COMMON: tuple[CommandRule, ...] = tuple(
     )
 )
 
-# Only commands that read the *files they are given*: an allow rule is
-# vouched for by the path guard judging each literal argument, and a tool
-# that reads a tree on its own (`grep -r`, `rg`, `diff -r`, `findstr /s`)
-# reaches `.env` and `id_rsa` without ever naming them. Those stay gray; the
-# built-in `grep_files` is the searcher that judges every file it opens.
-# Listing names (`ls -R`, `tree`, `du`) is fine: names are not content.
 READ_ONLY_POSIX: tuple[CommandRule, ...] = tuple(
     CommandRule(p, "allow")
     for p in (
         "ls",
-        "cat",
-        "head",
-        "tail",
-        "wc",
         "pwd",
         "echo",
         "which",
@@ -68,21 +70,18 @@ READ_ONLY_POSIX: tuple[CommandRule, ...] = tuple(
         "sleep",
         "test",
         "tree",
-        "sort",  # `sort -o x` is capped at ask by the policy; uniq's positional output isn't visible, so it stays gray
-        "cut",
-        "file",
     )
 )
 
 READ_ONLY_CMD: tuple[CommandRule, ...] = tuple(
-    CommandRule(p, "allow")
-    for p in ("dir", "type", "where", "echo", "cd", "tree", "fc", "more")
+    CommandRule(p, "allow") for p in ("dir", "where", "echo", "cd", "tree")
 )
 
 READ_ONLY: tuple[CommandRule, ...] = READ_ONLY_COMMON + (
     READ_ONLY_CMD if _NT else READ_ONLY_POSIX
 )
-"""Inspection commands that change nothing: allowed in ``coding``."""
+"""Inspection commands that change nothing and print no file contents:
+allowed in ``coding``. ``cat`` & co. are gray — ``read_file`` is the reader."""
 
 DEV_TOOLS: tuple[CommandRule, ...] = tuple(
     CommandRule(p, "allow")
@@ -111,6 +110,14 @@ project's own code — see the module docstring."""
 # ---------------------------------------------------------------------------
 
 IRREVERSIBLE_COMMON: tuple[CommandRule, ...] = (
+    # Not irreversible, but before READ_ONLY's `git diff` on purpose: with
+    # `--no-index` it diffs (prints) any two files or trees, tracked or not.
+    CommandRule(
+        "git diff",
+        "ask",
+        "Diffs arbitrary files outside the index.",
+        flags=("--no-index",),
+    ),
     CommandRule("git push", "ask", "Pushes commits to a remote."),
     CommandRule(
         "git reset", "ask", "Discards working-tree changes.", flags=("--hard",)

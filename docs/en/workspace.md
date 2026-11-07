@@ -62,11 +62,14 @@ or replace the whole thing with `policy=WorkspacePolicy(...)` (mutually
 exclusive with the shorthand knobs).
 
 The presets are built from the bundles in `lovia.workspace.rules`, which you
-can compose yourself: `READ_ONLY` (`ls`, `cat`, `head`, `git status`, … ;
-`dir`, `type`, … on Windows — commands that read the files they are given;
-tree-walking readers like `grep -r`, `rg` and `diff -r` stay gray, because
-they reach `.env` and `id_rsa` without naming them, and `grep_files` is the
-searcher that judges every file it opens), `DEV_TOOLS` (`pytest`, `ruff`, `mypy`, `npm test`,
+can compose yourself: `READ_ONLY` (`ls`, `du`, `stat`, `tree`, `git status`,
+`git log`, … ; `dir`, `where`, … on Windows — inspection that prints **no
+file contents**: every content reader has its own way to reach a file it
+never names, `grep -r`, `sort --files0-from`, `git diff --no-index`, a glob,
+so `cat` & co. stay gray and `read_file` / `grep_files`, which judge every
+file they open, are the readers; git's own commands print *tracked* content,
+and a secret committed to the repository is repository hygiene, not the
+baseline's hand), `DEV_TOOLS` (`pytest`, `ruff`, `mypy`, `npm test`,
 `cargo test`, …), `IRREVERSIBLE` (`git push`, `git reset --hard`, `rm -r`,
 `sudo`, `docker`, … — asked), and the baseline's `DANGEROUS_COMMANDS`,
 `CREDENTIAL_PATHS`, `PROTECTED_CONFIG`, `ENV_FILES`. Allowing `DEV_TOOLS` is

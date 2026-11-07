@@ -51,10 +51,11 @@ agent = Agent(
 “只拦危险的”姿态）、`baseline=`（用下面的规则包自己拼，或 `()` 关掉）细化预设；也可以用
 `policy=WorkspacePolicy(...)` 完全替换（与简写配置项互斥）。
 
-预设由 `lovia.workspace.rules` 里的规则包拼成，你也可以自己拼：`READ_ONLY`（`ls`、`cat`、`head`、
-`git status` 等；Windows 上是 `dir`、`type` 等——只收录“读给定文件”的命令；`grep -r`、`rg`、`diff -r`
-这类自己遍历目录树的读取工具留在灰区，因为它们不点名就能读到 `.env` 和 `id_rsa`，逐文件判定的搜索是
-内置的 `grep_files`）、`DEV_TOOLS`（`pytest`、`ruff`、`mypy`、`npm test`、
+预设由 `lovia.workspace.rules` 里的规则包拼成，你也可以自己拼：`READ_ONLY`（`ls`、`du`、`stat`、`tree`、
+`git status`、`git log` 等；Windows 上是 `dir`、`where` 等——只收录**不打印文件内容**的检查命令：每个
+内容读取器都有自己不点名就读到文件的办法，`grep -r`、`sort --files0-from`、`git diff --no-index`、通配符，
+所以 `cat` 之类留在灰区，逐文件判定的 `read_file` / `grep_files` 才是读取器；git 自己的命令打印的是*已跟踪*
+内容，提交进仓库的密钥是仓库卫生问题，不归底线管）、`DEV_TOOLS`（`pytest`、`ruff`、`mypy`、`npm test`、
 `cargo test` 等）、`IRREVERSIBLE`（`git push`、`git reset --hard`、`rm -r`、`sudo`、`docker` 等——要问），
 以及底线的 `DANGEROUS_COMMANDS`、`CREDENTIAL_PATHS`、`PROTECTED_CONFIG`、`ENV_FILES`。放行 `DEV_TOOLS`
 就是信任项目自己的代码在宿主上执行——这是 coding agent 的前提；这类工具的写入不经路径判定，底线管的

@@ -64,6 +64,7 @@ __all__ = ["extract_path_claims"]
 _REDIRECT_WRITE = {">", ">>", "&>", "&>>", ">&", ">|"}
 _REDIRECT_READ = {"<"}
 _HEREDOC = {"<<", "<<-", "<<<"}
+_REDIRECTS = _REDIRECT_WRITE | _REDIRECT_READ | _HEREDOC
 _PUNCTUATION = set("();<>|&")
 # A cmd.exe switch: one or two letters after a slash, optionally qualified
 # (``/a:d``). Longer slash-words (``/Users/neo``) are paths.
@@ -155,7 +156,7 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
     skip_next = False  # heredoc delimiter / herestring literal
     at_start = True  # the next word is a segment's command word
 
-    for token in tokens:
+    for i, token in enumerate(tokens):
         if _is_operator(token):
             pending = None
             skip_next = False
@@ -178,8 +179,8 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
             if not (token.isdigit() or token == "-" or _is_pseudo_device(token)):
                 claims.append((op, token))
             continue
-        if token.isdigit():
-            continue  # an fd number (`2>&1`) or a count (`head -n 5`), never a file
+        if token.isdigit() and i + 1 < len(tokens) and tokens[i + 1] in _REDIRECTS:
+            continue  # the fd of a redirection (`2>&1`, `1> out`), not a file
         at_command = at_start
         # A leading `VAR=value` keeps the command position for the next word;
         # like the command word it is a claim only when its value is rooted.

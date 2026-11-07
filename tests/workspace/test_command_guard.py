@@ -82,7 +82,11 @@ def test_bare_arguments_are_claims_but_command_words_are_not() -> None:
     assert extract_path_claims("ls | sort -r") == []
     assert extract_path_claims("FOO=1 cat id_rsa") == [("read", "id_rsa")]
     # fd numbers and counts are never files.
-    assert extract_path_claims("head -n 5 file") == [("read", "file")]
+    # Only the fd of a redirection is skipped as a number; `cat 123` names a
+    # file (a denied one, or a symlink to one, must still be judged).
+    assert extract_path_claims("head -n 5 file") == [("read", "5"), ("read", "file")]
+    assert extract_path_claims("cat 123") == [("read", "123")]
+    assert extract_path_claims("cmd 1> out") == [("write", "out")]
 
 
 def test_hash_inside_a_word_is_not_a_comment() -> None:

@@ -285,14 +285,13 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
     # policy never allows a segment that names one — whatever the spelling.
     policy = WorkspacePolicy.coding()
     for cmd in (
-        "sort -o .git/config in.txt",
-        "sort -o.git/config in.txt",
-        "sort '-o.git/config' in.txt",  # quoted: words as the shell sees them
-        "sort -ro .git/config in.txt",  # combined short options
-        "sort -r -o=.git/config in.txt",
+        "tree -o .git/config .",
+        "tree -o.git/config .",
+        "tree '-o.git/config' .",  # quoted: words as the shell sees them
+        "ls -lo .git/config",  # combined short options
+        "tree -a -o=.git/config",
         "git diff --output=.git/config",
         "git diff --output .git/config",
-        "tree -o out.txt .",
         "pytest --junitxml=r.xml",
         "ls -o",  # a false hit costs one question, never a bypass
     ):
@@ -301,23 +300,44 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
         assert "output option" in verdict.reason, cmd
     # Not an output option: `--oneline`, or anything after a bare `--`.
     assert policy.decide_command("git log --oneline").action == "allow"
-    assert policy.decide_command("cat README -- -o").action == "allow"
+    assert policy.decide_command("ls README -- -o").action == "allow"
     # A deny still bites through it.
     assert policy.decide_command("git push --force -o x").action == "deny"
     # Words as the shell sees them: a `#` inside a word is not a comment, so
     # the option after it is still seen.
-    assert policy.decide_command("sort input#tag -o .git/config").action == "ask"
-    assert policy.decide_command("cat a#b").action == "allow"
+    assert policy.decide_command("tree input#tag -o .git/config").action == "ask"
+    assert policy.decide_command("ls a#b").action == "allow"
 
 
 def test_globs_variables_and_substitutions_cap_allowed_commands_at_ask() -> None:
     # The guard judges literal paths; what the shell expands it never sees
-    # (`cat *` reads id_rsa), so an allow rule covers literal arguments only.
+    # (`ls *` lists, but `cat *` would read id_rsa), so an allow rule covers
+    # literal arguments only.
     policy = WorkspacePolicy.coding()
-    for cmd in ("cat *", "cat -- *", "head *.pem", "cat $F", "cat $(ls)", "cat ~/x[1]"):
+    for cmd in ("ls *", "ls -- *", "du *.pem", "echo $F", "ls $(ls)", "ls ~/x[1]"):
         verdict = policy.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scope is None, cmd
         assert "expanded by the shell" in verdict.reason, cmd
+
+
+def test_content_readers_are_gray_and_no_index_asks() -> None:
+    # Every content reader has a way to reach a file it never names
+    # (`sort --files0-from`, `git diff --no-index`, a glob), so none is
+    # allowed outright: read_file is the reader. Names and sizes are fine.
+    policy = WorkspacePolicy.coding()
+    for cmd in (
+        "cat README",
+        "head -n 5 x",
+        "sort x",
+        "wc -l x",
+        "cut -f1 x",
+        "file x",
+    ):
+        assert policy.decide_command(cmd).action == "ask", cmd
+    for cmd in ("ls -la", "du -sh .", "stat x", "tree", "git log -p", "git show HEAD"):
+        assert policy.decide_command(cmd).action == "allow", cmd
+    assert policy.decide_command("git diff --no-index a b").action == "ask"
+    assert policy.decide_command("git diff --stat").action == "allow"
     assert policy.decide_command('ls "my file"').action == "allow"
     assert policy.decide_command("git log --format=%H").action == "allow"
 

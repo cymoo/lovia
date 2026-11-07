@@ -46,6 +46,15 @@ class Verdict:
     reason: str = ""
     scope: str | None = None
 
+    def __post_init__(self) -> None:
+        # A dataclass does not enforce the Literal: an unchecked
+        # ``Verdict("DENY")`` would match neither the ask nor the deny branch
+        # downstream and run the tool. Refuse at construction instead.
+        if self.action not in _SEVERITY:
+            raise ValueError(
+                f"Verdict.action must be 'allow', 'ask' or 'deny', got {self.action!r}"
+            )
+
 
 def as_verdict(value: object) -> Verdict:
     """Normalize a permission result: a :data:`Decision` literal or a :class:`Verdict`.

@@ -124,6 +124,32 @@ def test_as_verdict_accepts_literals_and_verdicts_only() -> None:
         as_verdict("maybe")
 
 
+def test_verdict_rejects_an_invalid_action_at_construction() -> None:
+    # The dataclass would otherwise accept "DENY" and preflight, matching
+    # neither ask nor deny, would run the tool.
+    with pytest.raises(ValueError):
+        Verdict("DENY")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        Verdict(False)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_predicate_building_an_invalid_verdict_fails_closed() -> None:
+    executed: list[int] = []
+
+    @tool(permission=lambda _a, _c: Verdict("DENY"))  # type: ignore[arg-type]
+    async def guarded() -> str:
+        executed.append(1)
+        return "ran"
+
+    provider = ScriptedProvider([call("guarded", {}, call_id="g1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[guarded])
+    result = await Runner.run(agent, "go")
+    assert executed == []
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert "permission check failed" in tool_msg.content
+
+
 def test_merge_verdicts_keeps_scope_only_for_a_sole_ask() -> None:
     assert merge_verdicts(Verdict("allow"), Verdict("ask", "a", "x")).scope == "x"
     assert (

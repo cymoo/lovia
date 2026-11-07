@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from .. import events
-from ..approvals import Approval
 from ..checkpointer import CheckpointOptions
 from ..log_config import CURRENT_AGENT
 from ..messages import Message, Usage
@@ -430,28 +429,36 @@ class RunController:
             if self.deps.approval_timeout is None
             else f"auto-deny after {self.deps.approval_timeout:.0f}s",
         )
-        decision = asyncio.ensure_future(
-            self.deps.approvals.await_decision(self.session_id, ev)
-        )
+        # ``await_decision`` registers the pending future in its first step,
+        # before it yields — so awaiting the coroutine directly leaves no
+        # window in which a concurrent ``cancel_run()`` → ``deny_pending()``
+        # could run before registration and miss it (a task spawned via
+        # ensure_future would open exactly that window). The timeout is a
+        # timer that *resolves* the pending approval with its own reason,
+        # rather than cancelling the awaiter, so the model is told "timed
+        # out" and not the cancellation path's "run was cancelled".
+        decision = self.deps.approvals.await_decision(self.session_id, ev)
         if self.deps.approval_timeout is None:
             await decision
             return
-        done, _ = await asyncio.wait({decision}, timeout=self.deps.approval_timeout)
-        if not done:
-            # Resolve (deny) rather than cancel the awaiter, so the model is
-            # told *why* — "timed out", not the cancellation path's "run was
-            # cancelled". The runner unblocks with the rejection; the run
-            # continues.
-            log.info(
-                "approval %s for session %s timed out after %.0fs: denied",
-                ev.call.id,
-                self.session_id,
-                self.deps.approval_timeout,
-            )
-            await self.deps.approvals.resolve(
-                self.session_id, ev.call.id, Approval(False, "approval timed out")
-            )
-        await decision
+        timer = asyncio.get_running_loop().call_later(
+            self.deps.approval_timeout, self._deny_timed_out, ev.call.id
+        )
+        try:
+            await decision
+        finally:
+            timer.cancel()
+
+    def _deny_timed_out(self, call_id: str) -> None:
+        # Preflight is serial, so the session has at most one pending approval:
+        # the registry's per-session deny is exactly this call.
+        log.info(
+            "approval %s for session %s timed out after %.0fs: denied",
+            call_id,
+            self.session_id,
+            self.deps.approval_timeout or 0,
+        )
+        self.deps.approvals.deny_pending(self.session_id, reason="approval timed out")
 
     async def _persist_partial(self, run_id: str, started_at: float | None) -> None:
         """Fold this run's completed turns into the durable Session.

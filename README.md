@@ -408,11 +408,17 @@ agent = Agent(
     workspace=Workspace.local(
         ".",
         mode="coding",
-        denied_paths=(".env*",),
-        command_rules=(CommandRule("pytest", "allow"), CommandRule("rm -rf", "deny")),
+        command_rules=(CommandRule("make test", "allow"), CommandRule("gh", "ask")),
     ),
 )
 ```
+
+`coding` already runs inspection and dev-tool commands (`ls`, `git status`,
+`pytest`, `ruff`, …) without asking, asks for the irreversible (`git push`,
+`rm -r`, `sudo`, …), and under every mode a baseline denies the dangerous
+(`git push --force`, `rm -rf /`), keeps credential stores off-limits and asks
+before writing `.git` or CI configuration — compose your own from
+`lovia.workspace.rules`.
 
 Shell commands inherit a minimal environment, including Windows system,
 shell, temporary-directory, and user-profile variables so sockets and home

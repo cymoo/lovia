@@ -105,6 +105,19 @@ def test_claims_found_inside_substitutions() -> None:
     assert ("read", "/etc/passwd") in claims
 
 
+def test_cmd_switches_are_not_path_claims(monkeypatch) -> None:
+    # ``dir /b``: on Windows a slash-letter word is a switch, not a path at
+    # the drive root (which would resolve outside the root and ask).
+    from lovia.workspace import command_guard
+
+    monkeypatch.setattr(command_guard.os, "name", "nt")
+    assert extract_path_claims("dir /b") == []
+    assert extract_path_claims("dir /a:d /s") == []
+    assert ("read", "/Users/neo") in extract_path_claims("dir /Users/neo")
+    monkeypatch.setattr(command_guard.os, "name", "posix")
+    assert ("read", "/b") in extract_path_claims("ls /b")
+
+
 def test_relative_false_positives_are_harmless_by_construction() -> None:
     # sed expressions look like paths; they resolve inside the root where
     # reads are always allowed, so claiming them cannot escalate a decision.

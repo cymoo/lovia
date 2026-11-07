@@ -254,6 +254,7 @@ class LocalWorkspace:
                 f"Paths matching {denied} are off-limits: file tools refuse "
                 "them, and shell commands that name them are refused too."
             )
+        lines.extend(_describe_rules(policy))
         if policy.allow_shell:
             if policy.shell_default == "allow":
                 lines.append(
@@ -313,6 +314,41 @@ class LocalWorkspace:
         return "\n".join(lines)
 
 
+def _describe_rules(policy: WorkspacePolicy) -> list[str]:
+    """What the baseline and the preset's path rules refuse or ask about —
+    derived, so the prompt never claims a protection the policy lacks."""
+    lines: list[str] = []
+    off_limits = [
+        r.pattern
+        for r in policy.baseline or ()
+        if isinstance(r, PathRule) and r.action == "deny"
+    ]
+    if off_limits:
+        lines.append(
+            f"Credential stores ({', '.join(repr(p) for p in off_limits)}) are "
+            "off-limits to every tool and command."
+        )
+    guarded_writes = [
+        r.pattern
+        for r in policy.baseline or ()
+        if isinstance(r, PathRule) and r.action == "ask" and "write" in r.ops
+    ]
+    if guarded_writes:
+        lines.append(
+            f"Writes to {', '.join(repr(p) for p in guarded_writes)} ask the "
+            "user first: they change how tools behave."
+        )
+    asked_reads = [
+        r.pattern for r in policy.path_rules if r.action == "ask" and "read" in r.ops
+    ]
+    if asked_reads:
+        lines.append(
+            f"Files matching {', '.join(repr(p) for p in asked_reads)} ask the "
+            "user before being read, and bulk listing and search skip them."
+        )
+    return lines
+
+
 def _describe_outside_access(read: Decision, write: Decision) -> str:
     """One honest sentence about access beyond the workspace root."""
     if read == "deny" and write == "deny":
@@ -358,6 +394,8 @@ class Workspace:
         denied_paths: tuple[str, ...] = (),
         path_rules: tuple[PathRule, ...] = (),
         command_rules: tuple[CommandRule, ...] = (),
+        baseline: tuple[PathRule | CommandRule, ...] | None = None,
+        shell_default: Decision | None = None,
         env: Mapping[str, str] | None = None,
         shell_timeout: float | None = 300.0,
         inherit_env: bool = False,
@@ -371,9 +409,19 @@ class Workspace:
         * ``readable=`` / ``writable=`` — grant access to paths *outside* the
           root (absolute or ``~`` patterns; ``writable`` implies readable),
           e.g. ``readable=("~/docs",)`` for a reference folder.
-        * ``denied_paths=`` — patterns no tool may touch (``".env*"``, ...).
-        * ``path_rules=`` — full ACL control when the shorthands don't fit.
-        * ``command_rules=`` — shell prefix rules (allow/ask/deny).
+        * ``denied_paths=`` — patterns no tool may touch (``"secrets/**"``, ...).
+        * ``path_rules=`` — full ACL control when the shorthands don't fit;
+          yours come before the preset's (``.env*`` asks by default — a
+          ``PathRule(".env*", "allow")`` here lifts that).
+        * ``command_rules=`` — shell prefix rules (allow/ask/deny), before the
+          preset's bundles (see :mod:`lovia.workspace.rules`).
+        * ``shell_default=`` — what a command no rule names gets: ``coding``
+          asks, ``trusted`` allows; ``"allow"`` on ``coding`` is the
+          "only the dangerous is stopped" posture.
+        * ``baseline=`` — the rules in force whatever else is configured
+          (dangerous commands denied, credential stores denied, writes to
+          ``.git``-like configuration asked). They only ever tighten; compose
+          your own from the bundles to drop a group, ``()`` turns them off.
 
         Pass an explicit ``policy`` to take full control instead of using a
         preset (mutually exclusive with the rule shorthands above).
@@ -398,32 +446,43 @@ class Workspace:
         """
         rules = _combine_rules(path_rules, readable=readable, writable=writable)
         if policy is not None:
-            if denied_paths or command_rules or rules:
+            if (
+                denied_paths
+                or command_rules
+                or rules
+                or baseline is not None
+                or shell_default is not None
+            ):
                 raise UserError(
                     "Pass either policy= or rule shorthands "
-                    "(readable/writable/denied_paths/path_rules/command_rules), "
-                    "not both.",
+                    "(readable/writable/denied_paths/path_rules/command_rules/"
+                    "baseline/shell_default), not both.",
                     hint="Put the rules inside your WorkspacePolicy.",
                 )
         elif mode == "readonly":
-            if command_rules:
+            if command_rules or shell_default is not None:
                 raise UserError(
-                    "mode='readonly' has no shell; command_rules are unused."
+                    "mode='readonly' has no shell; command_rules and "
+                    "shell_default are unused."
                 )
             policy = WorkspacePolicy.readonly(
-                denied_paths=denied_paths, path_rules=rules
+                denied_paths=denied_paths, path_rules=rules, baseline=baseline
             )
         elif mode == "coding":
             policy = WorkspacePolicy.coding(
                 denied_paths=denied_paths,
                 path_rules=rules,
                 command_rules=command_rules,
+                baseline=baseline,
+                shell_default=shell_default or "ask",
             )
         elif mode == "trusted":
             policy = WorkspacePolicy.trusted(
                 denied_paths=denied_paths,
                 path_rules=rules,
                 command_rules=command_rules,
+                baseline=baseline,
+                shell_default=shell_default or "allow",
             )
         else:
             raise UserError(f"Unknown workspace mode: {mode!r}")

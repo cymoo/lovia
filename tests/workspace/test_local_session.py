@@ -455,6 +455,50 @@ async def test_grep_reports_nested_relative_paths(tmp_path) -> None:
     assert [m.path for m in await session.grep("needle")] == ["a/b/deep.txt"]
 
 
+async def test_bulk_walks_skip_ask_gated_files(tmp_path) -> None:
+    # A rule's ``ask`` cannot be answered mid-walk, so list / glob / grep leave
+    # the entry out — hidden or not, nested or not, through a symlink or not —
+    # while reading the file by name still asks.
+    (tmp_path / ".env").write_text("TOKEN=synthetic\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / ".env.local").write_text("TOKEN=nested\n", encoding="utf-8")
+    (tmp_path / "ok.txt").write_text("TOKEN=visible\n", encoding="utf-8")
+    (tmp_path / "alias.txt").symlink_to(tmp_path / ".env")
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    assert session.decide_path(".env").action == "ask"
+    assert {m.path for m in await session.grep("TOKEN", include_hidden=True)} == {
+        "ok.txt"
+    }
+    listed = {e.path for e in await session.list_files(".", include_hidden=True)}
+    assert ".env" not in listed and "alias.txt" not in listed and "ok.txt" in listed
+    globbed = {e.path for e in await session.list_files(".", pattern="**/.env*")}
+    assert globbed == set()
+
+
+async def test_listing_an_approved_outside_directory_shows_its_entries(
+    tmp_path,
+) -> None:
+    # The outside directory itself was the approved subject: its entries are
+    # covered by that approval (the same default ask), but a rule-gated file
+    # inside it is still skipped.
+    outside = tmp_path.parent / "shared_dir"
+    outside.mkdir(exist_ok=True)
+    (outside / "notes.txt").write_text("needle\n", encoding="utf-8")
+    (outside / ".env").write_text("needle\n", encoding="utf-8")
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    assert session.decide_path(str(outside)).action == "ask"  # the tool asks once
+    names = {
+        e.path.rsplit("/", 1)[-1]
+        for e in await session.list_files(str(outside), include_hidden=True)
+    }
+    assert "notes.txt" in names and ".env" not in names
+    found = {
+        m.path.rsplit("/", 1)[-1]
+        for m in await session.grep("needle", path=str(outside), include_hidden=True)
+    }
+    assert found == {"notes.txt"}
+
+
 async def test_grep_skips_denied_directories(tmp_path) -> None:
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets" / "k.txt").write_text("needle\n", encoding="utf-8")
@@ -1477,11 +1521,11 @@ async def test_shell_outside_read_claims_escalate_to_ask(tmp_path) -> None:
     assert session.decide_command("cat /etc/hosts").action == "allow"
     coding = await _session(tmp_path, policy=WorkspacePolicy.coding())
     # coding asks for outside reads; the shell tool routes this to approval.
-    # Two conditions ask here (gray command + outside read), so both reasons
-    # are reported and no single grant scope is offered.
+    # ``cat`` itself is on the read-only allow list, so the outside read is
+    # the one condition: its reason and directory scope ride along.
     verdict = coding.decide_command("cat /etc/hosts")
-    assert verdict.action == "ask" and verdict.scope is None
-    assert "no workspace rule allows this command" in verdict.reason
+    etc = os.path.realpath("/etc")  # macOS: /private/etc
+    assert verdict.action == "ask" and verdict.scope == f"read:{etc}"
     assert "outside the workspace root" in verdict.reason
 
 

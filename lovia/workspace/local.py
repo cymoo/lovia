@@ -393,12 +393,29 @@ class LocalWorkspaceSession:
         except ValueError:
             return p.as_posix(), None
 
-    def _read_denied(self, p: Path) -> bool:
+    def _read_hidden(self, p: Path, *, under_outside: bool) -> bool:
+        """Whether a bulk walk (list / glob / grep) leaves ``p`` out.
+
+        Anything short of ``allow`` is skipped — ``ask`` cannot be resolved
+        mid-walk — with one exception: under an outside directory the walk
+        was pointed at (``under_outside``), the *default* outside-root ``ask``
+        is already answered, since the target itself was the operation's
+        subject and got through the approval gate. A rule's ``ask`` or
+        ``deny`` (``.env*``, a credential store) still hides the entry.
+        """
         _, rel = self._display_and_rel(p)
-        return (
-            self.policy.decide_path(rel=rel, abs_posix=p.as_posix(), op="read").action
-            == "deny"
-        )
+        abs_posix = p.as_posix()
+        verdict = self.policy.decide_path(rel=rel, abs_posix=abs_posix, op="read")
+        if verdict.action == "allow":
+            return False
+        if verdict.action == "deny":
+            return True
+        if under_outside and rel is None:
+            return self.policy.rule_bound(rel=rel, abs_posix=abs_posix, op="read")
+        return True
+
+    def _is_outside(self, p: Path) -> bool:
+        return self._display_and_rel(p)[1] is None
 
     async def _lock_for(self, rp: ResolvedPath) -> asyncio.Lock:
         key = str(rp.abs)
@@ -755,17 +772,23 @@ class LocalWorkspaceSession:
     ) -> ClippedList[DirEntry]:
         entries: list[DirEntry] = []
         truncated = False
+        under_outside = self._is_outside(base)
         with os.scandir(base) as it:
             for entry in it:
                 if not include_hidden and entry.name.startswith("."):
                     continue
                 p = base / entry.name
-                if self._read_denied(p):
+                if self._read_hidden(p, under_outside=under_outside):
                     continue
-                # A symlink is also judged by where it leads, so a link to a
-                # denied path is hidden just like the path itself would be.
+                # A symlink is also judged by where it leads: a link to a
+                # denied or rule-gated path (a credential store, ``.env``) is
+                # hidden just like the path itself would be. Listing shows a
+                # link's name and target, not its content, so a link merely
+                # escaping the root stays visible; reading it asks.
                 try:
-                    if entry.is_symlink() and self._read_denied(p.resolve()):
+                    if entry.is_symlink() and self._read_hidden(
+                        p.resolve(), under_outside=True
+                    ):
                         continue
                 except OSError:
                     pass
@@ -792,6 +815,7 @@ class LocalWorkspaceSession:
             )
         results: dict[str, DirEntry] = {}
         truncated = False
+        under_outside = self._is_outside(base)
         for p in base.glob(pattern):
             display, _ = self._display_and_rel(p)
             # Hidden filtering is relative to the *listed* directory: listing
@@ -809,7 +833,11 @@ class LocalWorkspaceSession:
                 resolved = p.resolve()
             except OSError:
                 continue
-            if self._read_denied(p) or (resolved != p and self._read_denied(resolved)):
+            # Symlink targets as in _list_children: hidden when denied or
+            # rule-gated, visible when merely outside.
+            if self._read_hidden(p, under_outside=under_outside) or (
+                resolved != p and self._read_hidden(resolved, under_outside=True)
+            ):
                 continue
             if display in results:
                 continue
@@ -863,26 +891,19 @@ class LocalWorkspaceSession:
                     continue
                 # The walk only descends real directories under the target
                 # (os.walk does not follow symlinked dirs), so only a
-                # symlinked *file* can lead elsewhere: its target is inside
-                # the already-permitted tree (fine), or it must be readable
-                # on its own — "ask" is not resolvable mid-walk, so anything
-                # short of "allow" is skipped rather than surfaced. A
+                # symlinked *file* can lead elsewhere — and grep *reads* it,
+                # so the target is judged on its own: anything short of
+                # "allow" is skipped ("ask" is not resolvable mid-walk), a
+                # link to a gated file inside the tree included. A
                 # single-file target was already gated as the operation's
                 # subject, so it is exempt from this re-check.
                 try:
-                    if not single_file and file_path.is_symlink():
-                        resolved = file_path.resolve()
-                        if not resolved.is_relative_to(base):
-                            _, res_rel = self._display_and_rel(resolved)
-                            if (
-                                self.policy.decide_path(
-                                    rel=res_rel,
-                                    abs_posix=resolved.as_posix(),
-                                    op="read",
-                                ).action
-                                != "allow"
-                            ):
-                                continue
+                    if (
+                        not single_file
+                        and file_path.is_symlink()
+                        and self._read_hidden(file_path.resolve(), under_outside=False)
+                    ):
+                        continue
                 except OSError as exc:
                     logger.debug("grep: resolve failed for %s (%s)", file_display, exc)
                     continue
@@ -924,22 +945,23 @@ class LocalWorkspaceSession:
         ``base``; a symlinked *file* is still listed, so grep re-checks each
         one before reading.
         """
+        under_outside = self._is_outside(base)
         for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
             dp = Path(dirpath)
             # In-place assignment (note the [:]) prunes os.walk's recursion:
-            # hidden/denied subdirs are never descended into; the rest are
+            # hidden/gated subdirs are never descended into; the rest are
             # walked in sorted order. Rebinding dirnames would not prune.
             dirnames[:] = sorted(
                 d
                 for d in dirnames
                 if (include_hidden or not d.startswith("."))
-                and not self._read_denied(dp / d)
+                and not self._read_hidden(dp / d, under_outside=under_outside)
             )
             for name in sorted(filenames):
                 if not include_hidden and name.startswith("."):
                     continue
                 p = dp / name
-                if self._read_denied(p):
+                if self._read_hidden(p, under_outside=under_outside):
                     continue
                 display, _ = self._display_and_rel(p)
                 yield display, p

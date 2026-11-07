@@ -43,6 +43,7 @@ implementing the same session protocol.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 
 from .policy import FileOp
@@ -56,6 +57,9 @@ _REDIRECT_WRITE = {">", ">>", "&>", "&>>", ">&", ">|"}
 _REDIRECT_READ = {"<"}
 _HEREDOC = {"<<", "<<-", "<<<"}
 _PUNCTUATION = set("();<>|&")
+# A cmd.exe switch: one or two letters after a slash, optionally qualified
+# (``/a:d``). Longer slash-words (``/Users/neo``) are paths.
+_CMD_SWITCH = re.compile(r"/[A-Za-z]{1,2}(:\S*)?")
 
 # Shell-plumbing pseudo-devices, not data access: `2>/dev/null` or
 # `< /dev/stdin` must never escalate a decision (under coding,
@@ -99,6 +103,10 @@ def _pathish(token: str) -> str | None:
         if not eq:
             return None
         token = rhs
+    elif os.name == "nt" and _CMD_SWITCH.fullmatch(token):
+        # ``dir /b``, ``del /s /q``, ``dir /a:d``: a cmd.exe switch, not a
+        # path at the drive root.
+        return None
     elif "=" in token:
         _, _, rhs = token.partition("=")
         if rhs.startswith(("/", "~", ".")) or os.path.isabs(rhs):

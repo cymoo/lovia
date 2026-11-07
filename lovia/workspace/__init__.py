@@ -33,6 +33,15 @@ from .policy import (
 # are kept out of ``__all__`` so the advertised surface is the handful of
 # types day-to-day users actually touch.
 from .protocol import ShellExecutor, WorkspaceLike, WorkspaceSession  # noqa: F401
+from .rules import (
+    CREDENTIAL_PATHS,
+    DANGEROUS_COMMANDS,
+    DEFAULT_BASELINE,
+    DEV_TOOLS,
+    IRREVERSIBLE,
+    PROTECTED_CONFIG,
+    READ_ONLY,
+)
 from .types import (
     CommandResult,
     DirEntry,
@@ -59,8 +68,12 @@ from .workspace import (  # noqa: F401
 )
 
 __all__ = [
+    "CREDENTIAL_PATHS",
     "CommandResult",
     "CommandRule",
+    "DANGEROUS_COMMANDS",
+    "DEFAULT_BASELINE",
+    "DEV_TOOLS",
     "Decision",
     "DirEntry",
     "EditResult",
@@ -70,10 +83,13 @@ __all__ = [
     "FileOp",
     "FileTooLargeError",
     "GrepMatch",
+    "IRREVERSIBLE",
     "LocalWorkspace",
     "LocalWorkspaceSession",
+    "PROTECTED_CONFIG",
     "PathRule",
     "PermissionDeniedError",
+    "READ_ONLY",
     "ProcessOutput",
     "ProcessStart",
     "ProcessStatus",

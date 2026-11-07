@@ -1,6 +1,6 @@
 # 权限机制重构：少问、问得值、拦住最危险的
 
-> 状态：v2.3 评审通过，PR 1（core：说清楚，v0.9.134）已合入；PR 2（web：记住批准，v0.9.135）已实现；PR 3 待做 · 2026-11-07 · 范围：core（`tools/base.py`、`approvals.py`、`events.py`、`runtime/tool_calls.py`）、`workspace/policy.py`、`lovia/web`（审批卡片、授权）
+> 状态：v2.3 评审通过，PR 1（core：说清楚，v0.9.134）与 PR 2（web：记住批准，v0.9.135）已合入；PR 3（workspace 默认值，v0.9.136）已实现 · 2026-11-07 · 范围：core（`tools/base.py`、`approvals.py`、`events.py`、`runtime/tool_calls.py`）、`workspace/policy.py`、`lovia/web`（审批卡片、授权）
 >
 > 参考：[kits 的 Agent 权限方案调研](https://github.com/cymoo/kits/blob/main/docs/references/agent-permissions.md)。它调研了 OpenCode / Claude Code / Codex / Cursor / Gemini CLI 的做法并做了实测，结论是“把问人从默认路径改成最后一道防线”。本文取其结论，按 lovia 的结构落地：lovia 不是 OpenCode 的宿主，权限判定就在自己的 preflight 里，没有内核可绕、没有事件竞态，所以方案比 kits 更直接。
 >

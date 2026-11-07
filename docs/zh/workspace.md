@@ -37,11 +37,24 @@ agent = Agent(
 | 模式 | 根目录内写入 | 根目录外读取 | 根目录外写入 | Shell |
 | --- | --- | --- | --- | --- |
 | `readonly` | deny | deny | deny | none |
-| `coding`（默认） | allow | **ask** | deny | **ask** |
+| `coding`（默认） | allow | **ask** | deny | 只读命令和开发工具直接跑，不可撤回的问，其余**问** |
 | `trusted` | allow | allow | **ask** | allow |
 
+每种模式之下都有一条**底线**（baseline）：危险命令拒绝（`git push --force`、`rm -rf /`、`mkfs` 等），
+凭据库禁止读写（`~/.ssh`、`~/.aws`、`*.pem` 等），写 `.git`、`.github/workflows`、`.vscode`、`.husky`、
+`.lovia` 每次都问。`.env*` 读取前会问（这是预设规则，不在底线里——`path_rules=(PathRule(".env*", "allow"),)`
+一行就能放开）。
+
 可以用 `readable=` / `writable=`（授权）、`denied_paths=`（硬阻断）、完整的 `path_rules=` /
-`command_rules=` 细化预设；也可以用 `policy=WorkspacePolicy(...)` 完全替换（与简写配置项互斥）。
+`command_rules=`（你的规则排在预设规则前面）、`shell_default=`（`coding` 下传 `"allow"` 就是
+“只拦危险的”姿态）、`baseline=`（用下面的规则包自己拼，或 `()` 关掉）细化预设；也可以用
+`policy=WorkspacePolicy(...)` 完全替换（与简写配置项互斥）。
+
+预设由 `lovia.workspace.rules` 里的规则包拼成，你也可以自己拼：`READ_ONLY`（`ls`、`cat`、
+`git status` 等；Windows 上是 `dir`、`type` 等）、`DEV_TOOLS`（`pytest`、`ruff`、`mypy`、`npm test`、
+`cargo test` 等）、`IRREVERSIBLE`（`git push`、`git reset --hard`、`rm -r`、`sudo`、`docker` 等——要问），
+以及底线的 `DANGEROUS_COMMANDS`、`CREDENTIAL_PATHS`、`PROTECTED_CONFIG`。放行 `DEV_TOOLS` 就是信任项目
+自己的代码在宿主上执行——这是 coding agent 的前提；底线管的是模型亲手写的命令，不是沙箱。
 
 ## ACL
 
@@ -60,8 +73,20 @@ ACL 有三个决策值，分别作用于两个执行环节：
 `denied_paths` 最先，然后第一条匹配的 path rule，最后是 mode 默认。
 
 **命令规则。** `CommandRule(pattern, action)` 按**词边界前缀**匹配：`"git push"` 会匹配
-`git push origin`，不会匹配 `git pushx`。复合命令会按 `&&`、`||`、`;`、`|`、`&` 拆段；
-每段分别判断，取**最严格**决策。
+`git push origin`，不会匹配 `git pushx`。`flags=` 列出的词必须*另外*出现在该段的任意位置——
+`CommandRule("git push", "deny", flags=("--force",))` 也能拦下 `git push origin main --force`；
+单字母的 `-f` 被 `-fu` 满足，更长的旗标要整词出现，裸 `--` 之后的词不算。复合命令会按
+`&&`、`||`、`;`、`|`、`&` 拆段；每段分别判断，取**最严格**决策。段首的 `VAR=value` 和薄包装
+（`env`、`nice`、`nohup`、`time`、`timeout N`）会先剥掉再匹配，但剥过的段永远不会被直接*放行*
+（`PATH=…` 会改变实际运行的程序）：allow 降为 ask，deny 照样生效（`env git push --force`）。
+
+**底线**（`WorkspacePolicy.baseline`）单独判定，再与上面所有规则取最严格者合并，所以用户规则、
+`command_decider` 或记住的授权都放松不了它。规则的 `reason` 就是审批卡片上显示的理由（拒绝时模型
+也会读到）；`grant=False` 让前缀过宽的规则（`sudo`、`ssh`）不提供“总是允许”。
+
+**批量遍历**（`list_files`、`grep_files`）会跳过任何非 `allow` 的条目——`ask` 没法在遍历中回答——
+所以 `.env` 永远不会出现在搜索结果里；点名读取它会问。列出一个你批准过的*根目录外*目录时能看到
+其中的条目（那次批准覆盖了整棵子树），但其中被规则门禁的文件仍会跳过。
 
 **符号链接不作特殊处理**：每个路径都会先完成解析（跟随符号链接、展开 `~`，并将相对路径定位到根目录），
 再根据最终指向的位置应用策略。因此，当 `.venv/bin/python` 指向系统解释器时，只要策略允许访问目标

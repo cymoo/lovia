@@ -41,13 +41,31 @@ model sees them and adapts).
 | Mode | Writes inside | Reads outside | Writes outside | Shell |
 | --- | --- | --- | --- | --- |
 | `readonly` | deny | deny | deny | none |
-| `coding` (default) | allow | **ask** | deny | **ask** |
+| `coding` (default) | allow | **ask** | deny | inspection and dev tools run, the irreversible asks, the rest **asks** |
 | `trusted` | allow | allow | **ask** | allow |
 
+Under every mode the **baseline** holds: dangerous commands are denied
+(`git push --force`, `rm -rf /`, `mkfs`, …), credential stores are off-limits
+(`~/.ssh`, `~/.aws`, `*.pem`, …), and writes to `.git`, `.github/workflows`,
+`.vscode`, `.husky`, `.lovia` ask every time. `.env*` files ask before being
+read (a preset rule, not baseline — `path_rules=(PathRule(".env*", "allow"),)`
+lifts it).
+
 Refine any preset with `readable=` / `writable=` (grants), `denied_paths=`
-(hard blocks), full `path_rules=` / `command_rules=`, or replace the whole
-thing with `policy=WorkspacePolicy(...)` (mutually exclusive with the
-shorthand knobs).
+(hard blocks), full `path_rules=` / `command_rules=` (yours come before the
+preset's), `shell_default=` (`"allow"` on `coding` is the "only the dangerous
+is stopped" posture), `baseline=` (compose from the bundles below, or `()`),
+or replace the whole thing with `policy=WorkspacePolicy(...)` (mutually
+exclusive with the shorthand knobs).
+
+The presets are built from the bundles in `lovia.workspace.rules`, which you
+can compose yourself: `READ_ONLY` (`ls`, `cat`, `git status`, … ; `dir`,
+`type`, … on Windows), `DEV_TOOLS` (`pytest`, `ruff`, `mypy`, `npm test`,
+`cargo test`, …), `IRREVERSIBLE` (`git push`, `git reset --hard`, `rm -r`,
+`sudo`, `docker`, … — asked), and the baseline's `DANGEROUS_COMMANDS`,
+`CREDENTIAL_PATHS`, `PROTECTED_CONFIG`. Allowing `DEV_TOOLS` is trusting the
+project's own code to run on the host — the premise of a coding agent; the
+baseline is about the model's own hand, not a sandbox.
 
 ## The ACL
 
@@ -76,8 +94,28 @@ first matching path rule, then the mode defaults.
 
 **Command rules.** `CommandRule(pattern, action)` matches on
 **word-boundary prefix**: `"git push"` matches `git push origin`, never
-`git pushx`. Compound commands are split on `&&`, `||`, `;`, `|`, `&`; each
-segment is judged and the **most restrictive** decision wins.
+`git pushx`. `flags=` names words that must *also* appear anywhere in the
+segment — `CommandRule("git push", "deny", flags=("--force",))` stops `git
+push origin main --force` too; a one-letter `-f` is satisfied by `-fu`,
+anything longer must appear as that word, and words after a bare `--` never
+count. Compound commands are split on `&&`, `||`, `;`, `|`, `&`; each segment
+is judged and the **most restrictive** decision wins. A leading `VAR=value`
+or thin wrapper (`env`, `nice`, `nohup`, `time`, `timeout N`) is stripped
+before matching, and a segment that had one is never *allowed* outright
+(`PATH=…` changes which program runs): an allow becomes an ask, a deny still
+bites (`env git push --force`).
+
+**The baseline** (`WorkspacePolicy.baseline`) is judged on its own and merged
+most-restrictive with everything above, so no user rule, `command_decider`
+or remembered approval loosens it. A rule's `reason` is what the approval
+card shows (and the model reads on a denial); `grant=False` withholds the
+"always allow" option where the prefix is a whole world (`sudo`, `ssh`).
+
+**Bulk walks** (`list_files`, `grep_files`) skip anything short of `allow`
+— an `ask` cannot be answered mid-walk — so a `.env` never surfaces in a
+search; reading it by name asks. Listing an *outside* directory you approved
+shows its entries (that approval covered the subtree), but a rule-gated file
+inside it is still skipped.
 
 **Symlinks have no special case**: every path is resolved first (symlinks
 followed, `~` expanded, relative anchored at the root) and judged by where

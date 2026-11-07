@@ -184,17 +184,98 @@ class CommandRule:
 
     ``pattern`` matches when the command starts with the same
     whitespace-separated words: ``"git push"`` matches ``git push origin``
-    but not ``git pushx``. ``reason`` is what the human sees when the rule
-    asks (and the model when it denies); left empty, a generic one is
-    derived from the pattern. ``grant=False`` withholds the "always allow"
-    option for an ``ask`` rule — set it where the pattern is so broad
-    (``sudo``, ``ssh``) that remembering it would mean remembering everything.
+    but not ``git pushx``. ``flags`` are words that must *also* appear,
+    anywhere in the segment — ``CommandRule("git push", "deny",
+    flags=("--force",))`` stops ``git push origin main --force`` too. A
+    one-letter short flag (``-f``) is satisfied by a short-flag group that
+    contains its letter (``-fu``); anything longer (``--force``,
+    ``-Recurse``, ``/s``) must appear as that exact word, and words after a
+    bare ``--`` never count. Flags are flag-shaped words only; positional
+    arguments stay in the prefix, so ``python -m pytest`` cannot be written
+    as a rule that also matches ``python -m pip install pytest``.
+
+    ``reason`` is what the human sees when the rule asks (and the model when
+    it denies); left empty, a generic one is derived from the pattern.
+    ``grant=False`` withholds the "always allow" option for an ``ask`` rule —
+    set it where the pattern is so broad (``sudo``, ``ssh``) that remembering
+    it would mean remembering everything.
     """
 
     pattern: str
     action: Decision
     reason: str = ""
     grant: bool = True
+    flags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for flag in self.flags:
+            if not _is_flag(flag):
+                raise ValueError(
+                    f"CommandRule flags must be flag-shaped (-x, --xx, /x), got {flag!r}"
+                )
+
+    @property
+    def key(self) -> str:
+        """The rule as a grant scope: pattern plus flags, so two ``ask``
+        rules on one prefix (``git push --tags`` / ``--delete``) stay apart."""
+        return " ".join((self.pattern, *self.flags))
+
+    def matches(self, words: list[str]) -> bool:
+        pattern_words = self.pattern.split()
+        if words[: len(pattern_words)] != pattern_words:
+            return False
+        rest = words[len(pattern_words) :]
+        return all(_has_flag(rest, flag) for flag in self.flags)
+
+
+def _is_flag(word: str) -> bool:
+    return len(word) > 1 and (word[0] in "-/") and not word.startswith("---")
+
+
+def _has_flag(words: list[str], flag: str) -> bool:
+    short = len(flag) == 2 and flag[0] == "-"  # -f, not --f or /s
+    for word in words:
+        if word == "--":
+            return False
+        if word == flag:
+            return True
+        if (
+            short
+            and len(word) > 2
+            and word[0] == "-"
+            and word[1] != "-"
+            and flag[1] in word[1:]
+        ):
+            return True
+    return False
+
+
+# Leading words a shell runs the real command *through*. They are stripped
+# before the rules look at a segment, and a segment that had any is never
+# allowed outright: ``PATH=…``, ``LD_PRELOAD=…`` change which program runs,
+# so an allow rule for the inner command cannot vouch for the wrapped one —
+# but a deny rule for it still bites (``env git push --force``).
+_THIN_WRAPPERS = frozenset({"env", "nice", "nohup", "time", "call"})
+
+
+def _strip_wrappers(words: list[str]) -> tuple[list[str], list[str]]:
+    """Return ``(remaining words, stripped words)``."""
+    stripped: list[str] = []
+    while words:
+        head = words[0]
+        name, eq, _ = head.partition("=")
+        if eq and name.isidentifier():  # VAR=value
+            stripped.append(head)
+            words = words[1:]
+        elif head == "timeout" and len(words) > 2 and words[1][:1].isdigit():
+            stripped.extend(words[:2])
+            words = words[2:]
+        elif head in _THIN_WRAPPERS and len(words) > 1 and not words[1].startswith("-"):
+            stripped.append(head)
+            words = words[1:]
+        else:
+            break
+    return words, stripped
 
 
 @dataclass(frozen=True)
@@ -277,6 +358,15 @@ class WorkspacePolicy:
     return a :data:`Decision` / :class:`Verdict` to override or ``None`` to
     fall through. See :data:`CommandDecider`."""
 
+    baseline: tuple["PathRule | CommandRule", ...] | None = None
+    """Rules in force whatever the preset: judged on their own and merged
+    most-restrictive with everything above, so they can only tighten — a
+    user rule, the ``command_decider`` or a remembered approval never
+    loosens them. ``None`` (the default) resolves to
+    :data:`lovia.workspace.rules.DEFAULT_BASELINE` (dangerous commands denied,
+    credential stores denied, writes to repository/tool configuration asked);
+    ``()`` switches it off; a bundle of your own replaces it."""
+
     def __post_init__(self) -> None:
         # ``allow_shell=False`` already forces every command to ``deny`` in
         # :meth:`decide_command`, so a permissive ``shell_default`` alongside it
@@ -286,10 +376,28 @@ class WorkspacePolicy:
         # would ``ask``. Frozen dataclass, hence ``object.__setattr__``.
         if not self.allow_shell and self.shell_default != "deny":
             object.__setattr__(self, "shell_default", "deny")
+        if self.baseline is None:
+            # Resolved here, not as the field default: the bundles are built
+            # from these very dataclasses, so ``rules`` imports this module.
+            from .rules import DEFAULT_BASELINE
+
+            object.__setattr__(self, "baseline", DEFAULT_BASELINE)
+
+    @property
+    def _baseline_paths(self) -> tuple[PathRule, ...]:
+        return tuple(r for r in self.baseline or () if isinstance(r, PathRule))
+
+    @property
+    def _baseline_commands(self) -> tuple[CommandRule, ...]:
+        return tuple(r for r in self.baseline or () if isinstance(r, CommandRule))
 
     # ------------------------------------------------------------------ #
     # Presets
     # ------------------------------------------------------------------ #
+
+    # The presets are rule bundles (``lovia.workspace.rules``) composed in a
+    # fixed order: the caller's rules first (first match wins, so they win),
+    # then the preset's own. The baseline sits apart from that order.
 
     @classmethod
     def readonly(
@@ -297,16 +405,20 @@ class WorkspacePolicy:
         *,
         denied_paths: tuple[str, ...] = (),
         path_rules: tuple[PathRule, ...] = (),
+        baseline: tuple["PathRule | CommandRule", ...] | None = None,
     ) -> "WorkspacePolicy":
         """Read the workspace only: no writes anywhere, no shell."""
+        from .rules import ENV_FILES
+
         return cls(
             write="deny",
             read_outside="deny",
             write_outside="deny",
-            path_rules=path_rules,
+            path_rules=tuple(path_rules) + ENV_FILES,
             denied_paths=denied_paths,
             allow_shell=False,
             shell_default="deny",
+            baseline=baseline,
         )
 
     @classmethod
@@ -317,22 +429,29 @@ class WorkspacePolicy:
         denied_paths: tuple[str, ...] = (),
         path_rules: tuple[PathRule, ...] = (),
         command_decider: "CommandDecider | None" = None,
+        baseline: tuple["PathRule | CommandRule", ...] | None = None,
+        shell_default: Decision = "ask",
     ) -> "WorkspacePolicy":
         """Full workspace access; anything outside asks for approval or is denied.
 
-        Reads outside the root require approval, writes outside are denied,
-        and shell commands ask by default — the Claude-Code-like posture:
-        free inside the project, human-in-the-loop beyond it.
+        Reads outside the root require approval, writes outside are denied.
+        Shell: inspection and dev-tool commands run freely (``READ_ONLY``,
+        ``DEV_TOOLS``), the hard-to-undo ones ask (``IRREVERSIBLE``), and
+        whatever no rule names follows ``shell_default`` — ``ask`` unless you
+        choose the kits-style ``"allow"``. Your ``command_rules`` come first.
         """
+        from .rules import DEV_TOOLS, ENV_FILES, IRREVERSIBLE, READ_ONLY
+
         return cls(
             write="allow",
             read_outside="ask",
             write_outside="deny",
-            path_rules=path_rules,
+            path_rules=tuple(path_rules) + ENV_FILES,
             denied_paths=denied_paths,
-            shell_default="ask",
-            command_rules=command_rules,
+            shell_default=shell_default,
+            command_rules=tuple(command_rules) + IRREVERSIBLE + READ_ONLY + DEV_TOOLS,
             command_decider=command_decider,
+            baseline=baseline,
         )
 
     @classmethod
@@ -343,21 +462,27 @@ class WorkspacePolicy:
         denied_paths: tuple[str, ...] = (),
         path_rules: tuple[PathRule, ...] = (),
         command_decider: "CommandDecider | None" = None,
+        baseline: tuple["PathRule | CommandRule", ...] | None = None,
+        shell_default: Decision = "allow",
     ) -> "WorkspacePolicy":
         """Read anywhere, write the workspace; shell runs without approval.
 
         Writes outside the root still ask — a cheap safety valve, since the
-        approval channel exists anyway.
+        approval channel exists anyway. Only the baseline interrupts commands
+        here (the "all automatic" posture); ``.env*`` reads still ask.
         """
+        from .rules import ENV_FILES
+
         return cls(
             write="allow",
             read_outside="allow",
             write_outside="ask",
-            path_rules=path_rules,
+            path_rules=tuple(path_rules) + ENV_FILES,
             denied_paths=denied_paths,
-            shell_default="allow",
+            shell_default=shell_default,
             command_rules=command_rules,
             command_decider=command_decider,
+            baseline=baseline,
         )
 
     # ------------------------------------------------------------------ #
@@ -370,19 +495,56 @@ class WorkspacePolicy:
         ``rel`` is the workspace-relative POSIX path when the resolved path
         is inside the root, ``None`` when it is outside; ``abs_posix`` is the
         resolved absolute POSIX path in either case. Evaluation order:
-        ``denied_paths`` → ``path_rules`` (first match wins) → defaults. A
-        default-rule ``ask`` offers the target's directory as grant scope
-        (``"read:~/notes"``); a rule hit offers the rule's pattern.
+        ``denied_paths`` → ``path_rules`` (first match wins) → defaults,
+        merged most-restrictive with the ``baseline``. A default-rule ``ask``
+        offers the target's directory as grant scope (``"read:~/notes"``); a
+        rule hit offers the rule's pattern.
         """
-        for pattern in self.denied_paths:
-            if _pattern_matches(pattern, rel=rel, abs_posix=abs_posix):
-                return Verdict("deny", f"'{pattern}' is off-limits by workspace policy")
-        for rule in self.path_rules:
+        verdict = self._decide_path(rel=rel, abs_posix=abs_posix, op=op)
+        base = self._path_rule_verdict(
+            self._baseline_paths, rel=rel, abs_posix=abs_posix, op=op
+        )
+        # Normal verdict first: on a tie its reason (the deployer's own rule)
+        # is the one worth repeating.
+        return merge_verdicts(verdict, base) if base is not None else verdict
+
+    def rule_bound(self, *, rel: str | None, abs_posix: str, op: FileOp) -> bool:
+        """Whether a *rule* (``denied_paths``, ``path_rules`` or the baseline)
+        decides this path, as opposed to the root/outside defaults. A bulk
+        walk under an already-approved outside directory lets the default
+        ``ask`` through — the approval covered the subtree — but never a
+        rule's."""
+        if any(
+            _pattern_matches(p, rel=rel, abs_posix=abs_posix) for p in self.denied_paths
+        ):
+            return True
+        return any(
+            self._path_rule_verdict(rules, rel=rel, abs_posix=abs_posix, op=op)
+            is not None
+            for rules in (self.path_rules, self._baseline_paths)
+        )
+
+    @staticmethod
+    def _path_rule_verdict(
+        rules: tuple[PathRule, ...], *, rel: str | None, abs_posix: str, op: FileOp
+    ) -> Verdict | None:
+        for rule in rules:
             if op in rule.ops and _pattern_matches(
                 rule.pattern, rel=rel, abs_posix=abs_posix
             ):
                 scope = f"{op}:{rule.pattern}" if rule.grant else None
                 return _rule_verdict(rule.action, rule.reason, rule.pattern, scope)
+        return None
+
+    def _decide_path(self, *, rel: str | None, abs_posix: str, op: FileOp) -> Verdict:
+        for pattern in self.denied_paths:
+            if _pattern_matches(pattern, rel=rel, abs_posix=abs_posix):
+                return Verdict("deny", f"'{pattern}' is off-limits by workspace policy")
+        hit = self._path_rule_verdict(
+            self.path_rules, rel=rel, abs_posix=abs_posix, op=op
+        )
+        if hit is not None:
+            return hit
         verb = "reads" if op == "read" else "writes"
         if rel is not None:
             if op == "read" or self.write == "allow":
@@ -435,6 +597,23 @@ class WorkspacePolicy:
         return merge_verdicts(*(self._decide_segment(seg) for seg in segments))
 
     def _decide_segment(self, segment: str) -> Verdict:
+        words, stripped = _strip_wrappers(segment.split())
+        verdict = self._decide_words(segment, words)
+        if stripped:
+            if verdict.action == "allow":
+                verdict = Verdict(
+                    "ask",
+                    f"'{' '.join(stripped)}' wraps the command; allow rules "
+                    "do not cover wrapped commands",
+                )
+            elif verdict.action == "ask":
+                # Not grantable either: the grant would be for the inner
+                # command, and the wrapper is what changes what it runs.
+                verdict = Verdict("ask", verdict.reason)
+        base = self._command_rule_verdict(self._baseline_commands, words)
+        return merge_verdicts(verdict, base) if base is not None else verdict
+
+    def _decide_words(self, segment: str, words: list[str]) -> Verdict:
         if self.command_decider is not None:
             raw = self.command_decider(segment)
             if raw is not None:
@@ -444,13 +623,18 @@ class WorkspacePolicy:
                     # Fall through to the static rules rather than crash on a
                     # bad hook — never run unjudged, never abort the run.
                     pass
-        words = segment.split()
-        for rule in self.command_rules:
-            pattern_words = rule.pattern.split()
-            if words[: len(pattern_words)] == pattern_words:
-                scope = f"shell:{rule.pattern}" if rule.grant else None
-                return _rule_verdict(rule.action, rule.reason, rule.pattern, scope)
-        return self._default_command_verdict()
+        hit = self._command_rule_verdict(self.command_rules, words)
+        return hit if hit is not None else self._default_command_verdict()
+
+    @staticmethod
+    def _command_rule_verdict(
+        rules: tuple[CommandRule, ...], words: list[str]
+    ) -> Verdict | None:
+        for rule in rules:
+            if rule.matches(words):
+                scope = f"shell:{rule.key}" if rule.grant else None
+                return _rule_verdict(rule.action, rule.reason, rule.key, scope)
+        return None
 
     def _default_command_verdict(self) -> Verdict:
         if self.shell_default == "ask":

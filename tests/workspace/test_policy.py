@@ -202,6 +202,192 @@ def test_denied_path_verdict_names_the_pattern() -> None:
 
 
 # ---------------------------------------------------------------------------
+# flags=, wrappers, the baseline and the bundles
+# ---------------------------------------------------------------------------
+
+
+def test_flags_must_appear_anywhere_after_the_prefix() -> None:
+    policy = WorkspacePolicy(
+        shell_default="allow",
+        baseline=(),
+        command_rules=(
+            CommandRule("git push", "deny", flags=("--force",)),
+            CommandRule("git push", "deny", flags=("-f",)),
+        ),
+    )
+    assert policy.decide_command("git push --force origin main").action == "deny"
+    assert policy.decide_command("git push origin main --force").action == "deny"
+    assert policy.decide_command("git push -fu origin").action == "deny"  # -f in -fu
+    assert policy.decide_command("git push --force-with-lease").action == "allow"
+    assert policy.decide_command("git push origin -- --force").action == "allow"
+    assert policy.decide_command("git pushx --force").action == "allow"
+
+
+def test_flags_are_flag_shaped_and_positional_words_stay_in_the_prefix() -> None:
+    with pytest.raises(ValueError):
+        CommandRule("python", "allow", flags=("pytest",))
+    # The prefix form cannot be fooled by a different positional argument.
+    policy = WorkspacePolicy(
+        shell_default="ask",
+        baseline=(),
+        command_rules=(CommandRule("python -m pytest", "allow"),),
+    )
+    assert policy.decide_command("python -m pytest tests/").action == "allow"
+    assert policy.decide_command("python -m pip install pytest").action == "ask"
+
+
+def test_rule_key_keeps_two_flag_rules_apart_as_grant_scopes() -> None:
+    policy = WorkspacePolicy(
+        shell_default="allow",
+        baseline=(),
+        command_rules=(
+            CommandRule("git push", "ask", flags=("--tags",)),
+            CommandRule("git push", "ask", flags=("--delete",)),
+        ),
+    )
+    assert policy.decide_command("git push --tags").scope == "shell:git push --tags"
+    assert (
+        policy.decide_command("git push --delete x").scope == "shell:git push --delete"
+    )
+
+
+def test_wrapped_commands_are_at_most_asked_and_never_grantable() -> None:
+    policy = WorkspacePolicy(
+        shell_default="allow",
+        baseline=(CommandRule("git push", "deny", flags=("--force",)),),
+        command_rules=(
+            CommandRule("git status", "allow"),
+            CommandRule("git push", "ask"),
+        ),
+    )
+    for wrapped in (
+        "FOO=1 git status",
+        "env git status",
+        "nice git status",
+        "timeout 5 git status",
+    ):
+        verdict = policy.decide_command(wrapped)
+        assert verdict.action == "ask" and "wraps the command" in verdict.reason, (
+            wrapped
+        )
+    # An ask stays an ask but loses its scope: the wrapper is what changes
+    # what the inner command runs.
+    assert policy.decide_command("FOO=1 git push").scope is None
+    # A deny still bites through the wrapper.
+    assert policy.decide_command("env git push --force").action == "deny"
+    # env with options is not a thin wrapper: the whole segment is gray.
+    assert policy.decide_command("env -i git status").action == "allow"  # shell_default
+
+
+def test_baseline_only_tightens() -> None:
+    base = (
+        CommandRule("rm -rf /", "deny"),
+        PathRule(".env*", "ask"),
+        PathRule(".git", "ask", ops=("write",)),
+    )
+    # A user allow rule, a permissive default and a decider cannot lift it.
+    policy = WorkspacePolicy(
+        shell_default="allow",
+        baseline=base,
+        command_rules=(CommandRule("rm", "allow"),),
+        command_decider=lambda seg: "allow",
+    )
+    assert policy.decide_command("rm -rf /").action == "deny"
+    assert policy.decide_command("rm -rf build").action == "allow"
+    # A user deny is not loosened by a baseline ask.
+    strict = WorkspacePolicy(baseline=base, denied_paths=(".env*",))
+    assert (
+        strict.decide_path(rel=".env", abs_posix="/ws/.env", op="read").action == "deny"
+    )
+    # readonly's write deny beats the baseline's write ask.
+    ro = WorkspacePolicy.readonly(baseline=base)
+    assert (
+        ro.decide_path(rel=".git/x", abs_posix="/ws/.git/x", op="write").action
+        == "deny"
+    )
+    # Off, or replaced.
+    off = WorkspacePolicy(shell_default="allow", baseline=())
+    assert off.decide_command("rm -rf /").action == "allow"
+
+
+def test_baseline_ties_keep_the_users_reason() -> None:
+    policy = WorkspacePolicy(command_rules=(CommandRule("rm -rf", "deny", "nope"),))
+    assert policy.decide_command("rm -rf /").reason == "nope"
+
+
+def test_default_baseline_is_in_force_in_every_preset() -> None:
+    from pathlib import Path as _P
+
+    ssh = (_P.home() / ".ssh" / "id_rsa").resolve().as_posix()
+    for policy in (
+        WorkspacePolicy(),
+        WorkspacePolicy.readonly(),
+        WorkspacePolicy.coding(),
+        WorkspacePolicy.trusted(),
+    ):
+        assert policy.decide_path(rel=None, abs_posix=ssh, op="read").action == "deny"
+        git = policy.decide_path(
+            rel=".git/config", abs_posix="/ws/.git/config", op="write"
+        )
+        assert git.action in ("ask", "deny") and git.scope is None
+    for policy in (WorkspacePolicy.coding(), WorkspacePolicy.trusted()):
+        assert policy.decide_command("git push origin main --force").action == "deny"
+        assert policy.decide_command("mkfs /dev/sda").action == "deny"
+    # The rule is a word prefix: ``mkfs.ext4`` is another word, and falls to
+    # the preset's default (ask under coding, allow under trusted) — the
+    # baseline stops the spellings it names, no more.
+    assert WorkspacePolicy.coding().decide_command("mkfs.ext4 /dev/sda").action == "ask"
+
+
+def test_coding_preset_composes_the_bundles_after_user_rules() -> None:
+    policy = WorkspacePolicy.coding(command_rules=(CommandRule("pytest", "ask"),))
+    assert policy.decide_command("pytest -q").action == "ask"  # user first
+    assert policy.decide_command("ruff check .").action == "allow"  # DEV_TOOLS
+    assert policy.decide_command("git status").action == "allow"  # READ_ONLY
+    pushed = policy.decide_command("git push origin main")
+    assert pushed.action == "ask" and pushed.scope == "shell:git push"  # IRREVERSIBLE
+    assert policy.decide_command("sudo ls").scope is None  # grant=False
+    assert policy.decide_command("make deploy").action == "ask"  # gray
+    assert WorkspacePolicy.coding(shell_default="allow").decide_command(
+        "make deploy"
+    ).action == ("allow")
+    # .env* asks at the preset level, and a user path rule lifts it.
+    assert (
+        policy.decide_path(rel=".env", abs_posix="/ws/.env", op="read").scope
+        == "read:.env*"
+    )
+    lifted = WorkspacePolicy.coding(path_rules=(PathRule(".env*", "allow"),))
+    assert (
+        lifted.decide_path(rel=".env", abs_posix="/ws/.env", op="read").action
+        == "allow"
+    )
+
+
+def test_trusted_preset_interrupts_only_for_the_baseline() -> None:
+    policy = WorkspacePolicy.trusted()
+    assert policy.decide_command("git push origin main").action == "allow"
+    assert policy.decide_command("sudo ls").action == "allow"
+    assert policy.decide_command("git push --force").action == "deny"
+
+
+def test_bundles_exist_for_both_host_shells() -> None:
+    from lovia.workspace import rules
+
+    assert any(r.pattern == "ls" for r in rules.READ_ONLY_POSIX)
+    assert any(r.pattern == "dir" for r in rules.READ_ONLY_CMD)
+    assert any(r.pattern == "rd" and r.flags == ("/s",) for r in rules.IRREVERSIBLE_CMD)
+    assert any(r.pattern == "format" for r in rules.DANGEROUS_COMMANDS_CMD)
+    assert all(r.action == "deny" for r in rules.CREDENTIAL_PATHS)
+    assert all(r.grant is False and r.ops == {"write"} for r in rules.PROTECTED_CONFIG)
+
+
+def test_rule_bound_tells_rule_asks_from_default_asks() -> None:
+    policy = WorkspacePolicy.coding()
+    assert policy.rule_bound(rel=".env", abs_posix="/ws/.env", op="read")
+    assert not policy.rule_bound(rel=None, abs_posix="/srv/data/a.txt", op="read")
+
+
+# ---------------------------------------------------------------------------
 # Path decisions (the ACL)
 # ---------------------------------------------------------------------------
 

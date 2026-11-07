@@ -41,7 +41,7 @@ model sees them and adapts).
 | Mode | Writes inside | Reads outside | Writes outside | Shell |
 | --- | --- | --- | --- | --- |
 | `readonly` | deny | deny | deny | none |
-| `coding` (default) | allow | **ask** | deny | inspection and dev tools run, the irreversible asks, the rest **asks** |
+| `coding` (default) | allow | **ask** | deny | the irreversible asks with a reason, the rest **asks** (rememberable per chat) |
 | `trusted` | allow | allow | **ask** | allow |
 
 Under every mode the **baseline** holds: dangerous commands are denied
@@ -61,8 +61,12 @@ is stopped" posture), `baseline=` (compose from the bundles below, or `()`),
 or replace the whole thing with `policy=WorkspacePolicy(...)` (mutually
 exclusive with the shorthand knobs).
 
-The presets are built from the bundles in `lovia.workspace.rules`, which you
-can compose yourself: `READ_ONLY` (`ls`, `du`, `stat`, `tree`, `git status`,
+`coding` vouches for **no command** itself: the path guard is lexical and
+cannot audit a program's options, so which commands run unprompted is a
+choice — the deployer's, by opting in a bundle, or the user's, per chat, on
+the approval card ("always allow `ls`"; the scope offered for an unlisted
+command is its command word). The bundles live in `lovia.workspace.rules`:
+`READ_ONLY` (`ls`, `du`, `stat`, `tree`, `git status`,
 `git log`, … ; `dir`, `where`, … on Windows — inspection that prints **no
 file contents**: every content reader has its own way to reach a file it
 never names, `grep -r`, `sort --files0-from`, `git diff --no-index`, a glob,

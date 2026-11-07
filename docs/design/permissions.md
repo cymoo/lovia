@@ -29,7 +29,7 @@ lovia 的三段式判定（`allow` / `ask` / `deny`）和失败即拒绝的审�
 
 1. 判定结果从 `Decision` 字面量升级为 `Verdict(action, reason, scope)`——多两个字段，一个给人和模型看理由，一个说明“总是允许”会放开多大范围。
 2. `Tool.needs_approval` 改名为 `Tool.permission`，接受 `Decision | Verdict | predicate`。工具作者可以直接说 `"deny"` 并给理由。
-3. 工作区策略加一条 `baseline`（所有预设都生效的硬规则：黑名单命令、密钥路径、受保护配置的写入），**与普通判定取最严格者**，只能加严不能放松。`coding` 预设内置一小组只读命令和开发命令的放行规则、一组不可撤回动作的询问规则，shell 默认档仍是 `ask`，但只剩真正的灰区。
+3. 工作区策略加一条 `baseline`（所有预设都生效的硬规则：黑名单命令、密钥路径、受保护配置的写入），**与普通判定取最严格者**，只能加严不能放松。`coding` 预设内置一组不可撤回动作的询问规则（判错的代价只是多问一句）；只读命令和开发工具的放行包是**可选项**（v3 第八轮改为可选：框架不替任何程序担保，少弹窗靠部署方启用规则包或用户按对话授权），shell 默认档仍是 `ask`。
 4. 审批通道的决定也带理由：`ev.reject(reason=...)`，模型收到的是“用户拒绝了：...”而不是干巴巴的 "not approved"。
 5. 授权（grants）**不进 core**。core 只负责在 `Verdict.scope` 里说清范围；web 在服务端按聊天持久化、按 scope 精确匹配、只对 `ask` 生效、可撤销。非 web 的消费者用 `approval_handler` 五行实现同样的事。
 
@@ -295,7 +295,7 @@ scope 既是显示文本也是匹配键，精确字符串匹配，不做前缀�
 |---|---|---|
 | 显式 `ask` 规则命中，`grant=True`（默认） | 规则的 pattern，加上 `flags`（有的话） | `shell:git push`、`shell:git push --tags`、`write:.github/workflows` |
 | 显式 `ask` 规则命中，`grant=False` | 无 | `sudo`、`ssh`、`docker`：放开首词等于全放开，内置红名单对这些关掉 |
-| 灰区命令（`shell_default`，没有规则命中） | **无** | `make deploy`、`.venv/bin/python -m x`、`/usr/bin/python3 s.py` 每次都问 |
+| 灰区命令（`shell_default`，没有规则命中） | 命令词 `shell:<cmd>`（v3 改回：框架不再自带放行包后，这是普通用户少弹窗的唯一途径，范围按原样显示、按对话记录、可撤销；参数不确定时无） | `make deploy` → `shell:make`；`cat *`、`FOO=1 ls` → 无 |
 | 工作区外读 / 写（默认档） | op + 目标所在目录（`~` 折叠） | `read:~/notes` |
 | 需要批准的条件不止一个 | 无 | `git push && python deploy.py` |
 | `deny` | 无 | |

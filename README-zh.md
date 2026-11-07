@@ -384,10 +384,10 @@ agent = Agent(
 )
 ```
 
-`coding` 本身已经让只读命令和开发工具（`ls`、`git status`、`pytest`、`ruff` 等）直接运行，
-对不可撤回的操作（`git push`、`rm -r`、`sudo` 等）询问；任何模式之下都有一条底线：拒绝危险命令
-（`git push --force`、`rm -rf /`），禁止触碰凭据库，写 `.git` 或 CI 配置前先问——这些规则包都在
-`lovia.workspace.rules` 里，可以自己拼。
+`coding` 自己不为任何命令担保：不可撤回的操作（`git push`、`rm -r`、`sudo` 等）带理由询问，
+其余问一次、用户可以按对话记住（“本对话中总是允许 `ls`”）；任何模式之下都有一条底线：拒绝危险命令
+（`git push --force`、`rm -rf /`），禁止触碰凭据库，写 `.git` 或 CI 配置前先问。想让检查命令和
+开发工具免问，显式启用：`lovia.workspace.rules` 里的 `command_rules=READ_ONLY + DEV_TOOLS`。
 
 Shell 命令继承最小环境，包括 Windows 系统、命令解释器、临时目录和用户目录变量，
 确保默认配置下 socket 和用户主目录查找可以正常工作。API key 和代理配置不会自动继承；需要的变量通过

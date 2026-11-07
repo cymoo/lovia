@@ -128,9 +128,24 @@ def test_deny_rule_verdict_carries_reason_and_no_scope() -> None:
     assert verdict.reason == "'rm -rf' is denied by workspace policy"
 
 
-def test_gray_command_asks_without_scope() -> None:
-    verdict = WorkspacePolicy(shell_default="ask").decide_command("make deploy")
-    assert verdict == Verdict("ask", "no workspace rule allows this command", None)
+def test_gray_command_asks_with_the_command_word_as_scope() -> None:
+    # The grant on offer is the command word, as shown on the card; an
+    # argument the guard cannot vouch for withholds it.
+    policy = WorkspacePolicy(shell_default="ask")
+    verdict = policy.decide_command("make deploy")
+    assert verdict == Verdict(
+        "ask", "no workspace rule allows this command", "shell:make"
+    )
+    assert policy.decide_command("make *").scope is None
+    assert policy.decide_command("FOO=1 make").scope is None
+    assert policy.decide_command("make -o x").scope is None
+
+
+def _opted_in() -> WorkspacePolicy:
+    """coding with the optional allow bundles a deployer may enable."""
+    from lovia.workspace import DEV_TOOLS, READ_ONLY
+
+    return WorkspacePolicy.coding(command_rules=READ_ONLY + DEV_TOOLS)
 
 
 def test_compound_scope_survives_only_a_single_ask() -> None:
@@ -283,7 +298,7 @@ def test_wrapped_commands_are_at_most_asked_and_never_grantable() -> None:
 def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
     # The guard cannot know which option a program writes through, so the
     # policy never allows a segment that names one — whatever the spelling.
-    policy = WorkspacePolicy.coding()
+    policy = _opted_in()
     for cmd in (
         "tree -o .git/config .",
         "tree -o.git/config .",
@@ -313,7 +328,7 @@ def test_globs_variables_and_substitutions_cap_allowed_commands_at_ask() -> None
     # The guard judges literal paths; what the shell expands it never sees
     # (`ls *` lists, but `cat *` would read id_rsa), so an allow rule covers
     # literal arguments only.
-    policy = WorkspacePolicy.coding()
+    policy = _opted_in()
     for cmd in ("ls *", "ls -- *", "du *.pem", "echo $F", "ls $(ls)", "ls ~/x[1]"):
         verdict = policy.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scope is None, cmd
@@ -324,7 +339,7 @@ def test_content_readers_are_gray_and_no_index_asks() -> None:
     # Every content reader has a way to reach a file it never names
     # (`sort --files0-from`, `git diff --no-index`, a glob), so none is
     # allowed outright: read_file is the reader. Names and sizes are fine.
-    policy = WorkspacePolicy.coding()
+    policy = _opted_in()
     for cmd in (
         "cat README",
         "head -n 5 x",
@@ -377,7 +392,7 @@ def test_no_allowed_command_writes_a_protected_path_through_an_option(
     # back allow. A new spelling is a row here, not a branch in the guard.
     from lovia.workspace import rules
 
-    policy = WorkspacePolicy.coding()
+    policy = _opted_in()
     for rule in rules.READ_ONLY + rules.DEV_TOOLS:
         cmd = f"{rule.pattern} {spelling.format(p=target)}"
         assert policy.decide_command(cmd).action != "allow", cmd
@@ -390,7 +405,7 @@ def test_no_allowed_command_reads_through_an_expansion(argument: str) -> None:
     # come back allow — `cat *` would read id_rsa unseen.
     from lovia.workspace import rules
 
-    policy = WorkspacePolicy.coding()
+    policy = _opted_in()
     for rule in rules.READ_ONLY + rules.DEV_TOOLS:
         assert policy.decide_command(f"{rule.pattern} {argument}").action != "allow"
 
@@ -455,15 +470,27 @@ def test_default_baseline_is_in_force_in_every_preset() -> None:
     assert WorkspacePolicy.coding().decide_command("mkfs.ext4 /dev/sda").action == "ask"
 
 
-def test_coding_preset_composes_the_bundles_after_user_rules() -> None:
-    policy = WorkspacePolicy.coding(command_rules=(CommandRule("pytest", "ask"),))
-    assert policy.decide_command("pytest -q").action == "ask"  # user first
-    assert policy.decide_command("ruff check .").action == "allow"  # DEV_TOOLS
-    assert policy.decide_command("git status").action == "allow"  # READ_ONLY
+def test_coding_preset_vouches_for_no_command_and_takes_bundles_opt_in() -> None:
+    from lovia.workspace import DEV_TOOLS, READ_ONLY
+
+    policy = WorkspacePolicy.coding()
+    # Nothing runs unprompted by default: the irreversible ask with a reason
+    # and a rule scope, the rest ask with the command word as scope.
+    assert policy.decide_command("git status") == Verdict(
+        "ask", "no workspace rule allows this command", "shell:git"
+    )
+    assert policy.decide_command("ruff check .").scope == "shell:ruff"
     pushed = policy.decide_command("git push origin main")
     assert pushed.action == "ask" and pushed.scope == "shell:git push"  # IRREVERSIBLE
     assert policy.decide_command("sudo ls").scope is None  # grant=False
-    assert policy.decide_command("make deploy").action == "ask"  # gray
+    # Opting in is the deployer's call, and their own rules still come first.
+    opted = WorkspacePolicy.coding(
+        command_rules=(CommandRule("pytest", "ask"),) + READ_ONLY + DEV_TOOLS
+    )
+    assert opted.decide_command("pytest -q").action == "ask"  # user first
+    assert opted.decide_command("ruff check .").action == "allow"  # DEV_TOOLS
+    assert opted.decide_command("git status").action == "allow"  # READ_ONLY
+    assert opted.decide_command("make deploy").action == "ask"  # gray
     assert WorkspacePolicy.coding(shell_default="allow").decide_command(
         "make deploy"
     ).action == ("allow")

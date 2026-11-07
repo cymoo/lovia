@@ -494,12 +494,15 @@ class WorkspacePolicy:
         """Full workspace access; anything outside asks for approval or is denied.
 
         Reads outside the root require approval, writes outside are denied.
-        Shell: inspection and dev-tool commands run freely (``READ_ONLY``,
-        ``DEV_TOOLS``), the hard-to-undo ones ask (``IRREVERSIBLE``), and
-        whatever no rule names follows ``shell_default`` — ``ask`` unless you
-        choose the kits-style ``"allow"``. Your ``command_rules`` come first.
+        Shell: the hard-to-undo commands ask with a reason (``IRREVERSIBLE``),
+        everything else follows ``shell_default`` — ``ask`` unless you choose
+        the kits-style ``"allow"``. The preset vouches for *no* command: the
+        path guard cannot audit a program's options, so which commands run
+        unprompted is the deployer's call (``command_rules=READ_ONLY +
+        DEV_TOOLS`` opts in, your rules first) or the user's, per chat, on the
+        approval card.
         """
-        from .rules import DEV_TOOLS, IRREVERSIBLE, READ_ONLY
+        from .rules import IRREVERSIBLE
 
         return cls(
             write="allow",
@@ -508,7 +511,7 @@ class WorkspacePolicy:
             path_rules=path_rules,
             denied_paths=denied_paths,
             shell_default=shell_default,
-            command_rules=tuple(command_rules) + IRREVERSIBLE + READ_ONLY + DEV_TOOLS,
+            command_rules=tuple(command_rules) + IRREVERSIBLE,
             command_decider=command_decider,
             baseline=baseline,
         )
@@ -650,20 +653,20 @@ class WorkspacePolicy:
         segments = [seg.strip() for seg in _COMMAND_SPLIT.split(command)]
         segments = [seg for seg in segments if seg]
         if not segments:
-            return self._default_command_verdict()
+            return self._default_command_verdict([])
         return merge_verdicts(*(self._decide_segment(seg) for seg in segments))
 
     def _decide_segment(self, segment: str) -> Verdict:
         words, stripped = _strip_wrappers(_words(segment))
         verdict, by_rule = self._decide_words(segment, words)
         uncertain = _uncertain_argument(words)
-        if by_rule and (stripped or uncertain):
-            # Capped at ask, never allowed outright and never grantable: the
-            # wrapper (or the argument) is what the allow *rule* — and a grant
-            # for the inner command — cannot vouch for. A default of allow
-            # (``trusted``) is not a rule vouching for anything: it is the
-            # choice not to judge commands, and is left alone.
-            if verdict.action == "allow":
+        if stripped or uncertain:
+            # The wrapper (or the argument) is what neither an allow *rule*
+            # nor a grant for the command can vouch for: a rule's allow is
+            # capped at ask, and any ask loses its scope. A default of allow
+            # (``trusted``) is not a rule vouching for anything — it is the
+            # choice not to judge commands — and is left alone.
+            if by_rule and verdict.action == "allow":
                 why = (
                     f"'{' '.join(stripped)}' wraps the command"
                     if stripped
@@ -692,7 +695,7 @@ class WorkspacePolicy:
         hit = self._command_rule_verdict(self.command_rules, words)
         if hit is not None:
             return hit, True
-        return self._default_command_verdict(), False
+        return self._default_command_verdict(words), False
 
     @staticmethod
     def _command_rule_verdict(
@@ -704,9 +707,13 @@ class WorkspacePolicy:
                 return _rule_verdict(rule.action, rule.reason, rule.key, scope)
         return None
 
-    def _default_command_verdict(self) -> Verdict:
+    def _default_command_verdict(self, words: list[str]) -> Verdict:
         if self.shell_default == "ask":
-            return Verdict("ask", "no workspace rule allows this command")
+            # The grant on offer is the command word, exactly as shown
+            # ("always allow `ls` in this chat"); finer than that is a rule.
+            # Arguments the guard cannot vouch for strip it (_decide_segment).
+            scope = f"shell:{words[0]}" if words else None
+            return Verdict("ask", "no workspace rule allows this command", scope)
         if self.shell_default == "deny":
             return Verdict("deny", "shell commands are denied by workspace policy")
         return Verdict("allow")

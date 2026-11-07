@@ -37,7 +37,7 @@ agent = Agent(
 | 模式 | 根目录内写入 | 根目录外读取 | 根目录外写入 | Shell |
 | --- | --- | --- | --- | --- |
 | `readonly` | deny | deny | deny | none |
-| `coding`（默认） | allow | **ask** | deny | 只读命令和开发工具直接跑，不可撤回的问，其余**问** |
+| `coding`（默认） | allow | **ask** | deny | 不可撤回的带理由问，其余**问**（可按对话记住） |
 | `trusted` | allow | allow | **ask** | allow |
 
 每种模式之下都有一条**底线**（baseline）：危险命令拒绝（`git push --force`、`rm -rf /`、`mkfs` 等），
@@ -51,7 +51,9 @@ agent = Agent(
 “只拦危险的”姿态）、`baseline=`（用下面的规则包自己拼，或 `()` 关掉）细化预设；也可以用
 `policy=WorkspacePolicy(...)` 完全替换（与简写配置项互斥）。
 
-预设由 `lovia.workspace.rules` 里的规则包拼成，你也可以自己拼：`READ_ONLY`（`ls`、`du`、`stat`、`tree`、
+`coding` 自己**不为任何命令担保**：路径守卫是词法的，审计不了程序的选项，所以哪些命令免问是一个选择——
+部署方启用规则包，或用户在审批卡片上按对话决定（“本对话中总是允许 `ls`”；没有规则命中的命令，卡片
+提供的范围就是它的命令词）。规则包在 `lovia.workspace.rules`：`READ_ONLY`（`ls`、`du`、`stat`、`tree`、
 `git status`、`git log` 等；Windows 上是 `dir`、`where` 等——只收录**不打印文件内容**的检查命令：每个
 内容读取器都有自己不点名就读到文件的办法，`grep -r`、`sort --files0-from`、`git diff --no-index`、通配符，
 所以 `cat` 之类留在灰区，逐文件判定的 `read_file` / `grep_files` 才是读取器；git 自己的命令打印的是*已跟踪*

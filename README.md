@@ -413,12 +413,13 @@ agent = Agent(
 )
 ```
 
-`coding` already runs inspection and dev-tool commands (`ls`, `git status`,
-`pytest`, `ruff`, …) without asking, asks for the irreversible (`git push`,
-`rm -r`, `sudo`, …), and under every mode a baseline denies the dangerous
-(`git push --force`, `rm -rf /`), keeps credential stores off-limits and asks
-before writing `.git` or CI configuration — compose your own from
-`lovia.workspace.rules`.
+`coding` vouches for no command itself: the irreversible ask with a reason
+(`git push`, `rm -r`, `sudo`, …), everything else asks once and the user can
+remember it per chat ("always allow `ls`"), and under every mode a baseline
+denies the dangerous (`git push --force`, `rm -rf /`), keeps credential
+stores off-limits and asks before writing `.git` or CI configuration. To run
+inspection and dev tools unprompted, opt in: `command_rules=READ_ONLY +
+DEV_TOOLS` from `lovia.workspace.rules`.
 
 Shell commands inherit a minimal environment, including Windows system,
 shell, temporary-directory, and user-profile variables so sockets and home

@@ -43,17 +43,27 @@ _NT = os.name == "nt"
 # any git command and is repository hygiene, not the baseline's hand.
 # ---------------------------------------------------------------------------
 
-READ_ONLY_COMMON: tuple[CommandRule, ...] = tuple(
-    CommandRule(p, "allow")
-    for p in (
-        "git status",
-        "git diff",  # `--no-index` reads arbitrary files: asked (IRREVERSIBLE_COMMON)
-        "git log",
-        "git show",
-        "git blame",
-        "git rev-parse",
-        "git ls-files",
-    )
+READ_ONLY_COMMON: tuple[CommandRule, ...] = (
+    # A bundle carries its own caveats: this ask sits right before the allow
+    # it qualifies, so it holds wherever the bundle is placed.
+    CommandRule(
+        "git diff",
+        "ask",
+        "Diffs arbitrary files outside the index.",
+        flags=("--no-index",),
+    ),
+    *(
+        CommandRule(p, "allow")
+        for p in (
+            "git status",
+            "git diff",
+            "git log",
+            "git show",
+            "git blame",
+            "git rev-parse",
+            "git ls-files",
+        )
+    ),
 )
 
 READ_ONLY_POSIX: tuple[CommandRule, ...] = tuple(
@@ -110,14 +120,6 @@ project's own code — see the module docstring."""
 # ---------------------------------------------------------------------------
 
 IRREVERSIBLE_COMMON: tuple[CommandRule, ...] = (
-    # Not irreversible, but before READ_ONLY's `git diff` on purpose: with
-    # `--no-index` it diffs (prints) any two files or trees, tracked or not.
-    CommandRule(
-        "git diff",
-        "ask",
-        "Diffs arbitrary files outside the index.",
-        flags=("--no-index",),
-    ),
     CommandRule("git push", "ask", "Pushes commits to a remote."),
     CommandRule(
         "git reset", "ask", "Discards working-tree changes.", flags=("--hard",)

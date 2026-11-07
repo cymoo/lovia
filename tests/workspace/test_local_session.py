@@ -504,12 +504,17 @@ async def test_listing_an_approved_outside_directory_shows_its_entries(
 
 
 async def test_allowed_commands_still_meet_the_path_rules(tmp_path) -> None:
-    # The guard holds the baseline for the commands coding runs unprompted:
-    # a credential named bare is denied even for a name-only command, a
-    # protected config named by an output option asks, and content readers
-    # (`cat`) ask on their own — read_file is the reader.
+    # With the optional allow bundles enabled, the guard still holds the
+    # baseline for them: a credential named bare is denied even for a
+    # name-only command, a protected config named by an output option asks,
+    # and content readers (`cat`) ask on their own — read_file is the reader.
+    from lovia.workspace import DEV_TOOLS, READ_ONLY
+
     (tmp_path / "id_rsa").write_text("secret", encoding="utf-8")
-    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    session = await _session(
+        tmp_path,
+        policy=WorkspacePolicy.coding(command_rules=READ_ONLY + DEV_TOOLS),
+    )
     assert session.decide_command("ls -l id_rsa").action == "deny"
     assert session.decide_command("cat id_rsa").action == "deny"
     assert session.decide_command("ls -la").action == "allow"
@@ -1602,9 +1607,13 @@ async def test_shell_outside_read_claims_escalate_to_ask(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
     # trusted reads anywhere -> stays allow.
     assert session.decide_command("cat /etc/hosts").action == "allow"
-    coding = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    from lovia.workspace import READ_ONLY
+
+    coding = await _session(
+        tmp_path, policy=WorkspacePolicy.coding(command_rules=READ_ONLY)
+    )
     # coding asks for outside reads; the shell tool routes this to approval.
-    # ``ls`` itself is on the read-only allow list, so the outside read is
+    # ``ls`` itself is on the (opted-in) allow list, so the outside read is
     # the one condition: its reason and directory scope ride along.
     verdict = coding.decide_command("ls /etc/hosts")
     etc = os.path.realpath("/etc")  # macOS: /private/etc

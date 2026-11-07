@@ -287,6 +287,11 @@ class ToolCallProcessor:
                 )
                 yield self._rejected(state, call, denial)
                 return
+            # A stop issued while the call waited on the human is the last
+            # word: an approval that lands alongside it must not run the call.
+            # Same contract as the check at the top — the call stays dangling
+            # for a resume to re-ask.
+            self.cancel_token.check()
 
         outcome.ready = (tool, args)
 

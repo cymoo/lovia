@@ -136,13 +136,22 @@ export const api = {
       headers: { accept: 'text/event-stream' },
       signal,
     }),
-  // Resolve a pending approval. `body`: { session_id, call_id, decision }.
+  // Resolve a pending approval. `body`: { session_id, call_id, decision,
+  // remember?, reason? } → { ok, remembered }.
   approve: (body) =>
     request('/api/chat/approve', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
-    }),
+    }).then(_json),
+  // The chat's remembered approvals: [{ scope, context, created_at, active }].
+  listGrants: (sessionId) =>
+    request(`/api/sessions/${encodeURIComponent(sessionId)}/grants`).then(_json),
+  revokeGrant: (sessionId, scope, context) =>
+    request(
+      `/api/sessions/${encodeURIComponent(sessionId)}/grants${qs({ scope, context })}`,
+      { method: 'DELETE' },
+    ).then(_json),
   answer: (body) =>
     request('/api/chat/answer', {
       method: 'POST',

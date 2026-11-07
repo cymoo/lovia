@@ -10,6 +10,7 @@ detaches; the run keeps going.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Any
 
@@ -26,9 +27,11 @@ from ...messages import user
 from ..attachments import build_user_input, user_content
 from ..errors import WebError
 from ..run_deps import RunTrigger, build_run_deps
+from ...approvals import Approval
 from ..schemas import (
     AnswerRequest,
     ApprovalRequest,
+    ApprovalResponse,
     ChatRequest,
     ChatResponse,
     InjectCancelRequest,
@@ -40,6 +43,8 @@ from ..supervisor import RunController, forward
 from ..titles import provisional_title
 from .deps import RouterDeps
 from .serialization import Run, segments_runs
+
+log = logging.getLogger(__name__)
 
 
 def _busy() -> WebError:
@@ -282,14 +287,42 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         ctrl = deps.supervisor.get(req.session_id)
         return {"removed": bool(ctrl is not None and ctrl.uninject(req.id))}
 
-    @router.post("/api/chat/approve")
-    async def approve(req: ApprovalRequest) -> dict[str, bool]:
-        ok = await deps.approvals.resolve(
-            req.session_id, req.call_id, req.decision == "approve"
-        )
-        if not ok:
+    @router.post("/api/chat/approve", response_model=ApprovalResponse)
+    async def approve(req: ApprovalRequest) -> ApprovalResponse:
+        """Decide a pending approval; optionally remember an approval.
+
+        Claim → (write the grant) → resolve, in that order: the runner wakes
+        only once the grant is on disk, so the next call in the same scope
+        can't ask again meanwhile. The claim makes this request the decision's
+        owner — a second request for the same call gets 404, and the timeout /
+        cancel sweeps leave it alone — and the ``finally`` honours the user's
+        decision even if saving the grant fails (then ``remembered`` is false).
+        """
+        sid, cid = req.session_id, req.call_id
+        if not deps.approvals.claim(sid, cid):
             raise WebError(404, "approval_not_found", "no pending approval matches")
-        return {"ok": True}
+        approved = req.decision == "approve"
+        remembered = False
+        try:
+            if approved and req.remember:
+                remembered = await _remember(sid, cid)
+        finally:
+            await deps.approvals.resolve(sid, cid, Approval(approved, req.reason))
+        return ApprovalResponse(ok=True, remembered=remembered)
+
+    async def _remember(sid: str, cid: str) -> bool:
+        # The scope comes from the pending request itself, never from the
+        # client; the context from the run as it is bound right now.
+        pending = deps.approvals.pending(sid, cid)
+        ctrl = deps.supervisor.get(sid)
+        if pending is None or not pending.scope or ctrl is None:
+            return False
+        try:
+            await deps.store.add_grant(sid, pending.scope, ctrl.grant_context())
+        except Exception as exc:  # noqa: BLE001 — the approval itself still stands
+            log.warning("could not remember approval %s for %s: %s", cid, sid, exc)
+            return False
+        return True
 
     @router.post("/api/chat/answer")
     async def answer_question(req: AnswerRequest) -> dict[str, bool]:

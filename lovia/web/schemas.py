@@ -205,6 +205,32 @@ class ApprovalRequest(BaseModel):
     session_id: str
     call_id: str
     decision: Literal["approve", "deny"]
+    # Approve only: also remember this approval for the chat, under the
+    # request's own ``scope`` (the server takes it from the pending request —
+    # a client cannot widen it). Ignored when the request offers no scope.
+    remember: bool = False
+    # Deny only: why — passed to the model with the denial so it can change
+    # course instead of retrying.
+    reason: str = ""
+
+
+class ApprovalResponse(BaseModel):
+    ok: bool
+    # Whether the approval was remembered. False when not asked, when the
+    # request had no scope, or when saving failed (the call still went ahead).
+    remembered: bool = False
+
+
+class GrantInfo(BaseModel):
+    """One remembered approval of a chat."""
+
+    scope: str
+    # Agent name + workspace root the approval was given under (opaque key).
+    context: str
+    created_at: float
+    # Whether it applies to the chat as served now (same agent and root). A
+    # grant from another binding stays listed but inert until revoked.
+    active: bool
 
 
 class AnswerRequest(BaseModel):

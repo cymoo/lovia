@@ -1,6 +1,6 @@
 # 权限机制重构：少问、问得值、拦住最危险的
 
-> 状态：v2.3 评审通过，PR 1（core：说清楚）已实现（v0.9.134）；PR 2 / PR 3 待做 · 2026-11-07 · 范围：core（`tools/base.py`、`approvals.py`、`events.py`、`runtime/tool_calls.py`）、`workspace/policy.py`、`lovia/web`（审批卡片、授权）
+> 状态：v2.3 评审通过，PR 1（core：说清楚，v0.9.134）已合入；PR 2（web：记住批准，v0.9.135）已实现；PR 3 待做 · 2026-11-07 · 范围：core（`tools/base.py`、`approvals.py`、`events.py`、`runtime/tool_calls.py`）、`workspace/policy.py`、`lovia/web`（审批卡片、授权）
 >
 > 参考：[kits 的 Agent 权限方案调研](https://github.com/cymoo/kits/blob/main/docs/references/agent-permissions.md)。它调研了 OpenCode / Claude Code / Codex / Cursor / Gemini CLI 的做法并做了实测，结论是“把问人从默认路径改成最后一道防线”。本文取其结论，按 lovia 的结构落地：lovia 不是 OpenCode 的宿主，权限判定就在自己的 preflight 里，没有内核可绕、没有事件竞态，所以方案比 kits 更直接。
 >
@@ -332,7 +332,7 @@ agent = Agent(..., approval_handler=remember_grants)
 |---|---|
 | 来源 | scope 和 context 只从**服务端持有的待审批请求**上取；客户端只发 `remember: true`，不发范围字符串 |
 | 顺序 | 先**占有**待审批请求（`ApprovalRegistry` 原子地把它标成“处理中”，第二个请求得到 404），再写授权，**最后**才 `resolve` 唤醒 runner——否则下一条同范围的调用可能在落库前又弹卡片。写授权失败：本次调用照用户的意思批准，响应里 `remembered: false`，前端提示“已允许，但未能记住” |
-| 占有 vs 超时 / 取消 | 占有成功就是**接受了用户决定的时点**：此后 `approval_timeout` 和重复请求都不再碰这个 future（超时等待者看到“已占有”就继续等占有者）；占有者在 `finally` 里必定 `resolve`，成功路径批准、自身异常则拒绝，所以请求不会永久停在“处理中”，HTTP 断线也一样（写库和 resolve 不在请求任务里 await 取消）。用户在此期间取消运行：run 照常停（runner 在被唤醒后先看 `cancel_token`，调用不会执行），**已落库的授权保留**——那是用户明确做出的决定，不该由时序碰巧决定它存不存在；不想要就在列表里删。这个窗口要有一个“落库期间触发超时 / 取消”的测试 |
+| 占有 vs 超时 / 取消 | 占有成功就是**接受了用户决定的时点**：此后 `approval_timeout` 和重复请求都不再碰这个 future（超时等待者看到“已占有”就继续等占有者）；占有者在 `finally` 里必定 `resolve`，成功路径批准、自身异常则拒绝，所以请求不会永久停在“处理中”，HTTP 断线也一样（写库和 resolve 不在请求任务里 await 取消）。用户在此期间取消运行：run 照常停（preflight 在审批通过后再查一次 `cancel_token`——PR 2 补的一行，之前只在审批前查，批准后的调用会先跑完再停），**已落库的授权保留**——那是用户明确做出的决定，不该由时序碰巧决定它存不存在；不想要就在列表里删。这个窗口要有一个“落库期间触发超时 / 取消”的测试 |
 | 有效性 | 已超时、已取消、已处理、不存在的请求：404，不写授权 |
 | 继承 | 新聊天、子代理聊天（`parent_id` 非空）不继承；子代理本来就是无客户端运行，审批走 `approval_handler` 或拒绝 |
 | 撤销 | 只影响之后的调用；已在执行的动作撤不回，界面不暗示能撤回 |

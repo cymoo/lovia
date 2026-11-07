@@ -54,6 +54,7 @@ from .components import UI_DATA_SINK
 from .errors import WebError
 from .schemas import MessageOut
 from .sse import (
+    ApprovalGranted,
     RunFinishedData,
     RunStartedData,
     SessionData,
@@ -66,8 +67,9 @@ from .sse import (
     usage_dict,
 )
 from ..types import JsonObject
+from ..workspace.workspace import LocalWorkspace, WorkspaceSessionBinding
 from .run_deps import RUN_CLIENT, RUN_SERVER
-from .store import RunRow
+from .store import RunRow, grant_context
 
 if TYPE_CHECKING:
     from ..agent import Agent
@@ -75,6 +77,17 @@ if TYPE_CHECKING:
     from .api.deps import RouterDeps
 
 log = logging.getLogger(__name__)
+
+
+def agent_grant_context(name: str, agent: "Agent[Any]") -> str:
+    """The :func:`~lovia.web.store.grant_context` of an agent as served: its
+    name and its local workspace root (None without a local workspace)."""
+    ws = agent.workspace
+    if isinstance(ws, WorkspaceSessionBinding):
+        ws = ws.workspace
+    root = ws.root if isinstance(ws, LocalWorkspace) else None
+    return grant_context(name, root)
+
 
 # What started the run this task serves: "user" | "schedule:<id>" |
 # "subagent:<session>" (a child task run) | "subagent-report:<task>" (the
@@ -411,6 +424,22 @@ class RunController:
         if self.deps.questions is not None:
             self.deps.questions.cancel_session(self.session_id)
 
+    def grant_context(self) -> str:
+        """Where this run's approvals are given: its agent and workspace root."""
+        return agent_grant_context(self.deps.name_of(self.agent), self.agent)
+
+    async def _granted(self, ev: events.ApprovalRequired) -> bool:
+        """Whether a remembered approval for ``ev.scope`` covers this run."""
+        if not ev.scope:
+            return False
+        try:
+            return await self.deps.store.has_grant(
+                self.session_id, ev.scope, self.grant_context()
+            )
+        except Exception as exc:  # noqa: BLE001 — a lookup failure asks, never allows
+            log.warning("grant lookup failed for %s: %s", self.session_id, exc)
+            return False
+
     async def _await_approval(self, ev: events.ApprovalRequired) -> None:
         """Await the HTTP decision for ``ev``, denying after ``approval_timeout``.
 
@@ -696,13 +725,20 @@ class RunController:
                 succeeded = False
                 error_seen = False
                 async for ev in handle:
-                    if (
-                        isinstance(ev, events.ApprovalRequired)
-                        and not self.await_approvals
-                    ):
-                        # Left undecided, the call goes to the agent's
-                        # approval_handler, else is denied.
-                        continue
+                    if isinstance(ev, events.ApprovalRequired):
+                        if not self.await_approvals:
+                            # Left undecided, the call goes to the agent's
+                            # approval_handler, else is denied.
+                            continue
+                        if await self._granted(ev):
+                            # Remembered: answer it here and publish a note in
+                            # the card's place. Never for a deny — a verdict
+                            # with a scope is an ask by construction.
+                            ev.approve()
+                            note = ApprovalGranted(ev)
+                            self.in_flight_buffer.append(note)  # replayed on re-attach
+                            self.hub.publish(note)
+                            continue
                     if isinstance(ev, events.RunFailed):
                         error_seen = True
                     if isinstance(ev, events.RunCompleted) and self.run_id:

@@ -69,6 +69,18 @@ class ToolCallData(TypedDict):
     arguments: str
 
 
+class ApprovalRequiredData(TypedDict):
+    id: str
+    name: str
+    arguments: str
+    # Why the call needs a decision, from the tool's permission verdict.
+    reason: str
+    # What "always allow" would cover (``"shell:git push"``); null = don't offer.
+    scope: str | None
+    # True when a remembered approval already answered it: no card, just a note.
+    granted: bool
+
+
 class _ToolResultRequired(TypedDict):
     id: str
     name: str
@@ -162,8 +174,16 @@ class LegTiming:
     duration: float
 
 
+@dataclass(frozen=True)
+class ApprovalGranted:
+    """An ``ApprovalRequired`` a remembered approval answered on the server:
+    published in the event's place so the client shows a note, not a card."""
+
+    request: events.ApprovalRequired
+
+
 #: What the supervisor publishes besides the run's own events.
-LegFrame = UserTurnRefs | LegTiming
+LegFrame = UserTurnRefs | LegTiming | ApprovalGranted
 
 
 CHAT_EVENTS: dict[str, type] = {
@@ -177,7 +197,7 @@ CHAT_EVENTS: dict[str, type] = {
     "tool_call": ToolCallData,
     "tool_result": ToolResultData,
     "todo": TodoData,
-    "approval_required": ToolCallData,
+    "approval_required": ApprovalRequiredData,
     "handoff": HandoffData,
     "turn_started": TurnStartedData,
     "retrying": RetryingData,
@@ -231,6 +251,19 @@ LIFECYCLE_EVENTS: dict[str, type] = {
     "session_retitled": SessionRetitledData,
     "config_changed": ConfigChangedData,
 }
+
+
+def _approval_data(
+    ev: events.ApprovalRequired, *, granted: bool
+) -> ApprovalRequiredData:
+    return ApprovalRequiredData(
+        id=ev.call.id,
+        name=ev.call.name,
+        arguments=ev.call.arguments,
+        reason=ev.reason,
+        scope=ev.scope,
+        granted=granted,
+    )
 
 
 def frame(
@@ -336,6 +369,8 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
     """Return a ``{"event": ..., "data": json}`` dict, or ``None`` to skip."""
     if isinstance(ev, UserTurnRefs):
         return frame("refs", RefsData(refs=ev.refs))
+    if isinstance(ev, ApprovalGranted):
+        return frame("approval_required", _approval_data(ev.request, granted=True))
     if isinstance(ev, LegTiming):
         return frame(
             "timing", TimingData(finished_at=ev.finished_at, duration=ev.duration)
@@ -393,10 +428,7 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
                 payload["images"] = images
         return frame("tool_result", payload)
     if isinstance(ev, events.ApprovalRequired):
-        return frame(
-            "approval_required",
-            ToolCallData(id=ev.call.id, name=ev.call.name, arguments=ev.call.arguments),
-        )
+        return frame("approval_required", _approval_data(ev, granted=False))
     if isinstance(ev, events.HandoffOccurred):
         return frame(
             "handoff", HandoffData({"from": ev.from_agent.name, "to": ev.to_agent.name})

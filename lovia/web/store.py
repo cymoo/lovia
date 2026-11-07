@@ -146,6 +146,25 @@ CREATE TABLE IF NOT EXISTS chat_ui_data (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_ui_data_session
     ON chat_ui_data(session_id);
+CREATE TABLE IF NOT EXISTS chat_grants (
+    session_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    context TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (session_id, scope, context)
+);
+"""
+
+# ``chat_grants`` as a migration step too: the version-0 schema above runs only
+# on a fresh database, an existing one reaches the table through here.
+_GRANTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS chat_grants (
+    session_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    context TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (session_id, scope, context)
+)
 """
 
 # Columns added after their table first shipped, before the chat tables were
@@ -234,10 +253,16 @@ def _active_record(conn: sqlite3.Connection) -> None:
 
 # Changes to the chat tables since ``_META_SCHEMA``, in order (see
 # ``SQLiteStore``). Append a step; never edit one that has shipped.
+def _grants(conn: sqlite3.Connection) -> None:
+    """Remembered approvals (0.9.135): one row per (chat, scope, context)."""
+    conn.execute(_GRANTS_SCHEMA)
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     _reconcile_unversioned,
     _fork_origin,
     _active_record,
+    _grants,
 )
 
 
@@ -293,6 +318,43 @@ class ChatMeta:
             "origin_session_id": self.origin_session_id,
             "origin_ref": self.origin_ref,
         }
+
+
+@dataclass(frozen=True)
+class GrantRow:
+    """One remembered approval: "always allow ``scope`` in this chat".
+
+    ``scope`` is the verdict's grant key (``shell:git push``,
+    ``read:~/notes``); ``context`` identifies the agent and workspace root the
+    approval was given under (:func:`grant_context`), so a chat rebound to
+    another workspace does not reuse it. Rows are per chat: new chats and
+    subagent task sessions start with none.
+    """
+
+    session_id: str
+    scope: str
+    context: str
+    created_at: float
+
+    @classmethod
+    def from_row(cls, row: Any) -> "GrantRow":
+        return cls(row[0], row[1], row[2], row[3])
+
+    def to_dict(self) -> JsonObject:
+        return {
+            "session_id": self.session_id,
+            "scope": self.scope,
+            "context": self.context,
+            "created_at": self.created_at,
+        }
+
+
+def grant_context(agent: str | None, root: str | Path | None) -> str:
+    """The unambiguous key for *where* an approval was given: agent name and
+    resolved workspace root, JSON-encoded (an agent name may contain any
+    character, so no delimiter would be safe)."""
+    resolved = Path(root).expanduser().resolve().as_posix() if root else None
+    return json.dumps([agent, resolved])
 
 
 @dataclass(frozen=True)
@@ -732,6 +794,7 @@ class ChatStore:
                 for table, column in (
                     ("chat_runs", "session_id"),
                     ("chat_ui_data", "session_id"),
+                    ("chat_grants", "session_id"),
                     ("chat_sessions", "id"),
                 ):
                     conn.executemany(
@@ -757,6 +820,49 @@ class ChatStore:
         await self._write("DELETE FROM chat_sessions")
         await self._write("DELETE FROM chat_runs")
         await self._write("DELETE FROM chat_ui_data")
+        await self._write("DELETE FROM chat_grants")
+
+    # ---- remembered approvals ("always allow" grants) -------------------
+
+    async def add_grant(self, session_id: str, scope: str, context: str) -> None:
+        """Remember an approval for ``scope`` in this chat under ``context``.
+        Idempotent: approving the same thing twice is one row."""
+        await self._write(
+            "INSERT OR IGNORE INTO chat_grants (session_id, scope, context, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (session_id, scope, context, time.time()),
+        )
+
+    async def has_grant(self, session_id: str, scope: str, context: str) -> bool:
+        row = await self._read_one(
+            "SELECT 1 FROM chat_grants WHERE session_id = ? AND scope = ? AND context = ?",
+            (session_id, scope, context),
+            lambda r: True,
+        )
+        return bool(row)
+
+    async def list_grants(self, session_id: str) -> Sequence[GrantRow]:
+        return await self._read_all(
+            "SELECT session_id, scope, context, created_at FROM chat_grants "
+            "WHERE session_id = ? ORDER BY created_at",
+            (session_id,),
+            GrantRow.from_row,
+        )
+
+    async def delete_grant(self, session_id: str, scope: str, context: str) -> bool:
+        """Revoke one grant. Forward-looking only: a call it already approved
+        is running or done. Returns whether a row was removed."""
+
+        def _impl() -> bool:
+            with self._meta._tx() as conn:
+                cur = conn.execute(
+                    "DELETE FROM chat_grants "
+                    "WHERE session_id = ? AND scope = ? AND context = ?",
+                    (session_id, scope, context),
+                )
+                return cur.rowcount > 0
+
+        return await self._meta._run(_impl)
 
     async def _drop_checkpoint(self, session_id: str) -> None:
         """Delete the session's active-run snapshot, if any (best-effort)."""

@@ -29,6 +29,7 @@ from ..schemas import (
     FollowupsResponse,
     ForkRequest,
     ForkResponse,
+    GrantInfo,
     MessageOut,
     RewindRequest,
     RewindResponse,
@@ -40,6 +41,7 @@ from ..schemas import (
     TodoItemOut,
     TodosResponse,
 )
+from ..supervisor import agent_grant_context
 from .deps import RouterDeps
 from .serialization import (
     Run,
@@ -331,6 +333,43 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 SessionRetitledData(session_id=session_id, title=meta.title),
             )
         return session_info(meta)
+
+    @router.get("/api/sessions/{session_id}/grants", response_model=list[GrantInfo])
+    async def list_grants(session_id: str) -> list[GrantInfo]:
+        """The chat's remembered approvals, flagged ``active`` when they apply
+        to the chat as served now (same agent and workspace root)."""
+        rows = await store.list_grants(session_id)
+        if not rows:
+            return []
+        current = await _current_grant_context(session_id)
+        return [
+            GrantInfo(
+                scope=r.scope,
+                context=r.context,
+                created_at=r.created_at,
+                active=r.context == current,
+            )
+            for r in rows
+        ]
+
+    @router.delete("/api/sessions/{session_id}/grants")
+    async def revoke_grant(
+        session_id: str, scope: str = Query(...), context: str = Query(...)
+    ) -> dict[str, bool]:
+        """Forget one remembered approval. Later calls in that scope ask
+        again; a call it already approved is not affected."""
+        removed = await store.delete_grant(session_id, scope, context)
+        return {"removed": removed}
+
+    async def _current_grant_context(session_id: str) -> str | None:
+        ctrl = deps.supervisor.get(session_id)
+        if ctrl is not None:
+            return ctrl.grant_context()
+        meta = await store.get(session_id)
+        agent = deps.agents.get(meta.agent) if meta and meta.agent else None
+        if meta is None or meta.agent is None or agent is None:
+            return None
+        return agent_grant_context(meta.agent, agent)
 
     @router.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, bool]:

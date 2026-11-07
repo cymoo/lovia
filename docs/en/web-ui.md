@@ -314,6 +314,23 @@ flag, environment variable, then default.
 
 Use `lovia web --help` for the complete list.
 
+## Approvals
+
+A Tool whose [permission](tools.md#tool-approval) verdict is `ask` pauses
+the run on a card that leads with the verdict's *reason* ("Pushes to a
+remote."), shows the call as the model made it, and offers **Approve** and
+**Deny** — with an optional reason for denying that the model sees, so it can
+change course instead of retrying.
+
+When the verdict names a *scope* (`shell:git push`, `read:~/notes`), the card
+also offers **Always allow in this chat** for exactly that scope. The grant is
+kept on the server, per chat, and tied to the agent and workspace root it was
+given under: a later call in that scope is approved before anyone sees it and
+shows as a one-line note; a chat rebound to another workspace does not reuse
+it. Grants never apply to a `deny`, and nothing is inherited by new chats or
+subagent tasks. **Manage** on such a note lists the chat's grants and lets you
+revoke one — revoking affects later calls only.
+
 ## Questions from the Agent
 
 The default Agent includes the [`ask_human`](built-in-tools.md#ask-a-human)

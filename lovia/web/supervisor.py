@@ -54,6 +54,7 @@ from .components import UI_DATA_SINK
 from .errors import WebError
 from .schemas import MessageOut
 from .sse import (
+    ApprovalGranted,
     RunFinishedData,
     RunStartedData,
     SessionData,
@@ -66,8 +67,9 @@ from .sse import (
     usage_dict,
 )
 from ..types import JsonObject
+from ..workspace.workspace import LocalWorkspace, WorkspaceSessionBinding
 from .run_deps import RUN_CLIENT, RUN_SERVER
-from .store import RunRow
+from .store import RunRow, grant_context
 
 if TYPE_CHECKING:
     from ..agent import Agent
@@ -75,6 +77,17 @@ if TYPE_CHECKING:
     from .api.deps import RouterDeps
 
 log = logging.getLogger(__name__)
+
+
+def agent_grant_context(name: str, agent: "Agent[Any]") -> str:
+    """The :func:`~lovia.web.store.grant_context` of an agent as served: its
+    name and its local workspace root (None without a local workspace)."""
+    ws = agent.workspace
+    if isinstance(ws, WorkspaceSessionBinding):
+        ws = ws.workspace
+    root = ws.root if isinstance(ws, LocalWorkspace) else None
+    return grant_context(name, root)
+
 
 # What started the run this task serves: "user" | "schedule:<id>" |
 # "subagent:<session>" (a child task run) | "subagent-report:<task>" (the
@@ -251,6 +264,7 @@ class RunController:
         supervisor: RunSupervisor,
         session_id: str,
         agent: Agent[Any],
+        agent_name: str,
         first_input: str | list[Message],
         first_checkpoint: CheckpointOptions | None,
         seed_entries: list[TranscriptEntry],
@@ -267,6 +281,12 @@ class RunController:
         self.supervisor = supervisor
         self.session_id = session_id
         self.agent = agent
+        # The registry key the agent is served under, resolved by the caller
+        # *before* the workspace binding copied the agent (``name_of`` looks
+        # up by identity, and a copy would fall back to ``agent.name``).
+        self.agent_name = agent_name
+        # The agent whose turn is running: the entry agent until a handoff.
+        self.active_agent: Agent[Any] = agent
         self.source = source
         # False for a turn whose caller can't answer an approval (a blocking
         # /api/chat): the run doesn't park, Runner.run's order decides.
@@ -411,6 +431,28 @@ class RunController:
         if self.deps.questions is not None:
             self.deps.questions.cancel_session(self.session_id)
 
+    def grant_context(self) -> str:
+        """Where this run's approvals are given: the *active* agent (a handoff
+        target after a handoff) and its workspace root. The entry agent is
+        named by its registry key; a handoff target by its own name, so a
+        grant given to it applies only while it is the one acting."""
+        active = self.active_agent
+        if active is self.agent:
+            return agent_grant_context(self.agent_name, active)
+        return agent_grant_context(self.deps.name_of(active), active)
+
+    async def _granted(self, ev: events.ApprovalRequired) -> bool:
+        """Whether a remembered approval for ``ev.scope`` covers this run."""
+        if not ev.scope:
+            return False
+        try:
+            return await self.deps.store.has_grant(
+                self.session_id, ev.scope, self.grant_context()
+            )
+        except Exception as exc:  # noqa: BLE001 — a lookup failure asks, never allows
+            log.warning("grant lookup failed for %s: %s", self.session_id, exc)
+            return False
+
     async def _await_approval(self, ev: events.ApprovalRequired) -> None:
         """Await the HTTP decision for ``ev``, denying after ``approval_timeout``.
 
@@ -501,8 +543,11 @@ class RunController:
             self.in_flight_buffer.pop()
         if isinstance(ev, events.TurnStarted):
             self.turns = ev.turn
+            self.active_agent = ev.agent
             self.in_flight_buffer = []
             self.current_turn_entries = []
+        elif isinstance(ev, events.HandoffOccurred):
+            self.active_agent = ev.to_agent
         if isinstance(
             ev,
             (
@@ -637,7 +682,7 @@ class RunController:
                 RunRow(
                     id=record_id,
                     session_id=sid,
-                    agent=deps.name_of(self.agent),
+                    agent=self.agent_name,
                     source=self.source,
                     status="running",
                     error=None,
@@ -648,13 +693,13 @@ class RunController:
             )
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("run record insert failed for %s: %s", sid, exc)
-        log.info("run started: session=%s agent=%s", sid, deps.name_of(self.agent))
+        log.info("run started: session=%s agent=%s", sid, self.agent_name)
         deps.emit(
             "run_started",
             RunStartedData(
                 session_id=sid,
                 run_id=record_id,
-                agent=deps.name_of(self.agent),
+                agent=self.agent_name,
                 source=self.source,
             ),
         )
@@ -696,13 +741,26 @@ class RunController:
                 succeeded = False
                 error_seen = False
                 async for ev in handle:
-                    if (
-                        isinstance(ev, events.ApprovalRequired)
-                        and not self.await_approvals
-                    ):
-                        # Left undecided, the call goes to the agent's
-                        # approval_handler, else is denied.
-                        continue
+                    if isinstance(ev, events.ApprovalRequired):
+                        if not self.await_approvals:
+                            # Left undecided, the call goes to the agent's
+                            # approval_handler, else is denied.
+                            continue
+                        if await self._granted(ev):
+                            # Remembered: answer it here and publish a note in
+                            # the card's place. Never for a deny — a verdict
+                            # with a scope is an ask by construction.
+                            ev.approve()
+                            note = ApprovalGranted(ev)
+                            self.in_flight_buffer.append(note)  # replayed on re-attach
+                            self.hub.publish(note)
+                            continue
+                        if self.cancel.is_cancelled:
+                            # A stop landed during the grant lookup, before the
+                            # approval was registered for ``deny_pending`` to
+                            # find: answer it here or the run parks forever.
+                            ev.reject("the run was cancelled")
+                            continue
                     if isinstance(ev, events.RunFailed):
                         error_seen = True
                     if isinstance(ev, events.RunCompleted) and self.run_id:
@@ -746,7 +804,7 @@ class RunController:
                         self.final_output,
                         # Registry key, not agent.name: schedule_title re-picks
                         # the agent from the registry by this string.
-                        deps.name_of(self.agent),
+                        self.agent_name,
                     )
                 # Auto-chain: leftovers re-queued, next run starts with empty
                 # input so the loop drains+emits them as user turns (Phase 1).
@@ -971,6 +1029,7 @@ class RunSupervisor:
         """
         self._check_slot(session_id)
         meta = await self.deps.store.get(session_id)
+        agent_name = self.deps.name_of(agent)  # before bind() copies the agent
         # Every run of one web session shares that session's workspace session
         # (lazily opened here), so background processes survive across runs —
         # they die with the *chat* (deletion/shutdown), not with the turn.
@@ -994,6 +1053,7 @@ class RunSupervisor:
             supervisor=self,
             session_id=session_id,
             agent=agent,
+            agent_name=agent_name,
             first_input=input,
             first_checkpoint=None,
             seed_entries=seed,
@@ -1044,6 +1104,7 @@ class RunSupervisor:
         """Register a resume of ``snapshot``; ``run_deps`` as for :meth:`start`."""
         self._check_slot(session_id, cap=False)
         meta = await self.deps.store.get(session_id)
+        agent_name = self.deps.name_of(agent)  # before bind() copies the agent
         # Same chat-scoped workspace binding as start(): the resumed leg's
         # background processes are gone (they never survive a restart), but
         # its shell/file tools must land on the chat's one live session.
@@ -1068,6 +1129,7 @@ class RunSupervisor:
             supervisor=self,
             session_id=session_id,
             agent=agent,
+            agent_name=agent_name,
             first_input=[],
             first_checkpoint=ckpt,
             seed_entries=seed,

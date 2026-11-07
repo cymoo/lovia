@@ -156,7 +156,7 @@ normalizes all three.
 | `POST /api/chat` | one **blocking** turn → `{output, session_id, usage}`: a supervised Run, waited for ([details](#blocking-turns)) |
 | `POST /api/chat/stream` | **SSE**: start a run, or attach to the session's live run (injecting the new message) |
 | `POST /api/chat/reconnect?session_id=` | **SSE**: re-attach after refresh, or resume an interrupted checkpoint |
-| `POST /api/chat/approve` | resolve a pending approval: `{session_id, call_id, decision}` |
+| `POST /api/chat/approve` | resolve a pending approval: `{session_id, call_id, decision, remember?, reason?}` → `{ok, remembered}`. `remember` (approve only) also saves an "always allow" grant for the request's own `scope` in this chat; `reason` (deny only) reaches the model. The grant is written before the run wakes, so a repeat call in that scope never asks meanwhile; `remembered` is false when the request had no scope or saving failed (the approval still stands) |
 | `POST /api/chat/cancel?session_id=` | stop the live run (completed turns are kept) |
 | `POST /api/chat/inject` / `uninject` | queue / withdraw a [steering message](cancellation.md#steering-a-live-run) for the live run |
 | `GET /api/sessions?q=&limit=&offset=` | list / search chats (pinned first, paged); `DELETE` clears all |
@@ -169,6 +169,8 @@ normalizes all three.
 | `POST /api/sessions/{id}/rewind` | drop everything from a user message onward, named by its `ref` or by `user_turn`, its zero-based index among the user messages; 404 for a `ref` no longer in the chat, 409 while a run is live, 501 if the store lacks `rewind` |
 | `POST /api/sessions/{id}/fork` | `{ref?}` → `{session_id}`: copy the chat's finished history into a new, independent chat — up to just before the user message `ref` names, or whole. The new chat's detail carries `origin: {kind: "fork", session_id, ref, title, exists}`; deleting either chat leaves the other. A fork copies the conversation, not the workspace: files stay as they are now. A whole copy is refused (409) while a run is live, stopping, or resumable |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
+| `GET /api/sessions/{id}/grants` | the chat's remembered approvals: `[{scope, context, created_at, active}]` — `active` is false for a grant given under another agent or workspace root (listed, inert) |
+| `DELETE /api/sessions/{id}/grants?scope=&context=` | revoke one grant → `{removed}`; later calls in that scope ask again, a call it already approved is unaffected |
 | `GET /api/sessions/{id}/ui-data/{ref}` | a UI component's full props, stored by `put_ui_data` during a run of this chat ([details](web-server.md#bulk-data)) |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web-server.md#scheduling): list, create, retime/pause, delete, fire now |
 | `GET /api/schedules/{id}/runs` | a schedule's fire history (its run records, newest first) |
@@ -255,7 +257,7 @@ of `event:` / `data:` pairs: the Runner's
 | `tool_call` | `{id, name, arguments}` — `arguments` is the raw JSON string |
 | `tool_result` | `{id, name, result, is_error, images?}` — `images` lists `{index, mime_type}` stubs served by `GET /api/sessions/{id}/tool-images/{call_id}/{index}` |
 | `todo` | `{call_id, name, todos}` — a structured todo update, in place of that call's `tool_result` |
-| `approval_required` | `{id, name, arguments}` → answer via `POST /api/chat/approve` |
+| `approval_required` | `{id, name, arguments, reason, scope, granted}` → answer via `POST /api/chat/approve`. `reason` says why the call asks; `scope` is what "always allow" would cover (`null` = don't offer it); `granted` is true when a remembered approval already answered it — show a note, not a card |
 | `handoff` | `{from, to}` |
 | `turn_started` | `{turn, agent}` |
 | `retrying` | `{attempt, max_attempts, delay, message}` — the model call failed transiently; attempt `attempt + 1` follows in `delay` seconds |

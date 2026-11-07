@@ -5348,9 +5348,81 @@ body.lv-files-splitting {
 .lv-approval-always input {
   accent-color: var(--lv-accent);
 }
+.lv-approval-always code {
+  font-family: var(--lv-mono);
+  font-size: 12px;
+  color: var(--lv-ink);
+}
+.lv-approval-reason {
+  width: 100%;
+  margin: 8px 0 10px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--lv-ink);
+  background: var(--lv-surface);
+  border: 1px solid var(--lv-border);
+  border-radius: var(--lv-radius-sm);
+}
+.lv-approval-reason:focus {
+  outline: none;
+  border-color: var(--lv-accent);
+}
 .lv-approval-auto {
   margin: 8px 0;
   font-size: 12px;
+  color: var(--lv-muted);
+}
+.lv-approval-manage {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--lv-accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ---- Grants dialog ("Allowed in this chat") ---------------------------------------------------------- */
+.lv-grants h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+.lv-grants-hint,
+.lv-grants-empty {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--lv-muted);
+}
+.lv-grants-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  min-width: 320px;
+}
+.lv-grant {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--lv-border);
+}
+.lv-grant code {
+  flex: 1;
+  font-family: var(--lv-mono);
+  font-size: 12px;
+  color: var(--lv-ink);
+  overflow-wrap: anywhere;
+}
+.lv-grant-inactive code {
+  color: var(--lv-muted);
+}
+.lv-grant-note {
+  font-size: 11px;
   color: var(--lv-muted);
 }
 

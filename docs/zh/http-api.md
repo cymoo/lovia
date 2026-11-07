@@ -148,7 +148,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/chat` | 执行一次**阻塞式** Turn → `{output, session_id, usage}`：托管 Run，请求等待其结束（[详见](#阻塞式-turn)） |
 | `POST /api/chat/stream` | **SSE**：启动 Run，或连接到 Session 中正在执行的 Run（新消息会作为追加指令注入） |
 | `POST /api/chat/reconnect?session_id=` | **SSE**：重新连接，或从 Checkpoint 恢复中断的 Run |
-| `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision}` |
+| `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision, remember?, reason?}` → `{ok, remembered}`。`remember`（仅允许时）同时为这条请求自己的 `scope` 在本对话记一条“总是允许”；`reason`（仅拒绝时）会传给模型。授权先落库再唤醒运行，同范围的下一条调用不会在此期间再问；请求没有 scope 或保存失败时 `remembered` 为 false（本次允许照常生效） |
 | `POST /api/chat/cancel?session_id=` | 取消正在执行的 Run（保留已完成的 Turn） |
 | `POST /api/chat/inject` / `uninject` | 为正在执行的 Run 排队或撤回[追加指令](cancellation.md#在运行中追加指令) |
 | `GET /api/sessions?q=&limit=&offset=` | 列出或搜索对话（置顶优先，支持分页）；`DELETE` 清空全部对话 |
@@ -160,6 +160,8 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/sessions/{id}/followups` | 生成追问建议，返回 `{followups: [...]}`；功能未启用或建议器未返回内容时为 `[]`。该操作可能消耗模型 token，因此使用 POST |
 | `POST /api/sessions/{id}/rewind` | 从某条用户消息起删除后续内容；用它的 `ref` 指定，或用 `user_turn`（它在用户消息中的索引，从 0 开始）；`ref` 已不在聊天中时返回 404，运行中返回 409，不支持 `rewind` 时返回 501 |
 | `POST /api/sessions/{id}/fork` | `{ref?}` → `{session_id}`：把聊天已完成的历史复制成一个新的独立聊天；给 `ref` 时只复制到该用户消息之前，不给则复制整个聊天。新聊天的详情带 `origin: {kind: "fork", session_id, ref, title, exists}`；删除任一聊天都不影响另一个。fork 复制的是对话，不是工作区：文件保持当前状态。有 Run 正在运行、正在收尾或可恢复时，复制整个聊天返回 409 |
+| `GET /api/sessions/{id}/grants` | 这个对话记住的授权：`[{scope, context, created_at, active}]`——在另一个 agent 或工作区根目录下给出的授权 `active` 为 false（列出但不生效） |
+| `DELETE /api/sessions/{id}/grants?scope=&context=` | 撤销一条授权 → `{removed}`；之后同范围的调用会再问，已经批准的调用不受影响 |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出聊天 |
 | `GET /api/sessions/{id}/ui-data/{ref}` | UI 组件的完整 props，由本聊天运行中的 `put_ui_data` 保存（[详情](web-server.md#大块数据)） |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
@@ -238,7 +240,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `tool_call` | `{id, name, arguments}`：`arguments` 是原始 JSON 字符串 |
 | `tool_result` | `{id, name, result, is_error, images?}`：`images` 列出 `{index, mime_type}`，图片本身通过 `GET /api/sessions/{id}/tool-images/{call_id}/{index}` 获取 |
 | `todo` | `{call_id, name, todos}`：结构化 todo 更新，替代该调用的 `tool_result` |
-| `approval_required` | `{id, name, arguments}` → 通过 `POST /api/chat/approve` 回答 |
+| `approval_required` | `{id, name, arguments, reason, scope, granted}` → 通过 `POST /api/chat/approve` 回答。`reason` 是为什么要问；`scope` 是“总是允许”会放开的范围（`null` = 不提供）；`granted` 为 true 表示已有授权替用户答了——显示一行提示而不是卡片 |
 | `handoff` | `{from, to}` |
 | `turn_started` | `{turn, agent}` |
 | `retrying` | `{attempt, max_attempts, delay, message}`：模型调用遇到暂时性错误，`delay` 秒后进行第 `attempt + 1` 次尝试 |

@@ -3,7 +3,7 @@ import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
-import { copyToClipboard, openImageLightbox } from './ui.js';
+import { copyToClipboard, openImageLightbox, showDialog } from './ui.js';
 import { forkChat, loadSessions, updateSessionTitle } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
@@ -837,36 +837,27 @@ function upsertTodoCard(todos) {
   scrollDown();
 }
 
-// Per-chat tool allowlist (this browser tab only): approving with the
-// "always allow" box ticked auto-approves that tool's future calls in the
-// same chat — repeated identical approvals are pure friction. Deliberately
-// NOT persisted: a reload starts asking again.
-const _autoApprove = new Map(); // session id → Set<tool name>
+// "Always allow" lives on the server: ticking the box on a card remembers the
+// request's own scope (`shell:git push`, `read:~/notes`) for this chat, keyed
+// to the agent and workspace it was given under. A later call in that scope
+// arrives already approved (`granted: true`) and shows as a note, not a card.
+// The list is reviewed and revoked in the grants dialog below.
 
-function isAutoApproved(name) {
-  return _autoApprove.get(store.sessionId)?.has(name) ?? false;
-}
-
-function rememberApproval(name) {
-  let set = _autoApprove.get(store.sessionId);
-  if (!set) {
-    set = new Set();
-    _autoApprove.set(store.sessionId, set);
-  }
-  set.add(name);
-}
-
+/** @param {{ id: string, name: string, arguments: string, reason?: string, scope?: string | null, granted?: boolean }} call */
 function appendApproval(call) {
   if (!store.bubble) return;
-  if (isAutoApproved(call.name)) {
+  if (call.granted) {
     // A quiet record instead of a card — the decision was already made.
     const note = document.createElement('div');
     note.className = 'lv-approval-auto';
-    note.textContent = t('approval.auto', { name: call.name });
+    note.append(t('approval.auto', { scope: call.scope || call.name }), ' ');
+    const manage = document.createElement('button');
+    manage.type = 'button';
+    manage.className = 'lv-approval-manage';
+    manage.textContent = t('grants.manage');
+    manage.addEventListener('click', () => showGrants());
+    note.append(manage);
     appendBubbleContent(store.bubble, note);
-    api
-      .approve({ session_id: store.sessionId, call_id: call.id, decision: 'approve' })
-      .catch((err) => console.error(err));
     store.body = null;
     store.rawText = '';
     scrollDown();
@@ -875,28 +866,48 @@ function appendApproval(call) {
   setToolStatus(findToolNode(call.id), 'awaiting');
   store.emit('tool-awaiting');
   const node = cloneTemplate('tmpl-approval');
+  // Why the agent is asking leads the card; the command itself stays visible
+  // underneath, because a summary can be wrong and the arguments cannot.
   const head = node.querySelector('.lv-approval-head');
-  if (head) head.textContent = t('approval.waiting');
+  if (head) head.textContent = call.reason || t('approval.waiting');
   node.querySelector('.lv-approve').textContent = t('approval.approve');
   node.querySelector('.lv-decline').textContent = t('approval.deny');
   node.querySelector('.lv-approval-name').textContent = call.name;
   fillParams(node.querySelector('.lv-approval-args'), call.arguments);
 
-  const always = document.createElement('label');
-  always.className = 'lv-approval-always';
-  const box = document.createElement('input');
-  box.type = 'checkbox';
-  always.append(box, ` ${t('approval.always', { name: call.name })}`);
-  node.querySelector('.lv-approval-actions')?.before(always);
+  const actions = node.querySelector('.lv-approval-actions');
+  // Offered only when the server names what it would cover; the label shows
+  // exactly that, never a whole tool.
+  let box = null;
+  let always = null;
+  if (call.scope) {
+    always = document.createElement('label');
+    always.className = 'lv-approval-always';
+    box = document.createElement('input');
+    box.type = 'checkbox';
+    const scope = document.createElement('code');
+    scope.textContent = call.scope;
+    always.append(box, ` ${t('approval.always')} `, scope);
+    actions?.before(always);
+  }
+  // An optional reason for denying, passed to the model with the denial so it
+  // changes course instead of retrying the same thing.
+  const why = document.createElement('input');
+  why.type = 'text';
+  why.className = 'lv-approval-reason';
+  why.placeholder = t('approval.denyReason');
+  why.setAttribute('aria-label', t('approval.denyReason'));
+  actions?.before(why);
 
   const resolve = async (decision) => {
     node.classList.add('lv-resolved');
     // A denial settles as an error result; an approval runs the call.
     if (decision === 'approve') setToolStatus(findToolNode(call.id), 'running');
-    if (decision === 'approve' && box.checked) rememberApproval(call.name);
-    always.remove();
+    const remember = decision === 'approve' && !!box?.checked;
+    const reason = decision === 'deny' ? why.value.trim() : '';
+    always?.remove();
+    why.remove();
     // Leave a record of which way it went instead of just dimming the card.
-    const actions = node.querySelector('.lv-approval-actions');
     if (actions) {
       const status = document.createElement('span');
       status.className = `lv-approval-status lv-${decision}`;
@@ -905,7 +916,14 @@ function appendApproval(call) {
       actions.replaceChildren(status);
     }
     try {
-      await api.approve({ session_id: store.sessionId, call_id: call.id, decision });
+      const res = await api.approve({
+        session_id: store.sessionId,
+        call_id: call.id,
+        decision,
+        remember,
+        reason,
+      });
+      if (remember && !res.remembered) toast(t('approval.notRemembered'), { type: 'error' });
     } catch (err) { console.error(err); }
   };
   node.querySelector('.lv-approve').addEventListener('click', () => resolve('approve'));
@@ -918,6 +936,71 @@ function appendApproval(call) {
   // and put the keyboard on the decision unless it's busy typing elsewhere.
   announce(t('a11y.approvalNeeded', { name: call.name }), { assertive: true });
   focusApprovalCard(node);
+}
+
+/** The chat's remembered approvals, each with a Revoke button. */
+export async function showGrants() {
+  let grants = [];
+  try {
+    grants = await api.listGrants(store.sessionId);
+  } catch (err) {
+    toast(err.message || t('grants.loadFailed'), { type: 'error' });
+    return;
+  }
+  const body = document.createElement('div');
+  body.className = 'lv-grants';
+  const title = document.createElement('h3');
+  title.textContent = t('grants.title');
+  body.append(title);
+  const hint = document.createElement('p');
+  hint.className = 'lv-grants-hint';
+  hint.textContent = t('grants.hint');
+  body.append(hint);
+  const list = document.createElement('ul');
+  list.className = 'lv-grants-list';
+  const empty = document.createElement('p');
+  empty.className = 'lv-grants-empty';
+  empty.textContent = t('grants.empty');
+  const sync = () => empty.toggleAttribute('hidden', list.children.length > 0);
+  for (const g of grants) {
+    const row = document.createElement('li');
+    row.className = 'lv-grant' + (g.active ? '' : ' lv-grant-inactive');
+    const scope = document.createElement('code');
+    scope.textContent = g.scope;
+    row.append(scope);
+    if (!g.active) {
+      const note = document.createElement('span');
+      note.className = 'lv-grant-note';
+      note.textContent = t('grants.inactive');
+      note.title = g.context;
+      row.append(note);
+    }
+    const revoke = document.createElement('button');
+    revoke.type = 'button';
+    revoke.className = 'lv-btn lv-btn-ghost lv-btn-sm';
+    revoke.textContent = t('grants.revoke');
+    revoke.addEventListener('click', async () => {
+      revoke.disabled = true;
+      try {
+        await api.revokeGrant(store.sessionId, g.scope, g.context);
+        row.remove();
+        sync();
+      } catch (err) {
+        revoke.disabled = false;
+        toast(err.message || t('grants.revokeFailed'), { type: 'error' });
+      }
+    });
+    row.append(revoke);
+    list.append(row);
+  }
+  body.append(list, empty);
+  sync();
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'lv-btn lv-btn-primary';
+  close.textContent = t('dialog.close');
+  const dialog = showDialog({ body, actions: close });
+  close.addEventListener('click', () => dialog.close());
 }
 
 // Focus the Approve button so keyboard and screen-reader users land on the

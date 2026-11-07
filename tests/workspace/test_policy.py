@@ -313,10 +313,10 @@ def test_wrapped_commands_are_at_most_asked_and_never_grantable() -> None:
     assert policy.decide_command("env -i git status").action == "allow"  # shell_default
 
 
-def test_shell_syntax_before_the_command_is_stepped_over() -> None:
-    # `!`, `(`, `{`, a control-flow word or a leading redirect names no
-    # program: the command after it is the command, so the baseline meets
-    # it and the scope on offer is its word — never `shell:!`.
+def test_shell_syntax_is_not_the_programs() -> None:
+    # `!`, `(`, `{`, a control-flow word, a redirection and its target —
+    # wherever they stand — name no program: what is left is the command,
+    # so the baseline meets it and the scope on offer is its word.
     policy = WorkspacePolicy()
     for cmd in (
         "! git push --force",
@@ -326,8 +326,13 @@ def test_shell_syntax_before_the_command_is_stepped_over() -> None:
         "if git push --force; then :; fi",
         "while git push --force; do :; done",
         "do git push --force",
+        "git > /dev/null push --force",
+        "git push >/dev/null 2>&1 --force",
+        "case y in x) :;; y) git push --force;; esac",
     ):
         assert policy.decide_command(cmd).action == "deny", cmd
+    # A redirect target is not an argument: `--` here ends no options.
+    assert _opted_in().decide_command("tree > -- -o .git/config").action == "ask"
     for cmd in ("! ls", "(ls)", "((ls))", "} ls", "> out ls", ">out ls", "2>&1 ls"):
         verdict = policy.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scope == "shell:ls", cmd

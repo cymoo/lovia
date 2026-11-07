@@ -334,59 +334,72 @@ def _words(segment: str) -> list[str]:
         return segment.split()
 
 
-# Shell syntax that may stand before the command in a segment — a closed set,
-# the shell's grammar, unlike the programs that follow it. It names no
-# program and changes nothing about the one that runs, so it is stepped
-# over and the command's own verdict stands (``! ls`` and ``(ls)`` are
-# ``ls``; ``! git push --force`` meets the deny). A ``for`` / ``select``
-# header runs no command of its own (the body is its own segment, after
-# ``do``): the whole segment is syntax. A ``case`` segment runs the command
-# after its pattern's ``)``.
+# What the shell keeps for itself, by its grammar — a closed set, unlike the
+# programs it runs. Redirections and their targets, grouping parentheses, a
+# ``case`` pattern, the control-flow words and ``!`` name no program and
+# change nothing about the one that runs, so they are removed from the
+# segment *wherever they stand* and the command's own verdict is the
+# segment's: ``! ls``, ``(ls)`` and ``> out ls`` are ``ls``; ``! git push
+# --force`` and ``git > /dev/null push --force`` meet the deny. A ``for`` /
+# ``select`` header, or a ``case`` header without a branch, runs no command
+# of its own: the whole segment is syntax.
 _RESERVED = frozenset(
-    "! { } ( ) if then else elif fi while until do done esac function coproc".split()
+    "! { } if then else elif fi while until do done esac function coproc".split()
 )
 _LOOP_HEADS = frozenset({"for", "select"})
 _OPERATOR_CHARS = frozenset("()<>&|;")
 
 
-def _strip_syntax(words: list[str]) -> list[str]:
-    """Step over the shell syntax before a segment's command."""
-    while words:
-        head = words[0]
-        if os.name == "nt" and head.startswith("@"):  # cmd.exe: `@echo`
-            head = head[1:]
-            words = [head, *words[1:]] if head else words[1:]
-            continue
-        if head in _LOOP_HEADS:
-            return []
-        if head == "case":
-            # `case WORD in [(]PATTERN) command`: the command follows the
-            # first `)`; without one the segment is the header alone.
-            if ")" not in words:
-                return []
-            words = words[words.index(")") + 1 :]
-        elif head in _RESERVED:
-            words = words[1:]
-        elif set(head) <= _OPERATOR_CHARS:
-            # `>` / `<&` take the next word as their target; `(` does not.
-            target = 1 if ("<" in head or ">" in head) else 0
-            words = words[1 + target :]
-        elif head.isdigit() and len(words) > 1 and set(words[1]) <= _OPERATOR_CHARS:
-            words = words[1:]  # the fd of `2>&1`; the operator goes next
+def _is_redirect(word: str) -> bool:
+    return bool(word) and set(word) <= _OPERATOR_CHARS and ("<" in word or ">" in word)
+
+
+def _program_words(lexed: list[str]) -> list[str]:
+    """The words the program receives: the segment minus what the shell
+    keeps (redirections with their targets, grouping parentheses, a
+    ``case`` pattern)."""
+    words: list[str] = []
+    depth = 0
+    skip = False
+    for i, word in enumerate(lexed):
+        if skip:
+            skip = False  # a redirection's target
+        elif _is_redirect(word):
+            skip = True
+        elif word.isdigit() and i + 1 < len(lexed) and _is_redirect(lexed[i + 1]):
+            pass  # the fd of `2>&1`
+        elif set(word) == {"("}:
+            depth += len(word)
+        elif set(word) == {")"}:
+            for _ in word:
+                if depth:
+                    depth -= 1
+                else:
+                    words = []  # unmatched: a `case` pattern ended; the command follows
         else:
-            break
+            words.append(word)
     return words
 
 
-def _strip_wrappers(words: list[str]) -> tuple[list[str], list[str]]:
-    """Return ``(remaining words, stripped words)``: the command after any
-    shell syntax and wrappers, and the wrappers — syntax is not reported,
-    since it changes nothing about what runs (see ``_strip_syntax``)."""
+def _strip_wrappers(lexed: list[str]) -> tuple[list[str], list[str]]:
+    """Return ``(command words, wrappers)``: what the program receives once
+    the shell's own syntax and any wrappers are gone, and the wrappers —
+    syntax is not reported, since it changes nothing about what runs."""
+    if lexed and lexed[0] == "case":
+        # `case WORD in [(]PATTERN) command`: the command follows the first
+        # `)`, whatever the pattern looks like; without one, a header alone.
+        if ")" not in lexed:
+            return [], []
+        lexed = lexed[lexed.index(")") + 1 :]
+    words = _program_words(lexed)
+    if os.name == "nt" and words and words[0].startswith("@"):  # cmd.exe: `@echo`
+        words = [words[0][1:], *words[1:]] if len(words[0]) > 1 else words[1:]
+    if words and words[0] in _LOOP_HEADS:
+        return [], []
+    while words and words[0] in _RESERVED:
+        words = words[1:]
     stripped: list[str] = []
     while words:
-        words = _strip_syntax(words)
-        if not words:
-            break
         head = words[0]
         name, eq, _ = head.partition("=")
         if eq and name.isidentifier():  # VAR=value

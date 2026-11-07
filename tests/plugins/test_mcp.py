@@ -463,11 +463,11 @@ async def test_policy_fields_reach_built_tools(
     monkeypatch.setattr(MCPConnection, "_open_session", fake_open)
 
     server = _FakeServer(
-        needs_approval=True, retries=2, timeout=1.5, max_output_chars=4096
+        permission="ask", retries=2, timeout=1.5, max_output_chars=4096
     )
     conn = await server.open()
     (tool,) = conn.tools()
-    assert tool.needs_approval is True
+    assert tool.permission == "ask"
     assert tool.retries == 2
     assert tool.timeout == 1.5
     assert tool.max_output_chars == 4096
@@ -623,22 +623,22 @@ async def test_call_unknown_tool_suggests_near_matches() -> None:
         await run_tool(tools["call_mcp_tool"], {"tool": "create_issu"}, _ctx())
 
 
-async def test_call_delegates_needs_approval_to_the_underlying_tool() -> None:
+async def test_call_delegates_permission_to_the_underlying_tool() -> None:
     tools, _ = await _deferred_plugin(
-        needs_approval=lambda args, ctx: bool(args.get("danger"))
+        permission=lambda args, ctx: "ask" if args.get("danger") else "allow"
     )
     call_tool = tools["call_mcp_tool"]
     ctx = _ctx()
     safe = {"tool": "create_issue", "arguments": {}}
     hot = {"tool": "create_issue", "arguments": {"danger": True}}
-    assert call_tool.requires_approval(safe, ctx) is False
-    assert call_tool.requires_approval(hot, ctx) is True
+    assert call_tool.decide(safe, ctx).action == "allow"
+    assert call_tool.decide(hot, ctx).action == "ask"
     # Unknown target: no approval prompt; the call itself will error instead.
-    assert call_tool.requires_approval({"tool": "nope"}, ctx) is False
+    assert call_tool.decide({"tool": "nope"}, ctx).action == "allow"
     # Raw args may be malformed (predicates run before validation): a
     # non-object ``arguments`` is judged as {} instead of crashing.
     bad = {"tool": "create_issue", "arguments": ["not", "a", "dict"]}
-    assert call_tool.requires_approval(bad, ctx) is False
+    assert call_tool.decide(bad, ctx).action == "allow"
 
 
 async def test_call_honors_underlying_renderer_and_output_cap() -> None:

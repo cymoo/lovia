@@ -43,7 +43,7 @@ Shared options (on either config):
 | --- | --- | --- |
 | `name` | `None` | prefixes the server's tools: `name="web"` → `web__fetch` |
 | `include_tools` / `exclude_tools` | `None` | allowlist / denylist of raw tool names |
-| `needs_approval` | `False` | bool or predicate — gates every tool from this server through the normal [approval flow](tools.md#tool-approval) |
+| `permission` | `"allow"` | `"ask"` / `"deny"` / `Verdict` or a predicate — judges every tool from this server through the normal [approval flow](tools.md#tool-approval) |
 | `retries` / `timeout` / `max_output_chars` / `result_renderer` | `None` | per-tool policies, applied to each converted tool ([Tools](tools.md)) |
 | `auto_reconnect` | `True` | reopen a dead connection and retry the call once |
 | `close_after_run` | `True` | close the connection when the run ends |
@@ -148,7 +148,7 @@ plugins=[MCP(
 ```
 
 Deferral changes *when schemas enter the context*, not how tools run: a
-deferred call is fully delegated, so the server's `needs_approval`,
+deferred call is fully delegated, so the server's `permission`,
 `retries`, `timeout`, `result_renderer`, and `max_output_chars` apply
 exactly as if the tool were exposed directly. Names must stay unambiguous —
 a deferred name colliding with another deferred or exposed tool in the same
@@ -163,8 +163,8 @@ plugin raises `UserError` at setup (give servers a `name=` prefix).
 - **MCP tools run in parallel by default**, like every tool. A server
   whose tools mutate shared state has no barrier protection — wrap the
   risky ones via `include_tools` split across two server entries, or gate
-  them with `needs_approval`.
-- **`needs_approval` is per *server*, not per tool.** Splitting one server
+  them with `permission="ask"`.
+- **`permission` is per *server*, not per tool.** Splitting one server
   into two `MCPServer` entries (same command, different
   `include_tools`) is the idiom for "read tools free, write tools gated".
 - **stdio servers inherit your process environment** unless you pass

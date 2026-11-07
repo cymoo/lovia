@@ -32,8 +32,8 @@ def test_drive_pattern_grants_a_path_outside_the_root(
     outside = tmp_path / "outside"
     policy = WorkspacePolicy(path_rules=(PathRule(spell(outside), "allow"),))
     session = _session(tmp_path, policy)
-    assert session.decide_path(str(outside / "sub" / "a.txt")) == "allow"
-    assert session.decide_path(str(tmp_path / "elsewhere.txt")) == "deny"
+    assert session.decide_path(str(outside / "sub" / "a.txt")).action == "allow"
+    assert session.decide_path(str(tmp_path / "elsewhere.txt")).action == "deny"
 
 
 @windows_only
@@ -46,8 +46,8 @@ def test_drive_glob_denies_a_path_outside_the_root(
         read_outside="allow", denied_paths=(spell(outside / "**"),)
     )
     session = _session(tmp_path, policy)
-    assert session.decide_path(str(outside / "sub" / "a.txt")) == "deny"
-    assert session.decide_path(str(tmp_path / "elsewhere.txt")) == "allow"
+    assert session.decide_path(str(outside / "sub" / "a.txt")).action == "deny"
+    assert session.decide_path(str(tmp_path / "elsewhere.txt")).action == "allow"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="C: is a drive on Windows")
@@ -55,8 +55,10 @@ def test_drive_like_pattern_stays_workspace_relative_on_posix() -> None:
     # On POSIX "C:" is an ordinary directory name, as resolve_path sees it.
     policy = WorkspacePolicy(read_outside="allow", denied_paths=("C:/data",))
     decide = policy.decide_path
-    assert decide(rel="C:/data/x", abs_posix="/ws/C:/data/x", op="read") == "deny"
-    assert decide(rel=None, abs_posix="/srv/C:/data/x", op="read") == "allow"
+    assert (
+        decide(rel="C:/data/x", abs_posix="/ws/C:/data/x", op="read").action == "deny"
+    )
+    assert decide(rel=None, abs_posix="/srv/C:/data/x", op="read").action == "allow"
 
 
 @windows_only
@@ -88,11 +90,12 @@ def test_shell_command_is_judged_on_a_drive_path(
     )
     session = _session(tmp_path, policy)
     target = spell(tmp_path / "outside" / "a.txt")
-    assert session.decide_command(f"type {target}") == "ask"
-    assert session.decide_command(f"dd of={target}") == "ask"
-    assert session.decide_command(f"dir > {target}") == "deny"
+    assert session.decide_command(f"type {target}").action == "ask"
+    assert session.decide_command(f"dd of={target}").action == "ask"
+    assert session.decide_command(f"dir > {target}").action == "deny"
     assert (
-        session.decide_command(f"dir > {spell(tmp_path / 'ws' / 'a.txt')}") == "allow"
+        session.decide_command(f"dir > {spell(tmp_path / 'ws' / 'a.txt')}").action
+        == "allow"
     )
 
 

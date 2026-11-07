@@ -69,7 +69,8 @@ Python 3.10+. Run every Python command through the repo virtualenv: `.venv/bin/p
 
 - Don't import `workspace/` or `web/` from core (type-only imports excepted).
 - Don't add a hard dependency beyond the current core set — every other capability is an opt-in extra.
-- Don't rename or remove public API without a deprecation shim kept for ≥ 1 minor release.
+- From 1.0 on, don't rename or remove public API without a deprecation shim kept for ≥ 1 minor
+  release. Before 1.0, breaking changes ship in patch releases with no shim (see `docs/en/stability.md`).
 - Don't build a framework abstraction for what fits in a ~10-line user-side recipe. **Decline before designing.**
 
 ## Commit convention

@@ -153,7 +153,7 @@ async def test_blocking_turn_does_not_park_on_approval() -> None:
     decides, else the call is denied — the run never waits."""
     ran: list[str] = []
 
-    @tool(needs_approval=True)
+    @tool(permission="ask")
     async def sensitive() -> str:
         """Sensitive."""
         ran.append("yes")

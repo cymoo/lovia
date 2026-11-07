@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Protocol
 
-from .policy import Decision, WorkspacePolicy
+from .policy import Verdict, WorkspacePolicy
 from .types import (
     CommandResult,
     DirEntry,
@@ -33,17 +33,17 @@ class WorkspaceSession(Protocol):
     resolved (symlinks followed) and judged against the session's
     :class:`WorkspacePolicy` ACL on every operation, so custom tools that use
     the session directly are gated the same way the built-in tools are —
-    ``deny`` raises, ``ask`` is the tool layer's job (``needs_approval``).
+    ``deny`` raises, ``ask`` is the tool layer's job (``Tool.permission``).
     """
 
     policy: WorkspacePolicy
 
-    def decide_path(self, path: str, *, write: bool = False) -> Decision:
-        """Policy decision for one path (for tool approval predicates)."""
+    def decide_path(self, path: str, *, write: bool = False) -> Verdict:
+        """Policy verdict for one path (for the tools' permission predicates)."""
         ...
 
-    def decide_command(self, command: str, cwd: str = ".") -> Decision:
-        """Combined decision for a shell command: static rules ⊕ path guard."""
+    def decide_command(self, command: str, cwd: str = ".") -> Verdict:
+        """Combined verdict for a shell command: static rules ⊕ path guard."""
         ...
 
     async def read_text(

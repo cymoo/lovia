@@ -766,7 +766,7 @@ async def test_approval_flow_via_http() -> None:
 
     import httpx
 
-    @tool(needs_approval=True)
+    @tool(permission="ask")
     async def sensitive() -> str:
         """Sensitive."""
         return "did it"
@@ -847,7 +847,7 @@ async def _make_approval_event(name: str = "do_it") -> object:
             if not decision_fut.done():
                 decision_fut.set_result(True)
 
-        def reject(self) -> None:  # type: ignore[override]
+        def reject(self, reason: str = "") -> None:  # type: ignore[override]
             if not decision_fut.done():
                 decision_fut.set_result(False)
 

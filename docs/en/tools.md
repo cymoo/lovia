@@ -37,7 +37,7 @@ Choose safeguards from the Tool's behavior:
 | Read-only and independent | Keep default concurrency |
 | Writes or other non-reentrant side effects | `parallel=False` |
 | Temporary failures are safe to retry | `retries=` and `timeout=` |
-| Charges, sends, deletes, or other sensitive effects | `needs_approval=True` |
+| Charges, sends, deletes, or other sensitive effects | `permission="ask"` |
 | May return a large payload | `max_output_chars=` |
 
 ## Schema derivation
@@ -185,15 +185,25 @@ raw, un-rendered value still reaches observers via
 
 ## Tool approval
 
-Use `needs_approval` when a Tool has side effects that require a human
-decision. It accepts a boolean or a predicate over the parsed arguments and
-live Run Context:
+Every Tool carries a `permission`: `"allow"` (the default) runs the call,
+`"ask"` routes it through a human decision, `"deny"` refuses it. It can be a
+constant, a `Verdict` (a decision plus the *reason*), or a predicate over the
+parsed arguments and live Run Context:
 
 ```python
-from lovia import Agent, Runner, events, tool
+from lovia import Agent, Runner, Verdict, events, tool
 
 
-@tool(needs_approval=lambda args, ctx: args["amount_cents"] > 5_000)
+def refund_policy(args, ctx):
+    cents = args["amount_cents"]
+    if cents > 1_000_000:
+        return Verdict("deny", "Refunds above 10,000 USD go through finance.")
+    if cents > 5_000:
+        return Verdict("ask", f"Refund of {cents / 100:.0f} USD exceeds the 50 USD limit.")
+    return "allow"
+
+
+@tool(permission=refund_policy)
 async def refund(order_id: str, amount_cents: int) -> str:
     """Issue a refund."""
     return "refunded"
@@ -204,17 +214,30 @@ handle = Runner.stream(agent, "Refund 60 USD for order A123.")
 
 async for event in handle:
     if isinstance(event, events.ApprovalRequired):
-        event.approve()  # or event.reject()
+        print(event.reason)  # "Refund of 60 USD exceeds the 50 USD limit."
+        event.approve()  # or event.reject("use store credit instead")
 
 result = await handle.result()
 ```
 
-The runner emits `ApprovalRequired` before invoking the Tool. A decision is
-resolved in this order:
+`@tool(permission="ask")` is the whole configuration for a tool that should
+always ask. A predicate returns a decision or a `Verdict` — never a `bool`
+(its meaning is too easy to invert; a `bool` is treated as an invalid verdict
+and the call is denied with a `ToolCallFailed` event).
 
-1. The streaming consumer calls `event.approve()` or `event.reject()`.
-2. The Agent's `approval_handler` returns `True` / `"allow"`, `False` /
-   `"deny"`, or `"ask"` to defer to the consumer.
+A `deny` verdict never reaches a human: the model gets `Tool refund was
+denied by policy: <reason>` and nothing runs. An `ask` verdict makes the
+runner emit `ApprovalRequired` — carrying the verdict's `reason` and `scope`
+(what an "always allow" grant would cover; `None` when none should be
+offered) — and a decision is resolved in this order:
+
+1. The streaming consumer calls `event.approve()` or
+   `event.reject(reason)`. The reason reaches the model as
+   `Tool refund was not approved: <reason>`, so it can change course instead
+   of retrying.
+2. The Agent's `approval_handler(request, ctx)` — called with the pending
+   `ApprovalRequired` — returns `True` / `"allow"`, `False` / `"deny"`,
+   `Approval(False, reason)`, or `"ask"` to defer to the consumer.
 3. If nobody decides, the call is denied. Approval always fails closed.
 
 For a web endpoint, bot, or another task, use the Run Handle's out-of-band
@@ -222,17 +245,34 @@ channel:
 
 ```python
 handle.approvals.approve(call_id)
-handle.approvals.reject(call_id)
+handle.approvals.reject(call_id, reason="not today")
 handle.approvals.release(decision=False)  # deny everything still pending
 ```
 
 The bundled server exposes the same flow over SSE and
-`POST /api/chat/approve`. Workspace `ask` decisions and MCP tools configured
-with `needs_approval` also use this one channel.
+`POST /api/chat/approve`. Workspace `ask` verdicts and MCP tools configured
+with `permission` also use this one channel.
 
-Approval is preflight and preserves request order. A predicate or handler that
-raises denies the call. Non-streaming `Runner.run()` callers must configure an
-`approval_handler`; otherwise gated calls are denied because no consumer can
+Remembering approvals ("always allow `git push` in this chat") is the
+consumer's job, keyed by `request.scope`; a programmatic version is a
+five-line `approval_handler`:
+
+```python
+granted: set[str] = set()
+
+
+def remember(request: events.ApprovalRequired, ctx) -> str:
+    return "allow" if request.scope in granted else "ask"
+
+
+agent = Agent(..., approval_handler=remember)
+# when the user approves and ticks "always": granted.add(request.scope)
+```
+
+Permission is judged in preflight, once per model request (never per retry),
+and preserves request order. A predicate or handler that raises denies the
+call. Non-streaming `Runner.run()` callers must configure an
+`approval_handler`; otherwise `ask` calls are denied because no consumer can
 answer the event. Decisions are not persisted, so a resumed pending call asks
 again.
 
@@ -265,7 +305,7 @@ time. Argument validation happens innermost, at the function boundary — a
 policy that needs coerced values validates for itself.
 
 For gating that needs a *human decision* rather than code, use the
-[`needs_approval` flow](#tool-approval).
+[`permission` flow](#tool-approval).
 
 ## Building tools programmatically
 

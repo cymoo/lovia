@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from .. import events
+from ..approvals import Approval
 from ..checkpointer import CheckpointOptions
 from ..log_config import CURRENT_AGENT
 from ..messages import Message, Usage
@@ -429,21 +430,28 @@ class RunController:
             if self.deps.approval_timeout is None
             else f"auto-deny after {self.deps.approval_timeout:.0f}s",
         )
-        decision = self.deps.approvals.await_decision(self.session_id, ev)
+        decision = asyncio.ensure_future(
+            self.deps.approvals.await_decision(self.session_id, ev)
+        )
         if self.deps.approval_timeout is None:
             await decision
             return
-        try:
-            await asyncio.wait_for(decision, self.deps.approval_timeout)
-        except asyncio.TimeoutError:
-            # wait_for cancelled the awaiter, which default-denies on the way
-            # out — the runner unblocks with a rejection; the run continues.
+        done, _ = await asyncio.wait({decision}, timeout=self.deps.approval_timeout)
+        if not done:
+            # Resolve (deny) rather than cancel the awaiter, so the model is
+            # told *why* — "timed out", not the cancellation path's "run was
+            # cancelled". The runner unblocks with the rejection; the run
+            # continues.
             log.info(
                 "approval %s for session %s timed out after %.0fs: denied",
                 ev.call.id,
                 self.session_id,
                 self.deps.approval_timeout,
             )
+            await self.deps.approvals.resolve(
+                self.session_id, ev.call.id, Approval(False, "approval timed out")
+            )
+        await decision
 
     async def _persist_partial(self, run_id: str, started_at: float | None) -> None:
         """Fold this run's completed turns into the durable Session.

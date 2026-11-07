@@ -113,7 +113,7 @@ Handle 只能迭代一次。如果在终止事件前放弃迭代，`result()` �
 | `parameters` | 自动推导 | 模型提供参数的 JSON Schema |
 | `invoke` | 包装后的函数 | 接收原始参数和 `RunContext` 的异步 callable |
 | `strict` | `False`（仅 `@tool`） | 启用时要求完整函数注解并生成严格 Schema |
-| `needs_approval` | `False` | 在执行前要求审批的布尔值或谓词 |
+| `permission` | `"allow"` | `"allow"` / `"ask"` / `"deny"`、带理由的 `Verdict`，或返回它们的谓词 |
 | `retries` | `None` | 第一次后的重试次数；`None` 继承 Agent 默认值 |
 | `timeout` | `None` | 单次尝试秒数；`None` 继承 Agent 默认值 |
 | `parallel` | `True` | 是否允许与同一 Turn 的其他调用重叠执行 |

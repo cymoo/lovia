@@ -36,7 +36,7 @@ from ..tools import Tool, tool
 from ..workspace.errors import FileTooLargeError
 from ..workspace.tools import (
     VIEW_IMAGE_MAX_BYTES,
-    path_needs_approval,
+    path_permission,
     require_workspace,
 )
 
@@ -74,7 +74,7 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
             "approval or be denied by policy.\n"
             "- Supported: jpg, jpeg, png, gif, webp; over 5 MB is refused."
         ),
-        needs_approval=path_needs_approval("read"),
+        permission=path_permission("read"),
     )
     async def describe_image(
         ctx: RunContext[Any],

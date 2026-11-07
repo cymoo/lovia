@@ -19,11 +19,11 @@ from typing import (
     Awaitable,
     Callable,
     Generic,
-    Literal,
     TypeVar,
     Union,
 )
 
+from .approvals import Approval, Decision
 from .context.compaction import Compaction
 from .exceptions import UserError
 from .handoff import Handoff, agent_as_tool
@@ -34,9 +34,10 @@ from .tools import Tool
 
 if TYPE_CHECKING:
     from .context.policy import ContextPolicy
+    from .events import ApprovalRequired
     from .guardrails import GuardrailFn
     from .hooks import AgentHooks
-    from .messages import Message, ToolCall
+    from .messages import Message
     from .reliability import RunBudget
     from .output import OutputRepairStrategy
     from .plugins import Plugin
@@ -54,15 +55,18 @@ TDeps = TypeVar("TDeps")
 InstructionsFn = Callable[["RunContext[Any]"], "str | Awaitable[str]"]
 
 # A programmatic approval decision: ``True``/``"allow"`` permits the call,
-# ``False``/``"deny"`` blocks it, and ``"ask"`` defers to the streaming
-# consumer (the call is denied if nobody resolves it — fail closed).
-ApprovalDecision = Union[bool, Literal["allow", "deny", "ask"]]
+# ``False``/``"deny"`` blocks it, ``Approval(False, reason)`` blocks it and
+# tells the model why, and ``"ask"`` defers to the streaming consumer (the
+# call is denied if nobody resolves it — fail closed).
+ApprovalDecision = Union[bool, Decision, Approval]
 
-# A programmatic approval handler consulted for tools gated by
-# ``needs_approval``. May be sync or async (the runner awaits the result
-# either way).
+# A programmatic approval handler consulted for tools whose permission
+# verdict is ``ask``. Receives the pending ``ApprovalRequired`` event (the
+# call plus the verdict's ``reason`` / ``scope``) and the live run context,
+# like hooks and guardrails. May be sync or async (the runner awaits the
+# result either way).
 ApprovalHandler = Callable[
-    ["ToolCall", "RunContext[Any]"],
+    ["ApprovalRequired", "RunContext[Any]"],
     "ApprovalDecision | Awaitable[ApprovalDecision]",
 ]
 
@@ -158,11 +162,12 @@ class Agent(Generic[TDeps]):
     ``None`` = no observers."""
 
     approval_handler: ApprovalHandler | None = None
-    """Programmatic policy consulted when a tool gated by ``needs_approval``
-    is about to run: return ``True``/``"allow"`` to permit, ``False``/
-    ``"deny"`` to block, ``"ask"`` to defer to the streaming consumer. With
-    ``None``, the streaming consumer decides — and an unresolved request is
-    denied, so runs never hang."""
+    """Programmatic answer to a tool's ``ask`` verdict, called as
+    ``handler(request, ctx)`` with the pending ``ApprovalRequired`` event:
+    return ``True``/``"allow"`` to permit, ``False``/``"deny"`` or
+    ``Approval(False, reason)`` to block, ``"ask"`` to defer to the streaming
+    consumer. With ``None``, the streaming consumer decides — and an
+    unresolved request is denied, so runs never hang."""
 
     input_guardrails: list["GuardrailFn"] = field(default_factory=list)
     """Checks run against the input before the first model call; returning a

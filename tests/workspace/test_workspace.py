@@ -50,7 +50,7 @@ def test_readable_writable_shorthands_expand_to_rules(tmp_path) -> None:
     )
     assert rules[1].pattern == "~/docs" and rules[1].ops == frozenset({"read"})
     assert (
-        ws.policy.decide_path(rel=None, abs_posix="/srv/out/f.txt", op="write")
+        ws.policy.decide_path(rel=None, abs_posix="/srv/out/f.txt", op="write").action
         == "allow"
     )
 
@@ -69,10 +69,12 @@ def test_readonly_mode_accepts_readable_grants(tmp_path) -> None:
     assert ws.policy.write == "deny"
     # The grant opens exactly its scope; everything else outside stays denied.
     assert (
-        ws.policy.decide_path(rel=None, abs_posix="/srv/ref/doc.md", op="read")
+        ws.policy.decide_path(rel=None, abs_posix="/srv/ref/doc.md", op="read").action
         == "allow"
     )
     assert (
-        ws.policy.decide_path(rel=None, abs_posix=tmp_path.parent.as_posix(), op="read")
+        ws.policy.decide_path(
+            rel=None, abs_posix=tmp_path.parent.as_posix(), op="read"
+        ).action
         == "deny"
     )

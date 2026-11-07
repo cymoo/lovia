@@ -17,7 +17,15 @@ from .errors import (
     WorkspaceError,
 )
 from .local import LocalWorkspaceSession
-from .policy import CommandRule, Decision, FileOp, PathRule, WorkspacePolicy
+from .policy import (
+    CommandRule,
+    Decision,
+    FileOp,
+    PathRule,
+    Verdict,
+    WorkspacePolicy,
+    merge_verdicts,
+)
 
 # ``WorkspaceLike`` / ``WorkspaceSession`` / ``ShellExecutor`` are the
 # extension protocols for authoring a custom backend or sandboxing executor;
@@ -70,10 +78,12 @@ __all__ = [
     "ProcessStart",
     "ProcessStatus",
     "SCRATCH_DIR",
+    "Verdict",
     "Workspace",
     "WorkspaceClosedError",
     "WorkspaceError",
     "WorkspaceLimits",
     "WorkspaceMode",
     "WorkspacePolicy",
+    "merge_verdicts",
 ]

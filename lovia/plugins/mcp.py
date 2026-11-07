@@ -66,11 +66,12 @@ from typing import (
 
 from pydantic import Field
 
+from ..approvals import Verdict
 from ..types import JsonObject
 from ..exceptions import MCPError, ToolError, UserError
 from ..run_context import RunContext
 from ..tools.base import (
-    ApprovalPredicate,
+    Permission,
     Tool,
     ToolResultRenderer,
     render_tool_result,
@@ -244,7 +245,7 @@ class MCPConnection:
     prefix: str | None = None
     include_tools: set[str] | None = None
     exclude_tools: set[str] | None = None
-    needs_approval: bool | ApprovalPredicate = False
+    permission: Permission = "allow"
     retries: int | None = None
     timeout: float | None = None
     max_output_chars: int | None = None
@@ -372,7 +373,7 @@ class MCPConnection:
                         _field(entry, "input_schema", "inputSchema")
                     ),
                     invoke=self._make_invoke(raw_name),
-                    needs_approval=self.needs_approval,
+                    permission=self.permission,
                     retries=self.retries,
                     timeout=self.timeout,
                     max_output_chars=self.max_output_chars,
@@ -472,7 +473,7 @@ class MCPServer:
     name: str | None = None
     include_tools: list[str] | None = None
     exclude_tools: list[str] | None = None
-    needs_approval: bool | ApprovalPredicate = False
+    permission: Permission = "allow"
     retries: int | None = None
     timeout: float | None = None
     # Cap (in chars) on each tool's rendered output — MCP servers are the
@@ -510,7 +511,7 @@ class MCPServer:
             prefix=self.name,
             include_tools=set(self.include_tools) if self.include_tools else None,
             exclude_tools=set(self.exclude_tools) if self.exclude_tools else None,
-            needs_approval=self.needs_approval,
+            permission=self.permission,
             retries=self.retries,
             timeout=self.timeout,
             max_output_chars=self.max_output_chars,
@@ -688,15 +689,15 @@ def _make_search_tool(catalog: dict[str, Tool]) -> Tool:
 
 
 def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
-    def _needs(args: dict[str, Any], ctx: RunContext[Any]) -> bool:
+    def _permission(args: dict[str, Any], ctx: RunContext[Any]) -> Verdict:
         target = catalog.get(str(args.get("tool", "")))
         if target is None:
-            return False  # the call fails with unknown-tool before running
-        # Approval predicates see *raw* args — a model may send a non-object
+            return Verdict("allow")  # the call fails with unknown-tool before running
+        # Permission predicates see *raw* args — a model may send a non-object
         # ``arguments``. Judge that as {} rather than crash: the call itself
         # still fails argument validation with a correctable error.
         raw = args.get("arguments")
-        return target.requires_approval(dict(raw) if isinstance(raw, dict) else {}, ctx)
+        return target.decide(dict(raw) if isinstance(raw, dict) else {}, ctx)
 
     @tool(
         name="call_mcp_tool",
@@ -707,7 +708,7 @@ def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
             "- Only deferred MCP tools are reachable here; regular tools "
             "are called directly."
         ),
-        needs_approval=_needs,
+        permission=_permission,
     )
     async def call_mcp_tool(
         ctx: RunContext[Any],

@@ -93,12 +93,14 @@ from .plugins import (
     Todo,
 )
 from .tools import Tool, tool
+from .approvals import Approval, Verdict
 from .log_config import enable_logging
 
 __all__ = [
     "Agent",
     "AgentHooks",
     "AnthropicProvider",
+    "Approval",
     "BudgetExceeded",
     "CancelToken",
     "Message",
@@ -154,6 +156,7 @@ __all__ = [
     "ToolError",
     "Usage",
     "UserError",
+    "Verdict",
     "assistant",
     "enable_logging",
     "events",
@@ -163,4 +166,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.9.133"
+__version__ = "0.9.134"

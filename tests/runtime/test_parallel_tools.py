@@ -181,7 +181,7 @@ async def test_approval_mid_batch_keeps_backpressure() -> None:
         await asyncio.sleep(0.05)
         return "slow done"
 
-    @tool(needs_approval=True)
+    @tool(permission="ask")
     async def sensitive() -> str:
         return "secret done"
 

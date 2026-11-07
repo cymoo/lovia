@@ -37,7 +37,7 @@ from lovia.workspace.tools import (
     _render_file_change,
     _render_matches,
     _render_process_output,
-    _shell_needs_approval,
+    _shell_permission,
 )
 
 
@@ -213,21 +213,21 @@ def test_shell_schema_exposes_description() -> None:
     assert "shown to the user" in prop["description"]
 
 
-def test_shell_needs_approval_ignores_description(session) -> None:
+def test_shell_permission_ignores_description(session) -> None:
     # Model-authored prose must not sway the verdict in either direction.
     base = {"command": "cat /etc/hosts"}
     ctx = _ctx(session)
-    assert _shell_needs_approval(base | {"description": "harmless, promise"}, ctx) == (
-        _shell_needs_approval(base, ctx)
+    assert _shell_permission(base | {"description": "harmless, promise"}, ctx) == (
+        _shell_permission(base, ctx)
     )
 
 
-def test_shell_needs_approval_ignores_background(session) -> None:
+def test_shell_permission_ignores_background(session) -> None:
     # Backgrounding must not soften (or harden) how a command is judged.
     base = {"command": "cat /etc/hosts"}
     ctx = _ctx(session)
-    assert _shell_needs_approval(base | {"background": True}, ctx) == (
-        _shell_needs_approval(base, ctx)
+    assert _shell_permission(base | {"background": True}, ctx) == (
+        _shell_permission(base, ctx)
     )
 
 
@@ -463,36 +463,40 @@ def test_render_command_result_timeout() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shell approval gate (fail-closed)
+# Shell permission gate (fail-closed)
 # ---------------------------------------------------------------------------
 
 
-def test_shell_needs_approval_lets_setup_error_surface_without_workspace() -> None:
-    # No workspace -> nothing can run; skipping the approval gate lets
+def test_shell_permission_lets_setup_error_surface_without_workspace() -> None:
+    # No workspace -> nothing can run; skipping the gate lets
     # require_workspace raise its setup hint instead of "not approved".
-    assert _shell_needs_approval({"command": "ls"}, _ctx(None)) is False
+    assert _shell_permission({"command": "ls"}, _ctx(None)).action == "allow"
 
 
-def test_shell_needs_approval_fails_closed_on_bad_args(session) -> None:
+def test_shell_permission_fails_closed_on_bad_args(session) -> None:
     # Missing / non-string command -> ask rather than run something unjudged.
-    assert _shell_needs_approval({}, _ctx(session)) is True
-    assert _shell_needs_approval({"command": 123}, _ctx(session)) is True
+    assert _shell_permission({}, _ctx(session)).action == "ask"
+    assert _shell_permission({"command": 123}, _ctx(session)).action == "ask"
 
 
-def test_shell_needs_approval_consults_path_claims(tmp_path) -> None:
+def test_shell_permission_consults_path_claims(tmp_path) -> None:
     from lovia.workspace import WorkspacePolicy
 
     coding = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
-    # Outside read claim escalates to ask even without a command rule.
-    assert _shell_needs_approval({"command": "cat /etc/hosts"}, _ctx(coding)) is True
+    # Outside read claim escalates to ask even without a command rule, and
+    # the verdict says why.
+    verdict = _shell_permission({"command": "cat /etc/hosts"}, _ctx(coding))
+    assert verdict.action == "ask" and "outside the workspace root" in verdict.reason
     trusted = LocalWorkspaceSession(
         root=str(tmp_path), policy=WorkspacePolicy.trusted()
     )
-    assert _shell_needs_approval({"command": "cat /etc/hosts"}, _ctx(trusted)) is False
+    assert _shell_permission({"command": "cat /etc/hosts"}, _ctx(trusted)).action == (
+        "allow"
+    )
 
 
 # ---------------------------------------------------------------------------
-# File-tool approval gate (the ask side of the path ACL)
+# File-tool permission gate (the ask side of the path ACL)
 # ---------------------------------------------------------------------------
 
 
@@ -501,31 +505,29 @@ def test_file_tools_ask_for_outside_paths_under_coding(tmp_path) -> None:
 
     session = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
     ctx = _ctx(session)
-    assert read_file.requires_approval({"path": "/etc/hosts"}, ctx) is True
+    assert read_file.decide({"path": "/etc/hosts"}, ctx).action == "ask"
     # Inside the root: no approval needed.
-    assert read_file.requires_approval({"path": "inside.txt"}, ctx) is False
-    # Outside writes are denied under coding -> no pointless approval prompt;
-    # the call fails at the session with a clear error instead.
-    assert (
-        write_file.requires_approval({"path": "/tmp/evil.txt", "content": "x"}, ctx)
-        is False
-    )
+    assert read_file.decide({"path": "inside.txt"}, ctx).action == "allow"
+    # Outside writes are denied under coding: the verdict says so up front,
+    # with the reason, so the model learns why without anything running.
+    verdict = write_file.decide({"path": "/tmp/evil.txt", "content": "x"}, ctx)
+    assert verdict.action == "deny" and "outside the workspace root" in verdict.reason
 
 
 def test_file_tools_skip_approval_without_workspace() -> None:
     # Without a workspace the tool raises its setup hint on invoke; gating it
     # behind approval would replace that hint with "not approved".
     ctx = _ctx(None)
-    assert read_file.requires_approval({"path": "x"}, ctx) is False
+    assert read_file.decide({"path": "x"}, ctx).action == "allow"
     assert (
-        edit_file.requires_approval({"path": "x", "old": "a", "new": "b"}, ctx) is False
+        edit_file.decide({"path": "x", "old": "a", "new": "b"}, ctx).action == "allow"
     )
     # Malformed args with a live workspace still fail closed.
 
 
 def test_file_tools_fail_closed_on_bad_args(session) -> None:
     ctx = _ctx(session)
-    assert read_file.requires_approval({"path": 123}, ctx) is True
+    assert read_file.decide({"path": 123}, ctx).action == "ask"
 
 
 def test_inside_writes_ask_when_policy_says_ask(tmp_path) -> None:
@@ -535,8 +537,8 @@ def test_inside_writes_ask_when_policy_says_ask(tmp_path) -> None:
         root=str(tmp_path), policy=WorkspacePolicy(write="ask")
     )
     ctx = _ctx(session)
-    assert write_file.requires_approval({"path": "a.txt", "content": "x"}, ctx) is True
-    assert read_file.requires_approval({"path": "a.txt"}, ctx) is False
+    assert write_file.decide({"path": "a.txt", "content": "x"}, ctx).action == "ask"
+    assert read_file.decide({"path": "a.txt"}, ctx).action == "allow"
 
 
 @pytest.mark.asyncio
@@ -623,5 +625,5 @@ def test_view_image_outside_read_asks_under_coding_policy(tmp_path) -> None:
     session = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
     ctx = _ctx(session)
     # Same read pipeline as read_file: outside-root reads ask, inside don't.
-    assert view_image.requires_approval({"path": "/tmp/shot.png"}, ctx) is True
-    assert view_image.requires_approval({"path": "shot.png"}, ctx) is False
+    assert view_image.decide({"path": "/tmp/shot.png"}, ctx).action == "ask"
+    assert view_image.decide({"path": "shot.png"}, ctx).action == "allow"

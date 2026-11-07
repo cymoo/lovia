@@ -41,7 +41,7 @@ MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="a
 | --- | --- | --- |
 | `name` | `None` | 给服务器工具加前缀：`name="web"` → `web__fetch` |
 | `include_tools` / `exclude_tools` | `None` | 原始工具名 allowlist / denylist |
-| `needs_approval` | `False` | bool 或谓词；让这个服务器的每个工具都走标准[审批流程](tools.md#工具审批) |
+| `permission` | `"allow"` | `"ask"` / `"deny"` / `Verdict` 或谓词；让这个服务器的每个工具都走标准[审批流程](tools.md#工具审批) |
 | `retries` / `timeout` / `max_output_chars` / `result_renderer` | `None` | 应用于每个转换工具的工具级策略（见[工具](tools.md)） |
 | `auto_reconnect` | `True` | 连接失效后自动重开，并重试调用一次 |
 | `close_after_run` | `True` | 运行结束时关闭连接 |
@@ -129,7 +129,7 @@ plugins=[MCP(
 ```
 
 延迟只改变 *schema 何时进入上下文*，不改变工具怎么运行：延迟调用是完全委托的，服务器的
-`needs_approval`、`retries`、`timeout`、`result_renderer` 和 `max_output_chars` 与直接
+`permission`、`retries`、`timeout`、`result_renderer` 和 `max_output_chars` 与直接
 暴露时完全一致。名称必须无歧义——延迟名称与同插件内其他延迟或暴露工具冲突时，setup 抛
 `UserError`（给服务器设置 `name=` 前缀即可）。
 
@@ -139,8 +139,8 @@ plugins=[MCP(
   非幂等副作用（如 `create_ticket`）可能发生两次。对会修改状态的服务器，设置
   `auto_reconnect=False`，让模型看到错误。
 - **MCP 工具默认并发运行**，和所有工具一样。如果服务器工具会修改共享状态，它们没有天然屏障；
-  可以用 `include_tools` 拆成两个服务器条目，或用 `needs_approval` 给危险工具加门禁。
-- **`needs_approval` 是按服务器，不是按工具。** “读工具自由，写工具门禁”的惯用做法，是把同一
+  可以用 `include_tools` 拆成两个服务器条目，或用 `permission="ask"` 给危险工具加门禁。
+- **`permission` 是按服务器，不是按工具。** “读工具自由，写工具门禁”的惯用做法，是把同一
   服务器拆成两个 `MCPServer` 条目（同 command，不同 `include_tools`）。
 - **stdio 服务器默认继承你的进程环境**，除非传 `env=`；没有 `cwd` 选项。需要工作目录时，
   用包装脚本启动。

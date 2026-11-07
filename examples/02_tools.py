@@ -53,7 +53,7 @@ def convert_currency(
 
 
 # More per-tool policy, shown in later examples:
-#   @tool(needs_approval=True)     -> 12_approval.py (human-in-the-loop)
+#   @tool(permission="ask")        -> 12_approval.py (human-in-the-loop)
 #   @tool(retries=2, timeout=10)   -> 14_reliability.py
 #   @tool(parallel=False)          -> serialize a side-effecting tool
 

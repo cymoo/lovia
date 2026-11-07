@@ -313,8 +313,8 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
         "tree '-o.git/config' .",  # quoted: words as the shell sees them
         "ls -lo .git/config",  # combined short options
         "tree -a -o=.git/config",
-        "git diff --output=.git/config",
-        "git diff --output .git/config",
+        "git log --output=.git/config",
+        "git log --output .git/config",
         "pytest --junitxml=r.xml",
         "ls -o",  # a false hit costs one question, never a bypass
     ):
@@ -359,8 +359,10 @@ def test_content_readers_are_gray_and_no_index_asks() -> None:
         assert policy.decide_command(cmd).action == "ask", cmd
     for cmd in ("ls -la", "du -sh .", "stat x", "tree", "git log -p", "git show HEAD"):
         assert policy.decide_command(cmd).action == "allow", cmd
+    # Outside a repository `git diff a b` is `--no-index` unspelled: it
+    # prints untracked content, so it is as gray as `cat`.
     assert policy.decide_command("git diff --no-index a b").action == "ask"
-    assert policy.decide_command("git diff --stat").action == "allow"
+    assert policy.decide_command("git diff --stat").action == "ask"
     assert policy.decide_command('ls "my file"').action == "allow"
     assert policy.decide_command("git log --format=%H").action == "allow"
 
@@ -447,6 +449,50 @@ def test_baseline_only_tightens() -> None:
     # Off, or replaced.
     off = WorkspacePolicy(shell_default="allow", baseline=())
     assert off.decide_command("rm -rf /").action == "allow"
+
+
+def test_baseline_merges_every_matching_rule() -> None:
+    # The baseline is a set of protections, not an ordered list: composing
+    # bundles in either order, or appending a rule a bundle's own pattern
+    # also matches, never shadows the stricter one.
+    from lovia.workspace.rules import (
+        CREDENTIAL_PATHS,
+        DEFAULT_BASELINE,
+        PROTECTED_CONFIG,
+    )
+
+    for base in (
+        PROTECTED_CONFIG + CREDENTIAL_PATHS,
+        CREDENTIAL_PATHS + PROTECTED_CONFIG,
+    ):
+        policy = WorkspacePolicy(baseline=base)
+        verdict = policy.decide_path(
+            rel=".git/id_rsa", abs_posix="/ws/.git/id_rsa", op="write"
+        )
+        assert verdict.action == "deny" and "Credential" in verdict.reason
+    appended = WorkspacePolicy(
+        baseline=DEFAULT_BASELINE + (PathRule(".env.production", "deny"),)
+    )
+    read = appended.decide_path(
+        rel=".env.production", abs_posix="/ws/.env.production", op="read"
+    )
+    assert read.action == "deny"
+    # Two asks merge too: one reason listing both, no single-rule scope.
+    both = WorkspacePolicy(
+        baseline=(PathRule(".git", "ask", ops=("write",)), PathRule("*.lock", "ask"))
+    )
+    lock = both.decide_path(rel=".git/x.lock", abs_posix="/ws/.git/x.lock", op="write")
+    assert lock.action == "ask" and lock.scope is None and ";" in lock.reason
+    # Commands likewise.
+    cmds = (
+        CommandRule("git push", "ask"),
+        CommandRule("git push", "deny", flags=("-f",)),
+    )
+    for base in (cmds, cmds[::-1]):
+        assert (
+            WorkspacePolicy(baseline=base).decide_command("git push -f").action
+            == "deny"
+        )
 
 
 def test_baseline_ties_keep_the_users_reason() -> None:

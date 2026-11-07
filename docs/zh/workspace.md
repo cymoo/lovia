@@ -43,7 +43,8 @@ agent = Agent(
 每种模式之下都有一条**底线**（baseline）：危险命令拒绝（`git push --force`、`rm -rf /`、`mkfs` 等），
 凭据库禁止读写（`~/.ssh`、`~/.aws`、`*.pem` 等），写 `.git`、`.github/workflows`、`.vscode`、`.husky`、
 `.lovia` 每次都问，工作区内的 `.env*` 读取前会问。所有*保护*都在底线里——它只会加严，用户层的
-任何规则都不会无意间撤掉一条——去掉某一条就是不带它重新拼底线：
+任何规则都不会无意间撤掉一条；底线内部也是集合而非顺序表，命中的每条规则都算、最严者胜，所以
+规则包怎么拼都不会互相遮蔽——去掉某一条就是不带它重新拼底线：
 `baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG` 就让 agent 可以读 `.env`。
 
 可以用 `readable=` / `writable=`（授权）、`denied_paths=`（硬阻断）、完整的 `path_rules=` /
@@ -57,7 +58,8 @@ agent = Agent(
 `git status`、`git log` 等；Windows 上是 `dir`、`where` 等——只收录**不打印文件内容**的检查命令：每个
 内容读取器都有自己不点名就读到文件的办法，`grep -r`、`sort --files0-from`、`git diff --no-index`、通配符，
 所以 `cat` 之类留在灰区，逐文件判定的 `read_file` / `grep_files` 才是读取器；git 自己的命令打印的是*已跟踪*
-内容，提交进仓库的密钥是仓库卫生问题，不归底线管）、`DEV_TOOLS`（`pytest`、`ruff`、`mypy`、`npm test`、
+内容，提交进仓库的密钥是仓库卫生问题，不归底线管——例外是 `git diff`，在非仓库目录里它会像写了
+`--no-index` 一样比较任意两个路径，所以同样留在灰区）、`DEV_TOOLS`（`pytest`、`ruff`、`mypy`、`npm test`、
 `cargo test` 等）、`IRREVERSIBLE`（`git push`、`git reset --hard`、`rm -r`、`sudo`、`docker` 等——要问），
 以及底线的 `DANGEROUS_COMMANDS`、`CREDENTIAL_PATHS`、`PROTECTED_CONFIG`、`ENV_FILES`。放行 `DEV_TOOLS`
 就是信任项目自己的代码在宿主上执行——这是 coding agent 的前提；这类工具的写入不经路径判定，底线管的
@@ -92,8 +94,9 @@ ACL 有三个决策值，分别作用于两个执行环节：
 allow 降为 ask，deny 照样生效（`env git push --force`）；这种 ask 不可记忆。模式默认值
 `shell_default="allow"` 不是规则、不为任何命令担保，所以 `trusted` 下 `cat *` 直接运行——这正是 trusted 的意思。
 
-**底线**（`WorkspacePolicy.baseline`）单独判定，再与上面所有规则取最严格者合并，所以用户规则、
-`command_decider` 或记住的授权都放松不了它。规则的 `reason` 就是审批卡片上显示的理由（拒绝时模型
+**底线**（`WorkspacePolicy.baseline`）单独判定——命中的每条规则都算、最严者胜——再与上面所有规则取
+最严格者合并，所以用户规则、`command_decider` 或记住的授权都放松不了它，底线规则之间也互不遮蔽。
+规则的 `reason` 就是审批卡片上显示的理由（拒绝时模型
 也会读到）；`grant=False` 让前缀过宽的规则（`sudo`、`ssh`）不提供“总是允许”。
 
 **批量遍历**（`list_files`、`grep_files`）会跳过任何非 `allow` 的条目——`ask` 没法在遍历中回答——

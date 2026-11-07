@@ -49,7 +49,9 @@ Under every mode the **baseline** holds: dangerous commands are denied
 (`~/.ssh`, `~/.aws`, `*.pem`, …), and writes to `.git`, `.github/workflows`,
 `.vscode`, `.husky`, `.lovia` ask every time, and `.env*` files inside the
 workspace ask before being read. Every *protection* is baseline — it only
-ever tightens, so nothing in the user layer can undo one by accident — and
+ever tightens, so nothing in the user layer can undo one by accident; inside
+it every matching rule counts and the strictest wins, so bundles compose in
+any order without shadowing each other — and
 dropping one is composing the baseline without it: `baseline=
 DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG` lets the agent read
 `.env` files.
@@ -73,7 +75,8 @@ never names, `grep -r`, `sort --files0-from`, `git diff --no-index`, a glob,
 so `cat` & co. stay gray and `read_file` / `grep_files`, which judge every
 file they open, are the readers; git's own commands print *tracked* content,
 and a secret committed to the repository is repository hygiene, not the
-baseline's hand), `DEV_TOOLS` (`pytest`, `ruff`, `mypy`, `npm test`,
+baseline's hand — except `git diff`, which outside a repository diffs any two
+paths as if `--no-index` were spelled, so it is gray too), `DEV_TOOLS` (`pytest`, `ruff`, `mypy`, `npm test`,
 `cargo test`, …), `IRREVERSIBLE` (`git push`, `git reset --hard`, `rm -r`,
 `sudo`, `docker`, … — asked), and the baseline's `DANGEROUS_COMMANDS`,
 `CREDENTIAL_PATHS`, `PROTECTED_CONFIG`, `ENV_FILES`. Allowing `DEV_TOOLS` is
@@ -127,9 +130,10 @@ becomes). An allow becomes an ask, a deny still bites (`env git push
 is not a rule vouching for anything, so `trusted` runs `cat *` unprompted —
 which is its point.
 
-**The baseline** (`WorkspacePolicy.baseline`) is judged on its own and merged
-most-restrictive with everything above, so no user rule, `command_decider`
-or remembered approval loosens it. A rule's `reason` is what the approval
+**The baseline** (`WorkspacePolicy.baseline`) is judged on its own — every
+matching rule, strictest wins — and merged most-restrictive with everything
+above, so no user rule, `command_decider` or remembered approval loosens it,
+and no baseline rule shadows another. A rule's `reason` is what the approval
 card shows (and the model reads on a denial); `grant=False` withholds the
 "always allow" option where the prefix is a whole world (`sudo`, `ssh`).
 

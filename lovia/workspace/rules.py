@@ -40,30 +40,22 @@ _NT = os.name == "nt"
 # `read_file`, which judges the file it opens, or a command the user is
 # asked about. Git's own commands print *tracked* content (`git show`,
 # `git log -p`): a secret committed to the repository is reachable through
-# any git command and is repository hygiene, not the baseline's hand.
+# any git command and is repository hygiene, not the baseline's hand. The
+# exception is `git diff`, which outside a repository diffs the two paths
+# it is given, recursively, as if `--no-index` were spelled — so it is as
+# gray as `cat`.
 # ---------------------------------------------------------------------------
 
-READ_ONLY_COMMON: tuple[CommandRule, ...] = (
-    # A bundle carries its own caveats: this ask sits right before the allow
-    # it qualifies, so it holds wherever the bundle is placed.
-    CommandRule(
-        "git diff",
-        "ask",
-        "Diffs arbitrary files outside the index.",
-        flags=("--no-index",),
-    ),
-    *(
-        CommandRule(p, "allow")
-        for p in (
-            "git status",
-            "git diff",
-            "git log",
-            "git show",
-            "git blame",
-            "git rev-parse",
-            "git ls-files",
-        )
-    ),
+READ_ONLY_COMMON: tuple[CommandRule, ...] = tuple(
+    CommandRule(p, "allow")
+    for p in (
+        "git status",
+        "git log",
+        "git show",
+        "git blame",
+        "git rev-parse",
+        "git ls-files",
+    )
 )
 
 READ_ONLY_POSIX: tuple[CommandRule, ...] = tuple(

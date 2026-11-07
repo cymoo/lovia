@@ -428,7 +428,10 @@ class WorkspacePolicy:
     """Rules in force whatever the preset: judged on their own and merged
     most-restrictive with everything above, so they can only tighten — a
     user rule, the ``command_decider`` or a remembered approval never
-    loosens them. Every *protection* lives here, so none can be undone by
+    loosens them. Unlike the ordered rules above, *every* matching baseline
+    rule counts (most restrictive wins): the baseline is a set of
+    protections, and composing bundles in either order never lets one
+    shadow another. Every *protection* lives here, so none can be undone by
     accident; the user layer above holds what *grants*. ``None`` (the
     default) resolves to :data:`lovia.workspace.rules.DEFAULT_BASELINE`
     (dangerous commands denied, credential stores denied, writes to
@@ -569,7 +572,7 @@ class WorkspacePolicy:
         """
         verdict = self._decide_path(rel=rel, abs_posix=abs_posix, op=op)
         base = self._path_rule_verdict(
-            self._baseline_paths, rel=rel, abs_posix=abs_posix, op=op
+            self._baseline_paths, rel=rel, abs_posix=abs_posix, op=op, every=True
         )
         # Normal verdict first: on a tie its reason (the deployer's own rule)
         # is the one worth repeating.
@@ -593,15 +596,27 @@ class WorkspacePolicy:
 
     @staticmethod
     def _path_rule_verdict(
-        rules: tuple[PathRule, ...], *, rel: str | None, abs_posix: str, op: FileOp
+        rules: tuple[PathRule, ...],
+        *,
+        rel: str | None,
+        abs_posix: str,
+        op: FileOp,
+        every: bool = False,
     ) -> Verdict | None:
+        """The first matching rule's verdict — or, with ``every`` (the
+        baseline), all matching rules merged most-restrictive."""
+        hits: list[Verdict] = []
         for rule in rules:
             if op in rule.ops and _pattern_matches(
                 rule.pattern, rel=rel, abs_posix=abs_posix
             ):
                 scope = f"{op}:{rule.pattern}" if rule.grant else None
-                return _rule_verdict(rule.action, rule.reason, rule.pattern, scope)
-        return None
+                hits.append(
+                    _rule_verdict(rule.action, rule.reason, rule.pattern, scope)
+                )
+                if not every:
+                    break
+        return merge_verdicts(*hits) if hits else None
 
     def _decide_path(self, *, rel: str | None, abs_posix: str, op: FileOp) -> Verdict:
         for pattern in self.denied_paths:
@@ -684,7 +699,7 @@ class WorkspacePolicy:
                 )
             elif verdict.action == "ask":
                 verdict = Verdict("ask", verdict.reason)
-        base = self._command_rule_verdict(self._baseline_commands, words)
+        base = self._command_rule_verdict(self._baseline_commands, words, every=True)
         return merge_verdicts(verdict, base) if base is not None else verdict
 
     def _decide_words(self, segment: str, words: list[str]) -> tuple[Verdict, bool]:
@@ -706,13 +721,17 @@ class WorkspacePolicy:
 
     @staticmethod
     def _command_rule_verdict(
-        rules: tuple[CommandRule, ...], words: list[str]
+        rules: tuple[CommandRule, ...], words: list[str], *, every: bool = False
     ) -> Verdict | None:
+        """As :meth:`_path_rule_verdict`, for command rules."""
+        hits: list[Verdict] = []
         for rule in rules:
             if rule.matches(words):
                 scope = f"shell:{rule.key}" if rule.grant else None
-                return _rule_verdict(rule.action, rule.reason, rule.key, scope)
-        return None
+                hits.append(_rule_verdict(rule.action, rule.reason, rule.key, scope))
+                if not every:
+                    break
+        return merge_verdicts(*hits) if hits else None
 
     def _default_command_verdict(self, words: list[str]) -> Verdict:
         if self.shell_default == "ask":

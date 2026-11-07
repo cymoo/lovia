@@ -525,14 +525,14 @@ async def test_allowed_commands_still_meet_the_path_rules(tmp_path) -> None:
         "tree '-o.git/config' .",
         "ls -lo .git/config",
         "tree in#1 -o .git/config",
-        "git diff --output=.git/config",
+        "git log --output=.git/config",
         # Reads the guard cannot see: a tree walked by the tool, a glob.
         "grep -R TOKEN .",
         "git diff --no-index . /tmp",
         "ls *",
     ):
         assert session.decide_command(cmd).action == "ask", cmd
-    assert session.decide_command("git diff --stat").action == "allow"
+    assert session.decide_command("git log --stat").action == "allow"
 
 
 async def test_grep_follows_symlinks_within_an_approved_outside_directory(

@@ -314,9 +314,9 @@ def test_wrapped_commands_are_at_most_asked_and_never_grantable() -> None:
 
 
 def test_shell_syntax_is_not_the_programs() -> None:
-    # `!`, `(`, `{`, a control-flow word, a redirection and its target —
-    # wherever they stand — name no program: what is left is the command,
-    # so the baseline meets it and the scope on offer is its word.
+    # Redirections and their targets, parentheses, and a control-flow word
+    # before the command name no program: what is left is the command, so
+    # the baseline meets it and the scope on offer is its word.
     policy = WorkspacePolicy()
     for cmd in (
         "! git push --force",
@@ -328,23 +328,17 @@ def test_shell_syntax_is_not_the_programs() -> None:
         "do git push --force",
         "git > /dev/null push --force",
         "git push >/dev/null 2>&1 --force",
-        "case y in x) :;; y) git push --force;; esac",
     ):
         assert policy.decide_command(cmd).action == "deny", cmd
     # A redirect target is not an argument: `--` here ends no options.
     assert _opted_in().decide_command("tree > -- -o .git/config").action == "ask"
-    # Quoted or escaped, punctuation is a name, not syntax: `rm -r ')'`
-    # deletes a directory called `)` and meets the rm -r rule.
+    # Quoted punctuation is read as it comes — dropped like the syntax it
+    # looks like, which is harmless: the words around it are the command.
     coding = WorkspacePolicy.coding()
-    for cmd in ("rm -r ')'", 'rm -r ")"', "rm -r \\)"):
-        verdict = coding.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scope == "shell:rm -r", cmd
+    verdict = coding.decide_command("rm -r ')'")
+    assert verdict.action == "ask" and verdict.scope == "shell:rm -r"
     assert policy.decide_command("git commit -m ')'").scope == "shell:git"
-    assert policy.decide_command("git commit -m '>'").scope == "shell:git"
-    assert policy.decide_command("echo '(' ')'").scope == "shell:echo"
     assert policy.decide_command("git push '--force'").action == "deny"
-    # ...and a quoted reserved word is a program, not the keyword.
-    assert policy.decide_command("'if' ls").scope == "shell:if"
     for cmd in ("! ls", "(ls)", "((ls))", "} ls", "> out ls", ">out ls", "2>&1 ls"):
         verdict = policy.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scope == "shell:ls", cmd
@@ -361,17 +355,13 @@ def test_shell_syntax_is_not_the_programs() -> None:
         assert verdict.action == "ask" and verdict.scope is None, cmd
         assert "expanded by the shell" in verdict.reason, cmd
         assert policy.decide_command(cmd).scope is None, cmd
-    # A `case` segment runs the command after its pattern's `)`.
-    for cmd in ("case x in x) git push --force", "case x in (x) git push --force"):
-        assert policy.decide_command(cmd).action == "deny", cmd
-    assert policy.decide_command("case x in x) ls").scope == "shell:ls"
-    # Syntax alone runs nothing: a `for` header (the body is its own
-    # segment), a `case` header, a closing word — unless the shell expands
-    # something in it.
-    for cmd in ("for f in a b", "case x in", "select x in a b", "fi", "esac", "}"):
+    # Syntax alone (`fi`, `done`, `}`) runs nothing — unless the shell
+    # expands something in it.
+    for cmd in ("fi", "esac", "}", "done"):
         assert policy.decide_command(cmd).action == "allow", cmd
     assert opted.decide_command("if ls; then ls; fi").action == "allow"
-    for cmd in ("for f in *", "for f in $(ls)", "case $x in"):
+    # A `for` / `case` header is gray and not a program: ask, no scope.
+    for cmd in ("for f in a b", "case x in x) ls", "for f in $(ls)"):
         verdict = policy.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scope is None, cmd
 

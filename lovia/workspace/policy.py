@@ -270,10 +270,11 @@ _THIN_WRAPPERS = frozenset(
     {"command", "exec", "builtin", "env", "nice", "nohup", "time", "call"}
 )
 
-# A wrapper left in place because it takes options (``env -i``, ``nice -n
-# 1``, ``timeout --foreground 5``) is still not the program that runs, so a
-# grant for it would cover whatever follows: no scope.
-_WRAPPERS = _THIN_WRAPPERS | {"timeout"}
+# Words that head a segment without being the program that runs: a wrapper
+# left in place because it takes options (``env -i``, ``nice -n 1``,
+# ``timeout --foreground 5``), or a ``for`` / ``case`` / ``select`` header. A
+# grant for the word would cover whatever follows: no scope.
+_NOT_A_PROGRAM = _THIN_WRAPPERS | {"timeout", "for", "case", "select"}
 
 # The same principle for arguments: an allow rule vouches for a command over
 # *literal* arguments, which the path guard can judge one by one. Anything
@@ -298,9 +299,9 @@ def _uncertain_word(segment: list[str], command: list[str]) -> str | None:
     """The first word an allow rule cannot vouch for, with why, or None.
 
     ``segment`` is every word as lexed — the shell expands everywhere, a
-    redirect target or a ``case`` pattern included, so expansion is judged
-    before any syntax is stepped over; ``command`` is what is left after
-    that, whose arguments alone can be options.
+    redirect target included, so expansion is judged before any syntax is
+    dropped; ``command`` is what is left after that, whose arguments alone
+    can be options.
     """
     for word in segment:
         if any(c in word for c in _EXPANSION_CHARS):
@@ -316,130 +317,66 @@ def _uncertain_word(segment: list[str], command: list[str]) -> str | None:
     return None
 
 
-def _tokens(segment: str) -> list[str]:
+def _words(segment: str) -> list[str]:
+    """A segment's words as the shell sees them: quotes removed, so
+    ``'-o.git/config'`` is the option it is; operators as words of their
+    own (``(git`` is ``(`` then ``git``, ``2>&1`` is ``2``, ``>&``, ``1``);
+    no comment stripping, because a shell starts a comment only at a word's
+    start and shlex would cut ``input#tag`` in half. Unbalanced quotes fall
+    back to whitespace splitting (the guard gives up on them the same way)."""
     lexer = shlex.shlex(segment, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     lexer.commenters = ""
     if os.name == "nt":
         lexer.escape = ""  # cmd.exe: a backslash separates path segments
-    return list(lexer)
-
-
-def _mask_quoted(segment: str) -> str:
-    """The segment with every quoted or escaped character replaced by a
-    letter, quotes and escapes themselves kept, so it lexes into the same
-    tokens — and a token that is still punctuation afterwards was never
-    quoted."""
-    out: list[str] = []
-    quote = ""
-    escaped = False
-    for ch in segment:
-        if escaped:
-            out.append("x")
-            escaped = False
-        elif ch == "\\" and os.name != "nt" and quote != "'":
-            out.append(ch)
-            escaped = True
-        elif quote:
-            if ch == quote:
-                quote = ""
-                out.append(ch)
-            else:
-                out.append("x")
-        elif ch in "'\"":
-            quote = ch
-            out.append(ch)
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
-def _words(segment: str) -> list[tuple[str, bool]]:
-    """A segment's words as the shell sees them, each with whether it was
-    written *plain* — no quotes, no escapes — which is what makes ``)``
-    syntax rather than a name (``rm -r ')'`` deletes a directory called
-    ``)``). Quotes are removed, so ``'-o.git/config'`` is the option it is;
-    operators are words of their own (``(git`` is ``(`` then ``git``,
-    ``2>&1`` is ``2``, ``>&``, ``1``); no comment stripping, because a shell
-    starts a comment only at a word's start and shlex would cut
-    ``input#tag`` in half. Unbalanced quotes fall back to whitespace
-    splitting, nothing plain (the guard gives up on them the same way)."""
     try:
-        words = _tokens(segment)
-        masked = _tokens(_mask_quoted(segment))
+        return list(lexer)
     except ValueError:
-        return [(w, False) for w in segment.split()]
-    if len(masked) != len(words):  # should not happen; be conservative
-        return [(w, False) for w in words]
-    return [(w, w == m) for w, m in zip(words, masked)]
+        return segment.split()
 
 
-# What the shell keeps for itself, by its grammar — a closed set, unlike the
-# programs it runs. Redirections and their targets, grouping parentheses, a
-# ``case`` pattern, the control-flow words and ``!`` name no program and
-# change nothing about the one that runs, so they are removed from the
-# segment *wherever they stand* and the command's own verdict is the
-# segment's: ``! ls``, ``(ls)`` and ``> out ls`` are ``ls``; ``! git push
-# --force`` and ``git > /dev/null push --force`` meet the deny. A ``for`` /
-# ``select`` header, or a ``case`` header without a branch, runs no command
-# of its own: the whole segment is syntax.
-_RESERVED = frozenset(
-    "! { } if then else elif fi while until do done esac function coproc".split()
-)
-_LOOP_HEADS = frozenset({"for", "select"})
+# What the shell keeps for itself in the spellings a model writes:
+# redirections and their targets (``cmd >/dev/null 2>&1``), parentheses
+# (``(cd x && ls)``) and a control-flow word before the command (``if cmd``,
+# ``! cmd``). They name no program, so they are dropped and the command's
+# own verdict is the segment's: ``(ls)`` is ``ls``, ``! git push --force``
+# meets the deny. That is the whole of it — a rule stops the spellings it
+# names after this, and nothing cleverer: a ``case`` pattern or a quoted
+# ``)`` is read as it comes, and a model bent on hiding a command has
+# ``bash -c`` anyway (module docstring). Under ``coding`` every spelling the
+# rules miss still asks, with the spelling on the card.
+_SYNTAX_WORDS = frozenset("! { } if then else elif fi while until do done esac".split())
 _OPERATOR_CHARS = frozenset("()<>&|;")
 
 
-def _is_redirect(word: str, plain: bool) -> bool:
-    return plain and set(word) <= _OPERATOR_CHARS and ("<" in word or ">" in word)
+def _is_redirect(word: str) -> bool:
+    return bool(word) and set(word) <= _OPERATOR_CHARS and ("<" in word or ">" in word)
 
 
-def _program_words(lexed: list[tuple[str, bool]]) -> list[str]:
-    """The words the program receives: the segment minus what the shell
-    keeps (redirections with their targets, grouping parentheses, a
-    ``case`` pattern). Only a *plain* token is the shell's."""
+def _program_words(lexed: list[str]) -> list[str]:
+    """The words the program receives: the segment minus redirections with
+    their targets, parentheses, and the control-flow words before it."""
     words: list[str] = []
-    depth = 0
     skip = False
-    for i, (word, plain) in enumerate(lexed):
+    for i, word in enumerate(lexed):
         if skip:
             skip = False  # a redirection's target
-        elif _is_redirect(word, plain):
+        elif _is_redirect(word):
             skip = True
-        elif word.isdigit() and i + 1 < len(lexed) and _is_redirect(*lexed[i + 1]):
+        elif word.isdigit() and i + 1 < len(lexed) and _is_redirect(lexed[i + 1]):
             pass  # the fd of `2>&1`
-        elif plain and set(word) == {"("}:
-            depth += len(word)
-        elif plain and set(word) == {")"}:
-            for _ in word:
-                if depth:
-                    depth -= 1
-                else:
-                    words = []  # unmatched: a `case` pattern ended; the command follows
-        else:
+        elif not set(word) <= {"(", ")"}:
             words.append(word)
+    while words and words[0] in _SYNTAX_WORDS:
+        words = words[1:]
     return words
 
 
-def _strip_wrappers(lexed: list[tuple[str, bool]]) -> tuple[list[str], list[str]]:
+def _strip_wrappers(lexed: list[str]) -> tuple[list[str], list[str]]:
     """Return ``(command words, wrappers)``: what the program receives once
     the shell's own syntax and any wrappers are gone, and the wrappers —
     syntax is not reported, since it changes nothing about what runs."""
-    if lexed and lexed[0] == ("case", True):
-        # `case WORD in [(]PATTERN) command`: the command follows the first
-        # plain `)`, whatever the pattern looks like; without one, a header.
-        if (")", True) not in lexed:
-            return [], []
-        lexed = lexed[lexed.index((")", True)) + 1 :]
-    # A reserved word is one only when written plain: `'if'` is a program.
-    plain_words = [w for w, p in lexed if p]
     words = _program_words(lexed)
-    if os.name == "nt" and words and words[0].startswith("@"):  # cmd.exe: `@echo`
-        words = [words[0][1:], *words[1:]] if len(words[0]) > 1 else words[1:]
-    if words and words[0] in _LOOP_HEADS and words[0] in plain_words:
-        return [], []
-    while words and words[0] in _RESERVED and words[0] in plain_words:
-        words = words[1:]
     stripped: list[str] = []
     while words:
         head = words[0]
@@ -795,10 +732,10 @@ class WorkspacePolicy:
     def _decide_segment(self, segment: str) -> Verdict:
         lexed = _words(segment)
         words, stripped = _strip_wrappers(lexed)
-        uncertain = _uncertain_word([w for w, _ in lexed], words)
+        uncertain = _uncertain_word(lexed, words)
         if not words:
-            # Syntax alone (`fi`, `esac`, `for f in a b`) runs nothing —
-            # unless the shell expands something in it (`for f in $(…)`).
+            # Syntax alone (`fi`, `done`, `}`) runs nothing — unless the
+            # shell expands something in it.
             return Verdict("ask", uncertain) if uncertain else Verdict("allow")
         verdict, by_rule = self._decide_words(segment, words)
         if stripped or uncertain:
@@ -857,8 +794,12 @@ class WorkspacePolicy:
             # The grant on offer is the command word, exactly as shown
             # ("always allow `ls` in this chat"); finer than that is a rule.
             # Words the guard cannot vouch for strip it (_decide_segment), as
-            # does a wrapper: neither names the program that runs.
-            scope = f"shell:{words[0]}" if words and words[0] not in _WRAPPERS else None
+            # does a head that is not the program (_NOT_A_PROGRAM).
+            scope = (
+                f"shell:{words[0]}"
+                if words and words[0] not in _NOT_A_PROGRAM
+                else None
+            )
             return Verdict("ask", "no workspace rule allows this command", scope)
         if self.shell_default == "deny":
             return Verdict("deny", "shell commands are denied by workspace policy")

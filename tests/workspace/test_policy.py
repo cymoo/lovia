@@ -289,11 +289,21 @@ def test_wrapped_commands_are_at_most_asked_and_never_grantable() -> None:
         "env git status",
         "nice git status",
         "timeout 5 git status",
+        "command git status",
+        "exec git status",
     ):
         verdict = policy.decide_command(wrapped)
         assert verdict.action == "ask" and "wraps the command" in verdict.reason, (
             wrapped
         )
+    # The shell's own wrappers are stripped like the others, so the inner
+    # command meets the baseline and a gray wrapped command has no scope.
+    assert policy.decide_command("command git push --force").action == "deny"
+    assert policy.decide_command("exec git push --force").action == "deny"
+    gray = WorkspacePolicy(shell_default="ask")
+    for cmd in ("command ls", "exec ls", "builtin cd x", "exec -a x ls"):
+        verdict = gray.decide_command(cmd)
+        assert verdict.action == "ask" and verdict.scope is None, cmd
     # An ask stays an ask but loses its scope: the wrapper is what changes
     # what the inner command runs.
     assert policy.decide_command("FOO=1 git push").scope is None

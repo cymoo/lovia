@@ -257,12 +257,18 @@ def _has_flag(words: list[str], flag: str) -> bool:
     return False
 
 
-# Leading words a shell runs the real command *through*. They are stripped
-# before the rules look at a segment, and a segment that had any is never
-# allowed outright: ``PATH=…``, ``LD_PRELOAD=…`` change which program runs,
-# so an allow rule for the inner command cannot vouch for the wrapped one —
-# but a deny rule for it still bites (``env git push --force``).
-_THIN_WRAPPERS = frozenset({"env", "nice", "nohup", "time", "call"})
+# Leading words a shell runs the real command *through*: the shell's own
+# builtins for it (``command``, ``exec``, ``builtin``; ``call`` in cmd.exe)
+# and the coreutils that run a command unchanged. They are stripped before
+# the rules look at a segment, and a segment that had any is never allowed
+# outright: ``PATH=…``, ``LD_PRELOAD=…`` change which program runs, so an
+# allow rule for the inner command cannot vouch for the wrapped one — but a
+# deny rule for it still bites (``env git push --force``). Interpreters
+# (``bash -c``, ``xargs``, ``python -c``) are not wrappers: they run what
+# they are given as *data*, which the rules never see (module docstring).
+_THIN_WRAPPERS = frozenset(
+    {"command", "exec", "builtin", "env", "nice", "nohup", "time", "call"}
+)
 
 # A wrapper left in place because it takes options (``env -i``, ``nice -n
 # 1``, ``timeout --foreground 5``) is still not the program that runs, so a

@@ -120,8 +120,8 @@ count. Compound commands are split on `&&`, `||`, `;`, `|`, `&`; each segment
 is judged and the **most restrictive** decision wins. An allow rule covers
 **literal arguments only** — what the path guard can judge one by one — so
 three things cap a segment at `ask` whatever rule it matched: a leading
-`VAR=value` or thin wrapper (`env`, `nice`, `nohup`, `time`, `timeout N` —
-`PATH=…` changes which program runs); an argument that looks like an output
+`VAR=value` or thin wrapper (`command`, `exec`, `env`, `nice`, `nohup`,
+`time`, `timeout N` — `PATH=…` changes which program runs); an argument that looks like an output
 option (`-o …`, `-oPATH`, `-ro`, `--output=…`, `--log-file`, `--junitxml` —
 the command may write wherever it points); and an argument the shell
 expands (`cat *`, `cat $F`, `$(…)` — the guard never sees the paths it

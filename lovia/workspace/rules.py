@@ -209,11 +209,6 @@ PROTECTED_CONFIG: tuple[PathRule, ...] = tuple(
 )
 """Repository and tool configuration: every write asks, none is remembered."""
 
-DEFAULT_BASELINE: tuple[PathRule | CommandRule, ...] = (
-    DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG
-)
-"""What ``WorkspacePolicy.baseline`` holds unless told otherwise."""
-
 ENV_FILES: tuple[PathRule, ...] = (
     PathRule(
         "**/.env*",
@@ -222,11 +217,16 @@ ENV_FILES: tuple[PathRule, ...] = (
         reason="Environment files usually hold secrets.",
     ),
 )
-"""Preset-level, not baseline: ``path_rules=(PathRule("**/.env*", "allow"),)``
-lifts it. Reads only, and inside the workspace only (``**/`` is
-workspace-relative, the bare ``.env*`` would reach outside) — so neither the
-mode's write rule nor its outside-root rule is ever loosened: ``readonly``
-still denies outside reads, ``coding`` still denies outside writes."""
+"""Reading a ``.env`` inside the workspace asks (and bulk walks skip it).
+Part of the baseline like every other protection, so it can only tighten:
+reads only, workspace-relative (``**/`` never reaches outside the root).
+To let an agent read them: ``baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS
++ PROTECTED_CONFIG``."""
+
+DEFAULT_BASELINE: tuple[PathRule | CommandRule, ...] = (
+    DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG + ENV_FILES
+)
+"""What ``WorkspacePolicy.baseline`` holds unless told otherwise."""
 
 __all__ = [
     "CREDENTIAL_PATHS",

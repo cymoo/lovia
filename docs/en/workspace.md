@@ -47,10 +47,12 @@ model sees them and adapts).
 Under every mode the **baseline** holds: dangerous commands are denied
 (`git push --force`, `rm -rf /`, `mkfs`, …), credential stores are off-limits
 (`~/.ssh`, `~/.aws`, `*.pem`, …), and writes to `.git`, `.github/workflows`,
-`.vscode`, `.husky`, `.lovia` ask every time. `.env*` files inside the
-workspace ask before being read (a preset rule, not baseline —
-`path_rules=(PathRule("**/.env*", "allow"),)` lifts it; outside the root and
-for writes the mode's own rule applies unchanged).
+`.vscode`, `.husky`, `.lovia` ask every time, and `.env*` files inside the
+workspace ask before being read. Every *protection* is baseline — it only
+ever tightens, so nothing in the user layer can undo one by accident — and
+dropping one is composing the baseline without it: `baseline=
+DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG` lets the agent read
+`.env` files.
 
 Refine any preset with `readable=` / `writable=` (grants), `denied_paths=`
 (hard blocks), full `path_rules=` / `command_rules=` (yours come before the
@@ -64,9 +66,10 @@ can compose yourself: `READ_ONLY` (`ls`, `cat`, `git status`, … ; `dir`,
 `type`, … on Windows), `DEV_TOOLS` (`pytest`, `ruff`, `mypy`, `npm test`,
 `cargo test`, …), `IRREVERSIBLE` (`git push`, `git reset --hard`, `rm -r`,
 `sudo`, `docker`, … — asked), and the baseline's `DANGEROUS_COMMANDS`,
-`CREDENTIAL_PATHS`, `PROTECTED_CONFIG`. Allowing `DEV_TOOLS` is trusting the
-project's own code to run on the host — the premise of a coding agent; the
-baseline is about the model's own hand, not a sandbox.
+`CREDENTIAL_PATHS`, `PROTECTED_CONFIG`, `ENV_FILES`. Allowing `DEV_TOOLS` is
+trusting the project's own code to run on the host — the premise of a coding
+agent; such tools write wherever their job takes them, and the baseline is
+about the model's own hand, not a sandbox.
 
 ## The ACL
 
@@ -101,11 +104,14 @@ segment — `CommandRule("git push", "deny", flags=("--force",))` stops `git
 push origin main --force` too; a one-letter `-f` is satisfied by `-fu`,
 anything longer must appear as that word, and words after a bare `--` never
 count. Compound commands are split on `&&`, `||`, `;`, `|`, `&`; each segment
-is judged and the **most restrictive** decision wins. A leading `VAR=value`
-or thin wrapper (`env`, `nice`, `nohup`, `time`, `timeout N`) is stripped
-before matching, and a segment that had one is never *allowed* outright
-(`PATH=…` changes which program runs): an allow becomes an ask, a deny still
-bites (`env git push --force`).
+is judged and the **most restrictive** decision wins. Two things cap a
+segment at `ask` whatever rule it matched: a leading `VAR=value` or thin
+wrapper (`env`, `nice`, `nohup`, `time`, `timeout N` — `PATH=…` changes
+which program runs), and an argument that looks like an output option
+(`-o …`, `-oPATH`, `--output=…`, `--log-file`, `--junitxml` — the command
+may write wherever it points, which the path guard cannot see). An allow
+becomes an ask, a deny still bites (`env git push --force`); the ask is not
+grantable.
 
 **The baseline** (`WorkspacePolicy.baseline`) is judged on its own and merged
 most-restrictive with everything above, so no user rule, `command_decider`
@@ -242,14 +248,15 @@ deliverable.
 ## The command guard
 
 Static command rules can't see paths, so the session also **lexically**
-extracts path claims from each command — redirect targets and the usual
-output options (`-o`, `--output`, `--log-file`, …) count as writes, every
-other argument (bare names like `id_rsa` included; the command word itself
-only when spelled as a path) as a read — and merges their path-ACL verdicts
-with the static rule verdict, most-restrictive-wins. A command that names a
-denied path (redirects included) is denied even when its binary is allowed:
-`cat id_rsa` meets the same credential rule as `read_file("id_rsa")`, and
-`sort -o .git/config x` asks like `write_file(".git/config")` would.
+extracts path claims from each command — redirect targets count as writes,
+every other argument (bare names like `id_rsa` included; the command word
+itself only when spelled as a path) as a read — and merges their path-ACL
+verdicts with the static rule verdict, most-restrictive-wins. A command that
+names a denied path (redirects included) is denied even when its binary is
+allowed: `cat id_rsa` meets the same credential rule as
+`read_file("id_rsa")`. The guard does not know which *option* a program
+writes through; the policy covers that from the other side by never
+allowing a segment that names an output-looking option outright (above).
 On Windows a backslash is a path separator, not an escape, so `C:\data\a.txt`
 is judged as written.
 

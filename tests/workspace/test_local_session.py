@@ -855,17 +855,16 @@ async def test_workspace_instructions_follow_the_effective_rules(tmp_path) -> No
     assert "Writes to '.git'" in text
     assert "'**/.env*' ask the user before being read" in text
 
-    # Lifted by the same pattern, by a broader one, or denied outright: the
-    # sentence goes either way.
-    for override in (
-        PathRule("**/.env*", "allow"),
-        PathRule("*", "allow"),
-        PathRule(".env*", "deny"),
-    ):
-        text = Workspace.local(
-            str(tmp_path), mode="coding", path_rules=(override,)
-        ).instructions()
-        assert ".env*' ask" not in text, override
+    # Protections are baseline; a baseline composed without one drops its
+    # sentence. (User path rules are not described: they are the user's.)
+    from lovia.workspace import CREDENTIAL_PATHS, DANGEROUS_COMMANDS, PROTECTED_CONFIG
+
+    text = Workspace.local(
+        str(tmp_path),
+        mode="coding",
+        baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG,
+    ).instructions()
+    assert ".env*' ask" not in text and "Credential stores" in text
 
     bare = Workspace.local(str(tmp_path), mode="coding", baseline=()).instructions()
     assert "Credential stores" not in bare and "Writes to '.git'" not in bare
@@ -1022,11 +1021,12 @@ async def test_list_files_invalid_glob_pattern(tmp_path) -> None:
 
 
 async def test_glob_skips_hidden_unless_requested(tmp_path) -> None:
-    (tmp_path / ".env").write_text("secret", encoding="utf-8")
+    # A plain dotfile: `.env` would be hidden by the baseline regardless.
+    (tmp_path / ".editorconfig").write_text("root = true", encoding="utf-8")
     session = await _session(tmp_path)
     assert await session.list_files(".", pattern=".*", include_hidden=False) == []
     shown = await session.list_files(".", pattern=".*", include_hidden=True)
-    assert any(e.path == ".env" for e in shown)
+    assert any(e.path == ".editorconfig" for e in shown)
 
 
 async def test_glob_skips_denied_paths(tmp_path) -> None:

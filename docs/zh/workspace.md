@@ -42,8 +42,9 @@ agent = Agent(
 
 每种模式之下都有一条**底线**（baseline）：危险命令拒绝（`git push --force`、`rm -rf /`、`mkfs` 等），
 凭据库禁止读写（`~/.ssh`、`~/.aws`、`*.pem` 等），写 `.git`、`.github/workflows`、`.vscode`、`.husky`、
-`.lovia` 每次都问。工作区内的 `.env*` 读取前会问（这是预设规则，不在底线里——
-`path_rules=(PathRule("**/.env*", "allow"),)` 一行就能放开；根目录外和写入仍按模式自身的规则，不受它影响）。
+`.lovia` 每次都问，工作区内的 `.env*` 读取前会问。所有*保护*都在底线里——它只会加严，用户层的
+任何规则都不会无意间撤掉一条——去掉某一条就是不带它重新拼底线：
+`baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG` 就让 agent 可以读 `.env`。
 
 可以用 `readable=` / `writable=`（授权）、`denied_paths=`（硬阻断）、完整的 `path_rules=` /
 `command_rules=`（你的规则排在预设规则前面）、`shell_default=`（`coding` 下传 `"allow"` 就是
@@ -53,8 +54,9 @@ agent = Agent(
 预设由 `lovia.workspace.rules` 里的规则包拼成，你也可以自己拼：`READ_ONLY`（`ls`、`cat`、
 `git status` 等；Windows 上是 `dir`、`type` 等）、`DEV_TOOLS`（`pytest`、`ruff`、`mypy`、`npm test`、
 `cargo test` 等）、`IRREVERSIBLE`（`git push`、`git reset --hard`、`rm -r`、`sudo`、`docker` 等——要问），
-以及底线的 `DANGEROUS_COMMANDS`、`CREDENTIAL_PATHS`、`PROTECTED_CONFIG`。放行 `DEV_TOOLS` 就是信任项目
-自己的代码在宿主上执行——这是 coding agent 的前提；底线管的是模型亲手写的命令，不是沙箱。
+以及底线的 `DANGEROUS_COMMANDS`、`CREDENTIAL_PATHS`、`PROTECTED_CONFIG`、`ENV_FILES`。放行 `DEV_TOOLS`
+就是信任项目自己的代码在宿主上执行——这是 coding agent 的前提；这类工具的写入不经路径判定，底线管的
+是模型亲手写的命令，不是沙箱。
 
 ## ACL
 
@@ -77,9 +79,11 @@ ACL 有三个决策值，分别作用于两个执行环节：
 `git push origin`，不会匹配 `git pushx`。`flags=` 列出的词必须*另外*出现在该段的任意位置——
 `CommandRule("git push", "deny", flags=("--force",))` 也能拦下 `git push origin main --force`；
 单字母的 `-f` 被 `-fu` 满足，更长的旗标要整词出现，裸 `--` 之后的词不算。复合命令会按
-`&&`、`||`、`;`、`|`、`&` 拆段；每段分别判断，取**最严格**决策。段首的 `VAR=value` 和薄包装
-（`env`、`nice`、`nohup`、`time`、`timeout N`）会先剥掉再匹配，但剥过的段永远不会被直接*放行*
-（`PATH=…` 会改变实际运行的程序）：allow 降为 ask，deny 照样生效（`env git push --force`）。
+`&&`、`||`、`;`、`|`、`&` 拆段；每段分别判断，取**最严格**决策。两种情况会把一段封顶在 ask，
+不管它命中了什么规则：段首的 `VAR=value` 或薄包装（`env`、`nice`、`nohup`、`time`、`timeout N`——
+`PATH=…` 会改变实际运行的程序），以及看起来像输出选项的参数（`-o …`、`-oPATH`、`--output=…`、
+`--log-file`、`--junitxml`——命令可能写到它指向的任何地方，路径守卫看不见）。allow 降为 ask，deny 照样
+生效（`env git push --force`）；这种 ask 不可记忆。
 
 **底线**（`WorkspacePolicy.baseline`）单独判定，再与上面所有规则取最严格者合并，所以用户规则、
 `command_decider` 或记住的授权都放松不了它。规则的 `reason` 就是审批卡片上显示的理由（拒绝时模型
@@ -178,11 +182,11 @@ Python 包之前先创建 `.venv`，永远不要装进全局环境。
 
 ## 命令执行控制
 
-静态命令规则看不到路径，所以 session 还会从每条命令里**词法**提取路径声明：重定向目标和常见的输出选项
-（`-o`、`--output`、`--log-file` 等）算写入，其余参数（包括 `id_rsa` 这样的裸文件名；命令词本身只在写成路径时
-才算）算读取。它会把这些路径 ACL 判断和静态命令判断合并，取最严格结果。命令只要提到被 deny 的路径
-（包括重定向），即使命令本身被 allow，也会被 deny：`cat id_rsa` 和 `read_file("id_rsa")` 过的是同一条
-凭据规则，`sort -o .git/config x` 和 `write_file(".git/config")` 一样要问。Windows 上反斜杠是路径分隔符，
+静态命令规则看不到路径，所以 session 还会从每条命令里**词法**提取路径声明：重定向目标算写入，
+其余参数（包括 `id_rsa` 这样的裸文件名；命令词本身只在写成路径时才算）算读取。它会把这些路径 ACL
+判断和静态命令判断合并，取最严格结果。命令只要提到被 deny 的路径（包括重定向），即使命令本身被 allow，
+也会被 deny：`cat id_rsa` 和 `read_file("id_rsa")` 过的是同一条凭据规则。守卫不知道程序通过哪个
+*选项*写文件；策略从另一头堵上：带输出样子选项的段永远不会直接放行（见上）。Windows 上反斜杠是路径分隔符，
 不是转义符，所以 `C:\data\a.txt` 会按原样判断。
 
 这个门禁是**启发式的，而且只会收紧权限**：它看不到 `python -c` 里的代码或 `$(...)` 命令替换，

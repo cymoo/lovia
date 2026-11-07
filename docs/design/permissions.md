@@ -10,6 +10,8 @@
 >
 > v2.2（同日，第二轮评审）：撤回“必含词任意位置”的通用语义（`python -m pip install pytest` 会命中 `python -m pytest`），`CommandRule` 仍是纯前缀，只加一个显式的 `flags=`；剥赋值 / 包装后的结果最多到 `ask`；灰区命令不再自动生成 scope，范围只来自显式规则；授权记录带工作区上下文，写入先于唤醒；`permission` 谓词不再接受 bool。
 >
+> v3（2026-11-08，PR 3 四轮评审之后退一步）：四轮 9 条发现归为两个架构问题——放行命令让 advisory 的词法守卫承担了写判定（`-o x`、`-ox`、`--output=` 拼写永远补不完），以及预设的保护规则放在了能覆盖模式默认值的那一层（`.env*` 两次降低 readonly 的限制）。改法：守卫只做读声明和重定向写声明，带输出样子选项的段**封顶到 ask**（与剥包装同构，不解析路径）；**所有保护进 baseline**（含 `ENV_FILES`），用户层只放 allow/ask 包；instructions 只从顺序无关的 baseline 和模式默认值推导，删掉遮蔽启发式。放开 `.env` 的写法变为 `baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG`。
+>
 > v2.3（同日，第三轮评审）：撤回全平台大小写不敏感（`git branch -d` 会放行 `-D`），规则包按平台拼装；订正“批量遍历跳过 `ask`”——现有实现只过滤 `deny`，实测 `grep` 会返回 `ask` 文件的内容，列为 PR 3 的代码改动；scope 带上 `flags`；审批“占有”后超时 / 取消不再竞争；补 `Workspace.local(baseline=, shell_default=)` 的 API 变更。
 >
 > 行号指向 `main`（`1cbe294`，v0.9.132）。
@@ -200,13 +202,13 @@ Workspace.local(root, baseline=DANGEROUS_COMMANDS + PROTECTED_CONFIG)   # 这个
 
 注意最后一行摘掉的是**整组** `CREDENTIAL_PATHS`（`~/.aws`、`*.pem` 一起放开），不是只放开 `~/.ssh/config`；只想开一个路径就自己拼：`baseline=DANGEROUS_COMMANDS + PROTECTED_CONFIG + tuple(r for r in CREDENTIAL_PATHS if r.pattern != "~/.ssh")`，再用 `readable=("~/.ssh/config",)` 给到想要的那一个。`Workspace.local` 现在没有 `baseline=` 和 `shell_default=` 参数，两个都是本方案新增的（见“破坏性变更”）。
 
-`.env*` **不在 baseline 里**。它是“通常有密钥”的提示，不是 `~/.ssh` 那种凭据库，用户让 agent 配环境变量、排查启动失败时读 `.env` 再正常不过。所以它放在**预设层**的 `path_rules`（`PathRule(".env*", "ask", ops={"read"}, reason="Environment files usually hold secrets.")`——只管读；写仍跟随模式，否则 `readonly` 的写拒绝会被它降成 ask），三种放开方式都是一行：
+`.env*` **也在 baseline 里**（v3 改回；v2 曾放在预设层，两轮评审各发现一次它降低了 readonly 的限制——这正是“保护规则放在可覆盖层”的结构问题）。规则是 `PathRule("**/.env*", "ask", ops={"read"})`：只管读、只在工作区内（`**/` 是工作区相对的，裸 `.env*` 会匹配到根目录外），而且走 baseline 的合并，所以不可能放松任何模式默认值。用户让 agent 配环境变量、排查启动失败时读 `.env` 再正常不过，放开方式：
 
 | 谁 | 怎么做 |
 |---|---|
-| 聊天里的用户 | 卡片上点“允许”；勾“本对话中总是允许 `.env*`”则这个聊天不再问（scope `read:.env*`） |
-| 部署方 | `Workspace.local(root, path_rules=(PathRule("**/.env*", "allow"),))` —— 用户规则在预设规则之前，首个命中。预设用的是 `**/.env*`（工作区内任意深度），不是裸的 `.env*`：裸 pattern 根目录外也匹配，会把 readonly 的外部读取拒绝降成 ask |
-| 部署方，连问都不想问 | 同上；想反过来彻底禁止，`denied_paths=(".env*",)` |
+| 聊天里的用户 | 卡片上点“允许”；勾“本对话中总是允许 `**/.env*`”则这个聊天不再问（scope `read:**/.env*`） |
+| 部署方 | `Workspace.local(root, baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG)` —— 不带 `ENV_FILES` 重新拼底线 |
+| 部署方，想反过来彻底禁止 | `denied_paths=(".env*",)` |
 
 **批量遍历要补一条过滤，这是代码改动，不是现状。** architecture.md 写的“遍历中非 `allow` 即跳过”只对符号链接目标成立；`_read_denied()`（`local.py:394`）只过滤 `deny`。实测：`PathRule(".env*", "ask")` 下 `read_file(".env")` 判 `ask`，但 `grep("TOKEN", include_hidden=True)` 直接返回了 `.env` 的内容。默认不扫隐藏文件只是默认值，不是权限。PR 3 要改成：`list` / `glob` / `grep` 的遍历对每个条目检查**自身和解析后目标**的读取判定，非 `allow` 一律跳过、不弹卡片（遍历中没法审批）；用户点名的 `read_file(".env")` 照常走这一次调用的审批。回归用例覆盖 `include_hidden=True`、嵌套目录、符号链接三种。
 
@@ -473,6 +475,6 @@ PROTECTED_CONFIG = tuple(
 DEFAULT_BASELINE = DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG
 ```
 
-`.env*` 在预设层而不在这里（见 baseline 一节）。`rm` 的 16 条枚举看着笨，但它说的就是“拦这些写法”，比一条看似万能、实际看不见 `rm -- -rf /` 的规则诚实。v1 里的裸 `sh` / `bash` 拒绝删掉了：前缀规则表达不了“没有参数”，而 `curl x | sh` 里的 `curl` 本身就在灰区，复合命令取最严格，整条照样会问。`bash x.sh`、`bash -c ...`、`powershell -Command ...`、`cmd /c ...` 都在灰区，灰区不生成 scope，不提供“总是允许”。
+`ENV_FILES`（`**/.env*` 读要问）也在这里（见 baseline 一节）。`rm` 的 16 条枚举看着笨，但它说的就是“拦这些写法”，比一条看似万能、实际看不见 `rm -- -rf /` 的规则诚实。v1 里的裸 `sh` / `bash` 拒绝删掉了：前缀规则表达不了“没有参数”，而 `curl x | sh` 里的 `curl` 本身就在灰区，复合命令取最严格，整条照样会问。`bash x.sh`、`bash -c ...`、`powershell -Command ...`、`cmd /c ...` 都在灰区，灰区不生成 scope，不提供“总是允许”。
 
 清单里每一条都要有 `test_policy.py` 的用例：命中、不命中、被 `baseline=()` 关掉。

@@ -32,20 +32,20 @@ pattern that happens to equal a subcommand (``denied_paths=("build",)``
 against ``npm run build``) therefore denies that command: stricter, never
 looser, and a rare configuration.
 
-**Writes are shell redirection plus the usual output options.** ``>``,
-``>>``, ``&>`` mark the shell's own writes; ``-o`` / ``--output`` /
-``--output-file`` / ``--log-file`` / ``--junitxml`` (``=value`` or the next
-word) mark the writes of the commands the presets allow outright (``sort
--o``, ``git diff --output``, ``tree -o``) — without that, an allow rule for
-an inspection command would be a way to write ``.git/config``. Any other
-argument a program treats as an output path (``dd of=/dev/x``, ``cp src
-/etc/hosts``) is still recorded as a ``read``: per-command semantics are
-unbounded, and the consequence is bounded — in ``coding``
-(``read_outside="ask"``) an outside write argument still stops at approval;
-only in ``trusted`` does it pass unprompted, which is the point of
-``trusted``. Mandatory write enforcement is the job of a sandboxed executor
-(Seatbelt/bubblewrap) or an isolated backend implementing the same session
-protocol.
+**Writes are shell redirection, nothing else.** ``>``, ``>>``, ``&>`` mark
+the shell's own writes. An argument a program treats as an output path
+(``sort -o x``, ``dd of=/dev/x``, ``cp src /etc/hosts``) is lexically a
+read, and this module does not try to know better: per-command option
+semantics are unbounded (``-o x``, ``-ox``, ``--output=x``, ``--output x``,
+…), and a table of them is only ever one spelling short. The policy closes
+that gap the other way round — a command that *names* an output-looking
+option is never allowed outright, whatever the spelling (see
+``WorkspacePolicy.decide_command``) — and the consequence of the remaining
+read/write blur is bounded: in ``coding`` (``read_outside="ask"``) an
+outside write argument still stops at approval; only in ``trusted`` does it
+pass unprompted, which is the point of ``trusted``. Mandatory write
+enforcement is the job of a sandboxed executor (Seatbelt/bubblewrap) or an
+isolated backend implementing the same session protocol.
 """
 
 from __future__ import annotations
@@ -65,21 +65,6 @@ _REDIRECT_WRITE = {">", ">>", "&>", "&>>", ">&", ">|"}
 _REDIRECT_READ = {"<"}
 _HEREDOC = {"<<", "<<-", "<<<"}
 _PUNCTUATION = set("();<>|&")
-# Options whose value is where a command writes. Generic across commands on
-# purpose (a `-o` that means something else, as in `ls -o`, makes a false
-# *write* claim — which can only tighten the verdict).
-_OUTPUT_OPTIONS = frozenset(
-    {
-        "-o",
-        "--output",
-        "--output-file",
-        "--out-file",
-        "--outfile",
-        "--log-file",
-        "--junitxml",
-        "--junit-xml",
-    }
-)
 # A cmd.exe switch: one or two letters after a slash, optionally qualified
 # (``/a:d``). Longer slash-words (``/Users/neo``) are paths.
 _CMD_SWITCH = re.compile(r"/[A-Za-z]{1,2}(:\S*)?")
@@ -163,7 +148,7 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
         return []
 
     claims: list[tuple[FileOp, str]] = []
-    pending: FileOp | None = None  # op of a redirect / output option's target
+    pending: FileOp | None = None  # op of a redirect waiting for its target
     skip_next = False  # heredoc delimiter / herestring literal
     at_start = True  # the next word is a segment's command word
 
@@ -192,14 +177,6 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
             continue
         if token.isdigit():
             continue  # an fd number (`2>&1`) or a count (`head -n 5`), never a file
-        if token in _OUTPUT_OPTIONS:
-            pending = "write"
-            continue
-        if token.startswith("-") and token.partition("=")[0] in _OUTPUT_OPTIONS:
-            target = token.partition("=")[2]
-            if target and not _is_pseudo_device(target):
-                claims.append(("write", target))
-            continue
         at_command = at_start
         # A leading `VAR=value` keeps the command position for the next word;
         # like the command word it is a claim only when its value is rooted.

@@ -161,10 +161,11 @@ def test_command_decider_may_return_a_verdict() -> None:
 
 def test_path_rule_ask_offers_its_pattern_as_scope() -> None:
     policy = WorkspacePolicy(
+        baseline=(),  # the user layer alone; the baseline has its own .env rule
         path_rules=(
             PathRule(".env*", "ask", reason="Environment files usually hold secrets."),
             PathRule(".git", "ask", ops={"write"}, grant=False),
-        )
+        ),
     )
     env = policy.decide_path(rel=".env", abs_posix="/ws/.env", op="read")
     assert env == Verdict(
@@ -279,6 +280,55 @@ def test_wrapped_commands_are_at_most_asked_and_never_grantable() -> None:
     assert policy.decide_command("env -i git status").action == "allow"  # shell_default
 
 
+def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
+    # The guard cannot know which option a program writes through, so the
+    # policy never allows a segment that names one — whatever the spelling.
+    policy = WorkspacePolicy.coding()
+    for cmd in (
+        "sort -o .git/config in.txt",
+        "sort -o.git/config in.txt",
+        "git diff --output=.git/config",
+        "git diff --output .git/config",
+        "tree -o out.txt .",
+        "pytest --junitxml=r.xml",
+        "ls -o",  # a false hit costs one question, never a bypass
+    ):
+        verdict = policy.decide_command(cmd)
+        assert verdict.action == "ask" and verdict.scope is None, cmd
+        assert "output option" in verdict.reason, cmd
+    # Not an output option: `--oneline`, or anything after a bare `--`.
+    assert policy.decide_command("git log --oneline").action == "allow"
+    assert policy.decide_command("cat README -- -o").action == "allow"
+    # A deny still bites through it.
+    assert policy.decide_command("git push --force -o x").action == "deny"
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "-o {p}",
+        "-o{p}",
+        "--output={p}",
+        "--output {p}",
+        "--log-file={p}",
+        "--junitxml={p}",
+    ],
+)
+@pytest.mark.parametrize("target", [".git/config", "/etc/hosts", "~/.ssh/config"])
+def test_no_allowed_command_writes_a_protected_path_through_an_option(
+    spelling: str, target: str
+) -> None:
+    # Table-driven invariant: for every command the presets allow outright,
+    # every output-option spelling against a protected target must not come
+    # back allow. A new spelling is a row here, not a branch in the guard.
+    from lovia.workspace import rules
+
+    policy = WorkspacePolicy.coding()
+    for rule in rules.READ_ONLY + rules.DEV_TOOLS:
+        cmd = f"{rule.pattern} {spelling.format(p=target)}"
+        assert policy.decide_command(cmd).action != "allow", cmd
+
+
 def test_baseline_only_tightens() -> None:
     base = (
         CommandRule("rm -rf /", "deny"),
@@ -351,12 +401,22 @@ def test_coding_preset_composes_the_bundles_after_user_rules() -> None:
     assert WorkspacePolicy.coding(shell_default="allow").decide_command(
         "make deploy"
     ).action == ("allow")
-    # .env* asks at the preset level, and a user path rule lifts it.
+    # .env* asks from the baseline: a user path rule cannot lift it (it only
+    # tightens), composing the baseline without ENV_FILES does.
+    from lovia.workspace import CREDENTIAL_PATHS, DANGEROUS_COMMANDS, PROTECTED_CONFIG
+
     assert (
         policy.decide_path(rel=".env", abs_posix="/ws/.env", op="read").scope
         == "read:**/.env*"
     )
-    lifted = WorkspacePolicy.coding(path_rules=(PathRule("**/.env*", "allow"),))
+    not_lifted = WorkspacePolicy.coding(path_rules=(PathRule("**/.env*", "allow"),))
+    assert (
+        not_lifted.decide_path(rel=".env", abs_posix="/ws/.env", op="read").action
+        == "ask"
+    )
+    lifted = WorkspacePolicy.coding(
+        baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG
+    )
     assert (
         lifted.decide_path(rel=".env", abs_posix="/ws/.env", op="read").action
         == "allow"

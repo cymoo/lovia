@@ -263,6 +263,26 @@ def _has_flag(words: list[str], flag: str) -> bool:
 # but a deny rule for it still bites (``env git push --force``).
 _THIN_WRAPPERS = frozenset({"env", "nice", "nohup", "time", "call"})
 
+# The same principle for arguments: a word that looks like an output option
+# means the command may write wherever that option points, which the lexical
+# path guard cannot see (``sort -o x``, ``-ox``, ``--output=x``, ``--output
+# x`` — a table of spellings is only ever one short). Rather than parse it,
+# never *allow* such a segment outright; a false hit (``ls -o``, ``ssh -o``)
+# costs one question.
+_OUTPUT_LIKE = ("--out", "--log-file", "--junit")
+
+
+def _names_output_option(words: list[str]) -> str | None:
+    for word in words[1:]:
+        if word == "--":
+            return None
+        if word.startswith("--"):
+            if word.startswith(_OUTPUT_LIKE):
+                return word
+        elif word.startswith("-o"):
+            return word
+    return None
+
 
 def _strip_wrappers(words: list[str]) -> tuple[list[str], list[str]]:
     """Return ``(remaining words, stripped words)``."""
@@ -368,10 +388,12 @@ class WorkspacePolicy:
     """Rules in force whatever the preset: judged on their own and merged
     most-restrictive with everything above, so they can only tighten — a
     user rule, the ``command_decider`` or a remembered approval never
-    loosens them. ``None`` (the default) resolves to
-    :data:`lovia.workspace.rules.DEFAULT_BASELINE` (dangerous commands denied,
-    credential stores denied, writes to repository/tool configuration asked);
-    ``()`` switches it off; a bundle of your own replaces it."""
+    loosens them. Every *protection* lives here, so none can be undone by
+    accident; the user layer above holds what *grants*. ``None`` (the
+    default) resolves to :data:`lovia.workspace.rules.DEFAULT_BASELINE`
+    (dangerous commands denied, credential stores denied, writes to
+    repository/tool configuration asked, ``.env`` reads asked); ``()``
+    switches it off; a bundle of your own replaces it."""
 
     def __post_init__(self) -> None:
         # ``allow_shell=False`` already forces every command to ``deny`` in
@@ -414,13 +436,11 @@ class WorkspacePolicy:
         baseline: tuple["PathRule | CommandRule", ...] | None = None,
     ) -> "WorkspacePolicy":
         """Read the workspace only: no writes anywhere, no shell."""
-        from .rules import ENV_FILES
-
         return cls(
             write="deny",
             read_outside="deny",
             write_outside="deny",
-            path_rules=tuple(path_rules) + ENV_FILES,
+            path_rules=path_rules,
             denied_paths=denied_paths,
             allow_shell=False,
             shell_default="deny",
@@ -446,13 +466,13 @@ class WorkspacePolicy:
         whatever no rule names follows ``shell_default`` — ``ask`` unless you
         choose the kits-style ``"allow"``. Your ``command_rules`` come first.
         """
-        from .rules import DEV_TOOLS, ENV_FILES, IRREVERSIBLE, READ_ONLY
+        from .rules import DEV_TOOLS, IRREVERSIBLE, READ_ONLY
 
         return cls(
             write="allow",
             read_outside="ask",
             write_outside="deny",
-            path_rules=tuple(path_rules) + ENV_FILES,
+            path_rules=path_rules,
             denied_paths=denied_paths,
             shell_default=shell_default,
             command_rules=tuple(command_rules) + IRREVERSIBLE + READ_ONLY + DEV_TOOLS,
@@ -474,16 +494,14 @@ class WorkspacePolicy:
         """Read anywhere, write the workspace; shell runs without approval.
 
         Writes outside the root still ask — a cheap safety valve, since the
-        approval channel exists anyway. Only the baseline interrupts commands
-        here (the "all automatic" posture); ``.env*`` reads still ask.
+        approval channel exists anyway. Only the baseline interrupts here
+        (the "all automatic" posture).
         """
-        from .rules import ENV_FILES
-
         return cls(
             write="allow",
             read_outside="allow",
             write_outside="ask",
-            path_rules=tuple(path_rules) + ENV_FILES,
+            path_rules=path_rules,
             denied_paths=denied_paths,
             shell_default=shell_default,
             command_rules=command_rules,
@@ -605,16 +623,21 @@ class WorkspacePolicy:
     def _decide_segment(self, segment: str) -> Verdict:
         words, stripped = _strip_wrappers(segment.split())
         verdict = self._decide_words(segment, words)
-        if stripped:
+        output = _names_output_option(words)
+        if stripped or output:
+            # Capped at ask, never allowed outright and never grantable: the
+            # wrapper (or the output option) is what the allow rule — and a
+            # grant for the inner command — cannot vouch for.
             if verdict.action == "allow":
+                why = (
+                    f"'{' '.join(stripped)}' wraps the command"
+                    if stripped
+                    else f"'{output}' looks like an output option"
+                )
                 verdict = Verdict(
-                    "ask",
-                    f"'{' '.join(stripped)}' wraps the command; allow rules "
-                    "do not cover wrapped commands",
+                    "ask", f"{why}; allow rules do not cover what it may write or run"
                 )
             elif verdict.action == "ask":
-                # Not grantable either: the grant would be for the inner
-                # command, and the wrapper is what changes what it runs.
                 verdict = Verdict("ask", verdict.reason)
         base = self._command_rule_verdict(self._baseline_commands, words)
         return merge_verdicts(verdict, base) if base is not None else verdict

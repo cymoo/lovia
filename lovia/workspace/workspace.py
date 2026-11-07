@@ -31,13 +31,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Mapping, NoReturn
 
 from ..exceptions import UserError
 from .local import LocalWorkspaceSession
-from .policy import (
-    CommandRule,
-    Decision,
-    PathRule,
-    WorkspacePolicy,
-    _pattern_matches,
-)
+from .policy import CommandRule, Decision, PathRule, WorkspacePolicy
 from .protocol import ShellExecutor, WorkspaceSession
 from .types import WorkspaceLimits, WorkspaceMode
 
@@ -344,40 +338,19 @@ def _describe_rules(policy: WorkspacePolicy) -> list[str]:
             f"Writes to {', '.join(repr(p) for p in guarded_writes)} ask the "
             "user first: they change how tools behave."
         )
-    # First match wins, so an ask rule counts only if nothing before it
-    # (``denied_paths``, an earlier read rule) already catches the files it
-    # names — the documented ``PathRule("**/.env*", "allow")`` override, or a
-    # blanket ``PathRule("*", ...)``, must silence the sentence. Glob
-    # subsumption isn't decidable in general; a representative path of the
-    # pattern (``**/.env*`` → ``.envx``) tried against the earlier rules is.
-    asked_reads: list[str] = []
-    earlier: list[PathRule] = []
-    for r in policy.path_rules:
-        if "read" not in r.ops:
-            continue
-        if r.action == "ask" and not _shadowed(r.pattern, policy.denied_paths, earlier):
-            asked_reads.append(r.pattern)
-        earlier.append(r)
+    # Baseline only: it merges rather than orders, so what it says is what
+    # holds. The user's own path rules are theirs to describe.
+    asked_reads = [
+        r.pattern
+        for r in policy.baseline or ()
+        if isinstance(r, PathRule) and r.action == "ask" and "read" in r.ops
+    ]
     if asked_reads:
         lines.append(
             f"Files matching {', '.join(repr(p) for p in asked_reads)} ask the "
             "user before being read, and bulk listing and search skip them."
         )
     return lines
-
-
-def _shadowed(
-    pattern: str,
-    denied: tuple[str, ...],
-    earlier: tuple[PathRule, ...] | list[PathRule],
-) -> bool:
-    """Whether a representative file of ``pattern`` is caught before the
-    rule is reached (first match wins)."""
-    sample = pattern.removeprefix("**/").replace("*", "x").replace("?", "x")
-    if "/" in sample.strip("/") or sample.startswith("~"):
-        return False  # a rooted or nested pattern: no honest single sample
-    hit = (p for p in (*denied, *(r.pattern for r in earlier)))
-    return any(_pattern_matches(p, rel=sample, abs_posix="/ws/" + sample) for p in hit)
 
 
 def _describe_outside_access(read: Decision, write: Decision) -> str:
@@ -442,8 +415,7 @@ class Workspace:
           e.g. ``readable=("~/docs",)`` for a reference folder.
         * ``denied_paths=`` — patterns no tool may touch (``"secrets/**"``, ...).
         * ``path_rules=`` — full ACL control when the shorthands don't fit;
-          yours come before the preset's (``.env*`` asks by default — a
-          ``PathRule("**/.env*", "allow")`` here lifts that).
+          yours come before the preset's.
         * ``command_rules=`` — shell prefix rules (allow/ask/deny), before the
           preset's bundles (see :mod:`lovia.workspace.rules`).
         * ``shell_default=`` — what a command no rule names gets: ``coding``
@@ -451,8 +423,10 @@ class Workspace:
           "only the dangerous is stopped" posture.
         * ``baseline=`` — the rules in force whatever else is configured
           (dangerous commands denied, credential stores denied, writes to
-          ``.git``-like configuration asked). They only ever tighten; compose
-          your own from the bundles to drop a group, ``()`` turns them off.
+          ``.git``-like configuration and reads of ``.env`` files asked).
+          They only ever tighten; compose your own from the bundles to drop
+          a group (``DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG``
+          lets the agent read ``.env``), ``()`` turns them off.
 
         Pass an explicit ``policy`` to take full control instead of using a
         preset (mutually exclusive with the rule shorthands above).

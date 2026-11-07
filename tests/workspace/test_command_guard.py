@@ -85,20 +85,18 @@ def test_bare_arguments_are_claims_but_command_words_are_not() -> None:
     assert extract_path_claims("head -n 5 file") == [("read", "file")]
 
 
-def test_output_options_are_write_claims() -> None:
-    # The commands the presets allow outright can write through an option;
-    # `sort -o .git/config` must meet the same rule as `write_file`.
+def test_output_options_are_not_parsed_here() -> None:
+    # The guard does not know which option a program writes through (the
+    # spellings are unbounded); it records the value as a read like any
+    # argument. The policy caps such segments at ask instead — see
+    # test_policy's output-option tests.
     assert extract_path_claims("sort -o .git/config in.txt") == [
-        ("write", ".git/config"),
+        ("read", ".git/config"),
         ("read", "in.txt"),
     ]
     assert extract_path_claims("git diff --output=.git/config") == [
         ("read", "diff"),
-        ("write", ".git/config"),
-    ]
-    assert ("write", "out.txt") in extract_path_claims("tree -o out.txt .")
-    assert extract_path_claims("pytest --junitxml=/tmp/r.xml") == [
-        ("write", "/tmp/r.xml")
+        ("read", ".git/config"),
     ]
 
 

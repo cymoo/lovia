@@ -337,8 +337,24 @@ def test_shell_syntax_before_the_command_is_stepped_over() -> None:
     assert opted.decide_command("(ls)").action == "allow"
     assert opted.decide_command("! git status").action == "allow"
     assert opted.decide_command("env ls").action == "ask"
-    # A `for` / `case` head runs no command of its own: syntax throughout.
-    for cmd in ("for f in *", "case x in", "select x in a b"):
+    # The shell expands everywhere — a redirect target too — so expansion
+    # is judged before the syntax is stepped over: never allowed, no scope.
+    for cmd in ('>"$HOME/.ssh/config" ls', "> $F ls", "2>$LOG ls"):
+        verdict = opted.decide_command(cmd)
+        assert verdict.action == "ask" and verdict.scope is None, cmd
+        assert "expanded by the shell" in verdict.reason, cmd
+        assert policy.decide_command(cmd).scope is None, cmd
+    # A `case` segment runs the command after its pattern's `)`.
+    for cmd in ("case x in x) git push --force", "case x in (x) git push --force"):
+        assert policy.decide_command(cmd).action == "deny", cmd
+    assert policy.decide_command("case x in x) ls").scope == "shell:ls"
+    # Syntax alone runs nothing: a `for` header (the body is its own
+    # segment), a `case` header, a closing word — unless the shell expands
+    # something in it.
+    for cmd in ("for f in a b", "case x in", "select x in a b", "fi", "esac", "}"):
+        assert policy.decide_command(cmd).action == "allow", cmd
+    assert opted.decide_command("if ls; then ls; fi").action == "allow"
+    for cmd in ("for f in *", "for f in $(ls)", "case $x in"):
         verdict = policy.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scope is None, cmd
 

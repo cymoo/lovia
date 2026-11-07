@@ -294,17 +294,20 @@ _OUTPUT_LIKE = ("--out", "--log-file", "--junit")
 _EXPANSION_CHARS = frozenset("*?[{$`" + ("%^" if os.name == "nt" else ""))
 
 
-def _uncertain_word(words: list[str]) -> str | None:
-    """The first word an allow rule cannot vouch for, with why, or None."""
-    options_over = False
-    for i, word in enumerate(words):
-        if word == "--":
-            options_over = True  # ends options, not expansion
-            continue
+def _uncertain_word(segment: list[str], command: list[str]) -> str | None:
+    """The first word an allow rule cannot vouch for, with why, or None.
+
+    ``segment`` is every word as lexed — the shell expands everywhere, a
+    redirect target or a ``case`` pattern included, so expansion is judged
+    before any syntax is stepped over; ``command`` is what is left after
+    that, whose arguments alone can be options.
+    """
+    for word in segment:
         if any(c in word for c in _EXPANSION_CHARS):
             return f"'{word}' is expanded by the shell"
-        if i == 0 or options_over:
-            continue
+    for word in command[1:]:
+        if word == "--":
+            break  # ends options
         if word.startswith("--"):
             if word.startswith(_OUTPUT_LIKE):
                 return f"'{word}' looks like an output option"
@@ -335,13 +338,14 @@ def _words(segment: str) -> list[str]:
 # the shell's grammar, unlike the programs that follow it. It names no
 # program and changes nothing about the one that runs, so it is stepped
 # over and the command's own verdict stands (``! ls`` and ``(ls)`` are
-# ``ls``; ``! git push --force`` meets the deny). ``for`` / ``case`` /
-# ``select`` head a clause that runs no command of its own: the whole segment
-# is syntax.
+# ``ls``; ``! git push --force`` meets the deny). A ``for`` / ``select``
+# header runs no command of its own (the body is its own segment, after
+# ``do``): the whole segment is syntax. A ``case`` segment runs the command
+# after its pattern's ``)``.
 _RESERVED = frozenset(
     "! { } ( ) if then else elif fi while until do done esac function coproc".split()
 )
-_CLAUSE_HEADS = frozenset({"for", "case", "select"})
+_LOOP_HEADS = frozenset({"for", "select"})
 _OPERATOR_CHARS = frozenset("()<>&|;")
 
 
@@ -353,9 +357,15 @@ def _strip_syntax(words: list[str]) -> list[str]:
             head = head[1:]
             words = [head, *words[1:]] if head else words[1:]
             continue
-        if head in _CLAUSE_HEADS:
+        if head in _LOOP_HEADS:
             return []
-        if head in _RESERVED:
+        if head == "case":
+            # `case WORD in [(]PATTERN) command`: the command follows the
+            # first `)`; without one the segment is the header alone.
+            if ")" not in words:
+                return []
+            words = words[words.index(")") + 1 :]
+        elif head in _RESERVED:
             words = words[1:]
         elif set(head) <= _OPERATOR_CHARS:
             # `>` / `<&` take the next word as their target; `(` does not.
@@ -728,9 +738,14 @@ class WorkspacePolicy:
         return merge_verdicts(*(self._decide_segment(seg) for seg in segments))
 
     def _decide_segment(self, segment: str) -> Verdict:
-        words, stripped = _strip_wrappers(_words(segment))
+        lexed = _words(segment)
+        words, stripped = _strip_wrappers(lexed)
+        uncertain = _uncertain_word(lexed, words)
+        if not words:
+            # Syntax alone (`fi`, `esac`, `for f in a b`) runs nothing —
+            # unless the shell expands something in it (`for f in $(…)`).
+            return Verdict("ask", uncertain) if uncertain else Verdict("allow")
         verdict, by_rule = self._decide_words(segment, words)
-        uncertain = _uncertain_word(words)
         if stripped or uncertain:
             # The wrapper (or the word) is what neither an allow *rule*
             # nor a grant for the command can vouch for: a rule's allow is

@@ -85,6 +85,15 @@ def test_bare_arguments_are_claims_but_command_words_are_not() -> None:
     assert extract_path_claims("head -n 5 file") == [("read", "file")]
 
 
+def test_hash_inside_a_word_is_not_a_comment() -> None:
+    # shlex would cut `input#tag` in half and drop the rest of the line; a
+    # shell starts a comment only at a word's start.
+    assert extract_path_claims("sort input#tag > out.txt") == [
+        ("read", "input#tag"),
+        ("write", "out.txt"),
+    ]
+
+
 def test_output_options_are_not_parsed_here() -> None:
     # The guard does not know which option a program writes through (the
     # spellings are unbounded); it records the value as a read like any

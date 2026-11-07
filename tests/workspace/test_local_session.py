@@ -516,7 +516,12 @@ async def test_allowed_commands_still_meet_the_path_rules(tmp_path) -> None:
         "sort -o .git/config in.txt",
         "sort '-o.git/config' in.txt",
         "sort -ro .git/config in.txt",
+        "sort in#1 -o .git/config",
         "git diff --output=.git/config",
+        # Reads the guard cannot see: a tree walked by the tool, a glob.
+        "grep -R TOKEN .",
+        "cat *",
+        "head id_rs?",
     ):
         assert session.decide_command(cmd).action == "ask", cmd
     assert session.decide_command("git diff --stat").action == "allow"

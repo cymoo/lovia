@@ -62,8 +62,11 @@ or replace the whole thing with `policy=WorkspacePolicy(...)` (mutually
 exclusive with the shorthand knobs).
 
 The presets are built from the bundles in `lovia.workspace.rules`, which you
-can compose yourself: `READ_ONLY` (`ls`, `cat`, `git status`, … ; `dir`,
-`type`, … on Windows), `DEV_TOOLS` (`pytest`, `ruff`, `mypy`, `npm test`,
+can compose yourself: `READ_ONLY` (`ls`, `cat`, `head`, `git status`, … ;
+`dir`, `type`, … on Windows — commands that read the files they are given;
+tree-walking readers like `grep -r`, `rg` and `diff -r` stay gray, because
+they reach `.env` and `id_rsa` without naming them, and `grep_files` is the
+searcher that judges every file it opens), `DEV_TOOLS` (`pytest`, `ruff`, `mypy`, `npm test`,
 `cargo test`, …), `IRREVERSIBLE` (`git push`, `git reset --hard`, `rm -r`,
 `sudo`, `docker`, … — asked), and the baseline's `DANGEROUS_COMMANDS`,
 `CREDENTIAL_PATHS`, `PROTECTED_CONFIG`, `ENV_FILES`. Allowing `DEV_TOOLS` is
@@ -104,14 +107,18 @@ segment — `CommandRule("git push", "deny", flags=("--force",))` stops `git
 push origin main --force` too; a one-letter `-f` is satisfied by `-fu`,
 anything longer must appear as that word, and words after a bare `--` never
 count. Compound commands are split on `&&`, `||`, `;`, `|`, `&`; each segment
-is judged and the **most restrictive** decision wins. Two things cap a
-segment at `ask` whatever rule it matched: a leading `VAR=value` or thin
-wrapper (`env`, `nice`, `nohup`, `time`, `timeout N` — `PATH=…` changes
-which program runs), and an argument that looks like an output option
-(`-o …`, `-oPATH`, `--output=…`, `--log-file`, `--junitxml` — the command
-may write wherever it points, which the path guard cannot see). An allow
-becomes an ask, a deny still bites (`env git push --force`); the ask is not
-grantable.
+is judged and the **most restrictive** decision wins. An allow rule covers
+**literal arguments only** — what the path guard can judge one by one — so
+three things cap a segment at `ask` whatever rule it matched: a leading
+`VAR=value` or thin wrapper (`env`, `nice`, `nohup`, `time`, `timeout N` —
+`PATH=…` changes which program runs); an argument that looks like an output
+option (`-o …`, `-oPATH`, `-ro`, `--output=…`, `--log-file`, `--junitxml` —
+the command may write wherever it points); and an argument the shell
+expands (`cat *`, `cat $F`, `$(…)` — the guard never sees the paths it
+becomes). An allow becomes an ask, a deny still bites (`env git push
+--force`); the ask is not grantable. The mode default `shell_default="allow"`
+is not a rule vouching for anything, so `trusted` runs `cat *` unprompted —
+which is its point.
 
 **The baseline** (`WorkspacePolicy.baseline`) is judged on its own and merged
 most-restrictive with everything above, so no user rule, `command_decider`

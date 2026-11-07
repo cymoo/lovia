@@ -264,35 +264,50 @@ def _has_flag(words: list[str], flag: str) -> bool:
 # but a deny rule for it still bites (``env git push --force``).
 _THIN_WRAPPERS = frozenset({"env", "nice", "nohup", "time", "call"})
 
-# The same principle for arguments: a word that looks like an output option
-# means the command may write wherever that option points, which the lexical
-# path guard cannot see (``sort -o x``, ``-ox``, ``-ro x``, ``'-ox'``,
-# ``--output=x``, ``--output x`` — a table of spellings is only ever one
-# short). Rather than parse it, never *allow* such a segment outright: a long
-# option starting ``--out`` / ``--log-file`` / ``--junit``, or a short-option
-# group with an ``o`` anywhere in it. A false hit (``ls -o``, ``grep -o``,
-# ``ssh -o``) costs one question.
+# The same principle for arguments: an allow rule vouches for a command over
+# *literal* arguments, which the path guard can judge one by one. Anything
+# else about an argument the guard cannot see, so the segment is never
+# allowed outright (a false hit costs one question):
+#
+# * a word that looks like an output option — the command may write wherever
+#   it points (``sort -o x``, ``-ox``, ``-ro x``, ``'-ox'``, ``--output=x``;
+#   a table of spellings is only ever one short, so: a long option starting
+#   ``--out`` / ``--log-file`` / ``--junit``, or a short-option group with an
+#   ``o`` anywhere in it);
+# * a glob, variable or substitution — the shell turns it into paths the
+#   guard never sees (``cat *`` reads ``id_rsa``; ``cat $F``; ``$(…)``).
 _OUTPUT_LIKE = ("--out", "--log-file", "--junit")
+_EXPANSION_CHARS = frozenset("*?[{$`")
 
 
-def _names_output_option(words: list[str]) -> str | None:
+def _uncertain_argument(words: list[str]) -> str | None:
+    """The first argument an allow rule cannot vouch for, with why, or None."""
+    options_over = False
     for word in words[1:]:
         if word == "--":
-            return None
+            options_over = True  # ends options, not expansion
+            continue
+        if any(c in word for c in _EXPANSION_CHARS):
+            return f"'{word}' is expanded by the shell"
+        if options_over:
+            continue
         if word.startswith("--"):
             if word.startswith(_OUTPUT_LIKE):
-                return word
+                return f"'{word}' looks like an output option"
         elif word.startswith("-") and "o" in word.partition("=")[0]:
-            return word
+            return f"'{word}' looks like an output option"
     return None
 
 
 def _words(segment: str) -> list[str]:
     """A segment's words as the shell sees them: quotes removed, so
-    ``'-o.git/config'`` is the option it is. Unbalanced quotes fall back to
-    whitespace splitting (the guard gives up on them the same way)."""
+    ``'-o.git/config'`` is the option it is; no comment stripping, because
+    a shell starts a comment only at a word's start and shlex would cut
+    ``input#tag`` in half. Unbalanced quotes fall back to whitespace
+    splitting (the guard gives up on them the same way)."""
     lexer = shlex.shlex(segment, posix=True)
     lexer.whitespace_split = True
+    lexer.commenters = ""
     if os.name == "nt":
         lexer.escape = ""  # cmd.exe: a backslash separates path segments
     try:
@@ -639,38 +654,44 @@ class WorkspacePolicy:
 
     def _decide_segment(self, segment: str) -> Verdict:
         words, stripped = _strip_wrappers(_words(segment))
-        verdict = self._decide_words(segment, words)
-        output = _names_output_option(words)
-        if stripped or output:
+        verdict, by_rule = self._decide_words(segment, words)
+        uncertain = _uncertain_argument(words)
+        if by_rule and (stripped or uncertain):
             # Capped at ask, never allowed outright and never grantable: the
-            # wrapper (or the output option) is what the allow rule — and a
-            # grant for the inner command — cannot vouch for.
+            # wrapper (or the argument) is what the allow *rule* — and a grant
+            # for the inner command — cannot vouch for. A default of allow
+            # (``trusted``) is not a rule vouching for anything: it is the
+            # choice not to judge commands, and is left alone.
             if verdict.action == "allow":
                 why = (
                     f"'{' '.join(stripped)}' wraps the command"
                     if stripped
-                    else f"'{output}' looks like an output option"
+                    else uncertain
                 )
                 verdict = Verdict(
-                    "ask", f"{why}; allow rules do not cover what it may write or run"
+                    "ask", f"{why}; allow rules cover literal arguments only"
                 )
             elif verdict.action == "ask":
                 verdict = Verdict("ask", verdict.reason)
         base = self._command_rule_verdict(self._baseline_commands, words)
         return merge_verdicts(verdict, base) if base is not None else verdict
 
-    def _decide_words(self, segment: str, words: list[str]) -> Verdict:
+    def _decide_words(self, segment: str, words: list[str]) -> tuple[Verdict, bool]:
+        """The verdict and whether a static rule produced it (the decider saw
+        the whole segment itself; the default vouches for nothing)."""
         if self.command_decider is not None:
             raw = self.command_decider(segment)
             if raw is not None:
                 try:
-                    return as_verdict(raw)
+                    return as_verdict(raw), False
                 except TypeError:
                     # Fall through to the static rules rather than crash on a
                     # bad hook — never run unjudged, never abort the run.
                     pass
         hit = self._command_rule_verdict(self.command_rules, words)
-        return hit if hit is not None else self._default_command_verdict()
+        if hit is not None:
+            return hit, True
+        return self._default_command_verdict(), False
 
     @staticmethod
     def _command_rule_verdict(

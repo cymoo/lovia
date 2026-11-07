@@ -44,6 +44,12 @@ READ_ONLY_COMMON: tuple[CommandRule, ...] = tuple(
     )
 )
 
+# Only commands that read the *files they are given*: an allow rule is
+# vouched for by the path guard judging each literal argument, and a tool
+# that reads a tree on its own (`grep -r`, `rg`, `diff -r`, `findstr /s`)
+# reaches `.env` and `id_rsa` without ever naming them. Those stay gray; the
+# built-in `grep_files` is the searcher that judges every file it opens.
+# Listing names (`ls -R`, `tree`, `du`) is fine: names are not content.
 READ_ONLY_POSIX: tuple[CommandRule, ...] = tuple(
     CommandRule(p, "allow")
     for p in (
@@ -52,8 +58,6 @@ READ_ONLY_POSIX: tuple[CommandRule, ...] = tuple(
         "head",
         "tail",
         "wc",
-        "grep",
-        "rg",
         "pwd",
         "echo",
         "which",
@@ -64,8 +68,7 @@ READ_ONLY_POSIX: tuple[CommandRule, ...] = tuple(
         "sleep",
         "test",
         "tree",
-        "diff",
-        "sort",  # its `-o` is a write claim (command_guard); uniq's positional output isn't, so it stays gray
+        "sort",  # `sort -o x` is capped at ask by the policy; uniq's positional output isn't visible, so it stays gray
         "cut",
         "file",
     )
@@ -73,7 +76,7 @@ READ_ONLY_POSIX: tuple[CommandRule, ...] = tuple(
 
 READ_ONLY_CMD: tuple[CommandRule, ...] = tuple(
     CommandRule(p, "allow")
-    for p in ("dir", "type", "findstr", "where", "echo", "cd", "tree", "fc", "more")
+    for p in ("dir", "type", "where", "echo", "cd", "tree", "fc", "more")
 )
 
 READ_ONLY: tuple[CommandRule, ...] = READ_ONLY_COMMON + (

@@ -140,6 +140,9 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
     """
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
+    # A shell starts a comment only at a word's start; shlex would otherwise
+    # cut `input#tag` in half and lose everything after it.
+    lexer.commenters = ""
     if os.name == "nt":
         lexer.escape = ""  # cmd.exe: a backslash separates path segments
     try:

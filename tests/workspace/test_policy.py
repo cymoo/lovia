@@ -304,6 +304,33 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
     assert policy.decide_command("cat README -- -o").action == "allow"
     # A deny still bites through it.
     assert policy.decide_command("git push --force -o x").action == "deny"
+    # Words as the shell sees them: a `#` inside a word is not a comment, so
+    # the option after it is still seen.
+    assert policy.decide_command("sort input#tag -o .git/config").action == "ask"
+    assert policy.decide_command("cat a#b").action == "allow"
+
+
+def test_globs_variables_and_substitutions_cap_allowed_commands_at_ask() -> None:
+    # The guard judges literal paths; what the shell expands it never sees
+    # (`cat *` reads id_rsa), so an allow rule covers literal arguments only.
+    policy = WorkspacePolicy.coding()
+    for cmd in ("cat *", "cat -- *", "head *.pem", "cat $F", "cat $(ls)", "cat ~/x[1]"):
+        verdict = policy.decide_command(cmd)
+        assert verdict.action == "ask" and verdict.scope is None, cmd
+        assert "expanded by the shell" in verdict.reason, cmd
+    assert policy.decide_command('ls "my file"').action == "allow"
+    assert policy.decide_command("git log --format=%H").action == "allow"
+
+
+def test_recursive_readers_are_not_allowed_outright() -> None:
+    # `grep -r`, `rg`, `diff -r`, `findstr /s` read a tree without naming
+    # the files: they stay gray; `grep_files` is the searcher that judges
+    # every file it opens.
+    from lovia.workspace import rules
+
+    allowed = {r.pattern for r in rules.READ_ONLY_POSIX + rules.READ_ONLY_CMD}
+    assert not {"grep", "rg", "diff", "findstr"} & allowed
+    assert WorkspacePolicy.coding().decide_command("grep -R TOKEN .").action == "ask"
 
 
 @pytest.mark.parametrize(
@@ -318,6 +345,7 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
         "--output {p}",
         "--log-file={p}",
         "--junitxml={p}",
+        "x#y -o {p}",  # a `#` inside a word is not a comment
     ],
 )
 @pytest.mark.parametrize("target", [".git/config", "/etc/hosts", "~/.ssh/config"])
@@ -333,6 +361,18 @@ def test_no_allowed_command_writes_a_protected_path_through_an_option(
     for rule in rules.READ_ONLY + rules.DEV_TOOLS:
         cmd = f"{rule.pattern} {spelling.format(p=target)}"
         assert policy.decide_command(cmd).action != "allow", cmd
+
+
+@pytest.mark.parametrize("argument", ["*", "'*'", "$F", "$(ls)", "id_rs?", "~/{a,b}"])
+def test_no_allowed_command_reads_through_an_expansion(argument: str) -> None:
+    # The read-side twin of the output-option invariant: for every command
+    # the presets allow outright, an argument the shell expands must not
+    # come back allow — `cat *` would read id_rsa unseen.
+    from lovia.workspace import rules
+
+    policy = WorkspacePolicy.coding()
+    for rule in rules.READ_ONLY + rules.DEV_TOOLS:
+        assert policy.decide_command(f"{rule.pattern} {argument}").action != "allow"
 
 
 def test_baseline_only_tightens() -> None:
@@ -465,6 +505,15 @@ def test_trusted_preset_interrupts_only_for_the_baseline() -> None:
     assert policy.decide_command("git push origin main").action == "allow"
     assert policy.decide_command("sudo ls").action == "allow"
     assert policy.decide_command("git push --force").action == "deny"
+    # The caps keep allow *rules* honest; a default of allow is the choice
+    # not to judge, so expansions, wrappers and output options run as is.
+    for cmd in (
+        "echo $$ > pid.txt; exec sleep 30",
+        "cat *",
+        "env X=1 make",
+        "sort -o x y",
+    ):
+        assert policy.decide_command(cmd).action == "allow", cmd
 
 
 def test_bundles_exist_for_both_host_shells() -> None:

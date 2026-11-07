@@ -51,8 +51,10 @@ agent = Agent(
 “只拦危险的”姿态）、`baseline=`（用下面的规则包自己拼，或 `()` 关掉）细化预设；也可以用
 `policy=WorkspacePolicy(...)` 完全替换（与简写配置项互斥）。
 
-预设由 `lovia.workspace.rules` 里的规则包拼成，你也可以自己拼：`READ_ONLY`（`ls`、`cat`、
-`git status` 等；Windows 上是 `dir`、`type` 等）、`DEV_TOOLS`（`pytest`、`ruff`、`mypy`、`npm test`、
+预设由 `lovia.workspace.rules` 里的规则包拼成，你也可以自己拼：`READ_ONLY`（`ls`、`cat`、`head`、
+`git status` 等；Windows 上是 `dir`、`type` 等——只收录“读给定文件”的命令；`grep -r`、`rg`、`diff -r`
+这类自己遍历目录树的读取工具留在灰区，因为它们不点名就能读到 `.env` 和 `id_rsa`，逐文件判定的搜索是
+内置的 `grep_files`）、`DEV_TOOLS`（`pytest`、`ruff`、`mypy`、`npm test`、
 `cargo test` 等）、`IRREVERSIBLE`（`git push`、`git reset --hard`、`rm -r`、`sudo`、`docker` 等——要问），
 以及底线的 `DANGEROUS_COMMANDS`、`CREDENTIAL_PATHS`、`PROTECTED_CONFIG`、`ENV_FILES`。放行 `DEV_TOOLS`
 就是信任项目自己的代码在宿主上执行——这是 coding agent 的前提；这类工具的写入不经路径判定，底线管的
@@ -79,11 +81,13 @@ ACL 有三个决策值，分别作用于两个执行环节：
 `git push origin`，不会匹配 `git pushx`。`flags=` 列出的词必须*另外*出现在该段的任意位置——
 `CommandRule("git push", "deny", flags=("--force",))` 也能拦下 `git push origin main --force`；
 单字母的 `-f` 被 `-fu` 满足，更长的旗标要整词出现，裸 `--` 之后的词不算。复合命令会按
-`&&`、`||`、`;`、`|`、`&` 拆段；每段分别判断，取**最严格**决策。两种情况会把一段封顶在 ask，
-不管它命中了什么规则：段首的 `VAR=value` 或薄包装（`env`、`nice`、`nohup`、`time`、`timeout N`——
-`PATH=…` 会改变实际运行的程序），以及看起来像输出选项的参数（`-o …`、`-oPATH`、`--output=…`、
-`--log-file`、`--junitxml`——命令可能写到它指向的任何地方，路径守卫看不见）。allow 降为 ask，deny 照样
-生效（`env git push --force`）；这种 ask 不可记忆。
+`&&`、`||`、`;`、`|`、`&` 拆段；每段分别判断，取**最严格**决策。allow 规则只覆盖**字面参数**——
+路径守卫能逐个判定的那种——所以三种情况会把一段封顶在 ask，不管它命中了什么规则：段首的 `VAR=value`
+或薄包装（`env`、`nice`、`nohup`、`time`、`timeout N`——`PATH=…` 会改变实际运行的程序）；看起来像输出
+选项的参数（`-o …`、`-oPATH`、`-ro`、`--output=…`、`--log-file`、`--junitxml`——命令可能写到它指向的
+任何地方）；以及会被 shell 展开的参数（`cat *`、`cat $F`、`$(…)`——守卫看不到它展开成的路径）。
+allow 降为 ask，deny 照样生效（`env git push --force`）；这种 ask 不可记忆。模式默认值
+`shell_default="allow"` 不是规则、不为任何命令担保，所以 `trusted` 下 `cat *` 直接运行——这正是 trusted 的意思。
 
 **底线**（`WorkspacePolicy.baseline`）单独判定，再与上面所有规则取最严格者合并，所以用户规则、
 `command_decider` 或记住的授权都放松不了它。规则的 `reason` 就是审批卡片上显示的理由（拒绝时模型

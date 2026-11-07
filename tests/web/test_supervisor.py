@@ -812,6 +812,7 @@ async def test_persist_partial_trims_dangling_resumed_tool_call() -> None:
         supervisor=deps.supervisor,
         session_id="s1",
         agent=agent,
+        agent_name="bot",
         first_input="",
         first_checkpoint=None,
         seed_entries=[],

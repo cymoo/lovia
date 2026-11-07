@@ -264,6 +264,7 @@ class RunController:
         supervisor: RunSupervisor,
         session_id: str,
         agent: Agent[Any],
+        agent_name: str,
         first_input: str | list[Message],
         first_checkpoint: CheckpointOptions | None,
         seed_entries: list[TranscriptEntry],
@@ -280,6 +281,12 @@ class RunController:
         self.supervisor = supervisor
         self.session_id = session_id
         self.agent = agent
+        # The registry key the agent is served under, resolved by the caller
+        # *before* the workspace binding copied the agent (``name_of`` looks
+        # up by identity, and a copy would fall back to ``agent.name``).
+        self.agent_name = agent_name
+        # The agent whose turn is running: the entry agent until a handoff.
+        self.active_agent: Agent[Any] = agent
         self.source = source
         # False for a turn whose caller can't answer an approval (a blocking
         # /api/chat): the run doesn't park, Runner.run's order decides.
@@ -425,8 +432,14 @@ class RunController:
             self.deps.questions.cancel_session(self.session_id)
 
     def grant_context(self) -> str:
-        """Where this run's approvals are given: its agent and workspace root."""
-        return agent_grant_context(self.deps.name_of(self.agent), self.agent)
+        """Where this run's approvals are given: the *active* agent (a handoff
+        target after a handoff) and its workspace root. The entry agent is
+        named by its registry key; a handoff target by its own name, so a
+        grant given to it applies only while it is the one acting."""
+        active = self.active_agent
+        if active is self.agent:
+            return agent_grant_context(self.agent_name, active)
+        return agent_grant_context(self.deps.name_of(active), active)
 
     async def _granted(self, ev: events.ApprovalRequired) -> bool:
         """Whether a remembered approval for ``ev.scope`` covers this run."""
@@ -530,8 +543,11 @@ class RunController:
             self.in_flight_buffer.pop()
         if isinstance(ev, events.TurnStarted):
             self.turns = ev.turn
+            self.active_agent = ev.agent
             self.in_flight_buffer = []
             self.current_turn_entries = []
+        elif isinstance(ev, events.HandoffOccurred):
+            self.active_agent = ev.to_agent
         if isinstance(
             ev,
             (
@@ -666,7 +682,7 @@ class RunController:
                 RunRow(
                     id=record_id,
                     session_id=sid,
-                    agent=deps.name_of(self.agent),
+                    agent=self.agent_name,
                     source=self.source,
                     status="running",
                     error=None,
@@ -677,13 +693,13 @@ class RunController:
             )
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("run record insert failed for %s: %s", sid, exc)
-        log.info("run started: session=%s agent=%s", sid, deps.name_of(self.agent))
+        log.info("run started: session=%s agent=%s", sid, self.agent_name)
         deps.emit(
             "run_started",
             RunStartedData(
                 session_id=sid,
                 run_id=record_id,
-                agent=deps.name_of(self.agent),
+                agent=self.agent_name,
                 source=self.source,
             ),
         )
@@ -739,6 +755,12 @@ class RunController:
                             self.in_flight_buffer.append(note)  # replayed on re-attach
                             self.hub.publish(note)
                             continue
+                        if self.cancel.is_cancelled:
+                            # A stop landed during the grant lookup, before the
+                            # approval was registered for ``deny_pending`` to
+                            # find: answer it here or the run parks forever.
+                            ev.reject("the run was cancelled")
+                            continue
                     if isinstance(ev, events.RunFailed):
                         error_seen = True
                     if isinstance(ev, events.RunCompleted) and self.run_id:
@@ -782,7 +804,7 @@ class RunController:
                         self.final_output,
                         # Registry key, not agent.name: schedule_title re-picks
                         # the agent from the registry by this string.
-                        deps.name_of(self.agent),
+                        self.agent_name,
                     )
                 # Auto-chain: leftovers re-queued, next run starts with empty
                 # input so the loop drains+emits them as user turns (Phase 1).
@@ -1007,6 +1029,7 @@ class RunSupervisor:
         """
         self._check_slot(session_id)
         meta = await self.deps.store.get(session_id)
+        agent_name = self.deps.name_of(agent)  # before bind() copies the agent
         # Every run of one web session shares that session's workspace session
         # (lazily opened here), so background processes survive across runs —
         # they die with the *chat* (deletion/shutdown), not with the turn.
@@ -1030,6 +1053,7 @@ class RunSupervisor:
             supervisor=self,
             session_id=session_id,
             agent=agent,
+            agent_name=agent_name,
             first_input=input,
             first_checkpoint=None,
             seed_entries=seed,
@@ -1080,6 +1104,7 @@ class RunSupervisor:
         """Register a resume of ``snapshot``; ``run_deps`` as for :meth:`start`."""
         self._check_slot(session_id, cap=False)
         meta = await self.deps.store.get(session_id)
+        agent_name = self.deps.name_of(agent)  # before bind() copies the agent
         # Same chat-scoped workspace binding as start(): the resumed leg's
         # background processes are gone (they never survive a restart), but
         # its shell/file tools must land on the chat's one live session.
@@ -1104,6 +1129,7 @@ class RunSupervisor:
             supervisor=self,
             session_id=session_id,
             agent=agent,
+            agent_name=agent_name,
             first_input=[],
             first_checkpoint=ckpt,
             seed_entries=seed,

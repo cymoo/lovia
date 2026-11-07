@@ -313,6 +313,135 @@ async def test_remember_without_scope_approves_but_saves_nothing(
 
 
 @pytest.mark.asyncio
+async def test_grant_context_follows_the_active_agent_after_a_handoff(
+    tmp_path: Path,
+) -> None:
+    # Entry agent "alpha" in /a hands off to "b" in /b, where the gated tool
+    # is called. A grant given to alpha must not answer b's call, and the
+    # grant b's approval saves belongs to b — inert once alpha is idle again.
+    from lovia import Handoff
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+
+    @tool(permission=Verdict("ask", "Pushes to a remote.", "shell:git push"))
+    async def push() -> str:
+        return "pushed"
+
+    b = Agent(
+        name="b",
+        model=ScriptedProvider([call("push", {}, call_id="c1"), text("b done")]),
+        tools=[push],
+        workspace=Workspace.local(str(tmp_path / "b"), mode="readonly"),
+    )
+    alpha = Agent(
+        name="bot",
+        model=ScriptedProvider([call("transfer_to_b", {}, call_id="h1")]),
+        handoffs=[Handoff(target=b)],
+        workspace=Workspace.local(str(tmp_path / "a"), mode="readonly"),
+    )
+    store = ChatStore.in_memory()
+    await store.add_grant(
+        "s1", "shell:git push", grant_context("alpha", tmp_path / "a")
+    )
+    async with _client(_app({"alpha": alpha}, store=store)) as ac:
+        task, lines = await _run_until_approval(ac, "s1")  # alpha's grant: not b's
+        r = await ac.post(
+            "/api/chat/approve",
+            json={
+                "session_id": "s1",
+                "call_id": "c1",
+                "decision": "approve",
+                "remember": True,
+            },
+        )
+        assert r.json() == {"ok": True, "remembered": True}
+        await asyncio.wait_for(task, timeout=5)
+        await _wait_run(ac, "s1", gone=True)
+        contexts = {g.context for g in await store.list_grants("s1")}
+        assert grant_context("b", tmp_path / "b") in contexts
+        # Idle, the chat is alpha's again: b's grant is listed but inactive.
+        listed = (await ac.get("/api/sessions/s1/grants")).json()
+        assert {(g["context"], g["active"]) for g in listed} == {
+            (grant_context("alpha", tmp_path / "a"), True),
+            (grant_context("b", tmp_path / "b"), False),
+        }
+
+
+@pytest.mark.asyncio
+async def test_grant_context_uses_the_registry_key_not_the_internal_name(
+    tmp_path: Path,
+) -> None:
+    # Two agents served as "alpha" and "beta" may both be named "bot" inside
+    # and share a root: their grants must not mix, and the context saved by a
+    # run must match what the idle route computes (the workspace binding
+    # copies the agent, so the key is resolved before that copy is made).
+    agent = _agent(tmp_path, call("push", {}, call_id="c1"), text("ok"))
+    other = _agent(tmp_path, text("never"))
+    store = ChatStore.in_memory()
+    await store.add_grant("s1", "shell:git push", grant_context("beta", tmp_path))
+    app = _app({"alpha": agent, "beta": other}, store=store)
+    async with _client(app) as ac:
+        # Explicitly alpha's chat; beta's grant must not answer it.
+        task, lines = _spawn(
+            ac,
+            "/api/chat/stream",
+            json={"message": "go", "session_id": "s1", "agent": "alpha"},
+        )
+        await _wait_run(ac, "s1", status="blocked_on_approval")
+        r = await ac.post(
+            "/api/chat/approve",
+            json={
+                "session_id": "s1",
+                "call_id": "c1",
+                "decision": "approve",
+                "remember": True,
+            },
+        )
+        assert r.json() == {"ok": True, "remembered": True}
+        await asyncio.wait_for(task, timeout=5)
+        await _wait_run(ac, "s1", gone=True)
+        listed = (await ac.get("/api/sessions/s1/grants")).json()
+        assert {(g["context"], g["active"]) for g in listed} == {
+            (grant_context("alpha", tmp_path), True),
+            (grant_context("beta", tmp_path), False),
+        }
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_the_grant_lookup_does_not_park_the_run(
+    tmp_path: Path,
+) -> None:
+    # No approval timeout: a stop that lands while the server is still asking
+    # the store about grants — before the approval is registered — must still
+    # end the run instead of leaving it waiting for a decision nobody can give.
+    store = ChatStore.in_memory()
+    agent = _agent(tmp_path, call("push", {}, call_id="c1"), text("ok"))
+    looking = asyncio.Event()
+    release = asyncio.Event()
+    orig_has = store.has_grant
+
+    async def slow_has(*args, **kwargs):
+        looking.set()
+        await release.wait()
+        return await orig_has(*args, **kwargs)
+
+    store.has_grant = slow_has  # type: ignore[method-assign]
+    async with _client(_app(agent, store=store)) as ac:
+        task, lines = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await asyncio.wait_for(looking.wait(), timeout=5)
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        release.set()
+        await asyncio.wait_for(task, timeout=5)
+        await _wait_run(ac, "s1", gone=True)
+    assert not any(
+        "pushed" in str(d.get("result")) for d in _frames(lines, "tool_result")
+    )
+
+
+@pytest.mark.asyncio
 async def test_cancel_during_a_claimed_approval_keeps_the_grant(tmp_path: Path) -> None:
     # The claim is the moment the user's decision is accepted: a cancel that
     # lands while the grant is being written still stops the run, but the

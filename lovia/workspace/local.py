@@ -866,6 +866,7 @@ class LocalWorkspaceSession:
         cap = self.limits.max_grep_matches if max_matches is None else max_matches
         rp = self._resolve_checked(path, "read")
         base = rp.abs
+        under_outside = self._is_outside(base)
         try:
             regex = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
         except re.error as exc:
@@ -894,16 +895,20 @@ class LocalWorkspaceSession:
                 # symlinked *file* can lead elsewhere — and grep *reads* it,
                 # so the target is judged on its own: anything short of
                 # "allow" is skipped ("ask" is not resolvable mid-walk), a
-                # link to a gated file inside the tree included. A
-                # single-file target was already gated as the operation's
-                # subject, so it is exempt from this re-check.
+                # link to a gated file inside the tree included. A target
+                # still under the walk's (approved) outside base is covered
+                # by that approval like any other file there; one escaping
+                # it is not. A single-file target was already gated as the
+                # operation's subject, so it is exempt from this re-check.
                 try:
-                    if (
-                        not single_file
-                        and file_path.is_symlink()
-                        and self._read_hidden(file_path.resolve(), under_outside=False)
-                    ):
-                        continue
+                    if not single_file and file_path.is_symlink():
+                        resolved = file_path.resolve()
+                        if self._read_hidden(
+                            resolved,
+                            under_outside=under_outside
+                            and resolved.is_relative_to(base),
+                        ):
+                            continue
                 except OSError as exc:
                     logger.debug("grep: resolve failed for %s (%s)", file_display, exc)
                     continue

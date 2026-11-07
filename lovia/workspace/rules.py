@@ -65,8 +65,7 @@ READ_ONLY_POSIX: tuple[CommandRule, ...] = tuple(
         "test",
         "tree",
         "diff",
-        "sort",
-        "uniq",
+        "sort",  # its `-o` is a write claim (command_guard); uniq's positional output isn't, so it stays gray
         "cut",
         "file",
     )

@@ -23,21 +23,29 @@ deliberately one-sided:
   root or match a denied pattern change the verdict, and those are exactly
   the ones worth flagging.
 
-**Read vs write is only distinguished for shell redirection.** Shell syntax
-marks its own writes — ``>``, ``>>``, ``&>`` — and those become ``write``
-claims. An *argument* that a program happens to treat as an output path
-(``dd of=/dev/x``, ``cp src /etc/hosts``, ``tar -f out.tar``) is
-indistinguishable from a read argument without per-command semantics, so
-every non-redirection token is recorded as a ``read``. The consequence is
-bounded: in ``coding`` (``read_outside="ask"``) an outside write argument
-still stops at approval — it asks instead of denying, but does not slip
-through; only in ``trusted`` (``read_outside="allow"``) does it pass
-unprompted, which is the point of ``trusted`` (shell already defaults to
-``allow`` there). Classifying such arguments as writes would demand a
-per-command allow-list that is both unbounded and prone to false positives
-(``--config=/etc/app.conf`` is a read). Mandatory write enforcement is the
-job of a sandboxed executor (Seatbelt/bubblewrap) or an isolated backend
-implementing the same session protocol.
+**Every argument is a claim.** The command word itself (``git``, ``cat``) is
+an executable looked up on PATH, not a file, so it counts only when spelled
+as a path (``./run.sh``); every other word is a ``read`` claim, bare names
+included — ``cat id_rsa`` must meet the same credential rule as
+``read_file("id_rsa")``, now that ``cat`` runs without a prompt. A denied
+pattern that happens to equal a subcommand (``denied_paths=("build",)``
+against ``npm run build``) therefore denies that command: stricter, never
+looser, and a rare configuration.
+
+**Writes are shell redirection plus the usual output options.** ``>``,
+``>>``, ``&>`` mark the shell's own writes; ``-o`` / ``--output`` /
+``--output-file`` / ``--log-file`` / ``--junitxml`` (``=value`` or the next
+word) mark the writes of the commands the presets allow outright (``sort
+-o``, ``git diff --output``, ``tree -o``) — without that, an allow rule for
+an inspection command would be a way to write ``.git/config``. Any other
+argument a program treats as an output path (``dd of=/dev/x``, ``cp src
+/etc/hosts``) is still recorded as a ``read``: per-command semantics are
+unbounded, and the consequence is bounded — in ``coding``
+(``read_outside="ask"``) an outside write argument still stops at approval;
+only in ``trusted`` does it pass unprompted, which is the point of
+``trusted``. Mandatory write enforcement is the job of a sandboxed executor
+(Seatbelt/bubblewrap) or an isolated backend implementing the same session
+protocol.
 """
 
 from __future__ import annotations
@@ -57,6 +65,21 @@ _REDIRECT_WRITE = {">", ">>", "&>", "&>>", ">&", ">|"}
 _REDIRECT_READ = {"<"}
 _HEREDOC = {"<<", "<<-", "<<<"}
 _PUNCTUATION = set("();<>|&")
+# Options whose value is where a command writes. Generic across commands on
+# purpose (a `-o` that means something else, as in `ls -o`, makes a false
+# *write* claim — which can only tighten the verdict).
+_OUTPUT_OPTIONS = frozenset(
+    {
+        "-o",
+        "--output",
+        "--output-file",
+        "--out-file",
+        "--outfile",
+        "--log-file",
+        "--junitxml",
+        "--junit-xml",
+    }
+)
 # A cmd.exe switch: one or two letters after a slash, optionally qualified
 # (``/a:d``). Longer slash-words (``/Users/neo``) are paths.
 _CMD_SWITCH = re.compile(r"/[A-Za-z]{1,2}(:\S*)?")
@@ -86,17 +109,17 @@ def _is_pseudo_device(token: str) -> bool:
     return token in _PSEUDO_DEVICES or token.startswith("/dev/fd/")
 
 
-def _pathish(token: str) -> str | None:
+def _pathish(token: str, *, command: bool = False) -> str | None:
     """Return the path a word token appears to reference, or ``None``.
 
     Flags are skipped unless they carry a ``=value`` payload (``--out=/x``);
     a ``key=value`` token whose value looks rooted (``of=/dev/x``,
-    ``FOO=/etc/x``) yields the value. URLs are never paths. A token counts as
-    path-looking when it contains a path separator or a ``.`` or starts with
-    ``~`` — deliberately generous, because a relative false positive resolves
-    inside the root and cannot escalate the decision (see module docstring);
-    bare words like ``install`` stay exempt so a denied *pattern* can't
-    accidentally match a subcommand name.
+    ``FOO=/etc/x``) yields the value. URLs are never paths. Every other word
+    is a claim, bare names included (``id_rsa``, ``Makefile``) — a relative
+    false positive resolves inside the root and cannot escalate the decision
+    (see module docstring). ``command=True`` is the command word of a
+    segment: an executable, not a file, so it counts only when spelled as a
+    path (``./run.sh``, ``/usr/bin/python``).
     """
     if token.startswith("-"):
         _, eq, rhs = token.partition("=")
@@ -113,9 +136,11 @@ def _pathish(token: str) -> str | None:
             token = rhs
     if not token or "://" in token:
         return None
-    if "/" in token or os.sep in token or "." in token or token.startswith("~"):
-        return token
-    return None
+    if command and not (
+        "/" in token or os.sep in token or "." in token or token.startswith("~")
+    ):
+        return None
+    return token
 
 
 def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
@@ -138,8 +163,9 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
         return []
 
     claims: list[tuple[FileOp, str]] = []
-    pending: FileOp | None = None  # op of a redirect waiting for its target
+    pending: FileOp | None = None  # op of a redirect / output option's target
     skip_next = False  # heredoc delimiter / herestring literal
+    at_start = True  # the next word is a segment's command word
 
     for token in tokens:
         if _is_operator(token):
@@ -151,6 +177,8 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
                 pending = "write"
             elif token in _REDIRECT_READ:
                 pending = "read"
+            else:
+                at_start = True  # ; | || & && ( — a new segment starts
             continue
         if skip_next:
             skip_next = False
@@ -162,7 +190,22 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
             if not (token.isdigit() or token == "-" or _is_pseudo_device(token)):
                 claims.append((op, token))
             continue
-        path = _pathish(token)
+        if token.isdigit():
+            continue  # an fd number (`2>&1`) or a count (`head -n 5`), never a file
+        if token in _OUTPUT_OPTIONS:
+            pending = "write"
+            continue
+        if token.startswith("-") and token.partition("=")[0] in _OUTPUT_OPTIONS:
+            target = token.partition("=")[2]
+            if target and not _is_pseudo_device(target):
+                claims.append(("write", target))
+            continue
+        at_command = at_start
+        # A leading `VAR=value` keeps the command position for the next word;
+        # like the command word it is a claim only when its value is rooted.
+        name, eq, _ = token.partition("=")
+        at_start = at_command and bool(eq) and name.isidentifier()
+        path = _pathish(token, command=at_command)
         if path is not None and not _is_pseudo_device(path):
             claims.append(("read", path))
     return claims

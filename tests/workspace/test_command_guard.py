@@ -16,8 +16,8 @@ def test_input_redirect_is_a_read_claim() -> None:
 
 
 def test_fd_duplications_are_not_claims() -> None:
-    assert extract_path_claims("git status 2>&1") == []
-    assert extract_path_claims("echo hi >&2") == []
+    assert extract_path_claims("git status 2>&1") == [("read", "status")]
+    assert extract_path_claims("echo hi >&2") == [("read", "hi")]
 
 
 def test_pseudo_devices_are_not_claims() -> None:
@@ -66,11 +66,40 @@ def test_pathish_arguments_are_read_claims() -> None:
     assert ("read", "~") in extract_path_claims("ls ~")
 
 
-def test_bare_words_are_not_claims() -> None:
-    # Subcommand names must not be mistaken for paths, or a denied pattern
-    # like "build" would break `npm run build`.
-    assert extract_path_claims("npm run build") == []
-    assert extract_path_claims("git commit") == []
+def test_bare_arguments_are_claims_but_command_words_are_not() -> None:
+    # `cat id_rsa` must meet the credential rule `read_file("id_rsa")` meets,
+    # so bare arguments are claims (a relative false positive resolves inside
+    # the root and only ever tightens). The command word is an executable,
+    # not a file — unless it is spelled as a path.
+    assert extract_path_claims("cat id_rsa") == [("read", "id_rsa")]
+    assert extract_path_claims("npm run build") == [("read", "run"), ("read", "build")]
+    assert extract_path_claims("git commit") == [("read", "commit")]
+    assert extract_path_claims("./run.sh now") == [
+        ("read", "./run.sh"),
+        ("read", "now"),
+    ]
+    # A new segment has its own command word; a leading assignment keeps it.
+    assert extract_path_claims("ls | sort -r") == []
+    assert extract_path_claims("FOO=1 cat id_rsa") == [("read", "id_rsa")]
+    # fd numbers and counts are never files.
+    assert extract_path_claims("head -n 5 file") == [("read", "file")]
+
+
+def test_output_options_are_write_claims() -> None:
+    # The commands the presets allow outright can write through an option;
+    # `sort -o .git/config` must meet the same rule as `write_file`.
+    assert extract_path_claims("sort -o .git/config in.txt") == [
+        ("write", ".git/config"),
+        ("read", "in.txt"),
+    ]
+    assert extract_path_claims("git diff --output=.git/config") == [
+        ("read", "diff"),
+        ("write", ".git/config"),
+    ]
+    assert ("write", "out.txt") in extract_path_claims("tree -o out.txt .")
+    assert extract_path_claims("pytest --junitxml=/tmp/r.xml") == [
+        ("write", "/tmp/r.xml")
+    ]
 
 
 def test_urls_and_plain_flags_are_skipped() -> None:

@@ -242,10 +242,14 @@ deliverable.
 ## The command guard
 
 Static command rules can't see paths, so the session also **lexically**
-extracts path claims from each command — redirect targets count as writes,
-path-looking arguments as reads — and merges their path-ACL verdicts with
-the static rule verdict, most-restrictive-wins. A command that names a
-denied path (redirects included) is denied even when its binary is allowed.
+extracts path claims from each command — redirect targets and the usual
+output options (`-o`, `--output`, `--log-file`, …) count as writes, every
+other argument (bare names like `id_rsa` included; the command word itself
+only when spelled as a path) as a read — and merges their path-ACL verdicts
+with the static rule verdict, most-restrictive-wins. A command that names a
+denied path (redirects included) is denied even when its binary is allowed:
+`cat id_rsa` meets the same credential rule as `read_file("id_rsa")`, and
+`sort -o .git/config x` asks like `write_file(".git/config")` would.
 On Windows a backslash is a path separator, not an escape, so `C:\data\a.txt`
 is judged as written.
 

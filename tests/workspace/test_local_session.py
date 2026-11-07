@@ -503,6 +503,46 @@ async def test_listing_an_approved_outside_directory_shows_its_entries(
     assert found == {"notes.txt", ".env"}
 
 
+async def test_allowed_commands_still_meet_the_path_rules(tmp_path) -> None:
+    # `cat` and `sort` run without a prompt under coding, so the guard must
+    # hold the baseline for them: a credential named bare, and a protected
+    # config written through an output option.
+    (tmp_path / "id_rsa").write_text("secret", encoding="utf-8")
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    assert session.decide_command("cat id_rsa").action == "deny"
+    assert session.decide_command("cat README").action == "allow"
+    assert session.decide_command("sort -o .git/config in.txt").action == "ask"
+    assert session.decide_command("git diff --output=.git/config").action == "ask"
+    assert session.decide_command("git diff --stat").action == "allow"
+
+
+async def test_grep_follows_symlinks_within_an_approved_outside_directory(
+    tmp_path,
+) -> None:
+    outside = tmp_path.parent / "shared_links"
+    outside.mkdir(exist_ok=True)
+    (outside / "notes.txt").write_text("needle\n", encoding="utf-8")
+    link = outside / "alias.txt"
+    if not link.exists():
+        link.symlink_to(outside / "notes.txt")
+    escaping = outside / "escape.txt"
+    if not escaping.exists():
+        escaping.symlink_to(tmp_path.parent / "elsewhere_needle.txt")
+    (tmp_path.parent / "elsewhere_needle.txt").write_text("needle\n", encoding="utf-8")
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    # The link stays within the approved directory: covered. The one that
+    # escapes it does not ride on that approval.
+    found = {
+        m.path.rsplit("/", 1)[-1]
+        for m in await session.grep("needle", path=str(outside))
+    }
+    assert found == {"notes.txt", "alias.txt"}
+    assert [
+        m.path.rsplit("/", 1)[-1]
+        for m in await session.grep("needle", path=str(outside), glob="alias.txt")
+    ] == ["alias.txt"]
+
+
 async def test_grep_skips_denied_directories(tmp_path) -> None:
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets" / "k.txt").write_text("needle\n", encoding="utf-8")

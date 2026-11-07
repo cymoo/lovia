@@ -160,7 +160,7 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
     fd_dup = False  # the pending redirect is `>&` / `<&`
     at_start = True  # the next word is a segment's command word
 
-    for i, token in enumerate(tokens):
+    for token in tokens:
         if _is_operator(token):
             pending = None
             skip_next = False
@@ -185,8 +185,11 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
             if not (dup or _is_pseudo_device(token)):
                 claims.append((op, token))
             continue
-        if token.isdigit() and i + 1 < len(tokens) and tokens[i + 1] in _REDIRECTS:
-            continue  # the fd of a redirection (`2>&1`, `1> out`), not a file
+        # A number before a redirect is its descriptor when written as one
+        # word (`2>&1`), a file when not (`cat 123 > out`) — and shlex has
+        # dropped the spacing that tells them apart. Claiming the descriptor
+        # as a read costs nothing (a bare name resolves inside the root);
+        # missing the file would hide a symlink to a denied one.
         at_command = at_start
         # A leading `VAR=value` keeps the command position for the next word;
         # like the command word it is a claim only when its value is rooted.

@@ -264,10 +264,15 @@ def _has_flag(words: list[str], flag: str) -> bool:
 # but a deny rule for it still bites (``env git push --force``).
 _THIN_WRAPPERS = frozenset({"env", "nice", "nohup", "time", "call"})
 
+# A wrapper left in place because it takes options (``env -i``, ``nice -n
+# 1``, ``timeout --foreground 5``) is still not the program that runs, so a
+# grant for it would cover whatever follows: no scope.
+_WRAPPERS = _THIN_WRAPPERS | {"timeout"}
+
 # The same principle for arguments: an allow rule vouches for a command over
 # *literal* arguments, which the path guard can judge one by one. Anything
-# else about an argument the guard cannot see, so the segment is never
-# allowed outright (a false hit costs one question):
+# else about a word the guard cannot see, so the segment is never allowed
+# outright (a false hit costs one question):
 #
 # * a word that looks like an output option — the command may write wherever
 #   it points (``sort -o x``, ``-ox``, ``-ro x``, ``'-ox'``, ``--output=x``;
@@ -275,22 +280,24 @@ _THIN_WRAPPERS = frozenset({"env", "nice", "nohup", "time", "call"})
 #   ``--out`` / ``--log-file`` / ``--junit``, or a short-option group with an
 #   ``o`` anywhere in it);
 # * a glob, variable or substitution — the shell turns it into paths the
-#   guard never sees (``cat *`` reads ``id_rsa``; ``cat $F``; ``$(…)``).
+#   guard never sees (``cat *`` reads ``id_rsa``; ``cat $F``; ``$(…)``), or
+#   into a program it never sees (``$CMD``, ``./tool*``), which a grant for
+#   the word as spelled would then cover.
 _OUTPUT_LIKE = ("--out", "--log-file", "--junit")
 # cmd.exe expands `%VAR%` and strips the `^` escape (`type .e^nv` is `.env`).
 _EXPANSION_CHARS = frozenset("*?[{$`" + ("%^" if os.name == "nt" else ""))
 
 
-def _uncertain_argument(words: list[str]) -> str | None:
-    """The first argument an allow rule cannot vouch for, with why, or None."""
+def _uncertain_word(words: list[str]) -> str | None:
+    """The first word an allow rule cannot vouch for, with why, or None."""
     options_over = False
-    for word in words[1:]:
+    for i, word in enumerate(words):
         if word == "--":
             options_over = True  # ends options, not expansion
             continue
         if any(c in word for c in _EXPANSION_CHARS):
             return f"'{word}' is expanded by the shell"
-        if options_over:
+        if i == 0 or options_over:
             continue
         if word.startswith("--"):
             if word.startswith(_OUTPUT_LIKE):
@@ -659,9 +666,9 @@ class WorkspacePolicy:
     def _decide_segment(self, segment: str) -> Verdict:
         words, stripped = _strip_wrappers(_words(segment))
         verdict, by_rule = self._decide_words(segment, words)
-        uncertain = _uncertain_argument(words)
+        uncertain = _uncertain_word(words)
         if stripped or uncertain:
-            # The wrapper (or the argument) is what neither an allow *rule*
+            # The wrapper (or the word) is what neither an allow *rule*
             # nor a grant for the command can vouch for: a rule's allow is
             # capped at ask, and any ask loses its scope. A default of allow
             # (``trusted``) is not a rule vouching for anything — it is the
@@ -711,8 +718,9 @@ class WorkspacePolicy:
         if self.shell_default == "ask":
             # The grant on offer is the command word, exactly as shown
             # ("always allow `ls` in this chat"); finer than that is a rule.
-            # Arguments the guard cannot vouch for strip it (_decide_segment).
-            scope = f"shell:{words[0]}" if words else None
+            # Words the guard cannot vouch for strip it (_decide_segment), as
+            # does a wrapper: neither names the program that runs.
+            scope = f"shell:{words[0]}" if words and words[0] not in _WRAPPERS else None
             return Verdict("ask", "no workspace rule allows this command", scope)
         if self.shell_default == "deny":
             return Verdict("deny", "shell commands are denied by workspace policy")

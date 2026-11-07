@@ -139,6 +139,14 @@ def test_gray_command_asks_with_the_command_word_as_scope() -> None:
     assert policy.decide_command("make *").scope is None
     assert policy.decide_command("FOO=1 make").scope is None
     assert policy.decide_command("make -o x").scope is None
+    # Nor the command word itself, when the shell decides what it runs...
+    for cmd in ("$CMD build", "./tool* x", "`which make` x"):
+        assert policy.decide_command(cmd).scope is None, cmd
+    # ...or when it is a wrapper kept in place by its options: a grant for
+    # `env` would cover whatever it wraps next time.
+    for cmd in ("env -i make", "nice -n 1 make", "timeout --foreground 5 make"):
+        verdict = policy.decide_command(cmd)
+        assert verdict.action == "ask" and verdict.scope is None, cmd
 
 
 def _opted_in() -> WorkspacePolicy:

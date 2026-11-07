@@ -16,7 +16,6 @@ def test_input_redirect_is_a_read_claim() -> None:
 
 
 def test_fd_duplications_are_not_claims() -> None:
-    assert extract_path_claims("git status 2>&1") == [("read", "status")]
     assert extract_path_claims("echo hi >&2") == [("read", "hi")]
     assert extract_path_claims("cmd <&0") == []
     # ...but `>123` writes a file called 123 (which may be a symlink to
@@ -25,11 +24,19 @@ def test_fd_duplications_are_not_claims() -> None:
     assert extract_path_claims("echo x > 123") == [("read", "x"), ("write", "123")]
 
 
+def test_a_number_before_a_redirect_is_claimed_as_a_read() -> None:
+    # The lexer drops the spacing that tells `2>&1` from `cat 123 > out`, so
+    # the number is claimed either way: `2` resolves inside the root and
+    # changes nothing; `123` may be a symlink to a denied file.
+    assert extract_path_claims("cat 123 > out") == [("read", "123"), ("write", "out")]
+    assert extract_path_claims("git status 2>&1") == [("read", "status"), ("read", "2")]
+
+
 def test_pseudo_devices_are_not_claims() -> None:
     # `2>/dev/null` is shell plumbing, not file access — under coding,
     # write_outside="deny" must not turn it into a hard deny.
-    assert extract_path_claims("cmd 2>/dev/null") == []
-    assert extract_path_claims("cmd > /dev/null 2>&1") == []
+    assert extract_path_claims("cmd 2>/dev/null") == [("read", "2")]
+    assert extract_path_claims("cmd > /dev/null 2>&1") == [("read", "2")]
     assert extract_path_claims("cat /dev/stdin") == []
     assert extract_path_claims("sort < /dev/fd/63") == []
     # ...but other device nodes still count as claims.
@@ -86,12 +93,11 @@ def test_bare_arguments_are_claims_but_command_words_are_not() -> None:
     # A new segment has its own command word; a leading assignment keeps it.
     assert extract_path_claims("ls | sort -r") == []
     assert extract_path_claims("FOO=1 cat id_rsa") == [("read", "id_rsa")]
-    # fd numbers and counts are never files.
-    # Only the fd of a redirection is skipped as a number; `cat 123` names a
-    # file (a denied one, or a symlink to one, must still be judged).
+    # A number is a name like any other (`cat 123` may be a symlink to a
+    # denied file); the false claim on a count resolves inside the root.
     assert extract_path_claims("head -n 5 file") == [("read", "5"), ("read", "file")]
     assert extract_path_claims("cat 123") == [("read", "123")]
-    assert extract_path_claims("cmd 1> out") == [("write", "out")]
+    assert extract_path_claims("cmd 1> out") == [("read", "1"), ("write", "out")]
 
 
 def test_hash_inside_a_word_is_not_a_comment() -> None:

@@ -3,7 +3,10 @@
 A :class:`WorkspacePolicy` decides what the built-in workspace tools may do.
 Both file paths and shell commands are judged with the same three-valued
 vocabulary — ``allow`` runs freely, ``ask`` routes through the human-approval
-channel, ``deny`` is rejected outright:
+channel, ``deny`` is rejected outright — and every decision comes back as a
+:class:`~lovia.approvals.Verdict`: the action plus *why* (shown to the human
+on ``ask``, told to the model on ``deny``) and the *scope* an "always allow"
+grant would cover.
 
 * **Path decisions** (:meth:`WorkspacePolicy.decide_path`) are an ordered ACL:
   ``denied_paths`` first, then ``path_rules`` (first match wins), then the
@@ -28,6 +31,7 @@ abstracted so one can be added without touching the tools.
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 from dataclasses import dataclass
 from fnmatch import fnmatch
@@ -35,18 +39,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Literal
 
-Decision = Literal["allow", "ask", "deny"]
+from ..approvals import Decision, Verdict, as_verdict, merge_verdicts
+
 FileOp = Literal["read", "write"]
 
 # A per-segment command decider: given one command segment it returns a
-# Decision to override the static rules, or None to fall through to them. A
-# lightweight, complete extension point — the static command_rules are
-# prefix-only by design, so route anything richer (regex, allow-lists,
+# Decision or Verdict to override the static rules, or None to fall through
+# to them. A lightweight, complete extension point — the static command_rules
+# are prefix-only by design, so route anything richer (regex, allow-lists,
 # context-aware checks) through this hook.
-CommandDecider = Callable[[str], "Decision | None"]
-
-# Most-restrictive-wins ordering for compound commands.
-_SEVERITY = {"allow": 0, "ask": 1, "deny": 2}
+CommandDecider = Callable[[str], "Decision | Verdict | None"]
 
 # Splits a shell command on control operators so each segment is judged on
 # its own: `git status && rm -rf /` must not ride on a `git status` allow
@@ -146,17 +148,53 @@ def _pattern_matches(pattern: str, *, rel: str | None, abs_posix: str) -> bool:
     return False
 
 
+def _tilde(abs_posix: str) -> str:
+    """Collapse the home directory to ``~`` for display and grant keys."""
+    try:
+        home = Path.home().resolve().as_posix().rstrip("/")
+    except (RuntimeError, OSError):
+        return abs_posix
+    if abs_posix == home:
+        return "~"
+    if home and abs_posix.startswith(home + "/"):
+        return "~" + abs_posix[len(home) :]
+    return abs_posix
+
+
+def _dir_of(rel: str | None, abs_posix: str) -> str:
+    """The directory an "always allow" for a default-rule path decision covers.
+
+    The target itself when it is a directory (``list_files('~/notes')``),
+    else its parent — ``decide_path`` is static otherwise, but a file's
+    parent and a directory's parent are different grants.
+    """
+    target = rel if rel is not None else abs_posix
+    if os.path.isdir(abs_posix):
+        chosen = target
+    else:
+        chosen = posixpath.dirname(target)
+    if rel is not None:
+        return chosen or "."
+    return _tilde(chosen or "/")
+
+
 @dataclass(frozen=True)
 class CommandRule:
     """One shell-command rule: a word-boundary prefix and a decision.
 
     ``pattern`` matches when the command starts with the same
     whitespace-separated words: ``"git push"`` matches ``git push origin``
-    but not ``git pushx``.
+    but not ``git pushx``. ``reason`` is what the human sees when the rule
+    asks (and the model when it denies); left empty, a generic one is
+    derived from the pattern. ``grant=False`` withholds the "always allow"
+    option for an ``ask`` rule — set it where the pattern is so broad
+    (``sudo``, ``ssh``) that remembering it would mean remembering everything.
     """
 
     pattern: str
     action: Decision
+    reason: str = ""
+    grant: bool = True
 
 
 @dataclass(frozen=True)
@@ -170,17 +208,31 @@ class PathRule:
     (``".env*"``, ``"secrets"``) names a file or directory anywhere — inside
     or outside the root (see :func:`_pattern_matches`). ``ops`` restricts the
     rule to reads and/or writes — accepts any iterable of ``"read"`` /
-    ``"write"``.
+    ``"write"``. ``reason`` and ``grant`` as on :class:`CommandRule`.
     """
 
     pattern: str
     action: Decision
     ops: frozenset[FileOp] = frozenset({"read", "write"})
+    reason: str = ""
+    grant: bool = True
 
     def __post_init__(self) -> None:
         # Accept any iterable for ergonomics (("read",), {"write"}, ...).
         if not isinstance(self.ops, frozenset):
             object.__setattr__(self, "ops", frozenset(self.ops))
+
+
+def _rule_verdict(
+    action: Decision, reason: str, pattern: str, scope: str | None
+) -> Verdict:
+    """A rule hit as a verdict: the author's reason or a derived one, and the
+    rule's pattern as grant scope when it asks."""
+    if action == "ask":
+        return Verdict("ask", reason or f"'{pattern}' requires approval", scope)
+    if action == "deny":
+        return Verdict("deny", reason or f"'{pattern}' is denied by workspace policy")
+    return Verdict("allow", reason)
 
 
 @dataclass(frozen=True)
@@ -222,8 +274,8 @@ class WorkspacePolicy:
 
     command_decider: "CommandDecider | None" = None
     """Per-segment hook consulted *before* the static ``command_rules``:
-    return a :data:`Decision` to override or ``None`` to fall through. See
-    :data:`CommandDecider`."""
+    return a :data:`Decision` / :class:`Verdict` to override or ``None`` to
+    fall through. See :data:`CommandDecider`."""
 
     def __post_init__(self) -> None:
         # ``allow_shell=False`` already forces every command to ``deny`` in
@@ -312,33 +364,58 @@ class WorkspacePolicy:
     # Decisions
     # ------------------------------------------------------------------ #
 
-    def decide_path(self, *, rel: str | None, abs_posix: str, op: FileOp) -> Decision:
-        """Return the ACL decision for one resolved path.
+    def decide_path(self, *, rel: str | None, abs_posix: str, op: FileOp) -> Verdict:
+        """Return the ACL verdict for one resolved path.
 
         ``rel`` is the workspace-relative POSIX path when the resolved path
         is inside the root, ``None`` when it is outside; ``abs_posix`` is the
         resolved absolute POSIX path in either case. Evaluation order:
-        ``denied_paths`` → ``path_rules`` (first match wins) → defaults.
+        ``denied_paths`` → ``path_rules`` (first match wins) → defaults. A
+        default-rule ``ask`` offers the target's directory as grant scope
+        (``"read:~/notes"``); a rule hit offers the rule's pattern.
         """
         for pattern in self.denied_paths:
             if _pattern_matches(pattern, rel=rel, abs_posix=abs_posix):
-                return "deny"
+                return Verdict("deny", f"'{pattern}' is off-limits by workspace policy")
         for rule in self.path_rules:
             if op in rule.ops and _pattern_matches(
                 rule.pattern, rel=rel, abs_posix=abs_posix
             ):
-                return rule.action
+                scope = f"{op}:{rule.pattern}" if rule.grant else None
+                return _rule_verdict(rule.action, rule.reason, rule.pattern, scope)
+        verb = "reads" if op == "read" else "writes"
         if rel is not None:
-            return "allow" if op == "read" else self.write
-        return self.read_outside if op == "read" else self.write_outside
+            if op == "read" or self.write == "allow":
+                return Verdict("allow")
+            if self.write == "ask":
+                return Verdict(
+                    "ask",
+                    "writes inside the workspace require approval",
+                    f"write:{_dir_of(rel, abs_posix)}",
+                )
+            return Verdict("deny", "the workspace is read-only")
+        action = self.read_outside if op == "read" else self.write_outside
+        where = _dir_of(None, abs_posix)
+        if action == "allow":
+            return Verdict("allow")
+        if action == "ask":
+            return Verdict(
+                "ask",
+                f"{verb} outside the workspace root require approval ({where})",
+                f"{op}:{where}",
+            )
+        return Verdict(
+            "deny", f"{verb} outside the workspace root are not permitted ({where})"
+        )
 
-    def decide_command(self, command: str) -> Decision:
-        """Return the static-rule decision for one shell command line.
+    def decide_command(self, command: str) -> Verdict:
+        """Return the static-rule verdict for one shell command line.
 
         The command is split on shell control operators and each segment is
         judged independently; the most restrictive decision wins, so an
         ``allow`` rule can never whitelist a compound command that smuggles
-        in something stricter.
+        in something stricter (see :func:`~lovia.approvals.merge_verdicts`
+        for how the grant scope survives the merge).
 
         This judges the *command words* only. Path-looking tokens inside the
         command are additionally judged against the path ACL by the session
@@ -350,42 +427,37 @@ class WorkspacePolicy:
         not a security boundary — see the module docstring.
         """
         if not self.allow_shell:
-            return "deny"
+            return Verdict("deny", "the shell is disabled for this workspace")
         segments = [seg.strip() for seg in _COMMAND_SPLIT.split(command)]
         segments = [seg for seg in segments if seg]
         if not segments:
-            return self.shell_default
-        decision: Decision = "allow"
-        for segment in segments:
-            verdict = self._decide_segment(segment)
-            if _SEVERITY[verdict] > _SEVERITY[decision]:
-                decision = verdict
-            if decision == "deny":
-                break
-        return decision
+            return self._default_command_verdict()
+        return merge_verdicts(*(self._decide_segment(seg) for seg in segments))
 
-    def _decide_segment(self, segment: str) -> Decision:
+    def _decide_segment(self, segment: str) -> Verdict:
         if self.command_decider is not None:
-            verdict = self.command_decider(segment)
-            # Ignore anything that isn't a valid Decision (incl. None): fall
-            # through to the static rules rather than crash on a bad hook.
-            if verdict in ("allow", "ask", "deny"):
-                return verdict
+            raw = self.command_decider(segment)
+            if raw is not None:
+                try:
+                    return as_verdict(raw)
+                except TypeError:
+                    # Fall through to the static rules rather than crash on a
+                    # bad hook — never run unjudged, never abort the run.
+                    pass
         words = segment.split()
         for rule in self.command_rules:
             pattern_words = rule.pattern.split()
             if words[: len(pattern_words)] == pattern_words:
-                return rule.action
-        return self.shell_default
+                scope = f"shell:{rule.pattern}" if rule.grant else None
+                return _rule_verdict(rule.action, rule.reason, rule.pattern, scope)
+        return self._default_command_verdict()
 
-
-def merge_decisions(*decisions: Decision) -> Decision:
-    """Combine decisions, most restrictive wins."""
-    result: Decision = "allow"
-    for decision in decisions:
-        if _SEVERITY[decision] > _SEVERITY[result]:
-            result = decision
-    return result
+    def _default_command_verdict(self) -> Verdict:
+        if self.shell_default == "ask":
+            return Verdict("ask", "no workspace rule allows this command")
+        if self.shell_default == "deny":
+            return Verdict("deny", "shell commands are denied by workspace policy")
+        return Verdict("allow")
 
 
 __all__ = [
@@ -394,6 +466,7 @@ __all__ = [
     "Decision",
     "FileOp",
     "PathRule",
+    "Verdict",
     "WorkspacePolicy",
-    "merge_decisions",
+    "merge_verdicts",
 ]

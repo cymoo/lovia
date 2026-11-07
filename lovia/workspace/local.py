@@ -39,7 +39,7 @@ from .errors import (
     WorkspaceError,
 )
 from .paths import ResolvedPath, resolve_path
-from .policy import Decision, FileOp, WorkspacePolicy, merge_decisions
+from .policy import FileOp, Verdict, WorkspacePolicy, merge_verdicts
 
 if TYPE_CHECKING:
     from .protocol import ShellExecutor
@@ -298,14 +298,14 @@ class LocalWorkspaceSession:
     # Decisions
     # ------------------------------------------------------------------ #
 
-    def decide_path(self, path: str, *, write: bool = False) -> Decision:
-        """Policy decision for one path (used by tool approval predicates)."""
+    def decide_path(self, path: str, *, write: bool = False) -> Verdict:
+        """Policy verdict for one path (used by the tools' permission predicates)."""
         rp = resolve_path(self._root, path)
         op: FileOp = "write" if write else "read"
         return self.policy.decide_path(rel=rp.rel, abs_posix=rp.abs_posix, op=op)
 
-    def decide_command(self, command: str, cwd: str = ".") -> Decision:
-        """Combined decision for a shell command: static rules ⊕ path guard.
+    def decide_command(self, command: str, cwd: str = ".") -> Verdict:
+        """Combined verdict for a shell command: static rules ⊕ path guard.
 
         The static :meth:`WorkspacePolicy.decide_command` verdict is merged
         (most restrictive wins) with a path-ACL verdict for the working
@@ -315,22 +315,22 @@ class LocalWorkspaceSession:
         :mod:`lovia.workspace.command_guard` — but never *looser* than the
         static rules alone.
         """
-        decision = self.policy.decide_command(command)
-        if decision == "deny":
-            return decision
+        verdict = self.policy.decide_command(command)
+        if verdict.action == "deny":
+            return verdict
         cwd_rp = resolve_path(self._root, cwd)
-        decisions: list[Decision] = [
-            decision,
+        verdicts: list[Verdict] = [
+            verdict,
             self.policy.decide_path(
                 rel=cwd_rp.rel, abs_posix=cwd_rp.abs_posix, op="read"
             ),
         ]
         for op, token in extract_path_claims(command):
             rp = resolve_path(self._root, token, base=cwd_rp.abs)
-            decisions.append(
+            verdicts.append(
                 self.policy.decide_path(rel=rp.rel, abs_posix=rp.abs_posix, op=op)
             )
-        return merge_decisions(*decisions)
+        return merge_verdicts(*verdicts)
 
     # ------------------------------------------------------------------ #
     # Internals
@@ -344,13 +344,13 @@ class LocalWorkspaceSession:
         """Enforce the ACL: raise on ``deny``, pass ``allow`` and ``ask``.
 
         ``ask`` cannot be resolved here (approval is a runner concern); the
-        tools gate it via ``needs_approval``, so by the time a call reaches
+        tools gate it via ``permission``, so by the time a call reaches
         the session it has either been approved or comes from custom code
         using the session directly — which is gated the same way ``run``
         handles command decisions.
         """
-        decision = self.policy.decide_path(rel=rp.rel, abs_posix=rp.abs_posix, op=op)
-        if decision != "deny":
+        verdict = self.policy.decide_path(rel=rp.rel, abs_posix=rp.abs_posix, op=op)
+        if verdict.action != "deny":
             return
         verb = "Writing" if op == "write" else "Reading"
         if rp.rel is None:
@@ -364,7 +364,9 @@ class LocalWorkspaceSession:
             )
         if (
             op == "write"
-            and self.policy.decide_path(rel=rp.rel, abs_posix=rp.abs_posix, op="read")
+            and self.policy.decide_path(
+                rel=rp.rel, abs_posix=rp.abs_posix, op="read"
+            ).action
             != "deny"
         ):
             # Reads pass but writes don't: a read-only workspace (or a
@@ -374,7 +376,7 @@ class LocalWorkspaceSession:
                 hint="Use mode='coding' (or a writable rule) to enable writes.",
             )
         raise PermissionDeniedError(
-            f"Path {rp.display()!r} is denied by workspace policy.",
+            f"Path {rp.display()!r} is denied by workspace policy: {verdict.reason}.",
         )
 
     def _resolve_checked(self, path: str, *ops: FileOp) -> ResolvedPath:
@@ -394,7 +396,7 @@ class LocalWorkspaceSession:
     def _read_denied(self, p: Path) -> bool:
         _, rel = self._display_and_rel(p)
         return (
-            self.policy.decide_path(rel=rel, abs_posix=p.as_posix(), op="read")
+            self.policy.decide_path(rel=rel, abs_posix=p.as_posix(), op="read").action
             == "deny"
         )
 
@@ -877,7 +879,7 @@ class LocalWorkspaceSession:
                                     rel=res_rel,
                                     abs_posix=resolved.as_posix(),
                                     op="read",
-                                )
+                                ).action
                                 != "allow"
                             ):
                                 continue
@@ -955,9 +957,10 @@ class LocalWorkspaceSession:
         custom tool calls the session directly. "ask" cannot be resolved
         here (approval is a runner concern); the shell tool gates it.
         """
-        if self.decide_command(command, cwd) == "deny":
+        verdict = self.decide_command(command, cwd)
+        if verdict.action == "deny":
             raise PermissionDeniedError(
-                "Command denied by workspace policy.",
+                f"Command denied by workspace policy: {verdict.reason}.",
                 hint=(
                     "The command (or a path it references) is denied. Adjust "
                     "WorkspacePolicy rules or use a less restrictive mode."

@@ -6,8 +6,9 @@ intrinsically workspace-scoped: each resolves the active
 ``RunContext.workspace`` — the runner injects it when the agent has a
 ``workspace=`` configured — and delegates to it. The session enforces the
 workspace policy's path ACL and command rules on every operation (deny
-raises there; the ``needs_approval`` predicates here resolve the ask side),
-so there is no ungated variant of these tools.
+raises there; the ``permission`` predicates here surface the same verdict
+*before* the call, so ``ask`` reaches the human and ``deny`` reaches the
+model with its reason), so there is no ungated variant of these tools.
 
 The module depends only on :mod:`lovia.tools.base` (the ``@tool``
 infrastructure), keeping the package dependency one-directional:
@@ -18,14 +19,15 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from typing import Annotated, Any, Callable, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from ..approvals import Verdict, merge_verdicts
 from ..exceptions import ToolError
 from ..parts import ContentPart, ImagePart, TextPart, image_mime
 from ..run_context import RunContext
-from ..tools.base import tool
+from ..tools.base import PermissionFn, tool
 from ..transcript import InputEntry, TranscriptEntry
 from .errors import FileTooLargeError, WorkspaceError
 from .protocol import WorkspaceSession
@@ -46,7 +48,7 @@ __all__ = [
     "grep_files",
     "kill_process",
     "list_files",
-    "path_needs_approval",
+    "path_permission",
     "read_file",
     "read_process_output",
     "require_workspace",
@@ -67,36 +69,37 @@ def require_workspace(ctx: RunContext[Any]) -> WorkspaceSession:
     return workspace
 
 
-def path_needs_approval(
-    *ops: Literal["read", "write"],
-) -> Callable[[dict[str, Any], RunContext[Any]], bool]:
-    """Approval predicate for a path-taking tool.
+_UNJUDGED = Verdict("ask", "the workspace policy could not judge this call")
 
-    Returns True when the policy decision for the tool's ``path`` argument is
-    ``ask`` for any of the given ops (and none of them is ``deny`` — a denied
-    call fails at the session anyway, so asking the human first would be
-    noise). With no workspace the tool cannot touch anything — let it run so
-    ``require_workspace`` surfaces its setup hint instead of a confusing
-    "not approved". With a live workspace but malformed args or a broken
+
+def path_permission(*ops: Literal["read", "write"]) -> PermissionFn:
+    """Permission predicate for a path-taking tool.
+
+    The policy verdict for the tool's ``path`` argument, merged across the
+    given ops (most restrictive wins): ``ask`` reaches the human with the
+    policy's reason and grant scope, ``deny`` reaches the model with its
+    reason before anything runs (the session would refuse it anyway — this
+    just says why up front). With no workspace the tool cannot touch anything
+    — let it run so ``require_workspace`` surfaces its setup hint instead of
+    a confusing denial. With a live workspace but malformed args or a broken
     policy, fail closed: ask rather than run unjudged.
     """
 
-    def _needs(args: dict[str, Any], ctx: RunContext[Any]) -> bool:
+    def _permission(args: dict[str, Any], ctx: RunContext[Any]) -> Verdict:
         workspace = ctx.workspace
         if workspace is None:
-            return False
+            return Verdict("allow")
         path = args.get("path", ".")
         if not isinstance(path, str):
-            return True
+            return _UNJUDGED
         try:
-            decisions = [workspace.decide_path(path, write=op == "write") for op in ops]
+            return merge_verdicts(
+                *(workspace.decide_path(path, write=op == "write") for op in ops)
+            )
         except Exception:  # noqa: BLE001 — never run unjudged on a bad policy
-            return True
-        if "deny" in decisions:
-            return False
-        return "ask" in decisions
+            return _UNJUDGED
 
-    return _needs
+    return _permission
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +208,7 @@ def _render_edit_result(result: Any, ctx: RunContext[Any]) -> Any:
         "- Binary and non-UTF-8 files are refused; inspect those via the shell "
         "instead (file, xxd, iconv, ...)."
     ),
-    needs_approval=path_needs_approval("read"),
+    permission=path_permission("read"),
     result_renderer=_render_file_content,
 )
 async def read_file(
@@ -241,7 +244,7 @@ VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024
         "`sips -Z 1568 img.png` (macOS) or `magick img.png -resize 1568x1568 "
         "img.png`."
     ),
-    needs_approval=path_needs_approval("read"),
+    permission=path_permission("read"),
     returns_images=True,
 )
 async def view_image(
@@ -284,7 +287,7 @@ async def view_image(
         "skeleton first and extend it with edit_file.\n"
         "- Set create_only=true to fail instead of overwriting an existing file."
     ),
-    needs_approval=path_needs_approval("write"),
+    permission=path_permission("write"),
     result_renderer=_render_file_change,
     # Mutates the shared workspace: run as an execution barrier so two writes
     # (or a write racing a shell command) cannot interleave within one turn.
@@ -316,7 +319,7 @@ async def write_file(
         "- Set replace_all=true to replace every occurrence (e.g. renaming a "
         "symbol across one file)."
     ),
-    needs_approval=path_needs_approval("read", "write"),
+    permission=path_permission("read", "write"),
     result_renderer=_render_edit_result,
     # Mutates the shared workspace — barrier, same as write_file.
     parallel=False,
@@ -348,7 +351,7 @@ async def edit_file(
         "- Symlinks are shown with their resolved target ('link -> /target').\n"
         "- To search file *contents*, use grep_files instead."
     ),
-    needs_approval=path_needs_approval("read"),
+    permission=path_permission("read"),
     result_renderer=_render_entries,
 )
 async def list_files(
@@ -410,7 +413,7 @@ async def list_files(
         "- This is the fastest way to locate code or text; prefer it over "
         "reading files one by one."
     ),
-    needs_approval=path_needs_approval("read"),
+    permission=path_permission("read"),
     result_renderer=_render_matches,
 )
 async def grep_files(
@@ -455,24 +458,24 @@ async def grep_files(
 # ---------------------------------------------------------------------------
 
 
-def _shell_needs_approval(args: dict[str, Any], ctx: RunContext[Any]) -> bool:
+def _shell_permission(args: dict[str, Any], ctx: RunContext[Any]) -> Verdict:
     # With no workspace nothing can run — require_workspace raises its setup
     # hint, so don't hide it behind an approval prompt. With a workspace but
     # malformed args or a broken policy, fail closed: ask rather than run
     # unjudged (validation then fails after approval; nothing runs unasked).
     workspace = ctx.workspace
     if workspace is None:
-        return False
+        return Verdict("allow")
     command = args.get("command")
     cwd = args.get("cwd", ".")
     if not isinstance(command, str) or not isinstance(cwd, str):
-        return True
+        return _UNJUDGED
     try:
         # The session's combined verdict: static command rules merged with
         # the path ACL over the command's path claims and working directory.
-        return workspace.decide_command(command, cwd) == "ask"
+        return workspace.decide_command(command, cwd)
     except Exception:  # noqa: BLE001 — never run unjudged on a bad policy
-        return True
+        return _UNJUDGED
 
 
 def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
@@ -534,7 +537,7 @@ def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
         "cat, grep_files over grep/rg, list_files over ls/find, edit_file "
         "over sed."
     ),
-    needs_approval=_shell_needs_approval,
+    permission=_shell_permission,
     result_renderer=_render_command_result,
     # A command can mutate anything in the workspace — barrier, so it never
     # races file tools or another command within one turn. background=true
@@ -579,7 +582,7 @@ async def shell(
     # description is display chrome for UI consumers; execution and the
     # approval policy ignore it deliberately — model-authored prose must
     # never soften how a command is judged or reviewed. background goes
-    # through the same _shell_needs_approval verdict (it only reads
+    # through the same _shell_permission verdict (it only reads
     # command/cwd), so backgrounding cannot soften the judgment either.
     session = require_workspace(ctx)
     if background:

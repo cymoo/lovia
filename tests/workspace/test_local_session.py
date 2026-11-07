@@ -82,9 +82,9 @@ async def test_symlink_is_judged_by_its_target(tmp_path) -> None:
 
 async def test_session_decide_path_reports_ask_for_outside_reads(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.coding())
-    assert session.decide_path("/etc/hosts") == "ask"
-    assert session.decide_path("inside.txt") == "allow"
-    assert session.decide_path("/etc/hosts", write=True) == "deny"
+    assert session.decide_path("/etc/hosts").action == "ask"
+    assert session.decide_path("inside.txt").action == "allow"
+    assert session.decide_path("/etc/hosts", write=True).action == "deny"
     # "ask" passes at the session level: approval is gated by the tool layer.
     (tmp_path.parent / "shared.txt").write_text("ok", encoding="utf-8")
     result = await session.read_text((tmp_path.parent / "shared.txt").as_posix())
@@ -1455,7 +1455,7 @@ async def test_shell_cannot_read_denied_paths(tmp_path) -> None:
     session = await _session(
         tmp_path, policy=WorkspacePolicy.trusted(denied_paths=(".env*",))
     )
-    assert session.decide_command("cat .env") == "deny"
+    assert session.decide_command("cat .env").action == "deny"
     with pytest.raises(PermissionDeniedError):
         await session.run("cat .env")
     # Unrelated commands still run freely under trusted.
@@ -1465,7 +1465,7 @@ async def test_shell_cannot_read_denied_paths(tmp_path) -> None:
 async def test_shell_redirect_to_outside_is_gated(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.coding())
     # write_outside="deny" -> a redirect target outside the root is denied.
-    assert session.decide_command("echo x > ../evil.txt") == "deny"
+    assert session.decide_command("echo x > ../evil.txt").action == "deny"
     with pytest.raises(PermissionDeniedError):
         await session.run("echo x > ../evil.txt")
     assert not (tmp_path.parent / "evil.txt").exists()
@@ -1474,10 +1474,15 @@ async def test_shell_redirect_to_outside_is_gated(tmp_path) -> None:
 async def test_shell_outside_read_claims_escalate_to_ask(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
     # trusted reads anywhere -> stays allow.
-    assert session.decide_command("cat /etc/hosts") == "allow"
+    assert session.decide_command("cat /etc/hosts").action == "allow"
     coding = await _session(tmp_path, policy=WorkspacePolicy.coding())
     # coding asks for outside reads; the shell tool routes this to approval.
-    assert coding.decide_command("cat /etc/hosts") == "ask"
+    # Two conditions ask here (gray command + outside read), so both reasons
+    # are reported and no single grant scope is offered.
+    verdict = coding.decide_command("cat /etc/hosts")
+    assert verdict.action == "ask" and verdict.scope is None
+    assert "no workspace rule allows this command" in verdict.reason
+    assert "outside the workspace root" in verdict.reason
 
 
 async def test_listing_hides_symlink_to_denied_path(tmp_path) -> None:
@@ -1510,9 +1515,9 @@ async def test_readonly_write_error_mentions_write_policy(tmp_path) -> None:
 async def test_shell_cwd_is_part_of_the_decision(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
     # cwd resolving outside the root counts as an outside read claim.
-    assert session.decide_command("ls", cwd="..") in ("allow", "ask")
+    assert session.decide_command("ls", cwd="..").action in ("allow", "ask")
     coding = await _session(tmp_path, policy=WorkspacePolicy.coding())
-    assert coding.decide_command("ls", cwd="..") == "ask"
+    assert coding.decide_command("ls", cwd="..").action == "ask"
 
 
 async def test_dev_null_plumbing_never_escalates(tmp_path) -> None:
@@ -1522,8 +1527,8 @@ async def test_dev_null_plumbing_never_escalates(tmp_path) -> None:
         tmp_path,
         policy=WorkspacePolicy.coding(command_rules=(CommandRule("pytest", "allow"),)),
     )
-    assert session.decide_command("pytest -q 2>/dev/null") == "allow"
-    assert session.decide_command("pytest -q > /dev/null 2>&1") == "allow"
+    assert session.decide_command("pytest -q 2>/dev/null").action == "allow"
+    assert session.decide_command("pytest -q > /dev/null 2>&1").action == "allow"
 
 
 async def test_writable_grant_allows_outside_writes(tmp_path) -> None:

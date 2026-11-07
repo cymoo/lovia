@@ -305,6 +305,11 @@ class LocalWorkspace:
                     "packages when none exists, create it first (e.g. "
                     "'python -m venv .venv')."
                 )
+        lines.append(
+            "A denied or unapproved call comes back with its reason: respect "
+            "it and choose a different approach that the policy allows — "
+            "never retry the same forbidden operation under another spelling."
+        )
         return "\n".join(lines)
 
 

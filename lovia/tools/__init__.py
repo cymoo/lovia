@@ -10,7 +10,8 @@ and they are added to the agent automatically.
 from __future__ import annotations
 
 from .base import (
-    ApprovalPredicate,
+    Permission,
+    PermissionFn,
     Tool,
     ToolInvoker,
     ToolPolicy,
@@ -41,7 +42,6 @@ from .search import (
 from .time import current_date, now
 
 __all__ = [
-    "ApprovalPredicate",
     "DuckDuckGoSearch",
     "FENCE_NOTE",
     "HttpReader",
@@ -50,6 +50,8 @@ __all__ = [
     "Page",
     "PageImage",
     "PageReader",
+    "Permission",
+    "PermissionFn",
     "QuestionOption",
     "SearchResult",
     "TavilySearch",

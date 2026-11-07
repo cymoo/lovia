@@ -58,10 +58,13 @@ Three values, two enforcement points:
   tools, your custom tools, or your own code. Denials raise
   `PermissionDeniedError` (a `ToolError` — the model sees it and adapts).
 - **`ask` is resolved at the tool layer** — the built-in tools carry
-  `needs_approval` predicates that consult the policy, so `ask` decisions
+  `permission` predicates that consult the policy, so `ask` verdicts
   surface through the standard
   [approval channel](tools.md#tool-approval), same as any gated
-  tool.
+  tool, carrying the policy's reason (`reads outside the workspace root
+  require approval (~/notes)`) and a grant scope (`read:~/notes`). A `deny`
+  is refused before the call with its reason, so the model learns why
+  without anything running.
 
 **Path rules.** `PathRule(pattern, action, ops={"read","write"})`; patterns
 are globs with three addressing forms — absolute/`~` (including `C:/data` or
@@ -238,8 +241,9 @@ same gate: `read_text` / `write_text` / `edit_text` / `list_files` /
 `grep` / `run` / `spawn` / `read_process_output` / `kill_process`, plus
 `decide_path(path, write=...)` and
 `decide_command(command)` for tools that want to *check* before acting.
-Deny raises; `ask` returns as a decision your tool's own `needs_approval`
-predicate can honor. (`Workspace.local(...)` returns a `LocalWorkspace`
+Both return a `Verdict` (`action`, `reason`, `scope`); the file and shell
+methods raise on `deny`, and your tool's own `permission` predicate can
+return the verdict as is. (`Workspace.local(...)` returns a `LocalWorkspace`
 whose `open()` yields a `LocalWorkspaceSession`; the calls return typed
 results — `FileContent`, `FileChange`, `EditResult`, `DirEntry`,
 `GrepMatch`, `CommandResult`, `ProcessStart`, `ProcessOutput` — and

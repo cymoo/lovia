@@ -296,7 +296,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         cfg = require_cfg(agent)
         try:
             async with _view_session(cfg) as session:
-                if session.decide_path(path) != "allow":
+                if session.decide_path(path).action != "allow":
                     raise WebError(403, "path_denied", "path not readable")
                 resolved = resolve_path(_root_of(cfg), path)
                 if not resolved.abs.is_file():
@@ -336,7 +336,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         cfg = require_cfg(agent)
         try:
             async with _view_session(cfg) as session:
-                if session.decide_path(path) != "allow":
+                if session.decide_path(path).action != "allow":
                     raise WebError(403, "path_denied", "path not readable")
         except UserError as exc:
             raise WebError.from_exc(404, "file_not_found", exc) from exc

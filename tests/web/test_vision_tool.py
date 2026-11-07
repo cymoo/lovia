@@ -107,8 +107,8 @@ def test_describe_image_outside_read_asks_under_coding_policy(
     session = _session(tmp_path, policy=WorkspacePolicy.coding())
     ctx = _ctx(session)
     # Same read pipeline as read_file: outside-root reads ask, inside don't.
-    assert tool.requires_approval({"path": "/tmp/shot.png"}, ctx) is True
-    assert tool.requires_approval({"path": "shot.png"}, ctx) is False
+    assert tool.decide({"path": "/tmp/shot.png"}, ctx).action == "ask"
+    assert tool.decide({"path": "shot.png"}, ctx).action == "allow"
 
 
 def test_resolve_vision_tool_gating(tmp_path: Path) -> None:

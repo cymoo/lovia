@@ -31,7 +31,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator
 
 from .. import events
-from ..approvals import ApprovalChannel
+from ..approvals import Approval, ApprovalChannel
 from ..handoff import _HandoffSignal
 from ..messages import ToolCall
 from ..exceptions import RunCancelled
@@ -224,33 +224,43 @@ class ToolCallProcessor:
             return
 
         try:
-            needs_approval = tool.requires_approval(args, state.run_ctx)
+            verdict = tool.decide(args, state.run_ctx)
         except Exception as exc:
             # Fail closed, and — like every other outcome — leave a
-            # ToolResultEntry: a raising predicate must neither let the tool
-            # run unvetted nor crash the run with a dangling call that a
-            # resume would then re-execute.
+            # ToolResultEntry: a raising (or bool-returning) predicate must
+            # neither let the tool run unvetted nor crash the run with a
+            # dangling call that a resume would then re-execute.
             logger.warning(
-                "tool.approval_predicate_error: %s call_id=%s (%s: %s)",
+                "tool.permission_error: %s call_id=%s (%s: %s)",
                 tool.name,
                 call.id,
                 type(exc).__name__,
                 exc,
             )
             yield events.ToolCallFailed(error=exc, call=call)
-            err = f"Tool {call.name} was not approved (approval check failed)."
+            err = f"Tool {call.name} was denied by policy: permission check failed."
             yield self._rejected(state, call, err)
             return
-        if needs_approval:
+        if verdict.action == "deny":
+            err = _with_reason(f"Tool {call.name} was denied by policy", verdict.reason)
+            yield self._rejected(state, call, err)
+            return
+        if verdict.action == "ask":
             # Fail-closed approval. Resolution order: the streaming consumer
             # (while suspended at the ApprovalRequired yield, or out-of-band
             # via the channel), then ``agent.approval_handler``, then deny.
             fut = self.approvals.register(call.id)
-            yield events.ApprovalRequired(call=call, _channel=self.approvals)
+            request = events.ApprovalRequired(
+                call=call,
+                reason=verdict.reason,
+                scope=verdict.scope,
+                _channel=self.approvals,
+            )
+            yield request
             handler = state.agent.approval_handler
             if handler is not None and not fut.done():
                 try:
-                    decision = handler(call, state.run_ctx)
+                    decision = handler(request, state.run_ctx)
                     if inspect.isawaitable(decision):
                         decision = await decision
                 except Exception as exc:
@@ -264,15 +274,17 @@ class ToolCallProcessor:
                         exc,
                     )
                     yield events.ToolCallFailed(error=exc, call=call)
-                    decision = False
+                    decision = Approval(False, "the approval handler failed")
                 self._apply_handler_decision(call.id, decision)
             if not fut.done():
                 # Nobody decided — deny so the run cannot hang.
-                self.approvals.reject(call.id)
-            approved = fut.result()
+                self.approvals.reject(call.id, reason="no approver available")
+            approval = fut.result()
             self.approvals.discard(call.id)
-            if not approved:
-                denial = f"Tool {call.name} was not approved."
+            if not approval.approved:
+                denial = _with_reason(
+                    f"Tool {call.name} was not approved", approval.reason
+                )
                 yield self._rejected(state, call, denial)
                 return
 
@@ -471,13 +483,24 @@ class ToolCallProcessor:
         )
 
     def _apply_handler_decision(self, call_id: str, decision: object) -> None:
-        # String decisions follow the declared ``ApprovalDecision`` contract
-        # (``"allow"`` / ``"deny"`` / ``"ask"``). ``"deny"`` and anything
-        # unrecognized resolve to deny, matching the run's fail-closed posture.
+        # The declared ``ApprovalDecision`` contract: ``bool``, ``"allow"`` /
+        # ``"deny"`` / ``"ask"``, or an ``Approval``. ``"ask"`` defers to the
+        # default-deny check; anything unrecognized resolves to deny with a
+        # reason, matching the run's fail-closed posture.
+        if isinstance(decision, (bool, Approval)):
+            self.approvals.resolve(call_id, decision)
+            return
         if isinstance(decision, str):
             token = decision.strip().lower()
             if token == "ask":
-                return  # defer; falls through to the default-deny check
-            self.approvals.resolve(call_id, token == "allow")
-        else:
-            self.approvals.resolve(call_id, bool(decision))
+                return
+            if token in ("allow", "deny"):
+                self.approvals.resolve(call_id, token == "allow")
+                return
+        self.approvals.reject(
+            call_id, reason="the approval handler returned an invalid decision"
+        )
+
+
+def _with_reason(text: str, reason: str) -> str:
+    return f"{text}: {reason}" if reason else f"{text}."

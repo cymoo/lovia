@@ -49,8 +49,10 @@ ACL 有三个决策值，分别作用于两个执行环节：
 
 - **`deny` 在 session 层执行**：这是每个文件操作和命令都会经过的唯一关口，不管调用者是内置工具、
   你的自定义工具，还是你自己的代码。拒绝会抛 `PermissionDeniedError`（一种 `ToolError`，模型会看到并调整）。
-- **`ask` 在工具层解决**：内置工具带 `needs_approval` 谓词并咨询策略，所以 `ask` 决策会通过标准
-  [审批通道](tools.md#工具审批)出现，和任何带门禁的工具一样。
+- **`ask` 在工具层解决**：内置工具带 `permission` 谓词并咨询策略，所以 `ask` 判定会通过标准
+  [审批通道](tools.md#工具审批)出现，和任何带门禁的工具一样，并带着策略给出的理由
+  （`reads outside the workspace root require approval (~/notes)`）和授权范围（`read:~/notes`）。
+  `deny` 在调用前就被拒绝并附上理由，模型不用执行就知道为什么。
 
 **路径规则。** `PathRule(pattern, action, ops={"read","write"})`；pattern 是 glob，有三种寻址形式：
 绝对路径/`~`（含 Windows 的 `C:/data`、`C:\data`；匹配解析后路径及其子树）、包含 `/`（工作区相对路径），或纯文件名
@@ -183,8 +185,9 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 自定义工具可以通过 `ctx.workspace` 访问当前运行的工作区 Session，所有操作仍会经过同一套权限检查：
 `read_text` / `write_text` / `edit_text` / `list_files` / `grep` / `run` / `spawn` /
 `read_process_output` / `kill_process`，以及
-`decide_path(path, write=...)` 和 `decide_command(command)`，供工具在行动前检查。deny 会抛异常；
-`ask` 会作为决策返回，让你自己的 `needs_approval` 谓词处理。
+`decide_path(path, write=...)` 和 `decide_command(command)`，供工具在行动前检查。两者都返回
+`Verdict`（`action`、`reason`、`scope`）；文件和命令方法遇到 `deny` 会抛异常，你自己的
+`permission` 谓词可以把判定原样返回。
 （`Workspace.local(...)` 返回 `LocalWorkspace`，其 `open()` 产出 `LocalWorkspaceSession`；
 调用返回类型化结果：`FileContent`、`FileChange`、`EditResult`、`DirEntry`、`GrepMatch`、
 `CommandResult`、`ProcessStart`、`ProcessOutput`；`PathRule.ops` 接受 `FileOp` 值

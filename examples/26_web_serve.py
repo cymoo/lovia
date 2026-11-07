@@ -27,7 +27,7 @@ load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 
-@tool(needs_approval=True)
+@tool(permission="ask")
 async def send_email(to: str, subject: str, body: str) -> str:
     """Send an email — requires the user's approval in the UI."""
     return f"sent to {to}: {subject!r}"

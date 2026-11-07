@@ -192,7 +192,13 @@ class HandoffOccurred(TransitionEvent):
 
 @dataclass
 class ApprovalRequired(ToolEvent):
-    """Emitted before a tool that needs approval runs.
+    """Emitted before a tool whose permission verdict is ``ask`` runs.
+
+    ``reason`` says why the call needs a human ("Pushes to a remote.",
+    "Reads outside the workspace root (~/.ssh)."); ``scope`` names what an
+    "always allow" grant would cover (``"shell:git push"``), or ``None`` when
+    no such grant should be offered. Both come from the tool's
+    :class:`~lovia.approvals.Verdict`.
 
     A streaming consumer resolves the request by calling :meth:`approve` or
     :meth:`reject` on the event (any time before its loop yields control
@@ -210,6 +216,8 @@ class ApprovalRequired(ToolEvent):
     """
 
     call: ToolCall
+    reason: str = ""
+    scope: str | None = None
     # Back-channel reference. Kept private so events stay declarative —
     # callers should prefer ``approve()`` / ``reject()`` on the event or
     # the channel API on ``RunHandle.approvals``.
@@ -217,21 +225,20 @@ class ApprovalRequired(ToolEvent):
 
     def approve(self) -> None:
         """Allow the tool call to proceed."""
-        if self._channel is None:
-            raise RuntimeError(
-                "ApprovalRequired event has no channel attached. "
-                "This event was likely constructed outside the runner."
-            )
-        self._channel.approve(self.call.id)
+        self._require_channel().approve(self.call.id)
 
-    def reject(self) -> None:
-        """Block the tool call; the model will see a denial message."""
+    def reject(self, reason: str = "") -> None:
+        """Block the tool call. ``reason`` (the user's words, say) is passed to
+        the model in the denial, so it can change course instead of retrying."""
+        self._require_channel().reject(self.call.id, reason=reason)
+
+    def _require_channel(self) -> "ApprovalChannel":
         if self._channel is None:
             raise RuntimeError(
                 "ApprovalRequired event has no channel attached. "
                 "This event was likely constructed outside the runner."
             )
-        self._channel.reject(self.call.id)
+        return self._channel
 
 
 @dataclass

@@ -117,7 +117,7 @@ directly for factories and generated schemas.
 | `parameters` | derived | JSON Schema for model-supplied arguments |
 | `invoke` | wrapped function | Async callable receiving raw arguments and `RunContext` |
 | `strict` | `False` (`@tool` only) | Require complete function annotations and strict schema generation when enabled |
-| `needs_approval` | `False` | Boolean or predicate that gates execution on approval |
+| `permission` | `"allow"` | `"allow"` / `"ask"` / `"deny"`, a `Verdict` with a reason, or a predicate returning one |
 | `retries` | `None` | Retries after the first attempt; `None` inherits Agent default |
 | `timeout` | `None` | Per-attempt seconds; `None` inherits Agent default |
 | `parallel` | `True` | Whether the call may overlap other calls in the same Turn |

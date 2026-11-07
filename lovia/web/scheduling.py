@@ -10,7 +10,7 @@ validation helpers (:func:`~lovia.web.scheduler.validate_trigger`,
 :func:`~lovia.web.scheduler.initial_next_fire`).
 
 Because a scheduled run executes autonomously later, the tool is gated by
-approval (``needs_approval=True``): the model proposes the schedule and the user
+approval (``permission="ask"``): the model proposes the schedule and the user
 approves or denies it inline before it is saved.
 
 The tool needs only the :class:`~lovia.web.store.ChatStore`; everything else
@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
+from ..approvals import Verdict
 from ..exceptions import ToolError
 from ..plugins.base import PluginInstance
 from ..run_context import RunContext
@@ -133,7 +134,11 @@ def _iso_minutes(epoch: float) -> str:
 
 
 def _make_tool(store: ChatStore) -> Tool:
-    @tool(name="schedule_run", description=_DESCRIPTION, needs_approval=True)
+    @tool(
+        name="schedule_run",
+        description=_DESCRIPTION,
+        permission=Verdict("ask", "Creates a schedule that runs the agent repeatedly."),
+    )
     async def schedule_run(
         ctx: RunContext[Any],
         instruction: Annotated[

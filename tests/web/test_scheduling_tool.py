@@ -2,7 +2,7 @@
 
 Two layers: unit tests call the tool directly with a hand-built ``RunContext``
 (fast, no runner), and integration tests drive ``/api/chat/stream`` so the
-``needs_approval`` gate and the ``GET /api/schedules`` contract are exercised
+``permission="ask"`` gate and the ``GET /api/schedules`` contract are exercised
 end to end. A final test feeds a tool-created row through the real ``Scheduler``.
 """
 
@@ -80,7 +80,8 @@ def test_to_epoch_rejects_garbage() -> None:
 
 
 def test_tool_requires_approval() -> None:
-    assert _make_tool(ChatStore.in_memory()).needs_approval is True
+    permission = _make_tool(ChatStore.in_memory()).permission
+    assert not callable(permission) and permission.action == "ask"
 
 
 def test_management_tools_skip_approval() -> None:
@@ -88,8 +89,8 @@ def test_management_tools_skip_approval() -> None:
     # scheduled run, where an approval request would be auto-denied — and
     # cancelling only deactivates (reversible), so no gate on these two.
     store = ChatStore.in_memory()
-    assert _make_cancel_tool(store).needs_approval is False
-    assert _make_list_tool(store).needs_approval is False
+    assert _make_cancel_tool(store).permission == "allow"
+    assert _make_list_tool(store).permission == "allow"
 
 
 @pytest.mark.asyncio

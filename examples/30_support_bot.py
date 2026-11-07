@@ -3,7 +3,7 @@
 Everything from earlier examples in one ~100-line app:
 
 * streaming output with tool-call progress,
-* a ``needs_approval`` refund gate resolved from the keyboard,
+* a ``permission="ask"`` refund gate resolved from the keyboard,
 * ``SQLiteSession`` persistence — restart the script and it remembers,
 * agent-level ``Compaction`` posture so a long-running chat never
   overflows the model's context window.
@@ -54,7 +54,7 @@ async def lookup_order(order_id: str) -> str:
     return f"{order_id}: {order['item']} — {order['status']}, ${order['price']:.2f}"
 
 
-@tool(needs_approval=True)
+@tool(permission="ask")
 async def issue_refund(order_id: str, reason: str) -> str:
     """Refund an order in full. Requires human approval."""
     order = ORDERS.get(order_id.upper())

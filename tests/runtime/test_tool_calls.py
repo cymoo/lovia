@@ -17,7 +17,7 @@ from lovia import Agent, Runner, events, tool
 from ..scripted_provider import ScriptedProvider, call, text
 
 
-@tool(needs_approval=True)
+@tool(permission="ask")
 async def sensitive() -> str:
     """A sensitive tool that must be approved before it runs."""
     return "did it"
@@ -66,7 +66,7 @@ async def test_ask_in_non_streaming_run_defaults_to_deny() -> None:
 
 @pytest.mark.asyncio
 async def test_raising_approval_predicate_denies_without_dangling_call() -> None:
-    # A needs_approval *predicate* that raises must fail closed (deny) and
+    # A *permission predicate* that raises must fail closed (deny) and
     # still append a ToolResultEntry — a crash here would leave a dangling
     # tool call that a resume would then re-execute.
     from lovia.transcript import ToolCallEntry, ToolResultEntry
@@ -76,7 +76,7 @@ async def test_raising_approval_predicate_denies_without_dangling_call() -> None
     def exploding_predicate(_args, _ctx):  # type: ignore[no-untyped-def]
         raise ValueError("predicate exploded")
 
-    @tool(needs_approval=exploding_predicate)
+    @tool(permission=exploding_predicate)
     async def guarded() -> str:
         executed.append(1)
         return "ran"
@@ -98,7 +98,33 @@ async def test_raising_approval_predicate_denies_without_dangling_call() -> None
     results = [e for e in result.entries if isinstance(e, ToolResultEntry)]
     assert len(calls) == len(results) == 1  # no dangling call
     assert results[0].is_error
-    assert "not approved" in results[0].output
+    assert "permission check failed" in results[0].output
+
+
+@pytest.mark.asyncio
+async def test_bool_returning_permission_is_rejected_not_guessed() -> None:
+    # ``True`` meant "ask" under the old needs_approval and reads as "allowed"
+    # under permission — too easy to invert, so a bool is an invalid verdict:
+    # the call is denied and the mistake surfaces as a ToolCallFailed event.
+    executed: list[int] = []
+
+    @tool(permission=lambda _args, _ctx: True)  # type: ignore[arg-type,return-value]
+    async def guarded() -> str:
+        executed.append(1)
+        return "ran"
+
+    provider = ScriptedProvider([call("guarded", {}, call_id="g1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[guarded])
+    handle = Runner.stream(agent, "go")
+    errors: list[BaseException] = []
+    async for ev in handle:
+        if isinstance(ev, events.ToolCallFailed):
+            errors.append(ev.error)
+    result = await handle.result()
+    assert executed == []
+    assert any(isinstance(e, TypeError) for e in errors)
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert "permission check failed" in tool_msg.content
 
 
 @pytest.mark.asyncio

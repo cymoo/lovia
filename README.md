@@ -274,14 +274,15 @@ the original conversation.
 
 ### Human in the loop
 
-Gate sensitive tools; resolve from your UI, a server-side policy, or an
-out-of-band channel — unresolved approvals deny, so runs never hang:
+Give sensitive tools a `permission`; resolve `ask` from your UI, a
+server-side policy, or an out-of-band channel — unresolved approvals deny,
+so runs never hang, and a denial carries its reason back to the model:
 
 ```python
 from lovia import Runner, events, tool
 
 
-@tool(needs_approval=True)
+@tool(permission="ask")
 async def refund(order_id: str, amount_cents: int) -> str:
     """Issue a refund."""
     return "refunded"
@@ -289,7 +290,7 @@ async def refund(order_id: str, amount_cents: int) -> str:
 
 async for ev in Runner.stream(agent, "Refund order A123."):
     if isinstance(ev, events.ApprovalRequired):
-        ev.approve()          # or ev.reject()
+        ev.approve()          # or ev.reject("use store credit instead")
 ```
 
 → [Tool approval](https://cymoo.github.io/lovia/tools/#tool-approval)

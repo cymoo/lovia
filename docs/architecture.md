@@ -91,7 +91,7 @@ lovia/
     command_guard.py#   lexical path-claim extraction from shell commands
     tools.py        #   read_file/write_file/edit_file/list_files/grep_files/
                     #   shell(+background)/read_process_output/kill_process
-                    #   + needs_approval predicates (the ask side)
+                    #   + permission predicates (verdicts: ask/deny + reason)
     protocol.py     #   WorkspaceSession/WorkspaceLike/ShellExecutor protocols
   web/              # Optional FastAPI + SSE layer + Jinja2 chat UI
                     #   (decoupled from core; only loaded when lovia[web] is used)
@@ -139,7 +139,7 @@ One turn's tool calls run **concurrently by default**. `RunLoop._tool_phase` spl
 One three-valued ACL (`allow`/`ask`/`deny`) governs both files and shell. The split invariant:
 
 - **`deny` is enforced in the session** (`LocalWorkspaceSession`): every file op resolves its path (symlinks followed, absolute/`~`/relative all accepted) and asks `WorkspacePolicy.decide_path(rel, abs, op)`; `run()` and `spawn()` ask `session.decide_command(command, cwd)` (static `command_rules` merged most-restrictive with path claims lexically extracted by `command_guard.py` — redirect targets are writes, path-looking args are reads), so a background start is judged exactly like a foreground command. Custom tools calling the session directly get the same gate.
-- **`ask` is resolved at the tool layer**: the built-in tools carry `needs_approval` predicates that call `session.decide_path`/`decide_command` and route through the existing `ApprovalRequired` channel. By the time a call reaches the session, `ask` has been approved — the session lets it pass. Bulk operations (list/grep) never trigger approval mid-walk; anything short of `allow` for a symlinked file inside the walk is skipped, and only the operation's own target can ask.
+- **`ask` is resolved at the tool layer**: the built-in tools carry `permission` predicates that call `session.decide_path`/`decide_command` and surface the resulting `Verdict` — `ask` rides the existing `ApprovalRequired` channel with the verdict's `reason`/`scope`, `deny` is refused in preflight with its reason (the session would refuse it anyway; this just says why before anything runs). By the time a call reaches the session, `ask` has been approved — the session lets it pass. Bulk operations (list/grep) never trigger approval mid-walk; a `deny` entry (or a symlink target short of `allow`) inside the walk is skipped, and only the operation's own target can ask.
 - Symlinks have no special case: a path is judged by where it resolves. Inside-root reads are always `allow`; `write`, `read_outside`, `write_outside` and `path_rules`/`denied_paths` cover the rest. Presets: `readonly`, `coding` (outside reads ask, outside writes deny), `trusted` (reads anywhere, outside writes ask).
 - The command guard is **advisory** (it cannot see `python -c` or `$(...)` payloads) but one-sided: a missed claim falls back to the static rules, and a false claim is almost always a relative token that resolves inside the root where reads are allowed — it can surface extra `ask`s, not loosen anything. Hard enforcement is the `ShellExecutor` seam (`protocol.py`): an executor derives OS sandbox scopes (Seatbelt/bubblewrap) from the policy and runs *after* the policy/approval gates.
 - `instructions()` is generated from the policy so the system prompt never promises more than the session enforces.

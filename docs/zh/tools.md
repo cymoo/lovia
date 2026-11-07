@@ -36,7 +36,7 @@ def search_docs(
 | 纯读取、彼此独立 | 保持默认并发 |
 | 写入或其他不可重入副作用 | `parallel=False` |
 | 临时故障可以安全重试 | `retries=` 与 `timeout=` |
-| 涉及费用、发送或删除 | `needs_approval=True` |
+| 涉及费用、发送或删除 | `permission="ask"` |
 | 可能返回大量内容 | `max_output_chars=` |
 
 ## Schema 推导
@@ -162,14 +162,23 @@ async def top_customers(n: int = 10) -> list[dict]: ...
 
 ## 工具审批
 
-Tool 会产生需要人工确认的副作用时，使用 `needs_approval`。它可以是布尔值，也可以是接收
-已解析参数和实时 Run Context 的谓词：
+每个 Tool 都带一个 `permission`：`"allow"`（默认）直接执行，`"ask"` 交给人决定，
+`"deny"` 拒绝。它可以是常量、带理由的 `Verdict`，或接收已解析参数和实时 Run Context 的谓词：
 
 ```python
-from lovia import Agent, Runner, events, tool
+from lovia import Agent, Runner, Verdict, events, tool
 
 
-@tool(needs_approval=lambda args, ctx: args["amount_cents"] > 5_000)
+def refund_policy(args, ctx):
+    cents = args["amount_cents"]
+    if cents > 1_000_000:
+        return Verdict("deny", "Refunds above 10,000 USD go through finance.")
+    if cents > 5_000:
+        return Verdict("ask", f"Refund of {cents / 100:.0f} USD exceeds the 50 USD limit.")
+    return "allow"
+
+
+@tool(permission=refund_policy)
 async def refund(order_id: str, amount_cents: int) -> str:
     """执行退款。"""
     return "refunded"
@@ -180,32 +189,55 @@ handle = Runner.stream(agent, "为订单 A123 退款 60 美元。")
 
 async for event in handle:
     if isinstance(event, events.ApprovalRequired):
-        event.approve()  # 或 event.reject()
+        print(event.reason)  # "Refund of 60 USD exceeds the 50 USD limit."
+        event.approve()  # 或 event.reject("改用店内积分")
 
 result = await handle.result()
 ```
 
-Runner 会在调用 Tool 前发出 `ApprovalRequired`，并按以下顺序取得决定：
+总是要问的工具写 `@tool(permission="ask")` 就够了。谓词返回决定或 `Verdict`，
+**不接受 `bool`**（含义太容易反过来；返回 bool 会被当作非法判定，调用被拒并发出
+`ToolCallFailed` 事件）。
 
-1. 流式消费者调用 `event.approve()` 或 `event.reject()`。
-2. Agent 的 `approval_handler` 返回 `True` / `"allow"`、`False` / `"deny"`，
-   或返回 `"ask"` 交给消费者处理。
+`deny` 判定不会到人那里：模型收到 `Tool refund was denied by policy: <理由>`，什么都不会执行。
+`ask` 判定让 Runner 发出 `ApprovalRequired`——带着判定的 `reason` 和 `scope`
+（“总是允许”会放开的范围；`None` 表示不该提供这个选项）——并按以下顺序取得决定：
+
+1. 流式消费者调用 `event.approve()` 或 `event.reject(reason)`。理由会以
+   `Tool refund was not approved: <理由>` 的形式到达模型，让它换做法而不是重试。
+2. Agent 的 `approval_handler(request, ctx)`——参数是待决的 `ApprovalRequired`——返回
+   `True` / `"allow"`、`False` / `"deny"`、`Approval(False, reason)`，或 `"ask"` 交给消费者。
 3. 没有任何一方决定时拒绝调用；审批始终 fail closed。
 
 如果决定来自 Web 端点、机器人或另一个异步任务，可使用 `RunHandle` 的带外通道：
 
 ```python
 handle.approvals.approve(call_id)
-handle.approvals.reject(call_id)
+handle.approvals.reject(call_id, reason="今天不行")
 handle.approvals.release(decision=False)  # 拒绝所有仍在等待的调用
 ```
 
-内置服务端通过 SSE 和 `POST /api/chat/approve` 暴露同一流程。Workspace 的 `ask` 决策和
-配置了 `needs_approval` 的 MCP Tool 也使用这个通道。
+内置服务端通过 SSE 和 `POST /api/chat/approve` 暴露同一流程。Workspace 的 `ask` 判定和
+配置了 `permission` 的 MCP Tool 也使用这个通道。
 
-审批属于预检，并保持请求顺序。谓词或 handler 抛异常时会拒绝调用。非流式
-`Runner.run()` 无法消费事件，必须设置 `approval_handler`，否则带门禁的调用会被拒绝。
-审批决定不会持久化，因此恢复未完成的调用时会再次询问。
+“记住批准”（“本对话中总是允许 `git push`”）是消费者的事，以 `request.scope` 为键；
+程序化版本就是五行 `approval_handler`：
+
+```python
+granted: set[str] = set()
+
+
+def remember(request: events.ApprovalRequired, ctx) -> str:
+    return "allow" if request.scope in granted else "ask"
+
+
+agent = Agent(..., approval_handler=remember)
+# 用户批准并勾选“总是”时：granted.add(request.scope)
+```
+
+权限在预检阶段判定，每次模型请求判一次（重试不重判），并保持请求顺序。谓词或 handler
+抛异常时会拒绝调用。非流式 `Runner.run()` 无法消费事件，必须设置 `approval_handler`，
+否则 `ask` 的调用会被拒绝。审批决定不会持久化，因此恢复未完成的调用时会再次询问。
 
 ## 工具策略
 
@@ -232,7 +264,7 @@ async def search_docs(query: str) -> list[str]: ...
 只看到一次尝试。参数校验发生在最内层、函数边界；需要转换后值的 policy 要自己校验。
 
 如果门禁需要的是**人的决策**，而不是代码逻辑，请使用
-[`needs_approval` 流程](#工具审批)。
+[`permission` 流程](#工具审批)。
 
 ## 程序化构建工具
 

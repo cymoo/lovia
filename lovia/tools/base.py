@@ -5,7 +5,7 @@ only thing that invokes it, so the surface area stays small:
 
 * ``name``, ``description``, ``parameters`` form the JSON Schema the model sees.
 * ``invoke`` runs the underlying callable with already-validated kwargs.
-* Simple policy kwargs (``needs_approval``, ``retries``, ``timeout``,
+* Simple policy kwargs (``permission``, ``retries``, ``timeout``,
   ``result_renderer``, ``parallel``) cover the common cases.
 * Advanced callers can pass composable ``policies``.
 """
@@ -26,6 +26,7 @@ from typing import (
     Awaitable,
     Callable,
     Protocol,
+    Union,
     cast,
     get_origin,
     get_type_hints,
@@ -35,6 +36,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ValidationError
 
+from ..approvals import Decision, Verdict, as_verdict
 from ..types import JsonObject, JsonSchema
 from ..exceptions import (
     BudgetExceeded,
@@ -45,7 +47,7 @@ from ..exceptions import (
 from ..run_context import RunContext
 from ..schema import build_args_validator, function_args_schema
 
-# Argument contract for the callables below. ``ApprovalPredicate``,
+# Argument contract for the callables below. ``PermissionFn``,
 # ``ToolInvoker``, and ``ToolPolicy`` all receive the *raw* arguments parsed
 # from the model's tool call (``json.loads(call.arguments or "{}")``). Pydantic
 # coercion, defaults, and validation happen only at the function boundary, inside
@@ -55,9 +57,14 @@ from ..schema import build_args_validator, function_args_schema
 # ``invoke`` knows, so the surrounding wrappers stay schema-agnostic. A predicate
 # or policy that needs coerced/defaulted values should apply its own validation.
 #
-# Predicate that may inspect the parsed arguments and current context to decide
-# whether a tool invocation needs human approval.
-ApprovalPredicate = Callable[[dict[str, Any], "RunContext[Any]"], bool]
+# A permission predicate judges one call from its parsed arguments and the
+# run context: ``"allow"`` runs it, ``"ask"`` routes it through the approval
+# channel, ``"deny"`` refuses it; a ``Verdict`` adds the reason (and, for
+# ``ask``, the scope an "always allow" would cover). Never ``bool`` — see
+# :func:`lovia.approvals.as_verdict`.
+PermissionFn = Callable[[dict[str, Any], "RunContext[Any]"], "Decision | Verdict"]
+# What ``Tool.permission`` accepts: a constant decision/verdict or a predicate.
+Permission = Union[Decision, Verdict, PermissionFn]
 
 # A ``wrap`` callable receives the underlying ``invoke``, the raw (unvalidated)
 # args, and the run context. It must return (or await) the tool result. Use it to
@@ -103,7 +110,9 @@ class Tool:
     # callables are wrapped during construction.
     invoke: ToolInvoker
     # ---- flat policies ----
-    needs_approval: bool | ApprovalPredicate = False
+    # Whether a call may run: a constant ``"allow"`` / ``"ask"`` / ``"deny"``
+    # (or ``Verdict`` with a reason), or a predicate over the raw arguments.
+    permission: Permission = "allow"
     # Number of retries after the first attempt (0 = no retry). ``None`` means
     # "use the agent's default_tool_retries".
     retries: int | None = None
@@ -141,10 +150,13 @@ class Tool:
     # without firing its on_handoff side effects.
     _handoff: bool = field(default=False, repr=False)
 
-    def requires_approval(self, args: dict[str, Any], ctx: "RunContext[Any]") -> bool:
-        if callable(self.needs_approval):
-            return bool(self.needs_approval(args, ctx))
-        return bool(self.needs_approval)
+    def decide(self, args: dict[str, Any], ctx: "RunContext[Any]") -> Verdict:
+        """The permission verdict for one call. Raises ``TypeError`` on an
+        invalid ``permission`` value (the runner fails closed on that)."""
+        value = (
+            self.permission(args, ctx) if callable(self.permission) else self.permission
+        )
+        return as_verdict(value)
 
     def openai_schema(self) -> JsonObject:
         return {
@@ -373,7 +385,7 @@ def tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    needs_approval: bool | ApprovalPredicate = False,
+    permission: Permission = "allow",
     retries: int | None = None,
     timeout: float | None = None,
     max_output_chars: int | None = None,
@@ -391,7 +403,7 @@ def tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    needs_approval: bool | ApprovalPredicate = False,
+    permission: Permission = "allow",
     retries: int | None = None,
     timeout: float | None = None,
     max_output_chars: int | None = None,
@@ -408,7 +420,7 @@ def tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    needs_approval: bool | ApprovalPredicate = False,
+    permission: Permission = "allow",
     retries: int | None = None,
     timeout: float | None = None,
     max_output_chars: int | None = None,
@@ -491,7 +503,7 @@ def tool(
             description=tool_desc,
             parameters=parameters,
             invoke=invoke,
-            needs_approval=needs_approval,
+            permission=permission,
             retries=retries,
             timeout=timeout,
             max_output_chars=max_output_chars,

@@ -315,7 +315,7 @@ async def test_reattach_replays_a_retry_only_while_it_is_current() -> None:
 
 @pytest.mark.asyncio
 async def test_detached_approval_blocks_then_resolves_on_reattach() -> None:
-    @tool(needs_approval=True)
+    @tool(permission="ask")
     async def sensitive() -> str:
         """Sensitive."""
         return "did it"
@@ -1165,7 +1165,7 @@ async def test_delete_all_outlasts_a_run_stopped_before_it() -> None:
 
 @pytest.mark.asyncio
 async def test_approval_timeout_denies_and_completes_run() -> None:
-    @tool(needs_approval=True)
+    @tool(permission="ask")
     async def sensitive() -> str:
         """Sensitive."""
         return "did it"
@@ -1186,7 +1186,8 @@ async def test_approval_timeout_denies_and_completes_run() -> None:
     assert "approval_required" in kinds
     assert kinds[-1] == "done"
     denied = [d for (e, d) in evs if e == "tool_result"]
-    assert denied and "not approved" in str(denied[0].get("result"))
+    # The model is told *why*: timed out, not "run cancelled".
+    assert denied and "not approved: approval timed out" in str(denied[0].get("result"))
     assert not any("did it" in str(d.get("result")) for d in denied)
 
 

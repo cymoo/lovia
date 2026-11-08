@@ -351,6 +351,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # refresh in that window would reconnect and revive the stopped run.
             if store.checkpointer is not None and run_id:
                 await store.clear_active_run_id(session_id, expected=run_id)
+            # Answer once the stopped chat is saved: a reload after this shows it.
+            await deps.supervisor.settle(session_id)
             return {"ok": True}
         # No live run: still let the user clear a stranded interrupted run so a
         # page reload doesn't trigger an unwanted reconnect.
@@ -383,6 +385,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
 
         if store.checkpointer is None:
             raise WebError(404, "feature_unavailable", "no checkpointer configured")
+        # A run stopped a moment ago retires its pointer once saved: never
+        # resume it from the window before that.
+        await deps.supervisor.settle(session_id)
         run_id = await store.get_active_run_id(session_id)
         if run_id is None:
             raise WebError(404, "run_not_found", "no interrupted run")

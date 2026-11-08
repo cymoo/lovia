@@ -32,13 +32,16 @@ from ..reliability import CancelToken
 from ..parts import coerce_parts
 from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
+from ..runtime.loop import pending_tool_calls
+from ..runtime.resume import normalize_replayed_entries
 from ..session import TIMING_META_KEY
 from ..steering import InjectedContent, Mailbox
 from ..transcript import (
+    AssistantTextEntry,
     InputEntry,
+    ReasoningEntry,
     ToolResultEntry,
     TranscriptEntry,
-    drop_dangling_tool_calls,
     input_to_entries,
 )
 from .api.serialization import (
@@ -77,6 +80,11 @@ if TYPE_CHECKING:
     from .api.deps import RouterDeps
 
 log = logging.getLogger(__name__)
+
+# The result a stopped run's unanswered tool call is saved with.
+_INTERRUPTED = (
+    "Interrupted: the run stopped before this tool returned; its outcome is unknown."
+)
 
 
 def agent_grant_context(name: str, agent: "Agent[Any]") -> str:
@@ -335,6 +343,9 @@ class RunController:
         # times its messages from it.
         self.history_runs: Runs = []
         self.completed_mirror: list[TranscriptEntry] = []
+        # The leg the mirror shows — trails ``run_id`` across an auto-chain hop
+        # until the next leg resets the mirror; None before the first leg.
+        self._mirror_run_id: str | None = None
         self.current_turn_entries: list[TranscriptEntry] = []
         self.in_flight_buffer: list[events.Event | LegFrame] = []
         self.pending_approval: events.ApprovalRequired | None = None
@@ -349,6 +360,8 @@ class RunController:
         # in the finally, or the wind-down would re-create transcript rows for a
         # chat that no longer exists.
         self._discard_partial = False
+        # The write of what a stop froze (see freeze); None until then.
+        self._frozen: asyncio.Future[None] | None = None
         self.task: asyncio.Task[None] | None = None
 
     # -- lifecycle ------------------------------------------------------- #
@@ -424,6 +437,8 @@ class RunController:
 
     def cancel_run(self, *, user: bool) -> None:
         self._user_cancelled = self._user_cancelled or user
+        if user and not self._discard_partial:
+            self.freeze()
         self.cancel.cancel("user requested stop" if user else "server shutdown")
         # Unblock a run parked on a pending approval (deny) so it can wind down.
         self.deps.approvals.deny_pending(self.session_id)
@@ -502,34 +517,108 @@ class RunController:
         )
         self.deps.approvals.deny_pending(self.session_id, reason="approval timed out")
 
-    async def _persist_partial(self, run_id: str, started_at: float | None) -> None:
-        """Fold this run's completed turns into the durable Session.
+    def freeze(self) -> None:
+        """Fold what the user has seen of this leg into the durable Session.
 
-        Called when a run ends without success and its checkpoint is about to be
-        dropped (user stop, or a non-resumable failure) so a reload shows what was
-        produced instead of an empty chat. ``completed_mirror`` grows only on
-        ``TurnEnded``, so a *fresh* run's mirror already ends on a whole turn — but
-        a *resumed* run seeds it with the checkpoint's entries, which can end on a
-        tool call the restored run had not yet executed. ``drop_dangling_tool_calls``
-        strips any such unmatched call so the stored transcript never ends on a
-        dangling ``tool_use`` (which a provider would reject on the next turn).
+        On a user stop (and a non-resumable failure) the chat that a reload or
+        a follow-up message reads must be the one on screen — now, not once the
+        run reaches its next safe point, which for a mid-flight tool is only
+        after that tool returns. So the entries are captured synchronously,
+        here; only the write is deferred, to ``_frozen``, which
+        :meth:`RunSupervisor.settle` and the task's ``finally`` await.
 
-        Keyed by ``run_id`` -> idempotent; with the checkpoint deleted next, the
-        run lives in exactly one place (the resume path concatenates session
-        history + snapshot, so a run present in both would double-count).
-
-        Timed like a segment the loop writes (``TIMING_META_KEY``) when the
-        checkpoint knew the run's start.
+        Keyed by the leg's checkpoint ``run_id``: ``Session.append`` ignores a
+        stored one, and the task pulls no further event until this write lands,
+        so a run finishing in the background anyway (a stop during its final
+        model turn) can neither store its version first nor add a second copy.
+        Without a checkpointer the loop would mint its own id, so nothing is
+        folded.
         """
-        session = self.deps.session
-        entries = drop_dangling_tool_calls(list(self.completed_mirror))
-        meta: JsonObject | None = None
-        if started_at is not None:
-            meta = {
-                TIMING_META_KEY: {"started_at": started_at, "finished_at": time.time()}
-            }
-        if session is not None and entries:
+        if self._frozen is not None or self.deps.session is None:
+            return
+        run_id, entries = self._seen()
+        if run_id is None or not entries:
+            return
+        # The pointer names the current leg — past the mirror's on an
+        # auto-chain hop, the leg the stop kept from starting.
+        self._frozen = asyncio.ensure_future(
+            self._write_frozen(run_id, entries, time.time(), self.run_id)
+        )
+
+    def _seen(self) -> tuple[str | None, list[TranscriptEntry]]:
+        """The current leg's ``run_id`` and its transcript as shown: the
+        finished turns, the running turn so far, the model call still
+        streaming, and an interrupted result for each unanswered call."""
+        if self._mirror_run_id is None:
+            # The task has not opened its first leg: the input is all there is.
+            run_id, entries = self.run_id, list(self._seed_entries)
+        else:
+            run_id = self._mirror_run_id
+            entries = [*self.completed_mirror, *self.current_turn_entries]
+        # A model call's deltas become entries only with its MessageCompleted;
+        # the ones after the turn's last such frame are a call still streaming.
+        text: list[str] = []
+        reasoning: list[str] = []
+        for ev in self.in_flight_buffer:
+            if isinstance(ev, events.MessageCompleted):
+                text, reasoning = [], []
+            elif isinstance(ev, events.TextDelta):
+                text.append(ev.delta)
+            elif isinstance(ev, events.ReasoningDelta):
+                reasoning.append(ev.delta)
+        if reasoning:
+            # No provider: an unsigned fragment is shown, never replayed.
+            entries.append(ReasoningEntry(content="".join(reasoning)))
+        if text:
+            entries.append(AssistantTextEntry(content="".join(text)))
+        # Unanswered calls are the newest turn's (a turn's next model call waits
+        # for all its results), so their results go at the end. Paired by
+        # occurrence, as core does: a provider may reuse an id across turns.
+        # The tool may still be running: say so rather than claim it never ran.
+        entries += [
+            ToolResultEntry(call_id=call.id, output=_INTERRUPTED, is_error=True)
+            for call in pending_tool_calls(entries)
+        ]
+        # The mirror holds MessageCompleted's copies, which keep the model's raw
+        # arguments even for a call core rejected and rewrote. Session history
+        # is replayed as is, so make every (now answered) call wire-safe here.
+        return run_id, normalize_replayed_entries(entries)
+
+    async def _write_frozen(
+        self,
+        run_id: str,
+        entries: list[TranscriptEntry],
+        stopped_at: float,
+        pointer: str | None,
+    ) -> None:
+        # Timed like a segment the loop writes, when the checkpoint knew the
+        # leg's start. Best effort, like the run record: a failed write must
+        # not break the stop, nor the task's finally that awaits it.
+        # Once saved, the run's reconnect pointer goes too — for every way a
+        # run is stopped, not only the HTTP cancel's eager clear — or a reload
+        # would splice its checkpoint (still there until the run winds down)
+        # in after the same turns, and offer to resume a stopped run.
+        store, session = self.deps.store, self.deps.session
+        assert session is not None  # freeze() checked
+        try:
+            snapshot = (
+                await store.checkpointer.load(run_id)
+                if store.checkpointer is not None
+                else None
+            )
+            meta: JsonObject | None = None
+            if snapshot is not None and snapshot.started_at is not None:
+                meta = {
+                    TIMING_META_KEY: {
+                        "started_at": snapshot.started_at,
+                        "finished_at": stopped_at,
+                    }
+                }
             await session.append(self.session_id, entries, run_id=run_id, meta=meta)
+            if store.checkpointer is not None and pointer:
+                await store.clear_active_run_id(self.session_id, expected=pointer)
+        except Exception as exc:  # noqa: BLE001 — logged; the stop itself stands
+            log.warning("could not save stopped run %s: %s", run_id, exc)
 
     # -- snapshot mirror ------------------------------------------------- #
 
@@ -720,6 +809,7 @@ class RunController:
                 segments = await session.segments(sid) if session is not None else []
                 self.history_runs = segments_runs(segments)
                 self.completed_mirror = list(seed)
+                self._mirror_run_id = self.run_id
                 self.current_turn_entries = []
                 self.in_flight_buffer = []
                 budget = deps.fresh_budget()
@@ -741,6 +831,11 @@ class RunController:
                 succeeded = False
                 error_seen = False
                 async for ev in handle:
+                    if self._frozen is not None:
+                        # The run advances only as this loop pulls it: holding
+                        # the next pull until a stop's write lands means a run
+                        # finishing in the background can't store first.
+                        await asyncio.shield(self._frozen)
                     if isinstance(ev, events.ApprovalRequired):
                         if not self.await_approvals:
                             # Left undecided, the call goes to the agent's
@@ -851,12 +946,10 @@ class RunController:
             # spend lives only in the checkpoint head — fold it in before the
             # snapshot is (possibly) deleted below. Best effort, like the rest
             # of the run record.
-            started_at: float | None = None  # the stopped leg's, for its segment
             if not succeeded and rid and store.checkpointer is not None:
                 try:
                     snapshot = await store.checkpointer.load(rid)
                     if snapshot is not None:
-                        started_at = snapshot.started_at
                         self.usage.add(snapshot.usage)
                         if snapshot.last_input_tokens is not None:
                             self.last_input_tokens = snapshot.last_input_tokens
@@ -867,12 +960,13 @@ class RunController:
                 and rid
                 and (self._user_cancelled or failed_terminally)
             ):
-                # ``not succeeded`` skips a leg the loop already persisted (e.g. a
-                # cancel landing on an auto-chain hop, where this run_id names the
-                # not-yet-started next leg and the mirror is the prior, saved one).
-                # ``_discard_partial`` skips it when the session is being deleted.
-                if not succeeded and not self._discard_partial:
-                    await self._persist_partial(rid, started_at)
+                # A user stop froze at cancel time; a failure freezes now. Either
+                # way the write lands before the checkpoint goes, so the run is
+                # never in neither place. ``_discard_partial``: being deleted.
+                if failed_terminally and not self._discard_partial:
+                    self.freeze()
+                if self._frozen is not None:
+                    await self._frozen
                 await store.checkpointer.delete(rid)
                 await store.clear_active_run_id(sid, expected=rid)
             await deps.approvals.release(sid)
@@ -880,16 +974,18 @@ class RunController:
             self.supervisor._evict(sid, self)
             if title_args is not None:
                 deps.schedule_title(*title_args)
-            if not succeeded and (self._user_cancelled or final_error is None):
+            if self._user_cancelled or (not succeeded and final_error is None):
                 # Stable outcome text for every cooperative stop: a user cancel
                 # surfaces as RunCancelled ("user requested stop"), a shutdown
                 # reaches here with no exception at all — both must read
                 # "cancelled", not whatever the exception said.
                 final_error = "cancelled"
-            if succeeded:
-                status = "completed"
-            elif self._user_cancelled:
+            if self._user_cancelled:
+                # Even if the run finished in the background (a stop during its
+                # final model turn): the chat keeps what was frozen, not that.
                 status = "cancelled"
+            elif succeeded:
+                status = "completed"
             elif failed_terminally:
                 status = "failed"
             else:
@@ -897,13 +993,14 @@ class RunController:
                 # survives, so a reconnect may pick this run back up — in which
                 # case start_run flips this same row back to "running".
                 status = "interrupted"
+            error = None if status == "completed" else final_error
             self.final_status = status
-            self.final_error = None if succeeded else final_error
+            self.final_error = error
             try:
                 await store.finish_run(
                     record_id,
                     status=status,
-                    error=None if succeeded else final_error,
+                    error=error,
                     usage=usage_dict(
                         self.usage, last_input_tokens=self.last_input_tokens
                     )
@@ -916,7 +1013,7 @@ class RunController:
                 "run finished: session=%s status=%s%s",
                 sid,
                 status,
-                "" if succeeded or not final_error else f" error={final_error}",
+                f" error={error}" if error else "",
             )
             deps.emit(
                 "run_finished",
@@ -924,7 +1021,7 @@ class RunController:
                     session_id=sid,
                     run_id=record_id,
                     status=status,
-                    error=None if succeeded else final_error,
+                    error=error,
                     source=self.source,
                 ),
             )
@@ -1027,6 +1124,8 @@ class RunSupervisor:
         ``await_approvals=False`` doesn't park the run on an approval: the
         agent's ``approval_handler`` decides, else the call is denied.
         """
+        # A run stopped a moment ago must be in the history this one loads.
+        await self.settle(session_id)
         self._check_slot(session_id)
         meta = await self.deps.store.get(session_id)
         agent_name = self.deps.name_of(agent)  # before bind() copies the agent
@@ -1173,6 +1272,17 @@ class RunSupervisor:
         ctrl._discard_partial = discard
         ctrl.cancel_run(user=True)
         return True
+
+    async def settle(self, session_id: str) -> None:
+        """Wait until this session's stopped runs have saved what they showed.
+
+        One quick write each (see :meth:`RunController.freeze`) — unlike
+        :meth:`drain`, which waits for the runs themselves to wind down.
+        """
+        for ctrl in list(self._draining.get(session_id, ())):
+            if ctrl._frozen is not None:
+                # Shielded: a caller giving up must not cancel the write.
+                await asyncio.shield(ctrl._frozen)
 
     async def drain(
         self, session_id: str | None = None, *, timeout: float = 60.0

@@ -910,6 +910,77 @@ async def _live_ctrl(app, sid):
 
 
 @pytest.mark.asyncio
+async def test_stop_wins_over_a_run_finishing_in_the_background() -> None:
+    """The stop's write is slow (here: its checkpoint read) and the rest of the
+    answer streams at once: the run must not reach its own Session append —
+    same run_id, so whichever lands first is the one kept — before the stop's
+    does."""
+    gate = asyncio.Event()
+    provider = _GatedMidAnswer(ScriptedProvider([text("Hello world")]), gate, 5)
+    store = ChatStore.in_memory()
+    assert store.checkpointer is not None
+    real_load = store.checkpointer.load
+
+    async def slow_load(run_id):
+        await asyncio.sleep(0.2)
+        return await real_load(run_id)
+
+    store.checkpointer.load = slow_load  # type: ignore[method-assign]
+    app = _app(Agent(name="bot", model=provider), store=store)
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        ctrl = await _live_ctrl(app, "s1")
+        for _ in range(250):
+            if sum(isinstance(e, events.TextDelta) for e in ctrl.in_flight_buffer) == 5:
+                break
+            await asyncio.sleep(0.02)
+        app.state.deps.supervisor.cancel("s1")  # frozen, not yet written
+        gate.set()
+        assert ctrl.task is not None
+        await asyncio.wait_for(ctrl.task, timeout=5)
+        await _kill(task)
+    entries = await store.session.load("s1")
+    assert [e.content for e in entries] == ["go", "Hello"]
+
+
+@pytest.mark.asyncio
+async def test_stop_answers_a_call_whose_id_an_earlier_turn_used() -> None:
+    """Some providers reuse call ids across turns. A stop in the second ``c1``
+    must still answer it: the first ``c1``'s result is not its result."""
+    release = asyncio.Event()
+
+    @tool
+    async def ping() -> str:
+        """Return immediately."""
+        return "pong"
+
+    provider = ScriptedProvider(
+        [
+            _said_and_called("first", "ping", "c1"),
+            _said_and_called("second", "block", "c1"),
+            text("end"),
+        ]
+    )
+    agent = Agent(name="bot", model=provider, tools=[ping, _blocking_tool(release)])
+    store = ChatStore.in_memory()
+    async with _client(_app(agent, store=store)) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_calls(provider, 2)
+        await _wait_run(ac, "s1")
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        release.set()
+        await _kill(task)
+    entries = await store.session.load("s1")
+    results = [e for e in entries if isinstance(e, ToolResultEntry)]
+    assert [(r.call_id, r.is_error) for r in results] == [("c1", False), ("c1", True)]
+    assert results[1].output.startswith("Interrupted")
+
+
+@pytest.mark.asyncio
 async def test_failed_run_persists_partial_transcript() -> None:
     """A non-resumable failure (non-retryable provider error) folds the run's
     completed turns into the Session and leaves nothing to reconnect to — the

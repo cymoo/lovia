@@ -32,13 +32,13 @@ from ..reliability import CancelToken
 from ..parts import coerce_parts
 from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
+from ..runtime.loop import pending_tool_calls
 from ..session import TIMING_META_KEY
 from ..steering import InjectedContent, Mailbox
 from ..transcript import (
     AssistantTextEntry,
     InputEntry,
     ReasoningEntry,
-    ToolCallEntry,
     ToolResultEntry,
     TranscriptEntry,
     input_to_entries,
@@ -527,9 +527,11 @@ class RunController:
         :meth:`RunSupervisor.settle` and the task's ``finally`` await.
 
         Keyed by the leg's checkpoint ``run_id``: ``Session.append`` ignores a
-        stored one, so the run finishing in the background anyway (a stop
-        during its final model turn) can't add a second copy. Without a
-        checkpointer the loop would mint its own id, so nothing is folded.
+        stored one, and the task pulls no further event until this write lands,
+        so a run finishing in the background anyway (a stop during its final
+        model turn) can neither store its version first nor add a second copy.
+        Without a checkpointer the loop would mint its own id, so nothing is
+        folded.
         """
         if self._frozen is not None or self.deps.session is None:
             return
@@ -567,13 +569,12 @@ class RunController:
         if text:
             entries.append(AssistantTextEntry(content="".join(text)))
         # Unanswered calls are the newest turn's (a turn's next model call waits
-        # for all its results), so their results go at the end. The tool may
-        # still be running: say so rather than claim it never ran.
-        answered = {e.call_id for e in entries if isinstance(e, ToolResultEntry)}
+        # for all its results), so their results go at the end. Paired by
+        # occurrence, as core does: a provider may reuse an id across turns.
+        # The tool may still be running: say so rather than claim it never ran.
         entries += [
-            ToolResultEntry(call_id=e.call_id, output=_INTERRUPTED, is_error=True)
-            for e in list(entries)
-            if isinstance(e, ToolCallEntry) and e.call_id not in answered
+            ToolResultEntry(call_id=call.id, output=_INTERRUPTED, is_error=True)
+            for call in pending_tool_calls(entries)
         ]
         return run_id, entries
 
@@ -814,6 +815,11 @@ class RunController:
                 succeeded = False
                 error_seen = False
                 async for ev in handle:
+                    if self._frozen is not None:
+                        # The run advances only as this loop pulls it: holding
+                        # the next pull until a stop's write lands means a run
+                        # finishing in the background can't store first.
+                        await asyncio.shield(self._frozen)
                     if isinstance(ev, events.ApprovalRequired):
                         if not self.await_approvals:
                             # Left undecided, the call goes to the agent's

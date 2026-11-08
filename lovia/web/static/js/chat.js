@@ -1072,17 +1072,25 @@ function decideApproval(id, outcome, title) {
     if (hadFocus) promptEl.focus({ preventScroll: true });
   }
   if (outcome !== 'auto') announce(outcomeText(outcome));
+  // A call that ran gets its row when it starts, and appendTool adds the
+  // badge; a refused one gets its row from resolveApproval.
   const row = findToolNode(id);
-  if (row) {
-    setApprovalBadge(row, entry);
-  } else if (!ranAfter(outcome)) {
-    // A refused call never starts, so nothing else draws its row. Its error
-    // result arrives next and replaces this placeholder text.
-    appendTool(entry.call);
-    const drawn = findToolNode(id);
-    if (drawn) setToolResult(drawn, outcomeText(outcome), true, undefined, true);
-  }
-  // A call that ran gets its row when it starts; appendTool adds the badge.
+  if (row) setApprovalBadge(row, entry);
+}
+
+/**
+ * Draw the row of a call the server refused: it never starts, so nothing
+ * else would. Only on the server's word — a deny click can lose to another
+ * tab's approval, and an error drawn early would outlive the call's success.
+ * Its error result arrives next and replaces this placeholder text.
+ * @param {string} id
+ */
+function drawRefused(id) {
+  const entry = store.approvals.get(id);
+  if (!entry?.outcome || ranAfter(entry.outcome) || findToolNode(id)) return;
+  appendTool(entry.call); // adds the badge
+  const row = findToolNode(id);
+  if (row) setToolResult(row, outcomeText(entry.outcome), true, undefined, true);
 }
 
 /**
@@ -1133,6 +1141,7 @@ function resolveApproval(data) {
   decideApproval(data.id, approvalOutcome(data));
   // Approved elsewhere (another tab): the call runs now.
   if (data.approved) setToolStatus(findToolNode(data.id), 'running');
+  else drawRefused(data.id);
 }
 
 /** The chat's remembered approvals, each with a Revoke button. */

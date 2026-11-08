@@ -20,6 +20,7 @@ import { icon } from './icons.js';
 import { store } from './store.js';
 import {
   TOOL_VIEW_KIND,
+  argEchoed,
   toolInfo,
   toolViewChain,
   toolViewField,
@@ -325,7 +326,7 @@ function applySummary(node) {
   let el = summary.querySelector(':scope > .lv-tool-summary');
   if (text === null) {
     el?.remove();
-    node.classList.remove('lv-tool--summary');
+    node.classList.remove('lv-tool--summary', 'lv-tool--echoed');
     return;
   }
   if (!el) {
@@ -338,6 +339,8 @@ function applySummary(node) {
   /** @type {HTMLElement} */ (el).title =
     `${state.name} ${node.querySelector('.lv-tool-args')?.textContent ?? ''}`.trim();
   node.classList.add('lv-tool--summary');
+  // The title already shows the lone argument: skip the params row repeating it.
+  node.classList.toggle('lv-tool--echoed', argEchoed(state.arguments, text));
 }
 
 // Re-apply a view registered late (a slow extension) to the cards on screen

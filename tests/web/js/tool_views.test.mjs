@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  argEchoed,
   registerToolView,
   toolInfo,
   toolViewField,
@@ -49,4 +50,23 @@ test('ToolInfo parses arguments and is frozen', () => {
   assert.ok(Object.isFrozen(info));
   assert.equal(toolInfo({ ...base, arguments: '{oops' }).args, undefined);
   assert.equal(toolInfo({ ...base, arguments: undefined }).args, undefined);
+});
+
+test('a lone argument that ends the summary as a word counts as echoed', () => {
+  assert.ok(argEchoed('{"path": "src"}', 'List files src'));
+  assert.ok(argEchoed('{"command": "npm test"}', '$ npm test'));
+  assert.ok(argEchoed('{"query": "lovia  docs"}', 'Search “lovia docs”'));
+  assert.ok(argEchoed('{"title": "Q3"}', 'Q3'));
+  // more than one argument, or one the summary leaves out: the row stays
+  assert.ok(!argEchoed('{"path": "src", "depth": "2"}', 'List files src'));
+  assert.ok(!argEchoed('{"path": "lib"}', 'List files src'));
+  // a stray substring is not the subject
+  assert.ok(!argEchoed('{"q": "s"}', 'List files'));
+  assert.ok(!argEchoed('{"q": "rc"}', 'List files src'));
+  // non-strings, multi-line values, empty or unparsable args
+  assert.ok(!argEchoed('{"n": 3}', 'Step 3'));
+  assert.ok(!argEchoed('{"code": "a\\nb"}', 'a\nb'));
+  assert.ok(!argEchoed('{"q": ""}', 'Search'));
+  assert.ok(!argEchoed(undefined, 'List files'));
+  assert.ok(!argEchoed('{oops', 'List files'));
 });

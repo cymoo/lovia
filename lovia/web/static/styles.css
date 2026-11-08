@@ -1811,8 +1811,9 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 }
 
 /* ---- Activity group (activity.js) ---------------------------------------------
-   A run of steps folded under one summary: the same card, with the steps as
-   hairline-separated rows inside it instead of cards of their own. */
+   A run of steps folded under one summary. Folded, it is a line of metadata
+   in the prose column — no chrome competing with the answer. Opened, it
+   becomes the card, with the steps as a timeline inside. */
 .lv-activity {
   margin: 8px 0;
   background: var(--lv-surface);
@@ -1825,7 +1826,7 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 [data-theme="dark"] .lv-activity {
   background: var(--lv-surface-2);
 }
-.lv-activity:hover {
+.lv-activity[open]:hover {
   border-color: var(--lv-border-strong);
 }
 .lv-activity > summary {
@@ -1864,6 +1865,23 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12.5px;
+}
+/* Folded: no chrome, text aligned with the prose. After the card and hover
+   rules above (the themed ones included), which it must override. */
+.lv-activity:not([open]) {
+  background: transparent;
+  border-color: transparent;
+}
+.lv-activity:not([open]) > summary {
+  padding-left: 0;
+}
+.lv-activity:not([open]) > summary:hover {
+  background: transparent;
+  color: var(--lv-ink-2);
+}
+/* The chevron follows the words, not the far edge of the column. */
+.lv-activity:not([open]) .lv-activity-label {
+  flex: 0 1 auto;
 }
 /* Still working: the reply is streaming and a step hasn't settled. */
 .lv-turn.lv-streaming .lv-activity:has([data-status="running"], [data-status="awaiting"], .lv-reasoning:not(.lv-done)) .lv-activity-label::before {
@@ -2153,6 +2171,10 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 .lv-tool .lv-tool-params {
   border-top: 1px solid var(--lv-border);
   padding: 10px 14px;
+}
+/* The title already reads the call's lone argument (tools.js applySummary). */
+.lv-tool.lv-tool--echoed > .lv-tool-params {
+  display: none;
 }
 .lv-tool-params .lv-param-key {
   color: var(--lv-muted-2);

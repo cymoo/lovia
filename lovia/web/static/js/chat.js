@@ -35,6 +35,8 @@ import {
   cardRegistry,
   outcomeText,
   scopeLabel,
+  scopeList,
+  scopePick,
   splitNote,
 } from './approvals.js';
 import { BlockStream } from './stream-blocks.js';
@@ -864,7 +866,7 @@ function appendApproval(call) {
     // A quiet record instead of a card — the decision was already made.
     const note = document.createElement('div');
     note.className = 'lv-approval-auto';
-    const covered = scopes.map(scopeLabel).join(', ') || call.name;
+    const covered = scopes.length ? scopeList(scopes) : call.name;
     note.append(t('approval.auto', { scope: covered }), ' ');
     const manage = document.createElement('button');
     manage.type = 'button';
@@ -917,24 +919,9 @@ function appendApproval(call) {
 
   const actions = node.querySelector('.lv-approval-actions');
   // Offered only when the server names what it would cover; the label lists
-  // exactly that — every scope, since ticking it remembers them all.
-  let box = null;
-  if (scopes.length) {
-    const always = document.createElement('label');
-    always.className = 'lv-approval-always';
-    box = document.createElement('input');
-    box.type = 'checkbox';
-    const text = document.createElement('span');
-    text.textContent = t('approval.always');
-    always.append(box, text);
-    for (const s of scopes) {
-      const chip = document.createElement('code');
-      chip.textContent = scopeLabel(s);
-      chip.title = s;
-      always.append(chip);
-    }
-    actions?.before(always);
-  }
+  // exactly that, one chip per scope; the user may keep only some of them.
+  const pick = scopePick(scopes);
+  if (scopes.length) actions?.before(buildScopePicker(scopes, pick));
   // An optional reason for denying, passed to the model with the denial so it
   // changes course instead of retrying the same thing. Multi-line; ⌘/Ctrl+Enter
   // denies with it.
@@ -972,20 +959,26 @@ function appendApproval(call) {
     if (node.classList.contains('lv-resolved')) return;
     // A denial settles as an error result; an approval runs the call.
     if (decision === 'approve') setToolStatus(findToolNode(call.id), 'running');
-    const remember = decision === 'approve' && !!box?.checked;
+    const kept = decision === 'approve' ? pick.picked() : [];
     const reason = decision === 'deny' ? why.value.trim() : '';
-    // Settled at once; the server's approval_resolved confirms (or corrects:
-    // a click that lost the race to the timeout).
-    settleApproval(node, decision);
+    // Settled at once, saying what it will remember; the server's
+    // approval_resolved confirms (or corrects: a click that lost the race to
+    // the timeout).
+    settleApproval(
+      node,
+      decision,
+      kept.length ? t('approval.remembered', { scopes: scopeList(kept) }) : '',
+    );
     try {
       const res = await api.approve({
         session_id: store.sessionId,
         call_id: call.id,
         decision,
-        remember,
+        remember: kept.length > 0,
+        scopes: kept,
         reason,
       });
-      if (remember && !res.remembered) toast(t('approval.notRemembered'), { type: 'error' });
+      if (kept.length && !res.remembered) toast(t('approval.notRemembered'), { type: 'error' });
     } catch (err) { console.error(err); }
   };
   node.querySelector('.lv-approve').addEventListener('click', () => resolve('approve'));
@@ -1001,12 +994,70 @@ function appendApproval(call) {
 }
 
 /**
- * Freeze a card with which way it went. Idempotent, and the last word wins:
- * the server's `approval_resolved` may correct a click that came too late.
+ * "Always allow in this chat", picked per scope: the checkbox takes them all
+ * (or none), each chip includes or leaves out its own; a chip clicked first
+ * picks just itself. The checkbox mirrors the pick — checked, indeterminate,
+ * empty — and the group's `data-pick` styles the chips to match.
+ * @param {string[]} scopes
+ * @param {ReturnType<typeof scopePick>} pick
+ */
+function buildScopePicker(scopes, pick) {
+  const group = document.createElement('div');
+  group.className = 'lv-approval-always';
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', t('approval.always'));
+  const toggle = document.createElement('label');
+  toggle.className = 'lv-approval-always-toggle';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  const text = document.createElement('span');
+  text.textContent = t('approval.always');
+  toggle.append(box, text);
+  const chips = scopes.map((scope) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'lv-scope';
+    chip.textContent = scopeLabel(scope);
+    chip.title = t('approval.scopeToggle', { scope });
+    chip.addEventListener('click', () => {
+      pick.toggle(scope);
+      sync();
+    });
+    return chip;
+  });
+  const hint = document.createElement('span');
+  hint.className = 'lv-approval-pick-hint';
+  hint.textContent = t('approval.pickHint');
+  box.addEventListener('change', () => {
+    pick.setAll(box.checked);
+    sync();
+  });
+  const sync = () => {
+    const state = pick.state();
+    group.dataset.pick = state;
+    box.checked = state !== 'none';
+    box.indeterminate = state === 'some';
+    chips.forEach((chip, i) => chip.setAttribute('aria-pressed', String(pick.has(scopes[i]))));
+  };
+  group.append(toggle, ...chips);
+  // Leaving one out only means something when there are several.
+  if (scopes.length > 1) group.append(hint);
+  sync();
+  return group;
+}
+
+/**
+ * Freeze a card with which way it went (and, from this tab, what it
+ * remembered). The server's `approval_resolved` has the last word — it may
+ * correct a click that came too late — but repeating the same outcome keeps
+ * the detail.
  * @param {HTMLElement} node
  * @param {import('./approvals.js').ApprovalOutcome} outcome
+ * @param {string} [detail]
  */
-function settleApproval(node, outcome) {
+function settleApproval(node, outcome, detail = '') {
+  if (node.dataset.outcome === outcome) return;
+  node.dataset.outcome = outcome;
   node.classList.add('lv-resolved');
   for (const sel of ['.lv-approval-always', '.lv-approval-reason', '.lv-approval-expiry']) {
     node.querySelector(sel)?.remove();
@@ -1014,7 +1065,14 @@ function settleApproval(node, outcome) {
   const status = document.createElement('span');
   status.className = `lv-approval-status lv-${outcome === 'approve' ? 'approve' : 'deny'}`;
   status.textContent = outcomeText(outcome);
-  node.querySelector('.lv-approval-actions')?.replaceChildren(status);
+  const parts = [status];
+  if (detail) {
+    const more = document.createElement('span');
+    more.className = 'lv-approval-detail';
+    more.textContent = detail;
+    parts.unshift(more);
+  }
+  node.querySelector('.lv-approval-actions')?.replaceChildren(...parts);
 }
 
 /** @param {{ id: string, approved: boolean, cause: 'user' | 'timeout' | 'cancel' }} data */

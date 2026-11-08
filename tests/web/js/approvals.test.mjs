@@ -11,6 +11,8 @@ import {
   cardRegistry,
   outcomeText,
   scopeLabel,
+  scopeList,
+  scopePick,
   splitNote,
 } from '../../../lovia/web/static/js/approvals.js';
 import { setDefaultView } from '../../../lovia/web/static/js/tool-views.js';
@@ -28,6 +30,38 @@ test('scope chips: the command for shell, a verb for paths, else verbatim', () =
   assert.equal(scopeLabel('mail:external'), 'mail:external');
   assert.equal(scopeLabel('shell:'), 'shell:');
   assert.equal(scopeLabel('plain'), 'plain');
+});
+
+test('scope pick: one click takes all, chips leave some out, order is kept', () => {
+  const scopes = ['shell:pwd', 'shell:python', 'shell:git'];
+  const pick = scopePick(scopes);
+  assert.equal(pick.state(), 'none');
+  assert.deepEqual(pick.picked(), []);
+  pick.setAll(true);
+  assert.equal(pick.state(), 'all');
+  pick.toggle('shell:python');
+  assert.equal(pick.state(), 'some');
+  assert.deepEqual(pick.picked(), ['shell:pwd', 'shell:git']);
+  assert.equal(pick.has('shell:python'), false);
+  pick.toggle('shell:python');
+  assert.equal(pick.state(), 'all');
+  pick.setAll(false);
+  assert.equal(pick.state(), 'none');
+});
+
+test('scope pick: a chip clicked first picks just itself; strangers are ignored', () => {
+  const pick = scopePick(['shell:pwd', 'shell:git']);
+  pick.toggle('shell:git');
+  assert.deepEqual(pick.picked(), ['shell:git']);
+  pick.toggle('shell:rm'); // not offered: cannot be picked
+  assert.deepEqual(pick.picked(), ['shell:git']);
+  pick.toggle('shell:git');
+  assert.equal(pick.state(), 'none');
+});
+
+test('picked scopes read as a list', () => {
+  assert.equal(scopeList(['shell:pwd', 'shell:git']), 'pwd and git');
+  assert.equal(scopeList(['read:~/notes']), 'read ~/notes');
 });
 
 test("the model's description is set apart from the arguments that act", () => {

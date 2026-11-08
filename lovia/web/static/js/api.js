@@ -137,7 +137,8 @@ export const api = {
       signal,
     }),
   // Resolve a pending approval. `body`: { session_id, call_id, decision,
-  // remember?, reason? } → { ok, remembered }.
+  // remember?, scopes?, reason? } → { ok, remembered }. `scopes` narrows what
+  // `remember` keeps to some of the request's own.
   approve: (body) =>
     request('/api/chat/approve', {
       method: 'POST',

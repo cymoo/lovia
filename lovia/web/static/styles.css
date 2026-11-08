@@ -2358,9 +2358,20 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 }
 .lv-approval-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   justify-content: flex-end;
+}
+/* Deny and Approve wrap as one, never one per line. */
+.lv-approval-buttons {
+  display: inline-flex;
+  flex: none;
+  gap: 8px;
+  margin-left: auto;
+}
+.lv-approval-actions .lv-btn {
+  white-space: nowrap;
 }
 .lv-approval.lv-resolved {
   opacity: 0.72;
@@ -5361,27 +5372,73 @@ body.lv-files-splitting {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 5px 7px;
+  gap: 5px 6px;
   padding: 2px 2px 0;
   font-size: 12px;
   color: var(--lv-muted);
-  cursor: pointer;
   user-select: none;
+}
+.lv-approval-always-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: 2px;
+  cursor: pointer;
 }
 .lv-approval-always input {
   margin: 0;
   accent-color: var(--lv-accent);
+  cursor: pointer;
 }
-/* One chip per scope: a chained command lists each one it would remember. */
-.lv-approval-always code {
-  padding: 1px 6px;
+/* One chip per scope, each a toggle: picked chips carry the accent, the ones
+   left out are struck through — the row reads as exactly what will be kept.
+   Before any pick (data-pick="none") they are plain, inviting a click. */
+.lv-scope {
+  padding: 1px 7px;
   font-family: var(--lv-mono);
   font-size: 12px;
+  line-height: 1.6;
   color: var(--lv-ink);
   background: var(--lv-surface-2);
   border: 1px solid var(--lv-border);
   border-radius: var(--lv-radius-sm);
   overflow-wrap: anywhere;
+  cursor: pointer;
+  transition:
+    background-color 0.12s var(--lv-ease),
+    border-color 0.12s var(--lv-ease),
+    color 0.12s var(--lv-ease);
+}
+.lv-scope:hover {
+  border-color: color-mix(in srgb, var(--lv-accent) 55%, var(--lv-border));
+}
+.lv-scope:focus-visible {
+  outline: 2px solid var(--lv-accent);
+  outline-offset: 1px;
+}
+.lv-scope[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--lv-accent) 12%, var(--lv-surface));
+  border-color: color-mix(in srgb, var(--lv-accent) 50%, var(--lv-border));
+}
+.lv-approval-always:not([data-pick="none"]) .lv-scope[aria-pressed="false"] {
+  color: var(--lv-muted);
+  background: transparent;
+  border-style: dashed;
+  text-decoration: line-through;
+}
+/* Shown once something is picked: that is when leaving one out makes sense. */
+.lv-approval-pick-hint {
+  display: none;
+  margin-left: 2px;
+  font-size: 11px;
+}
+.lv-approval-always:not([data-pick="none"]) .lv-approval-pick-hint {
+  display: inline;
+}
+/* "Remembering pwd and uname" beside the settled status. */
+.lv-approval-detail {
+  font-size: 12px;
+  color: var(--lv-muted);
 }
 .lv-approval-reason {
   display: block;
@@ -5397,9 +5454,10 @@ body.lv-files-splitting {
   border-radius: var(--lv-radius-sm);
   resize: none; /* grows with its text (chat.js), up to a cap, then scrolls */
 }
-/* "Denied at 16:33 if unanswered" — the left end of the button row. */
+/* "Denied at 16:33 if unanswered" — the left end of the button row; on a
+   narrow card it takes a line of its own rather than squeeze the buttons. */
 .lv-approval-expiry {
-  margin-right: auto;
+  flex: 1 1 12em;
   font-size: 12px;
   color: var(--lv-muted);
 }

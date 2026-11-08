@@ -82,6 +82,8 @@ async def _session_view(
       replay (a live run surfaces compaction over SSE instead).
     """
     store, session = deps.store, deps.session
+    # A run stopped a moment ago is past the live branch but may not be saved.
+    await deps.supervisor.settle(session_id)
 
     live = deps.supervisor.get(session_id)
     if live is not None:

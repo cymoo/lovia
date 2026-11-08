@@ -351,6 +351,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # refresh in that window would reconnect and revive the stopped run.
             if store.checkpointer is not None and run_id:
                 await store.clear_active_run_id(session_id, expected=run_id)
+            # Answer once the stopped chat is saved: a reload after this shows it.
+            await deps.supervisor.settle(session_id)
             return {"ok": True}
         # No live run: still let the user clear a stranded interrupted run so a
         # page reload doesn't trigger an unwanted reconnect.

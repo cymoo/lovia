@@ -17,13 +17,13 @@ pytest.importorskip("fastapi")
 
 import httpx  # noqa: E402
 
-from lovia import Agent, Mailbox, Runner, tool  # noqa: E402
+from lovia import Agent, Mailbox, Runner, events, tool  # noqa: E402
 from lovia.checkpointer import RunHead  # noqa: E402
 from lovia.exceptions import ProviderError  # noqa: E402
-from lovia.messages import Usage  # noqa: E402
+from lovia.messages import AssistantTurn, ToolCall, Usage  # noqa: E402
 from lovia.reliability import RetryPolicy, RunBudget  # noqa: E402
 from lovia.session import TIMING_META_KEY  # noqa: E402
-from lovia.transcript import InputEntry, ToolResultEntry  # noqa: E402
+from lovia.transcript import InputEntry, TextDelta, ToolResultEntry  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
@@ -88,9 +88,9 @@ async def _kill(task) -> None:
 async def _wait_session_entries(store, sid, *, timeout=5.0):
     """Poll until the session holds persisted entries.
 
-    The supervisor's terminal persist runs in the run task's ``finally`` — which
-    completes *after* the cancel endpoint returns and the controller is evicted —
-    so a test can't sync on ``_wait_run(gone=True)`` for it.
+    A failed run's terminal persist runs in the run task's ``finally``, after
+    the controller is evicted — so a test can't sync on ``_wait_run(gone=True)``
+    for it. (A user stop is saved by the time the cancel endpoint returns.)
     """
     for _ in range(int(timeout / 0.02)):
         entries = await store.session.load(sid)
@@ -753,6 +753,162 @@ async def test_cancel_persists_partial_transcript() -> None:
     assert started_at <= timing["started_at"] <= timing["finished_at"]
 
 
+def _said_and_called(content: str, name: str, call_id: str) -> AssistantTurn:
+    """A scripted turn that says something, then requests one tool call."""
+    return AssistantTurn(
+        content=content,
+        tool_calls=[ToolCall(id=call_id, name=name, arguments="{}")],
+        usage=Usage(input_tokens=1, output_tokens=1),
+    )
+
+
+class _GatedMidAnswer:
+    """Streams the first ``shown`` characters of its answer, then waits for
+    ``gate`` before the rest — a stop lands mid-answer."""
+
+    name = "gated"
+    model = None
+    supports_json_schema = False
+
+    def __init__(self, inner: ScriptedProvider, gate: asyncio.Event, shown: int):
+        self.inner, self.gate, self.shown = inner, gate, shown
+        self.calls = inner.calls
+
+    async def stream(self, entries, **kwargs):
+        sent = 0
+        async for delta in self.inner.stream(entries, **kwargs):
+            if isinstance(delta, TextDelta):
+                if sent == self.shown:
+                    await self.gate.wait()
+                sent += 1
+            yield delta
+
+
+@pytest.mark.asyncio
+async def test_stop_is_saved_before_the_stopped_tool_returns() -> None:
+    """A reload right after a stop shows the chat as it was on screen — without
+    waiting for the tool the run was parked in, which may take minutes. The
+    turn it was stopped in is kept: its text and its call, the call answered
+    as interrupted."""
+    release = asyncio.Event()
+
+    @tool
+    async def ping() -> str:
+        """Return immediately."""
+        return "pong"
+
+    provider = ScriptedProvider(
+        [
+            call("ping", {}, call_id="c1"),
+            _said_and_called("waiting now", "block", "c2"),
+            text("end"),
+        ]
+    )
+    agent = Agent(name="bot", model=provider, tools=[ping, _blocking_tool(release)])
+    store = ChatStore.in_memory()
+    async with _client(_app(agent, store=store)) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_calls(provider, 2)
+        await _wait_run(ac, "s1")  # parked in block
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        detail = (await ac.get("/api/sessions/s1")).json()  # block still running
+        release.set()
+        await _kill(task)
+    assert detail["active_run_id"] is None
+    entries = await store.session.load("s1")
+    assert [type(e).__name__ for e in entries] == [
+        "InputEntry",
+        "ToolCallEntry",
+        "ToolResultEntry",
+        "AssistantTextEntry",
+        "ToolCallEntry",
+        "ToolResultEntry",
+    ]
+    assert entries[3].content == "waiting now"
+    stopped = entries[5]
+    assert isinstance(stopped, ToolResultEntry)
+    assert stopped.call_id == "c2" and stopped.is_error
+    assert detail["entries"]  # and the reload drew them
+
+
+@pytest.mark.asyncio
+async def test_message_after_stop_sees_the_stopped_run() -> None:
+    """Sending right after a stop continues the chat on screen: the new run's
+    model sees the stopped one, and the session keeps them in order — even
+    though the stopped run is still waiting on its tool."""
+    release = asyncio.Event()
+    provider = ScriptedProvider(
+        [call("block", {}, call_id="c1"), text("next answer"), text("unused")]
+    )
+    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
+    store = ChatStore.in_memory()
+    async with _client(_app(agent, store=store)) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_calls(provider, 1)
+        await _wait_run(ac, "s1")
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        r = await ac.post(
+            "/api/chat/stream", json={"message": "next", "session_id": "s1"}
+        )
+        assert r.status_code == 200
+        release.set()
+        await _kill(task)
+    seen = [(m.role, m.content) for m in provider.calls[1]]
+    assert seen[0] == ("user", "go") and seen[-1] == ("user", "next")
+    segments = await store.session.segments("s1")
+    inputs = [
+        [e.content for e in s.entries if isinstance(e, InputEntry)] for s in segments
+    ]
+    assert inputs == [["go"], ["next"]]
+
+
+@pytest.mark.asyncio
+async def test_stop_mid_answer_keeps_only_what_streamed() -> None:
+    """A stop mid-answer saves the answer as far as it streamed. The model call
+    is not interrupted (cancellation waits for a safe point), so the run may
+    finish in the background — but its full answer, never shown, doesn't
+    replace or join the saved one, and the run reads as cancelled."""
+    gate = asyncio.Event()
+    provider = _GatedMidAnswer(ScriptedProvider([text("Hello world")]), gate, 5)
+    store = ChatStore.in_memory()
+    app = _app(Agent(name="bot", model=provider), store=store)
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        ctrl = await _live_ctrl(app, "s1")
+        for _ in range(250):  # the first five characters reach the mirror
+            if sum(isinstance(e, events.TextDelta) for e in ctrl.in_flight_buffer) == 5:
+                break
+            await asyncio.sleep(0.02)
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        gate.set()
+        assert ctrl.task is not None
+        await asyncio.wait_for(ctrl.task, timeout=5)  # finished in the background
+        await _kill(task)
+        record = (await ac.get("/api/runs/history")).json()[0]
+    assert ctrl.succeeded
+    assert record["status"] == "cancelled"
+    entries = await store.session.load("s1")
+    assert [(type(e).__name__, e.content) for e in entries] == [
+        ("InputEntry", "go"),
+        ("AssistantTextEntry", "Hello"),
+    ]
+
+
+async def _live_ctrl(app, sid):
+    supervisor = app.state.deps.supervisor
+    for _ in range(250):
+        if (ctrl := supervisor.get(sid)) is not None:
+            return ctrl
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"no live run for {sid}")
+
+
 @pytest.mark.asyncio
 async def test_failed_run_persists_partial_transcript() -> None:
     """A non-resumable failure (non-retryable provider error) folds the run's
@@ -792,16 +948,13 @@ async def test_failed_run_persists_partial_transcript() -> None:
 
 
 @pytest.mark.asyncio
-async def test_persist_partial_trims_dangling_resumed_tool_call() -> None:
+async def test_freeze_answers_dangling_resumed_tool_call() -> None:
     """A *resumed* run seeds its mirror with the checkpoint's entries, which can
-    end on a tool call the restored run had not yet executed. If it's stopped
-    before draining that call, the persisted transcript must not end on an
-    unmatched ``tool_use`` (a provider would reject it on the next turn)."""
-    from lovia.transcript import (
-        AssistantTextEntry,
-        ToolCallEntry,
-        entries_to_messages,
-    )
+    end on a tool call the restored run had not yet executed. Frozen before it
+    drains that call, the saved transcript keeps the call — it was on screen —
+    with an interrupted result, never an unmatched ``tool_use`` (a provider
+    would reject it on the next turn)."""
+    from lovia.transcript import AssistantTextEntry, ToolCallEntry
     from lovia.web.supervisor import RunController
 
     store = ChatStore.in_memory()
@@ -821,19 +974,27 @@ async def test_persist_partial_trims_dangling_resumed_tool_call() -> None:
         source="user",
     )
     # The mirror a resumed-then-stopped run would carry: a pending, unexecuted call.
+    ctrl.run_id = ctrl._mirror_run_id = "run-x"
     ctrl.completed_mirror = [
         InputEntry(role="user", content="go"),
         AssistantTextEntry(content="on it"),
         ToolCallEntry(call_id="c1", name="block", arguments="{}"),
     ]
-    await ctrl._persist_partial("run-x", None)
+    ctrl.freeze()
+    assert ctrl._frozen is not None
+    await ctrl._frozen
 
     entries = await store.session.load("s1")
-    assert entries  # the partial chat survived the stop
-    msgs = entries_to_messages(entries)
-    assert not any(m.tool_calls for m in msgs)  # the dangling call was trimmed
-    assert any(m.role == "user" and m.content == "go" for m in msgs)
-    assert any(m.role == "assistant" and m.content == "on it" for m in msgs)
+    assert [type(e).__name__ for e in entries] == [
+        "InputEntry",
+        "AssistantTextEntry",
+        "ToolCallEntry",
+        "ToolResultEntry",
+    ]
+    result = entries[-1]
+    assert isinstance(result, ToolResultEntry)
+    assert result.call_id == "c1" and result.is_error
+    assert result.output.startswith("Interrupted")
 
 
 @pytest.mark.asyncio
@@ -841,12 +1002,13 @@ async def test_rewind_waits_out_a_cancelled_run_still_winding_down() -> None:
     """Edit-and-resend right after a stop must not race the wind-down.
 
     Stopping is cooperative: a run parked in a tool keeps going until that tool
-    returns, and only its ``finally`` folds the interrupted turn into the
-    Session. A rewind in that window used to map the client's ordinal over a
-    transcript still missing that turn -> 404 for a message plainly on screen
-    (and, had it mapped, the late persist would have re-appended the turn it
-    just cut). The tool here never returns until the test says so, so the
-    rewind can only pass by waiting.
+    returns. A rewind in that window used to map the client's ordinal over a
+    transcript still missing the stopped turn -> 404 for a message plainly on
+    screen. The stop now saves that turn at once, but the rewind still waits
+    the run out: a run that finished in the background would otherwise append
+    itself back once the cut removed the segment that made its write a no-op.
+    The tool here never returns until the test says so, so the rewind can only
+    pass by waiting.
     """
     release = asyncio.Event()
     provider = ScriptedProvider(
@@ -877,7 +1039,9 @@ async def test_rewind_waits_out_a_cancelled_run_still_winding_down() -> None:
         res = await asyncio.wait_for(rewind, timeout=5)
 
     assert res.status_code == 200, res.text
-    assert res.json()["removed"] == 1  # the "two" turn, persisted then cut
+    # The "two" turn, persisted then cut: its input, and the call it was
+    # stopped in with that call's interrupted result.
+    assert res.json()["removed"] == 3
     assert [m["content"] for m in res.json()["entries"]] == ["one", "a1"]
     # And it stays cut: the wind-down had already landed, so nothing appends
     # "two" back underneath the rewind.

@@ -32,9 +32,9 @@ import {
 import {
   approvalHeading,
   approvalOutcome,
-  approvalSubject,
-  cardRegistry,
+  badgeText,
   outcomeText,
+  ranAfter,
   scopeLabel,
   scopeList,
   scopePick,
@@ -580,6 +580,7 @@ function startAssistantTurn(ts) {
   store.body = null;
   store.rawText = '';
   store.toolNodes.clear();
+  store.approvals.clear();
   store.reasoningText = '';
   store.reasoningNode = null;
   store.reasoningStart = 0;
@@ -692,6 +693,9 @@ function appendTool(call) {
     refreshTool(node, true); // a tool view draws into the laid-out card
   }
   store.toolNodes.set(call.id, node);
+  // Its approval was decided before it started: show how it was allowed.
+  const approval = store.approvals.get(call.id);
+  if (approval?.outcome) setApprovalBadge(node, approval);
   store.body = null;
   store.rawText = '';
   scrollDown();
@@ -817,6 +821,7 @@ function resetChatView() {
   store.body = null;
   store.rawText = '';
   store.toolNodes.clear();
+  store.approvals.clear();
   store.reasoningText = '';
   store.reasoningNode = null;
   store.reasoningStart = 0;
@@ -848,45 +853,38 @@ function upsertTodoCard(todos) {
   scrollDown();
 }
 
-// "Always allow" lives on the server: ticking the box on a card remembers the
-// request's own scopes (`shell:git push`, `read:~/notes` — a chained command
-// can need several, remembered together) for this chat, keyed to the agent
-// and workspace it was given under. A later call those scopes cover arrives
-// already approved (`granted: true`) and shows as a note, not a card. The
-// list is reviewed and revoked in the grants dialog below.
+// A call that needs approval shows a card only while the decision is open.
+// Once decided — by this tab, another one, the server's timeout, a stop (the
+// server says which in `approval_resolved`) — the card goes, and the outcome
+// stays as a badge on the call's own tool row: the call is shown once, with
+// how it was allowed. A call that ran gets its row when it starts; a refused
+// one never starts, so its row is drawn at the decision (its error result
+// fills it, as a reloaded chat shows it).
 //
-// Whoever decides — this tab, another one, the server's timeout, a stop — the
-// server says so in `approval_resolved`, which settles the card everywhere.
-const approvalCards = cardRegistry();
+// "Always allow" lives on the server: ticking the box remembers the request's
+// own scopes (`shell:git push`, `read:~/notes` — a chained command can need
+// several) for this chat, keyed to the agent and workspace it was given
+// under. A later call those scopes cover arrives already approved
+// (`granted: true`): no card, an "auto-approved" badge that opens the grants
+// dialog below.
 
 /** @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], granted?: boolean, expires_at?: number | null }} call */
 function appendApproval(call) {
   if (!store.bubble) return;
   const scopes = call.scopes ?? [];
+  // Newest wins: a provider may reuse a call id across turns, and a frame is
+  // always about the latest request under it.
+  store.approvals.set(call.id, { call });
   if (call.granted) {
-    // A quiet record instead of a card — the decision was already made.
-    const note = document.createElement('div');
-    note.className = 'lv-approval-auto';
     const covered = scopes.length ? scopeList(scopes) : call.name;
-    note.append(t('approval.auto', { scope: covered }), ' ');
-    const manage = document.createElement('button');
-    manage.type = 'button';
-    manage.className = 'lv-approval-manage';
-    manage.textContent = t('grants.manage');
-    manage.addEventListener('click', () => showGrants());
-    note.append(manage);
-    appendBubbleContent(store.bubble, note);
-    store.body = null;
-    store.rawText = '';
-    scrollDown();
+    decideApproval(call.id, 'auto', t('approval.autoTitle', { scope: covered }));
     return;
   }
   setToolStatus(findToolNode(call.id), 'awaiting');
   store.emit('tool-awaiting');
   const node = /** @type {HTMLElement} */ (cloneTemplate('tmpl-approval'));
   node.dataset.callId = call.id;
-  node.dataset.tool = call.name;
-  approvalCards.add(call.id, node);
+  store.approvals.get(call.id).card = node;
   // The question leads, in the UI's words; the server's reason (only when
   // something stands out) goes under it; the call itself stays visible below,
   // because a summary can be wrong and the arguments cannot.
@@ -958,16 +956,18 @@ function appendApproval(call) {
 
   /** @param {'approve' | 'deny'} decision */
   const resolve = async (decision) => {
-    if (node.classList.contains('lv-resolved')) return;
-    // A denial settles as an error result; an approval runs the call.
-    if (decision === 'approve') setToolStatus(findToolNode(call.id), 'running');
+    if (!node.isConnected) return; // already decided
     const kept = decision === 'approve' ? pick.picked() : [];
     const reason = decision === 'deny' ? why.value.trim() : '';
-    // Settled at once; the server's approval_resolved confirms (or corrects:
+    // Decided at once; the server's approval_resolved confirms (or corrects:
     // a click that lost the race to the timeout). What was remembered is said
     // only once the server has saved it — a failed save, or another tab that
     // answered first, must not leave a "remembered" behind.
-    settleApproval(node, decision);
+    decideApproval(
+      call.id,
+      decision,
+      reason ? t('approval.deniedWhy', { reason }) : undefined,
+    );
     try {
       const res = await api.approve({
         session_id: store.sessionId,
@@ -979,7 +979,7 @@ function appendApproval(call) {
       });
       if (!kept.length) return;
       if (res.remembered) {
-        noteRemembered(node, t('approval.remembered', { scopes: scopeList(kept) }));
+        noteRemembered(call.id, t('approval.remembered', { scopes: scopeList(kept) }));
       } else {
         toast(t('approval.notRemembered'), { type: 'error' });
       }
@@ -1051,55 +1051,87 @@ function buildScopePicker(scopes, pick) {
 }
 
 /**
- * Fold a decided card into one line — "✓ Approved · Run command" — since the
- * call itself is on screen in its tool row, and repeating it in a big card
- * says everything twice. The server's `approval_resolved` has the last word
- * (it may correct a click that came too late); repeating the same outcome
- * keeps what the line already says.
- * @param {HTMLElement} node
+ * Record how a request went: the card goes, the outcome becomes the badge on
+ * the call's tool row. The server's `approval_resolved` has the last word (it
+ * may correct a click that came too late); repeating the same outcome keeps
+ * what is shown, such as a "remembered" a click added.
+ * @param {string} id
  * @param {import('./approvals.js').ApprovalOutcome} outcome
+ * @param {string} [title] the badge's tooltip; a sentence for the outcome when omitted
  */
-function settleApproval(node, outcome) {
-  if (node.dataset.outcome === outcome) return;
-  node.dataset.outcome = outcome;
-  // A keyboard user who just pressed a button keeps their place.
-  const hadFocus = node.contains(document.activeElement);
-  node.classList.add('lv-resolved');
-  const status = document.createElement('span');
-  status.className = `lv-approval-status lv-${outcome === 'approve' ? 'approve' : 'deny'}`;
-  status.textContent = outcomeText(outcome);
-  const subject = document.createElement('span');
-  subject.className = 'lv-approval-subject';
-  subject.textContent = approvalSubject(node.dataset.tool || '');
-  const line = document.createElement('div');
-  line.className = 'lv-approval-settled';
-  line.append(status, subject);
-  node.replaceChildren(line);
-  node.setAttribute('aria-label', `${status.textContent} ${subject.textContent}`);
-  if (hadFocus) node.focus({ preventScroll: true });
+function decideApproval(id, outcome, title) {
+  const entry = store.approvals.get(id);
+  if (!entry || entry.outcome === outcome) return;
+  entry.outcome = outcome;
+  entry.title = title ?? (ranAfter(outcome) ? '' : outcomeText(outcome));
+  if (entry.card) {
+    // A keyboard user who just pressed a button lands back in the composer.
+    const hadFocus = entry.card.contains(document.activeElement);
+    entry.card.remove();
+    entry.card = null;
+    if (hadFocus) promptEl.focus({ preventScroll: true });
+  }
+  if (outcome !== 'auto') announce(outcomeText(outcome));
+  const row = findToolNode(id);
+  if (row) {
+    setApprovalBadge(row, entry);
+  } else if (!ranAfter(outcome)) {
+    // A refused call never starts, so nothing else draws its row. Its error
+    // result arrives next and replaces this placeholder text.
+    appendTool(entry.call);
+    const drawn = findToolNode(id);
+    if (drawn) setToolResult(drawn, outcomeText(outcome), true, undefined, true);
+  }
+  // A call that ran gets its row when it starts; appendTool adds the badge.
 }
 
 /**
- * "Remembering pwd and uname" at the end of an approved card's line — called
- * once the server has saved the grants, and only while it still reads as
- * approved.
- * @param {HTMLElement} node
+ * "Remembering pwd and uname" as an approved call's badge tooltip — once the
+ * server has saved the grants, and only while the call still reads approved.
+ * @param {string} id
  * @param {string} text
  */
-function noteRemembered(node, text) {
-  if (node.dataset.outcome !== 'approve') return;
-  const more = document.createElement('span');
-  more.className = 'lv-approval-detail';
-  more.textContent = text;
-  node.querySelector('.lv-approval-settled')?.append(more);
+function noteRemembered(id, text) {
+  const entry = store.approvals.get(id);
+  if (entry?.outcome !== 'approve') return;
+  entry.title = text;
+  const row = findToolNode(id);
+  if (row) setApprovalBadge(row, entry);
+}
+
+/**
+ * The approval badge on a tool row's summary, beside its title and before
+ * its hover actions. "Auto-approved" is a button: it opens the grants that
+ * answered the call.
+ * @param {HTMLElement} row
+ * @param {{ outcome?: import('./approvals.js').ApprovalOutcome, title?: string }} entry
+ */
+function setApprovalBadge(row, { outcome, title }) {
+  const summary = row.querySelector('summary');
+  if (!summary || !outcome) return;
+  summary.querySelector(':scope > .lv-tool-approval')?.remove();
+  const badge =
+    outcome === 'auto' ? document.createElement('button') : document.createElement('span');
+  badge.className = `lv-tool-approval lv-${outcome}`;
+  badge.textContent = badgeText(outcome);
+  if (title) badge.title = title;
+  if (badge instanceof HTMLButtonElement) {
+    badge.type = 'button';
+    badge.addEventListener('click', (e) => {
+      e.preventDefault(); // inside <summary>: don't toggle the card
+      e.stopPropagation();
+      showGrants();
+    });
+  }
+  const actions = summary.querySelector(':scope > .lv-tool-open-file, :scope > .lv-tool-source');
+  if (actions) actions.before(badge);
+  else summary.append(badge);
 }
 
 /** @param {{ id: string, approved: boolean, cause: 'user' | 'timeout' | 'cancel' }} data */
 function resolveApproval(data) {
-  const node = approvalCards.take(data.id);
-  if (node) settleApproval(node, approvalOutcome(data));
-  // Approved elsewhere (another tab): the call runs now. A denial settles
-  // with its error result, which follows.
+  decideApproval(data.id, approvalOutcome(data));
+  // Approved elsewhere (another tab): the call runs now.
   if (data.approved) setToolStatus(findToolNode(data.id), 'running');
 }
 
@@ -2003,6 +2035,7 @@ function finalizeCurrentAssistantTurn() {
   store.body = null;
   store.rawText = '';
   store.toolNodes.clear();
+  store.approvals.clear();
   store.reasoningNode = null;
   store.reasoningText = '';
   store.reasoningStart = 0;
@@ -2240,6 +2273,7 @@ function renderHistoryWindow({ stickBottom }) {
   store.body = null;
   store.rawText = '';
   store.toolNodes.clear();
+  store.approvals.clear();
 
   // Results are looked up from the FULL history — a window boundary must not
   // orphan a call from its result.

@@ -337,13 +337,18 @@ itself still runs whole; the pick only decides what later calls skip asking.
 The
 grants are kept on the server, per chat, and tied to the agent and workspace
 root they were given under: a later call they fully cover is approved before
-anyone sees it and shows as a one-line note; a chat rebound to another
+anyone sees it, with no card; a chat rebound to another
 workspace does not reuse them. Grants never apply to a `deny`, and nothing is
-inherited by new chats or subagent tasks. **Manage** on such a note lists the
-chat's grants and lets you revoke one — revoking affects later calls only.
+inherited by new chats or subagent tasks.
 
-Whoever decides — you, another tab, the timeout, a stop — every open view of
-the chat shows the outcome on the card. `lovia web` denies an approval nobody
+The card is there only while the decision is open. Once decided — by you,
+another tab, the timeout or a stop — it goes, and the call's own tool row
+carries the outcome as a badge: **Approved** (hover: what was remembered),
+**Denied** (hover: your reason), **Timed out**, **Stopped**, or
+**Auto-approved** for a call grants answered — click it to list the chat's
+grants and revoke one (revoking affects later calls only). A refused call
+gets its row at once, filled by its error result, as a reloaded chat shows
+it. `lovia web` denies an approval nobody
 answers within ten minutes (the card says when, up front; the model is told
 the user did not answer), so a scheduled or background run never holds a run
 slot indefinitely; `create_app(approval_timeout=...)` sets it for your own

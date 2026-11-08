@@ -1,5 +1,6 @@
-// Approval cards: the words on them. The card itself lives in chat.js (it is
-// woven into the bubble and the composer); what it says is decided here.
+// Approvals: the words on the card and on the badge it leaves. The card
+// itself lives in chat.js (it is woven into the bubble and the composer);
+// what it says is decided here.
 
 import { currentLang, t } from './i18n.js';
 import { toolLabel } from './tool-views.js';
@@ -13,13 +14,6 @@ export function approvalHeading(name) {
   const label = toolLabel(name);
   return label === name ? t('approval.askTool', { name }) : t('approval.ask', { label });
 }
-
-/**
- * What a decided card's one line names: the tool's label ("Run command"),
- * else its name.
- * @param {string} name
- */
-export const approvalSubject = (name) => toolLabel(name);
 
 /**
  * A grant scope as a person reads it: the command for `shell:` (the card
@@ -98,33 +92,6 @@ export function splitNote(args) {
 }
 
 /**
- * The card each pending call id was drawn as. A provider may reuse a call id
- * across turns, so the page can hold two cards under one id: a settling frame
- * is for the newest — never the first a selector happens to find, which would
- * rewrite an old card's record and leave the live one open.
- */
-export function cardRegistry() {
-  /** @type {Map<string, HTMLElement>} */
-  const cards = new Map();
-  return {
-    /** @param {string} id @param {HTMLElement} node */
-    add(id, node) {
-      cards.set(id, node);
-    },
-    /**
-     * The card a settling frame is for, forgotten once returned: null when
-     * none is on the page (another chat is showing; a granted note).
-     * @param {string} id
-     */
-    take(id) {
-      const node = cards.get(id);
-      cards.delete(id);
-      return node?.isConnected ? node : null;
-    },
-  };
-}
-
-/**
  * Scopes as a sentence's list, in the page language ("pwd、uname和git",
  * "pwd, uname, and git").
  * @param {string[]} scopes
@@ -138,10 +105,14 @@ export function scopeList(scopes) {
   }
 }
 
-/** @typedef {'approve' | 'deny' | 'timeout' | 'cancel'} ApprovalOutcome */
+/**
+ * How a call's approval went: decided by someone (`approve` … `cancel`), or
+ * answered by remembered approvals before anyone saw it (`auto`).
+ * @typedef {'approve' | 'deny' | 'timeout' | 'cancel' | 'auto'} ApprovalOutcome
+ */
 
 /**
- * How an `approval_resolved` frame settles the card.
+ * How an `approval_resolved` frame settles a request.
  * @param {{ approved: boolean, cause: 'user' | 'timeout' | 'cancel' }} data
  * @returns {ApprovalOutcome}
  */
@@ -150,13 +121,20 @@ export function approvalOutcome(data) {
   return data.cause === 'user' ? 'deny' : data.cause;
 }
 
-/** @type {Record<ApprovalOutcome, string>} */
+/** @type {Record<ApprovalOutcome, [badge: string, sentence: string]>} */
 const OUTCOME_TEXT = {
-  approve: 'approval.approved',
-  deny: 'approval.denied',
-  timeout: 'approval.timedOut',
-  cancel: 'approval.cancelled',
+  approve: ['approval.badgeApprove', 'approval.approved'],
+  deny: ['approval.badgeDeny', 'approval.denied'],
+  timeout: ['approval.badgeTimeout', 'approval.timedOut'],
+  cancel: ['approval.badgeCancel', 'approval.cancelled'],
+  auto: ['approval.badgeAuto', 'approval.badgeAuto'],
 };
 
-/** @param {ApprovalOutcome} outcome */
-export const outcomeText = (outcome) => t(OUTCOME_TEXT[outcome]);
+/** The badge's word on the tool row ("Approved", "Timed out"). @param {ApprovalOutcome} outcome */
+export const badgeText = (outcome) => t(OUTCOME_TEXT[outcome][0]);
+
+/** The outcome as a sentence, for its tooltip and announcement. @param {ApprovalOutcome} outcome */
+export const outcomeText = (outcome) => t(OUTCOME_TEXT[outcome][1]);
+
+/** Whether the call ran (so its own tool row appears) or was refused. @param {ApprovalOutcome} outcome */
+export const ranAfter = (outcome) => outcome === 'approve' || outcome === 'auto';

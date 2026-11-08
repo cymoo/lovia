@@ -8,8 +8,9 @@ import { test } from 'node:test';
 import {
   approvalHeading,
   approvalOutcome,
-  cardRegistry,
+  badgeText,
   outcomeText,
+  ranAfter,
   scopeLabel,
   scopeList,
   scopePick,
@@ -83,29 +84,20 @@ test("the model's description is set apart from the arguments that act", () => {
   }
 });
 
-test('a reused call id settles the newest card, once', () => {
-  // A provider may reuse an id across turns: the earlier card (already
-  // decided) must keep its record; the frame is for the one still open.
-  const cards = cardRegistry();
-  const first = { isConnected: true };
-  const second = { isConnected: true };
-  cards.add('c1', first);
-  cards.add('c1', second);
-  assert.equal(cards.take('c1'), second);
-  assert.equal(cards.take('c1'), null); // settled: a repeat frame finds nothing
-});
-
-test('a card no longer on the page is not settled', () => {
-  const cards = cardRegistry();
-  cards.add('c1', { isConnected: false }); // another chat is showing now
-  assert.equal(cards.take('c1'), null);
-  assert.equal(cards.take('nope'), null);
-});
-
-test('a frame settles the card by who decided', () => {
+test('a frame settles the request by who decided', () => {
   assert.equal(approvalOutcome({ approved: true, cause: 'user' }), 'approve');
   assert.equal(approvalOutcome({ approved: false, cause: 'user' }), 'deny');
   assert.equal(approvalOutcome({ approved: false, cause: 'timeout' }), 'timeout');
   assert.equal(approvalOutcome({ approved: false, cause: 'cancel' }), 'cancel');
   assert.match(outcomeText('timeout'), /denied automatically/);
+});
+
+test('the badge names the outcome; only a call that ran gets its own row', () => {
+  assert.equal(badgeText('approve'), 'Approved');
+  assert.equal(badgeText('auto'), 'Auto-approved');
+  assert.equal(badgeText('timeout'), 'Timed out');
+  assert.deepEqual(
+    ['approve', 'auto', 'deny', 'timeout', 'cancel'].map(ranAfter),
+    [true, true, false, false, false],
+  );
 });

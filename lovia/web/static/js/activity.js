@@ -22,7 +22,7 @@ import { toolLabel } from './tool-views.js';
  */
 export function isStep(node) {
   const c = node.classList;
-  if (c.contains('lv-reasoning') || c.contains('lv-approval-auto')) return true;
+  if (c.contains('lv-reasoning')) return true;
   return c.contains('lv-tool') && !c.contains('lv-tool--ui') && !node.querySelector('.lv-tool-result-images');
 }
 

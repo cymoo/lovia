@@ -700,6 +700,15 @@ def test_bundles_exist_for_both_host_shells() -> None:
     assert all(r.grant is False and r.ops == {"write"} for r in rules.PROTECTED_CONFIG)
 
 
+def test_read_only_holds_no_command_that_prints_a_named_file() -> None:
+    # GNU `date -f FILE` echoes each line of FILE it cannot parse, and the
+    # attached `-f.env` names no path the guard sees: `date` stays gray.
+    from lovia.workspace import rules
+
+    assert not any(r.pattern == "date" for r in rules.READ_ONLY)
+    assert _opted_in().decide_command("date -f.env").action == "ask"
+
+
 def test_rule_bound_tells_rule_asks_from_default_asks() -> None:
     policy = WorkspacePolicy.coding()
     assert policy.rule_bound(rel=".env", abs_posix="/ws/.env", op="read")

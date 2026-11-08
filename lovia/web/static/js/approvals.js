@@ -15,6 +15,13 @@ export function approvalHeading(name) {
 }
 
 /**
+ * What a decided card's one line names: the tool's label ("Run command"),
+ * else its name.
+ * @param {string} name
+ */
+export const approvalSubject = (name) => toolLabel(name);
+
+/**
  * A grant scope as a person reads it: the command for `shell:` (the card
  * already says it is about commands), "read ~/notes" for a path scope, and
  * anything else — a deployer's own kinds — verbatim.

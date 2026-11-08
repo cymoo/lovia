@@ -30,7 +30,8 @@ from ..tools import (
     tavily_search,
     web_fetch,
 )
-from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
+from ..workspace import DEV_TOOLS, READ_ONLY, LocalWorkspace, Workspace, WorkspaceMode
+from ..workspace.policy import CommandRule
 from .charts import show_chart
 from .config import ModelProfile, SearchConfig, WebConfig, resolve_skills_dirs
 from .html import show_html
@@ -53,6 +54,18 @@ DEFAULT_RETRIES = RetryPolicy().max_attempts - 1
 # reads go through human approval. ``trusted`` (unprompted shell, read
 # anywhere) stays available via --trusted / LOVIA_WORKSPACE_MODE.
 DEFAULT_WORKSPACE_MODE = "coding"
+# The command bundles a ``coding`` workspace runs without asking, by name
+# (--auto-allow / LOVIA_AUTO_ALLOW). Core opts into none; `lovia web` is a
+# coding agent the person running it launched, so inspection that prints no
+# file contents and the project's own test/lint/build tools need no card —
+# a prompt for `ls` or `pytest` is noise that trains people to click
+# Approve. ``none`` restores the core default. The baseline (dangerous
+# commands, credential stores, protected config) applies either way.
+AUTO_ALLOW_BUNDLES: dict[str, tuple[CommandRule, ...]] = {
+    "read-only": READ_ONLY,
+    "dev-tools": DEV_TOOLS,
+}
+DEFAULT_AUTO_ALLOW = "read-only,dev-tools"
 GENERIC_INSTRUCTIONS = (
     "You are a helpful assistant running in the lovia web UI. "
     "Be concise and accurate, and use your tools and skills when they help."
@@ -281,8 +294,27 @@ def resolve_instructions(cli_text: str | None, cli_file: str | None) -> str:
     return GENERIC_INSTRUCTIONS
 
 
+def resolve_auto_allow(cli_value: str | None) -> tuple[str, ...]:
+    """The bundle names ``coding`` runs unprompted: ``--auto-allow`` >
+    ``LOVIA_AUTO_ALLOW`` > the default; ``none`` is the empty choice."""
+    raw = _first(cli_value, os.getenv("LOVIA_AUTO_ALLOW")) or DEFAULT_AUTO_ALLOW
+    names = tuple(dict.fromkeys(n.strip() for n in raw.split(",") if n.strip()))
+    if names == ("none",):
+        return ()
+    unknown = [n for n in names if n not in AUTO_ALLOW_BUNDLES]
+    if unknown or not names:
+        raise UserError(
+            f"invalid --auto-allow value: {raw!r}",
+            hint=f"a comma list of {', '.join(AUTO_ALLOW_BUNDLES)}, or none",
+        )
+    return names
+
+
 def resolve_workspace(
-    cli_dir: str | None, cli_mode: str | None, no_workspace: bool
+    cli_dir: str | None,
+    cli_mode: str | None,
+    no_workspace: bool,
+    auto_allow: str | None = None,
 ) -> LocalWorkspace | None:
     if no_workspace:
         return None
@@ -293,10 +325,17 @@ def resolve_workspace(
             f"invalid workspace mode: {mode!r}",
             hint=f"choose one of: {', '.join(WORKSPACE_MODES)}",
         )
+    # Parsed in every mode, so a typo fails at boot rather than on a switch
+    # to coding; only coding uses it (readonly has no shell, trusted asks
+    # for nothing).
+    bundles = resolve_auto_allow(auto_allow)
     path = Path(root)
     if not path.is_dir():
         raise UserError(f"workspace directory not found: {path}")
-    return Workspace.local(str(path), mode=cast(WorkspaceMode, mode))
+    if mode != "coding":
+        return Workspace.local(str(path), mode=cast(WorkspaceMode, mode))
+    rules = tuple(rule for name in bundles for rule in AUTO_ALLOW_BUNDLES[name])
+    return Workspace.local(str(path), mode="coding", command_rules=rules)
 
 
 def build_default_agent(
@@ -327,7 +366,9 @@ def build_default_agent(
     memory = resolve_memory(args.memory_dir, args.no_memory)
     if memory is not None:
         plugins.append(memory)
-    workspace = resolve_workspace(args.workspace, _mode_flag(args), args.no_workspace)
+    workspace = resolve_workspace(
+        args.workspace, _mode_flag(args), args.no_workspace, args.auto_allow
+    )
     tools = resolve_tools(config.search)
     vision_tool = resolve_vision_tool(provider, workspace, config.vision_profile())
     if vision_tool is not None:

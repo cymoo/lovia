@@ -65,7 +65,8 @@ exclusive with the shorthand knobs).
 
 `coding` vouches for **no command** itself: the path guard is lexical and
 cannot audit a program's options, so which commands run unprompted is a
-choice — the deployer's, by opting in a bundle, or the user's, per chat, on
+choice — the deployer's, by opting in a bundle (`lovia web` opts into
+`READ_ONLY` + `DEV_TOOLS`; `--auto-allow` changes that), or the user's, per chat, on
 the approval card ("always allow `ls`"; the scope offered for an unlisted
 command is its command word, and a chained command offers one per command). The bundles live in `lovia.workspace.rules`:
 `READ_ONLY` (`ls`, `du`, `stat`, `tree`, `git status`,

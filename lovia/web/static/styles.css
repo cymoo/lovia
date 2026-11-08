@@ -2373,13 +2373,32 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 .lv-approval-actions .lv-btn {
   white-space: nowrap;
 }
+/* Decided: one quiet line — the call itself is in its tool row. */
 .lv-approval.lv-resolved {
-  opacity: 0.72;
-  pointer-events: none;
+  margin: 8px 0;
+  padding: 7px 14px;
+  border-color: var(--lv-border);
+  box-shadow: none;
+}
+.lv-approval-settled {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 0;
+  font-size: 12px;
+  color: var(--lv-muted);
+}
+/* " · " between the line's parts, wrapping cleanly on a narrow card. */
+.lv-approval-settled > * + *::before {
+  content: "·";
+  margin: 0 7px;
 }
 .lv-approval-status {
   font-size: 13px;
   font-weight: 600;
+}
+.lv-approval-settled .lv-approval-status {
+  font-size: 12px;
 }
 .lv-approval-status.lv-approve {
   color: var(--lv-ok);

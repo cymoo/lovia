@@ -303,6 +303,7 @@ flag, environment variable, then default.
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent (or: an Agent, mapping, or app of your own) |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
 | `--workspace`, `--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`, `LOVIA_WORKSPACE_MODE` | `.` in coding mode |
+| `--auto-allow` | `LOVIA_AUTO_ALLOW` | `read-only,dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, … ; `pytest`, `ruff`, …); `none` asks for every command no rule allows |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
 | `--max-tokens` | `LOVIA_MAX_TOKENS` | The provider's; a `max_tokens` in a profile's extra request fields wins |

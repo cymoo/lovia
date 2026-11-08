@@ -32,6 +32,33 @@ export function scopeLabel(scope) {
   return scope;
 }
 
+/**
+ * The card each pending call id was drawn as. A provider may reuse a call id
+ * across turns, so the page can hold two cards under one id: a settling frame
+ * is for the newest — never the first a selector happens to find, which would
+ * rewrite an old card's record and leave the live one open.
+ */
+export function cardRegistry() {
+  /** @type {Map<string, HTMLElement>} */
+  const cards = new Map();
+  return {
+    /** @param {string} id @param {HTMLElement} node */
+    add(id, node) {
+      cards.set(id, node);
+    },
+    /**
+     * The card a settling frame is for, forgotten once returned: null when
+     * none is on the page (another chat is showing; a granted note).
+     * @param {string} id
+     */
+    take(id) {
+      const node = cards.get(id);
+      cards.delete(id);
+      return node?.isConnected ? node : null;
+    },
+  };
+}
+
 /** @typedef {'approve' | 'deny' | 'timeout' | 'cancel'} ApprovalOutcome */
 
 /**

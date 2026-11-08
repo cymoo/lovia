@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import {
   approvalHeading,
   approvalOutcome,
+  cardRegistry,
   outcomeText,
   scopeLabel,
 } from '../../../lovia/web/static/js/approvals.js';
@@ -26,6 +27,25 @@ test('scope chips: the command for shell, a verb for paths, else verbatim', () =
   assert.equal(scopeLabel('mail:external'), 'mail:external');
   assert.equal(scopeLabel('shell:'), 'shell:');
   assert.equal(scopeLabel('plain'), 'plain');
+});
+
+test('a reused call id settles the newest card, once', () => {
+  // A provider may reuse an id across turns: the earlier card (already
+  // decided) must keep its record; the frame is for the one still open.
+  const cards = cardRegistry();
+  const first = { isConnected: true };
+  const second = { isConnected: true };
+  cards.add('c1', first);
+  cards.add('c1', second);
+  assert.equal(cards.take('c1'), second);
+  assert.equal(cards.take('c1'), null); // settled: a repeat frame finds nothing
+});
+
+test('a card no longer on the page is not settled', () => {
+  const cards = cardRegistry();
+  cards.add('c1', { isConnected: false }); // another chat is showing now
+  assert.equal(cards.take('c1'), null);
+  assert.equal(cards.take('nope'), null);
 });
 
 test('a frame settles the card by who decided', () => {

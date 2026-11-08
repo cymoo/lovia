@@ -29,7 +29,13 @@ import {
   setToolStatus,
   toolPath,
 } from './tools.js';
-import { approvalHeading, approvalOutcome, outcomeText, scopeLabel } from './approvals.js';
+import {
+  approvalHeading,
+  approvalOutcome,
+  cardRegistry,
+  outcomeText,
+  scopeLabel,
+} from './approvals.js';
 import { BlockStream } from './stream-blocks.js';
 import { createSendQueue } from './send-queue.js';
 import { isStep, placeStep, removeStep, sealActivity } from './activity.js';
@@ -847,6 +853,7 @@ function upsertTodoCard(todos) {
 //
 // Whoever decides — this tab, another one, the server's timeout, a stop — the
 // server says so in `approval_resolved`, which settles the card everywhere.
+const approvalCards = cardRegistry();
 
 /** @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], granted?: boolean, expires_at?: number | null }} call */
 function appendApproval(call) {
@@ -874,6 +881,7 @@ function appendApproval(call) {
   store.emit('tool-awaiting');
   const node = /** @type {HTMLElement} */ (cloneTemplate('tmpl-approval'));
   node.dataset.callId = call.id;
+  approvalCards.add(call.id, node);
   // The question leads, in the UI's words; the server's reason (only when
   // something stands out) goes under it; the call itself stays visible below,
   // because a summary can be wrong and the arguments cannot.
@@ -1000,9 +1008,7 @@ function settleApproval(node, outcome) {
 
 /** @param {{ id: string, approved: boolean, cause: 'user' | 'timeout' | 'cancel' }} data */
 function resolveApproval(data) {
-  const node = /** @type {HTMLElement | null} */ (
-    document.querySelector(`.lv-approval[data-call-id="${CSS.escape(data.id)}"]`)
-  );
+  const node = approvalCards.take(data.id);
   if (node) settleApproval(node, approvalOutcome(data));
   // Approved elsewhere (another tab): the call runs now. A denial settles
   // with its error result, which follows.

@@ -64,7 +64,8 @@ function makeGroup(open) {
   group.open = open;
   const summary = document.createElement('summary');
   summary.innerHTML =
-    `<span class="lv-activity-icon">${icon('layers', { size: 14 })}</span>` +
+    // Shown only when a step failed (styles.css); otherwise the line is text.
+    `<span class="lv-activity-icon">${icon('triangle-alert', { size: 14 })}</span>` +
     '<span class="lv-activity-label"></span>';
   // A click or keypress on the summary is the user's say; programmatic
   // open/close (sealActivity) must not override it.

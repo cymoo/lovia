@@ -426,7 +426,7 @@ function addEditButton(node) {
   btn.className = 'lv-btn-edit';
   btn.title = t('chat.edit');
   btn.setAttribute('aria-label', t('chat.edit'));
-  btn.innerHTML = icon('pencil', { size: 13 });
+  btn.innerHTML = icon('pencil', { size: 15 });
   btn.addEventListener('click', () => startEditUserTurn(node));
   footer.appendChild(btn);
 }
@@ -512,7 +512,7 @@ function updateRegenButton() {
   btn.className = 'lv-btn-regen';
   btn.title = t('chat.regenerate');
   btn.setAttribute('aria-label', t('chat.regenerate'));
-  btn.innerHTML = icon('refresh-cw', { size: 13 });
+  btn.innerHTML = icon('refresh-cw', { size: 15 });
   btn.addEventListener('click', () => {
     if (store.streaming) return;
     const text = lastUser.querySelector('.lv-body')?.textContent?.trim();
@@ -1858,10 +1858,10 @@ function addCopyButton(footer, markdown) {
   btn.addEventListener('click', async () => {
     const ok = await copyToClipboard(markdown);
     if (ok) {
-      btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+      btn.innerHTML = icon('check', { size: 15 });
       btn.classList.add('lv-copied');
       setTimeout(() => {
-        btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+        btn.innerHTML = icon('copy', { size: 15 });
         btn.classList.remove('lv-copied');
       }, 1500);
     }
@@ -1952,7 +1952,7 @@ function renderBranchButton(turn, footer) {
   btn.className = 'lv-btn-branch';
   btn.title = t('chat.branch');
   btn.setAttribute('aria-label', t('chat.branch'));
-  btn.innerHTML = icon('git-branch', { size: 13 });
+  btn.innerHTML = icon('git-branch', { size: 15 });
   btn.addEventListener('click', async () => {
     const source = store.sessionId;
     const cut = branchCut(turn); // asked again: the turns may have moved on

@@ -84,7 +84,7 @@ function ask(id, fn, msg, fallback) {
  */
 function setGlyph(el, action) {
   const glyph = action.icon ?? '';
-  if (Object.hasOwn(ICONS, glyph)) el.innerHTML = icon(glyph, { size: 13 });
+  if (Object.hasOwn(ICONS, glyph)) el.innerHTML = icon(glyph, { size: 15 });
   else if (glyph.trimStart().startsWith('<svg')) el.innerHTML = glyph;
   else {
     el.textContent = glyph || action.label;

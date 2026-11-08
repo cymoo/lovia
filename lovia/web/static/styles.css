@@ -1754,9 +1754,9 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   justify-content: center;
   margin: 0;
   padding: 2px;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--lv-radius-xs);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--lv-radius-sm);
   color: var(--lv-muted);
   background: transparent;
   border: 0;
@@ -1850,13 +1850,14 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 [data-theme="dark"] .lv-activity > summary:hover {
   background: var(--lv-surface-3);
 }
+/* The summary is plain text; its one glyph is the alert a failed step raises. */
 .lv-activity-icon {
-  display: inline-flex;
+  display: none;
   flex-shrink: 0;
-  color: var(--lv-muted-2);
+  color: var(--lv-danger);
 }
 .lv-activity:has(.lv-tool.lv-error) .lv-activity-icon {
-  color: var(--lv-danger);
+  display: inline-flex;
 }
 .lv-activity-label {
   flex: 1;
@@ -5719,9 +5720,9 @@ body.lv-files-splitting {
   justify-content: center;
   margin: 0;
   padding: 2px;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--lv-radius-xs);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--lv-radius-sm);
   color: var(--lv-muted);
   background: transparent;
   border: 0;
@@ -5781,9 +5782,9 @@ body.lv-files-splitting {
   justify-content: center;
   margin: 0;
   padding: 2px;
-  min-width: 24px;
-  height: 24px;
-  border-radius: var(--lv-radius-xs);
+  min-width: 28px;
+  height: 28px;
+  border-radius: var(--lv-radius-sm);
   color: var(--lv-muted);
   background: transparent;
   border: 0;

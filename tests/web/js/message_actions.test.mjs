@@ -91,7 +91,7 @@ test('the glyph: a built-in icon, SVG markup, or text (the label by default)', (
     registerMessageAction('d', { label: 'Flag', run() {} }),
   ];
   const [a, b, c, d] = messageActionButtons(() => msg());
-  assert.match(a.innerHTML, /^<svg[^>]*width="13"/);
+  assert.match(a.innerHTML, /^<svg[^>]*width="15"/);
   assert.equal(b.innerHTML, '<svg viewBox="0 0 1 1"></svg>');
   assert.equal(c.textContent, '👍');
   assert.equal(c.innerHTML, '');

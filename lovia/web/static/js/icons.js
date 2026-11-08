@@ -76,7 +76,7 @@ const PATHS = {
  * @param {{ size?: number, stroke?: number, cls?: string }} [opts]
  * @returns {string}
  */
-export function icon(name, { size = 18, stroke = 2, cls = '' } = {}) {
+export function icon(name, { size = 18, stroke = 1.75, cls = '' } = {}) {
   const inner = PATHS[name] || '';
   const klass = cls ? ` class="${cls}"` : '';
   return (

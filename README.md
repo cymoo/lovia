@@ -420,7 +420,8 @@ offers both at once), and under every mode a baseline
 denies the dangerous (`git push --force`, `rm -rf /`), keeps credential
 stores off-limits and asks before writing `.git` or CI configuration. To run
 inspection and dev tools unprompted, opt in: `command_rules=READ_ONLY +
-DEV_TOOLS` from `lovia.workspace.rules`.
+DEV_TOOLS` from `lovia.workspace.rules` — `lovia web` does, by default
+(`--auto-allow none` to ask for every command).
 
 Shell commands inherit a minimal environment, including Windows system,
 shell, temporary-directory, and user-profile variables so sockets and home

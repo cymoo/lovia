@@ -269,6 +269,45 @@ def test_resolve_workspace_mode_from_env(
     assert ws.policy.allow_shell is False
 
 
+def test_coding_auto_allows_inspection_and_dev_tools_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("LOVIA_AUTO_ALLOW", raising=False)
+    ws = builder.resolve_workspace(str(tmp_path), None, no_workspace=False)
+    assert ws is not None
+    for cmd in ("ls", "pwd", "echo hi", "git status", "pytest -q", "ruff check ."):
+        assert ws.policy.decide_command(cmd).action == "allow", cmd
+    # Everything else still asks, and the baseline still bites.
+    assert ws.policy.decide_command("python app.py").action == "ask"
+    assert ws.policy.decide_command("git push origin main").action == "ask"
+    assert ws.policy.decide_command("git push --force").action == "deny"
+
+
+def test_auto_allow_flag_and_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = str(tmp_path)
+    none = builder.resolve_workspace(root, None, False, auto_allow="none")
+    assert none is not None and none.policy.decide_command("ls").action == "ask"
+    only = builder.resolve_workspace(root, None, False, auto_allow=" read-only ")
+    assert only is not None
+    assert only.policy.decide_command("ls").action == "allow"
+    assert only.policy.decide_command("pytest").action == "ask"
+    monkeypatch.setenv("LOVIA_AUTO_ALLOW", "dev-tools")
+    env = builder.resolve_workspace(root, None, False)
+    assert env is not None and env.policy.decide_command("ls").action == "ask"
+    assert env.policy.decide_command("pytest").action == "allow"
+    # The flag beats the env.
+    assert builder.resolve_auto_allow("read-only") == ("read-only",)
+
+
+@pytest.mark.parametrize("bad", ["bogus", "read-only,cat", "none,read-only", ","])
+def test_auto_allow_rejects_unknown_bundles(tmp_path: Path, bad: str) -> None:
+    # Checked in every mode: a typo fails at boot, not on a later switch.
+    with pytest.raises(UserError, match="invalid --auto-allow"):
+        builder.resolve_workspace(str(tmp_path), "readonly", False, auto_allow=bad)
+
+
 def test_resolve_workspace_invalid_mode(tmp_path: Path) -> None:
     with pytest.raises(UserError, match="invalid workspace mode"):
         builder.resolve_workspace(str(tmp_path), "bogus", no_workspace=False)

@@ -49,6 +49,8 @@ from fastapi import FastAPI  # after .app: its import names a missing [web] extr
 from .api import RouterDeps
 from .auth import is_loopback
 from .builder import (
+    AUTO_ALLOW_BUNDLES,
+    DEFAULT_AUTO_ALLOW,
     DEFAULT_MAX_TURNS,
     DEFAULT_MEMORY_DIR,
     DEFAULT_RETRIES,
@@ -56,6 +58,7 @@ from .builder import (
     INSTRUCTIONS_FILES,
     _first,
     _mode_flag,
+    resolve_auto_allow,
     resolve_followups,
     resolve_max_retries,
     resolve_max_turns,
@@ -205,6 +208,13 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     ws.add_argument(
         "--no-workspace", action="store_true", help="no filesystem/shell workspace"
     )
+    agent.add_argument(
+        "--auto-allow",
+        metavar="BUNDLES",
+        help="command bundles coding mode runs without asking: a comma list of "
+        f"{', '.join(AUTO_ALLOW_BUNDLES)}, or none (env LOVIA_AUTO_ALLOW, "
+        f"default {DEFAULT_AUTO_ALLOW})",
+    )
 
     server = p.add_argument_group("server")
     server.add_argument(
@@ -326,6 +336,7 @@ def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
         ("--readonly", args.readonly),
         ("--trusted", args.trusted),
         ("--no-workspace", args.no_workspace),
+        ("--auto-allow", args.auto_allow is not None),
         ("--instructions", args.instructions is not None),
         ("--instructions-file", args.instructions_file is not None),
         ("--max-tokens", args.max_tokens is not None),
@@ -386,6 +397,10 @@ def _workspace_desc(args: argparse.Namespace, workspace: object) -> str:
         or DEFAULT_WORKSPACE_MODE
     )
     root = getattr(workspace, "root", ".")
+    if mode == "coding":
+        # Already validated when the workspace was built.
+        allowed = ", ".join(resolve_auto_allow(args.auto_allow)) or "none"
+        mode = f"coding, auto-allow: {allowed}"
     return f"{Path(root).resolve()} ({mode})"
 
 

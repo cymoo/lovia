@@ -32,6 +32,7 @@ import {
 import {
   approvalHeading,
   approvalOutcome,
+  approvalSubject,
   cardRegistry,
   outcomeText,
   scopeLabel,
@@ -884,6 +885,7 @@ function appendApproval(call) {
   store.emit('tool-awaiting');
   const node = /** @type {HTMLElement} */ (cloneTemplate('tmpl-approval'));
   node.dataset.callId = call.id;
+  node.dataset.tool = call.name;
   approvalCards.add(call.id, node);
   // The question leads, in the UI's words; the server's reason (only when
   // something stands out) goes under it; the call itself stays visible below,
@@ -1049,28 +1051,37 @@ function buildScopePicker(scopes, pick) {
 }
 
 /**
- * Freeze a card with which way it went. The server's `approval_resolved` has
- * the last word — it may correct a click that came too late — but repeating
- * the same outcome keeps what the card already says.
+ * Fold a decided card into one line — "✓ Approved · Run command" — since the
+ * call itself is on screen in its tool row, and repeating it in a big card
+ * says everything twice. The server's `approval_resolved` has the last word
+ * (it may correct a click that came too late); repeating the same outcome
+ * keeps what the line already says.
  * @param {HTMLElement} node
  * @param {import('./approvals.js').ApprovalOutcome} outcome
  */
 function settleApproval(node, outcome) {
   if (node.dataset.outcome === outcome) return;
   node.dataset.outcome = outcome;
+  // A keyboard user who just pressed a button keeps their place.
+  const hadFocus = node.contains(document.activeElement);
   node.classList.add('lv-resolved');
-  for (const sel of ['.lv-approval-always', '.lv-approval-reason', '.lv-approval-expiry']) {
-    node.querySelector(sel)?.remove();
-  }
   const status = document.createElement('span');
   status.className = `lv-approval-status lv-${outcome === 'approve' ? 'approve' : 'deny'}`;
   status.textContent = outcomeText(outcome);
-  node.querySelector('.lv-approval-actions')?.replaceChildren(status);
+  const subject = document.createElement('span');
+  subject.className = 'lv-approval-subject';
+  subject.textContent = approvalSubject(node.dataset.tool || '');
+  const line = document.createElement('div');
+  line.className = 'lv-approval-settled';
+  line.append(status, subject);
+  node.replaceChildren(line);
+  node.setAttribute('aria-label', `${status.textContent} ${subject.textContent}`);
+  if (hadFocus) node.focus({ preventScroll: true });
 }
 
 /**
- * "Remembering pwd and uname" beside an approved card's status — called once
- * the server has saved the grants, and only while the card still reads as
+ * "Remembering pwd and uname" at the end of an approved card's line — called
+ * once the server has saved the grants, and only while it still reads as
  * approved.
  * @param {HTMLElement} node
  * @param {string} text
@@ -1080,7 +1091,7 @@ function noteRemembered(node, text) {
   const more = document.createElement('span');
   more.className = 'lv-approval-detail';
   more.textContent = text;
-  node.querySelector('.lv-approval-status')?.before(more);
+  node.querySelector('.lv-approval-settled')?.append(more);
 }
 
 /** @param {{ id: string, approved: boolean, cause: 'user' | 'timeout' | 'cancel' }} data */

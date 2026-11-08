@@ -68,7 +68,9 @@ READ_ONLY_POSIX: tuple[CommandRule, ...] = tuple(
         "stat",
         "du",
         "df",
-        "date",
+        # Not `date`: GNU `date -f FILE` reads a file and echoes each line
+        # it cannot parse — `-f.env` escapes the guard (the `now` tool tells
+        # the time).
         "sleep",
         "test",
         "tree",

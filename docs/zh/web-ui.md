@@ -233,6 +233,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent（或使用自己的 Agent、映射或应用） |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
 | `--workspace`，`--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`、`LOVIA_WORKSPACE_MODE` | `.`（coding 模式） |
+| `--auto-allow` | `LOVIA_AUTO_ALLOW` | `read-only,dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；`none` 表示没有规则放行的命令一律询问 |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | 若存在则使用 `AGENTS.md` |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
 | `--max-tokens` | `LOVIA_MAX_TOKENS` | 沿用 Provider 的默认值；模型配置“额外请求参数”里的 `max_tokens` 优先 |

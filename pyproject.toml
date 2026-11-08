@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lovia"
-version = "0.9.143"
+version = "0.9.144"
 description = "A lightweight and elegant Agent framework"
 readme = "README.md"
 license = { text = "MIT" }

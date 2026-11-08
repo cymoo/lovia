@@ -1918,7 +1918,7 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   background: var(--lv-border);
 }
 /* Specific enough to beat the card rules below, the themed ones included. */
-.lv-activity > .lv-activity-steps > :is(.lv-reasoning, .lv-tool, .lv-approval-auto) {
+.lv-activity > .lv-activity-steps > :is(.lv-reasoning, .lv-tool) {
   position: relative;
   margin: 0;
   border: 0;
@@ -1928,9 +1928,6 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 }
 .lv-activity > .lv-activity-steps > :is(.lv-reasoning, .lv-tool) > summary {
   min-height: 32px;
-  padding: 6px 14px 6px var(--lv-step-indent);
-}
-.lv-activity > .lv-activity-steps > .lv-approval-auto {
   padding: 6px 14px 6px var(--lv-step-indent);
 }
 /* A thinking row reads like the tool rows beside it, not as a section label. */
@@ -1950,7 +1947,7 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   margin-left: var(--lv-step-indent);
   margin-right: 14px;
 }
-.lv-activity-steps > :is(.lv-reasoning, .lv-tool, .lv-approval-auto)::before {
+.lv-activity-steps > :is(.lv-reasoning, .lv-tool)::before {
   content: "";
   position: absolute;
   z-index: 1;
@@ -2312,9 +2309,6 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   background: var(--lv-warn);
   animation: lv-run-pulse 1.6s var(--lv-ease) infinite;
 }
-.lv-approval.lv-resolved .lv-approval-head::before {
-  animation: none;
-}
 /* Focused on arrival (never its Approve button): only a keyboard user needs to see it. */
 .lv-approval:focus {
   outline: none;
@@ -2373,38 +2367,38 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 .lv-approval-actions .lv-btn {
   white-space: nowrap;
 }
-/* Decided: one quiet line — the call itself is in its tool row. */
-.lv-approval.lv-resolved {
-  margin: 8px 0;
-  padding: 7px 14px;
-  border-color: var(--lv-border);
-  box-shadow: none;
+/* How a call's approval went, on its tool row — a quiet pill beside the
+   title; the card that asked is gone once decided. */
+.lv-tool-approval {
+  flex: none;
+  padding: 0 7px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  white-space: nowrap;
 }
-.lv-approval-settled {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 0;
-  font-size: 12px;
-  color: var(--lv-muted);
-}
-/* " · " between the line's parts, wrapping cleanly on a narrow card. */
-.lv-approval-settled > * + *::before {
-  content: "·";
-  margin: 0 7px;
-}
-.lv-approval-status {
-  font-size: 13px;
-  font-weight: 600;
-}
-.lv-approval-settled .lv-approval-status {
-  font-size: 12px;
-}
-.lv-approval-status.lv-approve {
+.lv-tool-approval.lv-approve,
+.lv-tool-approval.lv-auto {
   color: var(--lv-ok);
+  background: color-mix(in srgb, var(--lv-ok) 10%, transparent);
 }
-.lv-approval-status.lv-deny {
+.lv-tool-approval.lv-deny,
+.lv-tool-approval.lv-timeout,
+.lv-tool-approval.lv-cancel {
   color: var(--lv-danger);
+  background: color-mix(in srgb, var(--lv-danger) 9%, transparent);
+}
+button.lv-tool-approval {
+  cursor: pointer;
+}
+button.lv-tool-approval:hover {
+  border-color: color-mix(in srgb, var(--lv-ok) 45%, transparent);
+}
+button.lv-tool-approval:focus-visible {
+  outline: 2px solid var(--lv-accent);
+  outline-offset: 1px;
 }
 
 /* ---- ask_human question card ----------------------------------------------------- */
@@ -5454,11 +5448,6 @@ body.lv-files-splitting {
 .lv-approval-always:not([data-pick="none"]) .lv-approval-pick-hint {
   display: inline;
 }
-/* "Remembering pwd and uname" beside the settled status. */
-.lv-approval-detail {
-  font-size: 12px;
-  color: var(--lv-muted);
-}
 .lv-approval-reason {
   display: block;
   width: 100%;
@@ -5483,22 +5472,6 @@ body.lv-files-splitting {
 .lv-approval-reason:focus {
   outline: none;
   border-color: var(--lv-accent);
-}
-.lv-approval-auto {
-  margin: 8px 0;
-  font-size: 12px;
-  color: var(--lv-muted);
-}
-.lv-approval-manage {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  font-size: 12px;
-  color: var(--lv-accent);
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 /* ---- Grants dialog ("Allowed in this chat") ---------------------------------------------------------- */

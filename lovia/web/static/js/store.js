@@ -46,6 +46,11 @@ export const store = {
   body: null,
   rawText: "",
   toolNodes: new Map(),
+  // Approval requests of the shown chat by call id: the call, its pending
+  // card, and how it was decided — shown as a badge on the call's tool row,
+  // which may only appear later (a call runs after its approval). Cleared
+  // with toolNodes: call ids repeat across chats.
+  approvals: new Map(),
   reasoningText: "",
   reasoningNode: null,
   reasoningStart: 0,

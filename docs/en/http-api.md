@@ -156,7 +156,7 @@ normalizes all three.
 | `POST /api/chat` | one **blocking** turn → `{output, session_id, usage}`: a supervised Run, waited for ([details](#blocking-turns)) |
 | `POST /api/chat/stream` | **SSE**: start a run, or attach to the session's live run (injecting the new message) |
 | `POST /api/chat/reconnect?session_id=` | **SSE**: re-attach after refresh, or resume an interrupted checkpoint |
-| `POST /api/chat/approve` | resolve a pending approval: `{session_id, call_id, decision, remember?, reason?}` → `{ok, remembered}`. `remember` (approve only) also saves an "always allow" grant for the request's own `scope` in this chat; `reason` (deny only) reaches the model. The grant is written before the run wakes, so a repeat call in that scope never asks meanwhile; `remembered` is false when the request had no scope or saving failed (the approval still stands) |
+| `POST /api/chat/approve` | resolve a pending approval: `{session_id, call_id, decision, remember?, reason?}` → `{ok, remembered}`. `remember` (approve only) also saves an "always allow" grant for each of the request's own `scopes` in this chat; `reason` (deny only) reaches the model. The grants are written before the run wakes, so a repeat call in those scopes never asks meanwhile; `remembered` is false when the request had no scopes or saving failed (the approval still stands) |
 | `POST /api/chat/cancel?session_id=` | stop the live run (completed turns are kept) |
 | `POST /api/chat/inject` / `uninject` | queue / withdraw a [steering message](cancellation.md#steering-a-live-run) for the live run |
 | `GET /api/sessions?q=&limit=&offset=` | list / search chats (pinned first, paged); `DELETE` clears all |
@@ -257,7 +257,8 @@ of `event:` / `data:` pairs: the Runner's
 | `tool_call` | `{id, name, arguments}` — `arguments` is the raw JSON string |
 | `tool_result` | `{id, name, result, is_error, images?}` — `images` lists `{index, mime_type}` stubs served by `GET /api/sessions/{id}/tool-images/{call_id}/{index}` |
 | `todo` | `{call_id, name, todos}` — a structured todo update, in place of that call's `tool_result` |
-| `approval_required` | `{id, name, arguments, reason, scope, granted}` → answer via `POST /api/chat/approve`. `reason` says why the call asks; `scope` is what "always allow" would cover (`null` = don't offer it); `granted` is true when a remembered approval already answered it — show a note, not a card |
+| `approval_required` | `{id, name, arguments, reason, scopes, granted, expires_at}` → answer via `POST /api/chat/approve`. `reason` says why the call asks (empty when nothing stands out beyond "not pre-approved"); `scopes` is what "always allow" would cover — every entry, remembered together (`[]` = don't offer it); `granted` is true when remembered approvals already answered it — show a note, not a card; `expires_at` (epoch seconds, `null` = never) is when an unanswered request is denied |
+| `approval_resolved` | `{id, approved, cause}` — the request `id` was settled: `cause` is `user` (an answer from any tab), `timeout` (no answer by `expires_at`) or `cancel` (the run was stopped). Sent to every attached client and replayed with the turn, so a card never stays open once decided |
 | `handoff` | `{from, to}` |
 | `turn_started` | `{turn, agent}` |
 | `retrying` | `{attempt, max_attempts, delay, message}` — the model call failed transiently; attempt `attempt + 1` follows in `delay` seconds |

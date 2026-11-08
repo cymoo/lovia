@@ -67,7 +67,9 @@ async def test_streaming_reject_with_reason_reaches_the_model() -> None:
 
 @pytest.mark.asyncio
 async def test_static_verdict_puts_reason_and_scope_on_the_event() -> None:
-    @tool(permission=Verdict("ask", "Sends mail outside the company.", "mail:external"))
+    @tool(
+        permission=Verdict("ask", "Sends mail outside the company.", ("mail:external",))
+    )
     async def send() -> str:
         return "sent"
 
@@ -82,7 +84,7 @@ async def test_static_verdict_puts_reason_and_scope_on_the_event() -> None:
     await handle.result()
     assert len(seen) == 1
     assert seen[0].reason == "Sends mail outside the company."
-    assert seen[0].scope == "mail:external"
+    assert seen[0].scopes == ("mail:external",)
 
 
 @pytest.mark.asyncio
@@ -131,6 +133,10 @@ def test_verdict_rejects_an_invalid_action_at_construction() -> None:
         Verdict("DENY")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         Verdict(False)  # type: ignore[arg-type]
+    # A bare string would read as one scope per character.
+    with pytest.raises(TypeError):
+        Verdict("ask", "", "shell:ls")  # type: ignore[arg-type]
+    assert Verdict("ask", "", ["shell:ls"]).scopes == ("shell:ls",)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -150,14 +156,14 @@ async def test_predicate_building_an_invalid_verdict_fails_closed() -> None:
     assert "permission check failed" in tool_msg.content
 
 
-def test_merge_verdicts_keeps_scope_only_for_a_sole_ask() -> None:
-    assert merge_verdicts(Verdict("allow"), Verdict("ask", "a", "x")).scope == "x"
-    assert (
-        merge_verdicts(Verdict("ask", "a", "x"), Verdict("ask", "b", "y")).scope is None
-    )
-    assert (
-        merge_verdicts(Verdict("ask", "a", "x"), Verdict("deny", "d")).action == "deny"
-    )
+def test_merge_verdicts_keeps_every_scope_only_when_every_ask_has_one() -> None:
+    x, y = Verdict("ask", "a", ("x",)), Verdict("ask", "b", ("y",))
+    assert merge_verdicts(Verdict("allow"), x).scopes == ("x",)
+    # Several asks: one grant naming them all, each once, in order.
+    assert merge_verdicts(x, y, x) == Verdict("ask", "a; b", ("x", "y"))
+    # An ask that offers no grant cannot be granted away by the others.
+    assert merge_verdicts(x, Verdict("ask", "c")).scopes == ()
+    assert merge_verdicts(x, Verdict("deny", "d")).action == "deny"
 
 
 # ---------- Handler returning bool ----------
@@ -198,7 +204,7 @@ async def test_handler_sees_the_request_and_may_answer_with_a_reason() -> None:
         seen.append(request)
         return Approval(False, "handler says no")
 
-    @tool(permission=Verdict("ask", "why", "scope:x"))
+    @tool(permission=Verdict("ask", "why", ("scope:x",)))
     async def dangerous() -> str:  # pragma: no cover
         return "ok"
 
@@ -206,7 +212,7 @@ async def test_handler_sees_the_request_and_may_answer_with_a_reason() -> None:
     agent = Agent(name="a", model=provider, tools=[dangerous], approval_handler=handler)
     result = await Runner.run(agent, "go")
     assert seen[0].call.name == "dangerous"
-    assert seen[0].reason == "why" and seen[0].scope == "scope:x"
+    assert seen[0].reason == "why" and seen[0].scopes == ("scope:x",)
     tool_msg = next(m for m in result.messages if m.role == "tool")
     assert tool_msg.content == "Tool dangerous was not approved: handler says no"
 

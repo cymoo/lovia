@@ -29,25 +29,31 @@ from .test_supervisor import _parse_sse, _spawn, _wait_run  # noqa: E402
 async def test_grants_roundtrip_and_delete() -> None:
     store = ChatStore.in_memory()
     ctx = grant_context("bot", "/ws")
-    await store.add_grant("s1", "shell:git push", ctx)
-    await store.add_grant("s1", "shell:git push", ctx)  # idempotent
-    await store.add_grant("s1", "read:~/notes", ctx)
-    assert await store.has_grant("s1", "shell:git push", ctx)
-    assert not await store.has_grant("s1", "shell:git push", grant_context("bot", "/x"))
-    assert not await store.has_grant("s2", "shell:git push", ctx)  # per chat
+    await store.add_grants("s1", ["shell:git push"], ctx)
+    await store.add_grants("s1", ["shell:git push", "read:~/notes"], ctx)  # idempotent
+    assert await store.has_grants("s1", ["shell:git push"], ctx)
+    assert await store.has_grants("s1", ["read:~/notes", "shell:git push"], ctx)
+    # Every scope must be granted; none at all is never a grant.
+    assert not await store.has_grants("s1", ["shell:git push", "shell:make"], ctx)
+    assert not await store.has_grants("s1", [], ctx)
+    assert not await store.has_grants(
+        "s1", ["shell:git push"], grant_context("bot", "/x")
+    )
+    assert not await store.has_grants("s2", ["shell:git push"], ctx)  # per chat
     assert [g.scope for g in await store.list_grants("s1")] == [
         "shell:git push",
         "read:~/notes",
     ]
     assert await store.delete_grant("s1", "shell:git push", ctx) is True
     assert await store.delete_grant("s1", "shell:git push", ctx) is False
-    assert not await store.has_grant("s1", "shell:git push", ctx)
+    assert not await store.has_grants("s1", ["shell:git push"], ctx)
+    assert not await store.has_grants("s1", ["shell:git push", "read:~/notes"], ctx)
 
 
 async def test_deleting_a_chat_drops_its_grants() -> None:
     store = ChatStore.in_memory()
     await store.upsert("s1", agent="bot")
-    await store.add_grant("s1", "shell:make", grant_context("bot", "/ws"))
+    await store.add_grants("s1", ["shell:make"], grant_context("bot", "/ws"))
     await store.delete("s1")
     assert await store.list_grants("s1") == []
 
@@ -66,7 +72,7 @@ async def test_grants_table_reaches_an_existing_database(tmp_path: Path) -> None
     conn.commit()
     conn.close()
     reopened = ChatStore.sqlite(path)
-    await reopened.add_grant("s1", "shell:make", grant_context("bot", "/ws"))
+    await reopened.add_grants("s1", ["shell:make"], grant_context("bot", "/ws"))
     assert len(await reopened.list_grants("s1")) == 1
 
 
@@ -82,10 +88,10 @@ def test_grant_context_is_unambiguous() -> None:
 
 
 def _request(
-    call_id: str = "c1", scope: str | None = "shell:x"
+    call_id: str = "c1", scopes: tuple[str, ...] = ("shell:x",)
 ) -> events.ApprovalRequired:
     return events.ApprovalRequired(
-        call=ToolCall(id=call_id, name="shell", arguments="{}"), scope=scope
+        call=ToolCall(id=call_id, name="shell", arguments="{}"), scopes=scopes
     )
 
 
@@ -101,18 +107,18 @@ async def test_claim_owns_the_decision() -> None:
         def reject(self, reason: str = "") -> None:  # type: ignore[override]
             approved.append(False)
 
-    ev = _Ev(call=ev.call, scope=ev.scope)
+    ev = _Ev(call=ev.call, scopes=ev.scopes)
     waiter = asyncio.create_task(reg.await_decision("s", ev))
     await asyncio.sleep(0)
     assert reg.pending("s", "c1") is ev
     assert reg.claim("s", "c1") is True
     assert reg.claim("s", "c1") is False  # a second request is too late
-    # The sweeps leave a claimed approval to its owner.
-    reg.deny_pending("s", reason="approval timed out")
+    # The sweeps leave a claimed approval to its owner — and say so.
+    assert reg.deny_pending("s", reason="approval timed out") is False
     await asyncio.sleep(0)
     assert not waiter.done()
     assert await reg.resolve("s", "c1", Approval(True)) is True
-    assert await waiter is True
+    assert await waiter == Approval(True)
     assert approved == [True]
     assert reg.claim("s", "c1") is False  # gone once decided
 
@@ -131,8 +137,8 @@ async def test_unclaimed_approvals_are_swept() -> None:
 
     waiter = asyncio.create_task(reg.await_decision("s", _Ev(call=ev.call)))
     await asyncio.sleep(0)
-    reg.deny_pending("s", reason="approval timed out")
-    assert await waiter is False
+    assert reg.deny_pending("s", reason="approval timed out") is True
+    assert await waiter == Approval(False, "approval timed out")
     assert seen == ["approval timed out"]
 
 
@@ -152,7 +158,7 @@ def _client(app):
 
 
 def _agent(tmp_path: Path, *steps) -> Agent:
-    @tool(permission=Verdict("ask", "Pushes to a remote.", "shell:git push"))
+    @tool(permission=Verdict("ask", "Pushes to a remote.", ("shell:git push",)))
     async def push() -> str:
         return "pushed"
 
@@ -203,10 +209,11 @@ async def test_remembered_approval_answers_the_next_call(tmp_path: Path) -> None
         await asyncio.wait_for(task, timeout=5)
         await _wait_run(ac, "s1", gone=True)
         (req,) = _frames(lines, "approval_required")
-        assert (
-            req["reason"] == "Pushes to a remote." and req["scope"] == "shell:git push"
-        )
+        assert req["reason"] == "Pushes to a remote."
+        assert req["scopes"] == ["shell:git push"]
         assert req["granted"] is False
+        (done,) = _frames(lines, "approval_resolved")
+        assert done == {"id": "c1", "approved": True, "cause": "user"}
 
         grants = (await ac.get("/api/sessions/s1/grants")).json()
         assert [(g["scope"], g["active"]) for g in grants] == [("shell:git push", True)]
@@ -218,6 +225,7 @@ async def test_remembered_approval_answers_the_next_call(tmp_path: Path) -> None
         await asyncio.wait_for(task2, timeout=5)
         (granted,) = _frames(lines2, "approval_required")
         assert granted["granted"] is True and granted["id"] == "c2"
+        assert _frames(lines2, "approval_resolved") == []  # no card to settle
         assert any(
             "pushed" in str(d.get("result")) for d in _frames(lines2, "tool_result")
         )
@@ -239,9 +247,9 @@ async def test_grant_from_another_chat_or_workspace_does_not_apply(
     store = ChatStore.in_memory()
     agent = _agent(tmp_path, call("push", {}, call_id="c1"), text("ok"))
     # Same scope, but remembered for another chat / under another root.
-    await store.add_grant("other", "shell:git push", grant_context("bot", tmp_path))
-    await store.add_grant(
-        "s1", "shell:git push", grant_context("bot", tmp_path / "else")
+    await store.add_grants("other", ["shell:git push"], grant_context("bot", tmp_path))
+    await store.add_grants(
+        "s1", ["shell:git push"], grant_context("bot", tmp_path / "else")
     )
     async with _client(_app(agent, store=store)) as ac:
         task, lines = await _run_until_approval(ac, "s1")  # still asks
@@ -278,6 +286,8 @@ async def test_deny_with_reason_reaches_the_model(tmp_path: Path) -> None:
         await asyncio.wait_for(task, timeout=5)
     (result,) = _frames(lines, "tool_result")
     assert result["result"] == "Tool push was not approved: open a PR instead"
+    (done,) = _frames(lines, "approval_resolved")
+    assert done == {"id": "c1", "approved": False, "cause": "user"}
 
 
 @pytest.mark.asyncio
@@ -307,7 +317,7 @@ async def test_remember_without_scope_approves_but_saves_nothing(
         assert r.json() == {"ok": True, "remembered": False}
         await asyncio.wait_for(task, timeout=5)
         (req,) = _frames(lines, "approval_required")
-        assert req["scope"] is None
+        assert req["scopes"] == [] and req["reason"] == ""
         assert (await ac.get("/api/sessions/s1/grants")).json() == []
     assert any("ran" in str(d.get("result")) for d in _frames(lines, "tool_result"))
 
@@ -324,7 +334,7 @@ async def test_grant_context_follows_the_active_agent_after_a_handoff(
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
 
-    @tool(permission=Verdict("ask", "Pushes to a remote.", "shell:git push"))
+    @tool(permission=Verdict("ask", "Pushes to a remote.", ("shell:git push",)))
     async def push() -> str:
         return "pushed"
 
@@ -341,8 +351,8 @@ async def test_grant_context_follows_the_active_agent_after_a_handoff(
         workspace=Workspace.local(str(tmp_path / "a"), mode="readonly"),
     )
     store = ChatStore.in_memory()
-    await store.add_grant(
-        "s1", "shell:git push", grant_context("alpha", tmp_path / "a")
+    await store.add_grants(
+        "s1", ["shell:git push"], grant_context("alpha", tmp_path / "a")
     )
     async with _client(_app({"alpha": alpha}, store=store)) as ac:
         task, lines = await _run_until_approval(ac, "s1")  # alpha's grant: not b's
@@ -379,7 +389,7 @@ async def test_grant_context_uses_the_registry_key_not_the_internal_name(
     agent = _agent(tmp_path, call("push", {}, call_id="c1"), text("ok"))
     other = _agent(tmp_path, text("never"))
     store = ChatStore.in_memory()
-    await store.add_grant("s1", "shell:git push", grant_context("beta", tmp_path))
+    await store.add_grants("s1", ["shell:git push"], grant_context("beta", tmp_path))
     app = _app({"alpha": agent, "beta": other}, store=store)
     async with _client(app) as ac:
         # Explicitly alpha's chat; beta's grant must not answer it.
@@ -419,14 +429,14 @@ async def test_cancel_during_the_grant_lookup_does_not_park_the_run(
     agent = _agent(tmp_path, call("push", {}, call_id="c1"), text("ok"))
     looking = asyncio.Event()
     release = asyncio.Event()
-    orig_has = store.has_grant
+    orig_has = store.has_grants
 
     async def slow_has(*args, **kwargs):
         looking.set()
         await release.wait()
         return await orig_has(*args, **kwargs)
 
-    store.has_grant = slow_has  # type: ignore[method-assign]
+    store.has_grants = slow_has  # type: ignore[method-assign]
     async with _client(_app(agent, store=store)) as ac:
         task, lines = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
@@ -450,7 +460,7 @@ async def test_cancel_during_a_claimed_approval_keeps_the_grant(tmp_path: Path) 
     agent = _agent(tmp_path, call("push", {}, call_id="c1"), text("ok"))
     app = _app(agent, store=store)
     registry = app.state.deps.approvals
-    orig_add = store.add_grant
+    orig_add = store.add_grants
     writing = asyncio.Event()
     release = asyncio.Event()
 
@@ -459,7 +469,7 @@ async def test_cancel_during_a_claimed_approval_keeps_the_grant(tmp_path: Path) 
         await release.wait()
         await orig_add(*args, **kwargs)
 
-    store.add_grant = slow_add  # type: ignore[method-assign]
+    store.add_grants = slow_add  # type: ignore[method-assign]
     async with _client(app) as ac:
         task, lines = await _run_until_approval(ac, "s1")
         approve = asyncio.create_task(

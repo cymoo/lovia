@@ -62,7 +62,7 @@ ApprovalDecision = Union[bool, Decision, Approval]
 
 # A programmatic approval handler consulted for tools whose permission
 # verdict is ``ask``. Receives the pending ``ApprovalRequired`` event (the
-# call plus the verdict's ``reason`` / ``scope``) and the live run context,
+# call plus the verdict's ``reason`` / ``scopes``) and the live run context,
 # like hooks and guardrails. May be sync or async (the runner awaits the
 # result either way).
 ApprovalHandler = Callable[

@@ -317,19 +317,32 @@ Use `lovia web --help` for the complete list.
 ## Approvals
 
 A Tool whose [permission](tools.md#tool-approval) verdict is `ask` pauses
-the run on a card that leads with the verdict's *reason* ("Pushes to a
-remote."), shows the call as the model made it, and offers **Approve** and
-**Deny** — with an optional reason for denying that the model sees, so it can
-change course instead of retrying.
+the run on a card that asks in the Tool's own words ("Run command?"), adds
+the verdict's *reason* underneath when something stands out ("Pushes commits
+to a remote."), shows the call as the model made it, and offers **Approve**
+and **Deny** — with an optional, multi-line reason for denying that the model
+sees, so it can change course instead of retrying (⌘/Ctrl+Enter denies with
+it). The card takes keyboard focus on arrival, but not its Approve button: a
+stray Enter never approves anything.
 
-When the verdict names a *scope* (`shell:git push`, `read:~/notes`), the card
-also offers **Always allow in this chat** for exactly that scope. The grant is
-kept on the server, per chat, and tied to the agent and workspace root it was
-given under: a later call in that scope is approved before anyone sees it and
-shows as a one-line note; a chat rebound to another workspace does not reuse
-it. Grants never apply to a `deny`, and nothing is inherited by new chats or
-subagent tasks. **Manage** on such a note lists the chat's grants and lets you
-revoke one — revoking affects later calls only.
+When the verdict names *scopes* (`shell:git push`, `read:~/notes`), the card
+also offers **Always allow in this chat** for exactly those — a chained
+command such as `echo a; uname -a | head -1` lists each command it would
+remember (`echo` `uname` `head`), all granted together, and none at all when
+one of its parts cannot be granted (`sudo`, a `$VAR` the shell expands). The
+grants are kept on the server, per chat, and tied to the agent and workspace
+root they were given under: a later call they fully cover is approved before
+anyone sees it and shows as a one-line note; a chat rebound to another
+workspace does not reuse them. Grants never apply to a `deny`, and nothing is
+inherited by new chats or subagent tasks. **Manage** on such a note lists the
+chat's grants and lets you revoke one — revoking affects later calls only.
+
+Whoever decides — you, another tab, the timeout, a stop — every open view of
+the chat shows the outcome on the card. `lovia web` denies an approval nobody
+answers within ten minutes (the card says when, up front; the model is told
+the user did not answer), so a scheduled or background run never holds a run
+slot indefinitely; `create_app(approval_timeout=...)` sets it for your own
+app (`None`: wait for an answer).
 
 ## Questions from the Agent
 

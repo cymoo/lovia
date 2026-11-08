@@ -77,7 +77,7 @@ def path_permission(*ops: Literal["read", "write"]) -> PermissionFn:
 
     The policy verdict for the tool's ``path`` argument, merged across the
     given ops (most restrictive wins): ``ask`` reaches the human with the
-    policy's reason and grant scope, ``deny`` reaches the model with its
+    policy's reason and grant scopes, ``deny`` reaches the model with its
     reason before anything runs (the session would refuse it anyway — this
     just says why up front). With no workspace the tool cannot touch anything
     — let it run so ``require_workspace`` surfaces its setup hint instead of

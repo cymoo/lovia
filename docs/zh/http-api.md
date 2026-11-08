@@ -148,7 +148,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/chat` | 执行一次**阻塞式** Turn → `{output, session_id, usage}`：托管 Run，请求等待其结束（[详见](#阻塞式-turn)） |
 | `POST /api/chat/stream` | **SSE**：启动 Run，或连接到 Session 中正在执行的 Run（新消息会作为追加指令注入） |
 | `POST /api/chat/reconnect?session_id=` | **SSE**：重新连接，或从 Checkpoint 恢复中断的 Run |
-| `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision, remember?, reason?}` → `{ok, remembered}`。`remember`（仅允许时）同时为这条请求自己的 `scope` 在本对话记一条“总是允许”；`reason`（仅拒绝时）会传给模型。授权先落库再唤醒运行，同范围的下一条调用不会在此期间再问；请求没有 scope 或保存失败时 `remembered` 为 false（本次允许照常生效） |
+| `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision, remember?, reason?}` → `{ok, remembered}`。`remember`（仅允许时）同时为这条请求自己的每个 `scopes` 在本对话各记一条“总是允许”；`reason`（仅拒绝时）会传给模型。授权先落库再唤醒运行，同范围的下一条调用不会在此期间再问；请求没有 scopes 或保存失败时 `remembered` 为 false（本次允许照常生效） |
 | `POST /api/chat/cancel?session_id=` | 取消正在执行的 Run（保留已完成的 Turn） |
 | `POST /api/chat/inject` / `uninject` | 为正在执行的 Run 排队或撤回[追加指令](cancellation.md#在运行中追加指令) |
 | `GET /api/sessions?q=&limit=&offset=` | 列出或搜索对话（置顶优先，支持分页）；`DELETE` 清空全部对话 |
@@ -240,7 +240,8 @@ API 路由抛出的错误都使用同一种响应体：
 | `tool_call` | `{id, name, arguments}`：`arguments` 是原始 JSON 字符串 |
 | `tool_result` | `{id, name, result, is_error, images?}`：`images` 列出 `{index, mime_type}`，图片本身通过 `GET /api/sessions/{id}/tool-images/{call_id}/{index}` 获取 |
 | `todo` | `{call_id, name, todos}`：结构化 todo 更新，替代该调用的 `tool_result` |
-| `approval_required` | `{id, name, arguments, reason, scope, granted}` → 通过 `POST /api/chat/approve` 回答。`reason` 是为什么要问；`scope` 是“总是允许”会放开的范围（`null` = 不提供）；`granted` 为 true 表示已有授权替用户答了——显示一行提示而不是卡片 |
+| `approval_required` | `{id, name, arguments, reason, scopes, granted, expires_at}` → 通过 `POST /api/chat/approve` 回答。`reason` 是为什么要问（除了“不在允许清单上”之外没什么特别时为空）；`scopes` 是“总是允许”会放开的范围——全部列出、一起记住（`[]` = 不提供）；`granted` 为 true 表示已有授权替用户答了——显示一行提示而不是卡片；`expires_at`（epoch 秒，`null` = 不过期）是无人回答时自动拒绝的时刻 |
+| `approval_resolved` | `{id, approved, cause}`——请求 `id` 已有结论：`cause` 为 `user`（任一标签页的回答）、`timeout`（到 `expires_at` 仍无人回答）或 `cancel`（运行被停止）。发给所有连接中的客户端，并随当前 Turn 回放，卡片一旦有结论就不再可点 |
 | `handoff` | `{from, to}` |
 | `turn_started` | `{turn, agent}` |
 | `retrying` | `{attempt, max_attempts, delay, message}`：模型调用遇到暂时性错误，`delay` 秒后进行第 `attempt + 1` 次尝试 |

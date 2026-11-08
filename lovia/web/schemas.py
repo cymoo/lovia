@@ -205,9 +205,9 @@ class ApprovalRequest(BaseModel):
     session_id: str
     call_id: str
     decision: Literal["approve", "deny"]
-    # Approve only: also remember this approval for the chat, under the
-    # request's own ``scope`` (the server takes it from the pending request —
-    # a client cannot widen it). Ignored when the request offers no scope.
+    # Approve only: also remember this approval for the chat, under every one
+    # of the request's own ``scopes`` (the server takes them from the pending
+    # request — a client cannot widen them). Ignored when it offers none.
     remember: bool = False
     # Deny only: why — passed to the model with the denial so it can change
     # course instead of retrying.
@@ -217,7 +217,7 @@ class ApprovalRequest(BaseModel):
 class ApprovalResponse(BaseModel):
     ok: bool
     # Whether the approval was remembered. False when not asked, when the
-    # request had no scope, or when saving failed (the call still went ahead).
+    # request had no scopes, or when saving failed (the call still went ahead).
     remembered: bool = False
 
 

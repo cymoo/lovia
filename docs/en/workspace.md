@@ -67,7 +67,7 @@ exclusive with the shorthand knobs).
 cannot audit a program's options, so which commands run unprompted is a
 choice — the deployer's, by opting in a bundle, or the user's, per chat, on
 the approval card ("always allow `ls`"; the scope offered for an unlisted
-command is its command word). The bundles live in `lovia.workspace.rules`:
+command is its command word, and a chained command offers one per command). The bundles live in `lovia.workspace.rules`:
 `READ_ONLY` (`ls`, `du`, `stat`, `tree`, `git status`,
 `git log`, … ; `dir`, `where`, … on Windows — inspection that prints **no
 file contents**: every content reader has its own way to reach a file it
@@ -96,8 +96,9 @@ Three values, two enforcement points:
   `permission` predicates that consult the policy, so `ask` verdicts
   surface through the standard
   [approval channel](tools.md#tool-approval), same as any gated
-  tool, carrying the policy's reason (`reads outside the workspace root
-  require approval (~/notes)`) and a grant scope (`read:~/notes`). A `deny`
+  tool, carrying the policy's reason (`Outside the workspace root
+  (~/notes).`; none for a command no rule names — being asked says it all)
+  and its grant scopes (`read:~/notes`). A `deny`
   is refused before the call with its reason, so the model learns why
   without anything running.
 
@@ -316,7 +317,7 @@ same gate: `read_text` / `write_text` / `edit_text` / `list_files` /
 `grep` / `run` / `spawn` / `read_process_output` / `kill_process`, plus
 `decide_path(path, write=...)` and
 `decide_command(command)` for tools that want to *check* before acting.
-Both return a `Verdict` (`action`, `reason`, `scope`); the file and shell
+Both return a `Verdict` (`action`, `reason`, `scopes`); the file and shell
 methods raise on `deny`, and your tool's own `permission` predicate can
 return the verdict as is. (`Workspace.local(...)` returns a `LocalWorkspace`
 whose `open()` yields a `LocalWorkspaceSession`; the calls return typed

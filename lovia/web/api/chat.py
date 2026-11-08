@@ -311,14 +311,14 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         return ApprovalResponse(ok=True, remembered=remembered)
 
     async def _remember(sid: str, cid: str) -> bool:
-        # The scope comes from the pending request itself, never from the
+        # The scopes come from the pending request itself, never from the
         # client; the context from the run as it is bound right now.
         pending = deps.approvals.pending(sid, cid)
         ctrl = deps.supervisor.get(sid)
-        if pending is None or not pending.scope or ctrl is None:
+        if pending is None or not pending.scopes or ctrl is None:
             return False
         try:
-            await deps.store.add_grant(sid, pending.scope, ctrl.grant_context())
+            await deps.store.add_grants(sid, pending.scopes, ctrl.grant_context())
         except Exception as exc:  # noqa: BLE001 — the approval itself still stands
             log.warning("could not remember approval %s for %s: %s", cid, sid, exc)
             return False

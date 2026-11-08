@@ -265,8 +265,11 @@ class LocalWorkspace:
                 )
             else:
                 lines.append(
-                    "A shell tool is available but gated: some commands need "
-                    "user approval and others are denied by policy."
+                    "A shell tool is available but gated: a command no rule "
+                    "allows waits for the user's approval, and some are denied "
+                    "by policy. Explore and read with list_files, grep_files "
+                    "and read_file rather than the shell, and keep the shell "
+                    "for what only it can do."
                 )
             lines.append(
                 "Paths named in shell commands (arguments, redirect targets, "

@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import AsyncIterator, Callable, TypedDict, cast
+from typing import AsyncIterator, Callable, Literal, TypedDict, cast
 
 from ..types import JsonObject, JsonValue
 from .. import events
@@ -73,12 +73,23 @@ class ApprovalRequiredData(TypedDict):
     id: str
     name: str
     arguments: str
-    # Why the call needs a decision, from the tool's permission verdict.
+    # Why the call needs a decision, from the tool's permission verdict;
+    # empty when nothing beyond "not pre-approved".
     reason: str
-    # What "always allow" would cover (``"shell:git push"``); null = don't offer.
-    scope: str | None
-    # True when a remembered approval already answered it: no card, just a note.
+    # What "always allow" would cover (``["shell:git push"]``) — all of them,
+    # remembered together; empty = don't offer.
+    scopes: list[str]
+    # True when remembered approvals already answered it: no card, just a note.
     granted: bool
+    # When an unanswered request is denied (epoch seconds); null = never.
+    expires_at: float | None
+
+
+class ApprovalResolvedData(TypedDict):
+    id: str
+    approved: bool
+    # Who decided: the user (from any tab), the approval timeout, or a stop.
+    cause: Literal["user", "timeout", "cancel"]
 
 
 class _ToolResultRequired(TypedDict):
@@ -175,15 +186,29 @@ class LegTiming:
 
 
 @dataclass(frozen=True)
-class ApprovalGranted:
-    """An ``ApprovalRequired`` a remembered approval answered on the server:
-    published in the event's place so the client shows a note, not a card."""
+class ApprovalAsked:
+    """An ``ApprovalRequired`` as the client sees it, published in the event's
+    place: either already answered by remembered approvals (``granted`` — a
+    note, not a card) or waiting on the user until ``expires_at``."""
 
     request: events.ApprovalRequired
+    granted: bool = False
+    expires_at: float | None = None
+
+
+@dataclass(frozen=True)
+class ApprovalResolved:
+    """How a card's request was settled — by whichever tab answered, the
+    timeout, or a stop — so every attached client (and a replay of the
+    current turn) stops offering a decision that is already made."""
+
+    call_id: str
+    approved: bool
+    cause: Literal["user", "timeout", "cancel"]
 
 
 #: What the supervisor publishes besides the run's own events.
-LegFrame = UserTurnRefs | LegTiming | ApprovalGranted
+LegFrame = UserTurnRefs | LegTiming | ApprovalAsked | ApprovalResolved
 
 
 CHAT_EVENTS: dict[str, type] = {
@@ -198,6 +223,7 @@ CHAT_EVENTS: dict[str, type] = {
     "tool_result": ToolResultData,
     "todo": TodoData,
     "approval_required": ApprovalRequiredData,
+    "approval_resolved": ApprovalResolvedData,
     "handoff": HandoffData,
     "turn_started": TurnStartedData,
     "retrying": RetryingData,
@@ -253,16 +279,16 @@ LIFECYCLE_EVENTS: dict[str, type] = {
 }
 
 
-def _approval_data(
-    ev: events.ApprovalRequired, *, granted: bool
-) -> ApprovalRequiredData:
+def _approval_data(ev: ApprovalAsked) -> ApprovalRequiredData:
+    req = ev.request
     return ApprovalRequiredData(
-        id=ev.call.id,
-        name=ev.call.name,
-        arguments=ev.call.arguments,
-        reason=ev.reason,
-        scope=ev.scope,
-        granted=granted,
+        id=req.call.id,
+        name=req.call.name,
+        arguments=req.call.arguments,
+        reason=req.reason,
+        scopes=list(req.scopes),
+        granted=ev.granted,
+        expires_at=ev.expires_at,
     )
 
 
@@ -369,8 +395,13 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
     """Return a ``{"event": ..., "data": json}`` dict, or ``None`` to skip."""
     if isinstance(ev, UserTurnRefs):
         return frame("refs", RefsData(refs=ev.refs))
-    if isinstance(ev, ApprovalGranted):
-        return frame("approval_required", _approval_data(ev.request, granted=True))
+    if isinstance(ev, ApprovalAsked):
+        return frame("approval_required", _approval_data(ev))
+    if isinstance(ev, ApprovalResolved):
+        return frame(
+            "approval_resolved",
+            ApprovalResolvedData(id=ev.call_id, approved=ev.approved, cause=ev.cause),
+        )
     if isinstance(ev, LegTiming):
         return frame(
             "timing", TimingData(finished_at=ev.finished_at, duration=ev.duration)
@@ -427,8 +458,6 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
             if images:
                 payload["images"] = images
         return frame("tool_result", payload)
-    if isinstance(ev, events.ApprovalRequired):
-        return frame("approval_required", _approval_data(ev, granted=False))
     if isinstance(ev, events.HandoffOccurred):
         return frame(
             "handoff", HandoffData({"from": ev.from_agent.name, "to": ev.to_agent.name})

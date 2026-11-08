@@ -54,7 +54,7 @@ agent = Agent(
 
 `coding` 自己**不为任何命令担保**：路径守卫是词法的，审计不了程序的选项，所以哪些命令免问是一个选择——
 部署方启用规则包，或用户在审批卡片上按对话决定（“本对话中总是允许 `ls`”；没有规则命中的命令，卡片
-提供的范围就是它的命令词）。规则包在 `lovia.workspace.rules`：`READ_ONLY`（`ls`、`du`、`stat`、`tree`、
+提供的范围就是它的命令词，串起来的命令每个命令各一个）。规则包在 `lovia.workspace.rules`：`READ_ONLY`（`ls`、`du`、`stat`、`tree`、
 `git status`、`git log` 等；Windows 上是 `dir`、`where` 等——只收录**不打印文件内容**的检查命令：每个
 内容读取器都有自己不点名就读到文件的办法，`grep -r`、`sort --files0-from`、`git diff --no-index`、通配符，
 所以 `cat` 之类留在灰区，逐文件判定的 `read_file` / `grep_files` 才是读取器；git 自己的命令打印的是*已跟踪*
@@ -73,7 +73,8 @@ ACL 有三个决策值，分别作用于两个执行环节：
   你的自定义工具，还是你自己的代码。拒绝会抛 `PermissionDeniedError`（一种 `ToolError`，模型会看到并调整）。
 - **`ask` 在工具层解决**：内置工具带 `permission` 谓词并咨询策略，所以 `ask` 判定会通过标准
   [审批通道](tools.md#工具审批)出现，和任何带门禁的工具一样，并带着策略给出的理由
-  （`reads outside the workspace root require approval (~/notes)`）和授权范围（`read:~/notes`）。
+  （`Outside the workspace root (~/notes).`；没有规则命中的命令不带理由——要审批本身就说明了一切）
+  和授权范围（`read:~/notes`）。
   `deny` 在调用前就被拒绝并附上理由，模型不用执行就知道为什么。
 
 **路径规则。** `PathRule(pattern, action, ops={"read","write"})`；pattern 是 glob，有三种寻址形式：
@@ -231,7 +232,7 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 `read_text` / `write_text` / `edit_text` / `list_files` / `grep` / `run` / `spawn` /
 `read_process_output` / `kill_process`，以及
 `decide_path(path, write=...)` 和 `decide_command(command)`，供工具在行动前检查。两者都返回
-`Verdict`（`action`、`reason`、`scope`）；文件和命令方法遇到 `deny` 会抛异常，你自己的
+`Verdict`（`action`、`reason`、`scopes`）；文件和命令方法遇到 `deny` 会抛异常，你自己的
 `permission` 谓词可以把判定原样返回。
 （`Workspace.local(...)` 返回 `LocalWorkspace`，其 `open()` 产出 `LocalWorkspaceSession`；
 调用返回类型化结果：`FileContent`、`FileChange`、`EditResult`、`DirEntry`、`GrepMatch`、

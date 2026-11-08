@@ -415,7 +415,8 @@ agent = Agent(
 
 `coding` vouches for no command itself: the irreversible ask with a reason
 (`git push`, `rm -r`, `sudo`, …), everything else asks once and the user can
-remember it per chat ("always allow `ls`"), and under every mode a baseline
+remember it per chat ("always allow `ls`" — a chained `ls; git status`
+offers both at once), and under every mode a baseline
 denies the dangerous (`git push --force`, `rm -rf /`), keeps credential
 stores off-limits and asks before writing `.git` or CI configuration. To run
 inspection and dev tools unprompted, opt in: `command_rules=READ_ONLY +

@@ -1513,12 +1513,76 @@ async def test_approval_timeout_denies_and_completes_run() -> None:
         await _wait_run(ac, "s1", gone=True)
     evs = _parse_sse("\n".join(lines))
     kinds = [e for e, _ in evs]
-    assert "approval_required" in kinds
     assert kinds[-1] == "done"
+    # The card carries its deadline, and is settled as timed out — before
+    # the denied result, so the client can say so.
+    (asked,) = [d for (e, d) in evs if e == "approval_required"]
+    assert asked["expires_at"] is not None and asked["expires_at"] > 0
+    (settled,) = [d for (e, d) in evs if e == "approval_resolved"]
+    assert settled == {"id": "c1", "approved": False, "cause": "timeout"}
+    assert kinds.index("approval_resolved") < kinds.index("tool_result")
     denied = [d for (e, d) in evs if e == "tool_result"]
-    # The model is told *why*: timed out, not "run cancelled".
-    assert denied and "not approved: approval timed out" in str(denied[0].get("result"))
+    # The model is told *why*: nobody answered, not "run cancelled".
+    assert denied and "not approved: the user did not answer within 0 seconds" in str(
+        denied[0].get("result")
+    )
     assert not any("did it" in str(d.get("result")) for d in denied)
+
+
+@pytest.mark.asyncio
+async def test_a_reattach_replays_a_decided_card_as_settled() -> None:
+    # Reloading while the approved tool still runs replays the current turn:
+    # the card must come back decided, not as an open question.
+    release = asyncio.Event()
+
+    @tool(permission="ask")
+    async def gated() -> str:
+        """Gated and slow."""
+        await release.wait()
+        return "done"
+
+    provider = ScriptedProvider([call("gated", {}, call_id="c1"), text("ack")])
+    agent = Agent(name="bot", model=provider, tools=[gated])
+    async with _client(_app(agent)) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1", status="blocked_on_approval")
+        await ac.post(
+            "/api/chat/approve",
+            json={"session_id": "s1", "call_id": "c1", "decision": "approve"},
+        )
+        await _wait_run(ac, "s1", status="running")
+        t2, lines = _spawn(ac, "/api/chat/reconnect", params={"session_id": "s1"})
+        await asyncio.sleep(0.1)
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, t2), timeout=5)
+    kinds = [e for e, _ in _parse_sse("\n".join(lines))]
+    assert kinds.index("approval_required") < kinds.index("approval_resolved")
+
+
+@pytest.mark.asyncio
+async def test_a_stop_settles_the_pending_card_as_cancelled() -> None:
+    @tool(permission="ask")
+    async def sensitive() -> str:
+        """Sensitive."""
+        return "did it"
+
+    provider = ScriptedProvider([call("sensitive", {}, call_id="c1"), text("ack")])
+    agent = Agent(name="bot", model=provider, tools=[sensitive])
+    async with _client(_app(agent)) as ac:
+        task, lines = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1", status="blocked_on_approval")
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        await asyncio.wait_for(task, timeout=5)
+        await _wait_run(ac, "s1", gone=True)
+    evs = _parse_sse("\n".join(lines))
+    (asked,) = [d for (e, d) in evs if e == "approval_required"]
+    assert asked["expires_at"] is None  # no approval_timeout: waits for an answer
+    (settled,) = [d for (e, d) in evs if e == "approval_resolved"]
+    assert settled == {"id": "c1", "approved": False, "cause": "cancel"}
 
 
 @pytest.mark.asyncio

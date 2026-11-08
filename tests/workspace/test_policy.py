@@ -111,11 +111,11 @@ def test_ask_rule_verdict_carries_reason_and_pattern_scope() -> None:
     )
     pushed = policy.decide_command("git push origin main")
     assert pushed == Verdict(
-        "ask", "Pushes to a remote; not undoable.", "shell:git push"
+        "ask", "Pushes to a remote; not undoable.", ("shell:git push",)
     )
     # grant=False: still asks, but offers nothing to remember.
     assert policy.decide_command("sudo ls") == Verdict(
-        "ask", "'sudo' requires approval", None
+        "ask", "'sudo' requires approval"
     )
     # No author reason: a generic one is derived from the pattern.
     assert policy.decide_command("docker ps").reason == "'docker' requires approval"
@@ -124,29 +124,30 @@ def test_ask_rule_verdict_carries_reason_and_pattern_scope() -> None:
 def test_deny_rule_verdict_carries_reason_and_no_scope() -> None:
     policy = WorkspacePolicy(command_rules=(CommandRule("rm -rf", "deny"),))
     verdict = policy.decide_command("rm -rf /")
-    assert verdict.action == "deny" and verdict.scope is None
+    assert verdict.action == "deny" and verdict.scopes == ()
     assert verdict.reason == "'rm -rf' is denied by workspace policy"
 
 
 def test_gray_command_asks_with_the_command_word_as_scope() -> None:
-    # The grant on offer is the command word, as shown on the card; an
-    # argument the guard cannot vouch for withholds it.
+    # The grant on offer is the command word, as shown on the card, and no
+    # reason — nothing stands out; an argument the guard cannot vouch for
+    # withholds the grant and says why.
     policy = WorkspacePolicy(shell_default="ask")
     verdict = policy.decide_command("make deploy")
-    assert verdict == Verdict(
-        "ask", "no workspace rule allows this command", "shell:make"
-    )
-    assert policy.decide_command("make *").scope is None
-    assert policy.decide_command("FOO=1 make").scope is None
-    assert policy.decide_command("make -o x").scope is None
+    assert verdict == Verdict("ask", "", ("shell:make",))
+    star = policy.decide_command("make *")
+    assert star.scopes == () and "expanded by the shell" in star.reason
+    wrapped = policy.decide_command("FOO=1 make")
+    assert wrapped.scopes == () and "wraps the command" in wrapped.reason
+    assert policy.decide_command("make -o x").scopes == ()
     # Nor the command word itself, when the shell decides what it runs...
     for cmd in ("$CMD build", "./tool* x", "`which make` x"):
-        assert policy.decide_command(cmd).scope is None, cmd
+        assert policy.decide_command(cmd).scopes == (), cmd
     # ...or when it is a wrapper kept in place by its options: a grant for
     # `env` would cover whatever it wraps next time.
     for cmd in ("env -i make", "nice -n 1 make", "timeout --foreground 5 make"):
         verdict = policy.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scope is None, cmd
+        assert verdict.action == "ask" and verdict.scopes == (), cmd
 
 
 def _opted_in() -> WorkspacePolicy:
@@ -156,29 +157,38 @@ def _opted_in() -> WorkspacePolicy:
     return WorkspacePolicy.coding(command_rules=READ_ONLY + DEV_TOOLS)
 
 
-def test_compound_scope_survives_only_a_single_ask() -> None:
+def test_compound_command_offers_every_ask_scope_or_none() -> None:
     policy = WorkspacePolicy(
         shell_default="allow",
         command_rules=(
             CommandRule("git push", "ask"),
             CommandRule("npm publish", "ask"),
+            CommandRule("sudo", "ask", grant=False),
         ),
     )
     # One ask among allows: its scope is the grant on offer.
-    assert policy.decide_command("git push && echo ok").scope == "shell:git push"
-    # Two asks: granting one must not cover the other -> nothing to remember.
-    merged = policy.decide_command("git push && npm publish")
-    assert merged.action == "ask" and merged.scope is None
+    assert policy.decide_command("git push && echo ok").scopes == ("shell:git push",)
+    # Two asks: the grant names both, so neither rides on the other.
+    merged = policy.decide_command("git push && npm publish && git push")
+    assert merged.action == "ask"
+    assert merged.scopes == ("shell:git push", "shell:npm publish")
+    # One ask that offers nothing: nothing for the others either.
+    assert policy.decide_command("git push; sudo ls").scopes == ()
+    # Gray words in a chain, as models write them: each word, once.
+    gray = WorkspacePolicy(shell_default="ask", baseline=())
+    chain = gray.decide_command('echo "--- a ---"; uname -a; echo b | head -1')
+    assert chain == Verdict("ask", "", ("shell:echo", "shell:uname", "shell:head"))
+    assert gray.decide_command("echo a; echo $HOME").scopes == ()
 
 
 def test_command_decider_may_return_a_verdict() -> None:
     policy = WorkspacePolicy(
         shell_default="allow",
         command_decider=lambda seg: (
-            Verdict("ask", "custom", "shell:x") if seg.startswith("x") else None
+            Verdict("ask", "custom", ("shell:x",)) if seg.startswith("x") else None
         ),
     )
-    assert policy.decide_command("x run") == Verdict("ask", "custom", "shell:x")
+    assert policy.decide_command("x run") == Verdict("ask", "custom", ("shell:x",))
     assert policy.decide_command("y run").action == "allow"
 
 
@@ -192,21 +202,22 @@ def test_path_rule_ask_offers_its_pattern_as_scope() -> None:
     )
     env = policy.decide_path(rel=".env", abs_posix="/ws/.env", op="read")
     assert env == Verdict(
-        "ask", "Environment files usually hold secrets.", "read:.env*"
+        "ask", "Environment files usually hold secrets.", ("read:.env*",)
     )
     git = policy.decide_path(rel=".git/config", abs_posix="/ws/.git/config", op="write")
-    assert git.action == "ask" and git.scope is None
+    assert git.action == "ask" and git.scopes == ()
 
 
 def test_outside_default_ask_offers_the_directory_as_scope() -> None:
     policy = WorkspacePolicy(read_outside="ask")
     verdict = policy.decide_path(rel=None, abs_posix="/etc/hosts", op="read")
-    assert verdict.action == "ask" and verdict.scope == "read:/etc"
-    assert "outside the workspace root" in verdict.reason
+    assert verdict == Verdict(
+        "ask", "Outside the workspace root (/etc).", ("read:/etc",)
+    )
     # The home directory collapses to ~ in both the key and the reason.
     home = Path.home().resolve().as_posix()
     verdict = policy.decide_path(rel=None, abs_posix=f"{home}/notes/a.md", op="read")
-    assert verdict.scope == "read:~/notes" and "~/notes" in verdict.reason
+    assert verdict.scopes == ("read:~/notes",) and "~/notes" in verdict.reason
 
 
 def test_inside_write_ask_offers_the_relative_directory() -> None:
@@ -215,8 +226,8 @@ def test_inside_write_ask_offers_the_relative_directory() -> None:
     nested = policy.decide_path(
         rel="src/app.py", abs_posix="/ws/src/app.py", op="write"
     )
-    assert top.scope == "write:." and nested.scope == "write:src"
-    assert top.reason == "writes inside the workspace require approval"
+    assert top.scopes == ("write:.",) and nested.scopes == ("write:src",)
+    assert top.reason == ""
 
 
 def test_denied_path_verdict_names_the_pattern() -> None:
@@ -269,9 +280,9 @@ def test_rule_key_keeps_two_flag_rules_apart_as_grant_scopes() -> None:
             CommandRule("git push", "ask", flags=("--delete",)),
         ),
     )
-    assert policy.decide_command("git push --tags").scope == "shell:git push --tags"
-    assert (
-        policy.decide_command("git push --delete x").scope == "shell:git push --delete"
+    assert policy.decide_command("git push --tags").scopes == ("shell:git push --tags",)
+    assert policy.decide_command("git push --delete x").scopes == (
+        "shell:git push --delete",
     )
 
 
@@ -303,10 +314,10 @@ def test_wrapped_commands_are_at_most_asked_and_never_grantable() -> None:
     gray = WorkspacePolicy(shell_default="ask")
     for cmd in ("command ls", "exec ls", "builtin cd x", "exec -a x ls"):
         verdict = gray.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scope is None, cmd
+        assert verdict.action == "ask" and verdict.scopes == (), cmd
     # An ask stays an ask but loses its scope: the wrapper is what changes
     # what the inner command runs.
-    assert policy.decide_command("FOO=1 git push").scope is None
+    assert policy.decide_command("FOO=1 git push").scopes == ()
     # A deny still bites through the wrapper.
     assert policy.decide_command("env git push --force").action == "deny"
     # env with options is not a thin wrapper: the whole segment is gray.
@@ -336,12 +347,12 @@ def test_shell_syntax_is_not_the_programs() -> None:
     # looks like, which is harmless: the words around it are the command.
     coding = WorkspacePolicy.coding()
     verdict = coding.decide_command("rm -r ')'")
-    assert verdict.action == "ask" and verdict.scope == "shell:rm -r"
-    assert policy.decide_command("git commit -m ')'").scope == "shell:git"
+    assert verdict.action == "ask" and verdict.scopes == ("shell:rm -r",)
+    assert policy.decide_command("git commit -m ')'").scopes == ("shell:git",)
     assert policy.decide_command("git push '--force'").action == "deny"
     for cmd in ("! ls", "(ls)", "((ls))", "} ls", "> out ls", ">out ls", "2>&1 ls"):
         verdict = policy.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scope == "shell:ls", cmd
+        assert verdict.action == "ask" and verdict.scopes == ("shell:ls",), cmd
     # Syntax changes nothing about what runs, so an allow rule still holds
     # through it — unlike a wrapper.
     opted = _opted_in()
@@ -352,9 +363,9 @@ def test_shell_syntax_is_not_the_programs() -> None:
     # is judged before the syntax is stepped over: never allowed, no scope.
     for cmd in ('>"$HOME/.ssh/config" ls', "> $F ls", "2>$LOG ls"):
         verdict = opted.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scope is None, cmd
+        assert verdict.action == "ask" and verdict.scopes == (), cmd
         assert "expanded by the shell" in verdict.reason, cmd
-        assert policy.decide_command(cmd).scope is None, cmd
+        assert policy.decide_command(cmd).scopes == (), cmd
     # Syntax alone (`fi`, `done`, `}`) runs nothing — unless the shell
     # expands something in it.
     for cmd in ("fi", "esac", "}", "done"):
@@ -363,7 +374,7 @@ def test_shell_syntax_is_not_the_programs() -> None:
     # A `for` / `case` header is gray and not a program: ask, no scope.
     for cmd in ("for f in a b", "case x in x) ls", "for f in $(ls)"):
         verdict = policy.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scope is None, cmd
+        assert verdict.action == "ask" and verdict.scopes == (), cmd
 
 
 def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
@@ -382,7 +393,7 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
         "ls -o",  # a false hit costs one question, never a bypass
     ):
         verdict = policy.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scope is None, cmd
+        assert verdict.action == "ask" and verdict.scopes == (), cmd
         assert "output option" in verdict.reason, cmd
     # Not an output option: `--oneline`, or anything after a bare `--`.
     assert policy.decide_command("git log --oneline").action == "allow"
@@ -402,7 +413,7 @@ def test_globs_variables_and_substitutions_cap_allowed_commands_at_ask() -> None
     policy = _opted_in()
     for cmd in ("ls *", "ls -- *", "du *.pem", "echo $F", "ls $(ls)", "ls ~/x[1]"):
         verdict = policy.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scope is None, cmd
+        assert verdict.action == "ask" and verdict.scopes == (), cmd
         assert "expanded by the shell" in verdict.reason, cmd
 
 
@@ -540,12 +551,13 @@ def test_baseline_merges_every_matching_rule() -> None:
         rel=".env.production", abs_posix="/ws/.env.production", op="read"
     )
     assert read.action == "deny"
-    # Two asks merge too: one reason listing both, no single-rule scope.
+    # Two asks merge too: one reason listing both, a grant naming both.
     both = WorkspacePolicy(
         baseline=(PathRule(".git", "ask", ops=("write",)), PathRule("*.lock", "ask"))
     )
     lock = both.decide_path(rel=".git/x.lock", abs_posix="/ws/.git/x.lock", op="write")
-    assert lock.action == "ask" and lock.scope is None and ";" in lock.reason
+    assert lock.action == "ask" and ";" in lock.reason
+    assert lock.scopes == ("write:.git", "write:*.lock")
     # Commands likewise.
     cmds = (
         CommandRule("git push", "ask"),
@@ -577,7 +589,7 @@ def test_default_baseline_is_in_force_in_every_preset() -> None:
         git = policy.decide_path(
             rel=".git/config", abs_posix="/ws/.git/config", op="write"
         )
-        assert git.action in ("ask", "deny") and git.scope is None
+        assert git.action in ("ask", "deny") and git.scopes == ()
     for policy in (WorkspacePolicy.coding(), WorkspacePolicy.trusted()):
         assert policy.decide_command("git push origin main --force").action == "deny"
         assert policy.decide_command("mkfs /dev/sda").action == "deny"
@@ -593,13 +605,11 @@ def test_coding_preset_vouches_for_no_command_and_takes_bundles_opt_in() -> None
     policy = WorkspacePolicy.coding()
     # Nothing runs unprompted by default: the irreversible ask with a reason
     # and a rule scope, the rest ask with the command word as scope.
-    assert policy.decide_command("git status") == Verdict(
-        "ask", "no workspace rule allows this command", "shell:git"
-    )
-    assert policy.decide_command("ruff check .").scope == "shell:ruff"
+    assert policy.decide_command("git status") == Verdict("ask", "", ("shell:git",))
+    assert policy.decide_command("ruff check .").scopes == ("shell:ruff",)
     pushed = policy.decide_command("git push origin main")
-    assert pushed.action == "ask" and pushed.scope == "shell:git push"  # IRREVERSIBLE
-    assert policy.decide_command("sudo ls").scope is None  # grant=False
+    assert pushed.action == "ask" and pushed.scopes == ("shell:git push",)
+    assert policy.decide_command("sudo ls").scopes == ()  # grant=False
     # Opting in is the deployer's call, and their own rules still come first.
     opted = WorkspacePolicy.coding(
         command_rules=(CommandRule("pytest", "ask"),) + READ_ONLY + DEV_TOOLS
@@ -615,9 +625,8 @@ def test_coding_preset_vouches_for_no_command_and_takes_bundles_opt_in() -> None
     # tightens), composing the baseline without ENV_FILES does.
     from lovia.workspace import CREDENTIAL_PATHS, DANGEROUS_COMMANDS, PROTECTED_CONFIG
 
-    assert (
-        policy.decide_path(rel=".env", abs_posix="/ws/.env", op="read").scope
-        == "read:**/.env*"
+    assert policy.decide_path(rel=".env", abs_posix="/ws/.env", op="read").scopes == (
+        "read:**/.env*",
     )
     not_lifted = WorkspacePolicy.coding(path_rules=(PathRule("**/.env*", "allow"),))
     assert (
@@ -653,7 +662,7 @@ def test_env_files_rule_gates_inside_reads_only() -> None:
     outside = WorkspacePolicy.coding().decide_path(
         rel=None, abs_posix="/srv/app/.env", op="read"
     )
-    assert outside.action == "ask" and outside.scope == "read:/srv/app"
+    assert outside.action == "ask" and outside.scopes == ("read:/srv/app",)
     coding = WorkspacePolicy.coding()
     assert (
         coding.decide_path(rel=None, abs_posix="/srv/app/.env", op="write").action
@@ -942,16 +951,16 @@ def test_command_decider_invalid_return_falls_through() -> None:
 
 def test_merge_verdicts_most_restrictive_wins_and_keeps_its_reason() -> None:
     assert merge_verdicts() == Verdict("allow")
-    assert merge_verdicts(Verdict("allow"), Verdict("ask", "why", "s")) == Verdict(
-        "ask", "why", "s"
+    assert merge_verdicts(Verdict("allow"), Verdict("ask", "why", ("s",))) == Verdict(
+        "ask", "why", ("s",)
     )
     assert merge_verdicts(
         Verdict("ask", "a"), Verdict("deny", "no"), Verdict("allow")
     ) == Verdict("deny", "no")
-    # Two asks: the scope is dropped and both reasons are kept.
+    # Two asks: both reasons and both scopes are kept.
     assert merge_verdicts(
-        Verdict("ask", "a", "x"), Verdict("ask", "b", "y")
-    ) == Verdict("ask", "a; b", None)
+        Verdict("ask", "a", ("x",)), Verdict("ask", "b", ("y",))
+    ) == Verdict("ask", "a; b", ("x", "y"))
 
 
 def test_path_rule_ops_accepts_any_iterable() -> None:

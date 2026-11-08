@@ -422,12 +422,12 @@ class PathRule:
 
 
 def _rule_verdict(
-    action: Decision, reason: str, pattern: str, scope: str | None
+    action: Decision, reason: str, pattern: str, scopes: tuple[str, ...]
 ) -> Verdict:
     """A rule hit as a verdict: the author's reason or a derived one, and the
     rule's pattern as grant scope when it asks."""
     if action == "ask":
-        return Verdict("ask", reason or f"'{pattern}' requires approval", scope)
+        return Verdict("ask", reason or f"'{pattern}' requires approval", scopes)
     if action == "deny":
         return Verdict("deny", reason or f"'{pattern}' is denied by workspace policy")
     return Verdict("allow", reason)
@@ -661,9 +661,9 @@ class WorkspacePolicy:
             if op in rule.ops and _pattern_matches(
                 rule.pattern, rel=rel, abs_posix=abs_posix
             ):
-                scope = f"{op}:{rule.pattern}" if rule.grant else None
+                scopes = (f"{op}:{rule.pattern}",) if rule.grant else ()
                 hits.append(
-                    _rule_verdict(rule.action, rule.reason, rule.pattern, scope)
+                    _rule_verdict(rule.action, rule.reason, rule.pattern, scopes)
                 )
                 if not every:
                     break
@@ -683,11 +683,8 @@ class WorkspacePolicy:
             if op == "read" or self.write == "allow":
                 return Verdict("allow")
             if self.write == "ask":
-                return Verdict(
-                    "ask",
-                    "writes inside the workspace require approval",
-                    f"write:{_dir_of(rel, abs_posix)}",
-                )
+                # No reason: "this write needs approval" is the ask itself.
+                return Verdict("ask", "", (f"write:{_dir_of(rel, abs_posix)}",))
             return Verdict("deny", "the workspace is read-only")
         action = self.read_outside if op == "read" else self.write_outside
         where = _dir_of(None, abs_posix)
@@ -695,9 +692,7 @@ class WorkspacePolicy:
             return Verdict("allow")
         if action == "ask":
             return Verdict(
-                "ask",
-                f"{verb} outside the workspace root require approval ({where})",
-                f"{op}:{where}",
+                "ask", f"Outside the workspace root ({where}).", (f"{op}:{where}",)
             )
         return Verdict(
             "deny", f"{verb} outside the workspace root are not permitted ({where})"
@@ -744,17 +739,15 @@ class WorkspacePolicy:
             # capped at ask, and any ask loses its scope. A default of allow
             # (``trusted``) is not a rule vouching for anything — it is the
             # choice not to judge commands — and is left alone.
+            why = f"'{' '.join(stripped)}' wraps the command" if stripped else uncertain
             if by_rule and verdict.action == "allow":
-                why = (
-                    f"'{' '.join(stripped)}' wraps the command"
-                    if stripped
-                    else uncertain
-                )
                 verdict = Verdict(
                     "ask", f"{why}; allow rules cover literal arguments only"
                 )
             elif verdict.action == "ask":
-                verdict = Verdict("ask", verdict.reason)
+                # Without a reason of its own, the ask says why no "always
+                # allow" is on offer.
+                verdict = Verdict("ask", verdict.reason or str(why))
         base = self._command_rule_verdict(self._baseline_commands, words, every=True)
         return merge_verdicts(verdict, base) if base is not None else verdict
 
@@ -783,8 +776,8 @@ class WorkspacePolicy:
         hits: list[Verdict] = []
         for rule in rules:
             if rule.matches(words):
-                scope = f"shell:{rule.key}" if rule.grant else None
-                hits.append(_rule_verdict(rule.action, rule.reason, rule.key, scope))
+                scopes = (f"shell:{rule.key}",) if rule.grant else ()
+                hits.append(_rule_verdict(rule.action, rule.reason, rule.key, scopes))
                 if not every:
                     break
         return merge_verdicts(*hits) if hits else None
@@ -794,13 +787,15 @@ class WorkspacePolicy:
             # The grant on offer is the command word, exactly as shown
             # ("always allow `ls` in this chat"); finer than that is a rule.
             # Words the guard cannot vouch for strip it (_decide_segment), as
-            # does a head that is not the program (_NOT_A_PROGRAM).
-            scope = (
-                f"shell:{words[0]}"
+            # does a head that is not the program (_NOT_A_PROGRAM). No reason:
+            # nothing about the command stands out — it is just not on an
+            # allow list, which is what being asked already says.
+            scopes = (
+                (f"shell:{words[0]}",)
                 if words and words[0] not in _NOT_A_PROGRAM
-                else None
+                else ()
             )
-            return Verdict("ask", "no workspace rule allows this command", scope)
+            return Verdict("ask", "", scopes)
         if self.shell_default == "deny":
             return Verdict("deny", "shell commands are denied by workspace policy")
         return Verdict("allow")

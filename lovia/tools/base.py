@@ -60,7 +60,7 @@ from ..schema import build_args_validator, function_args_schema
 # A permission predicate judges one call from its parsed arguments and the
 # run context: ``"allow"`` runs it, ``"ask"`` routes it through the approval
 # channel, ``"deny"`` refuses it; a ``Verdict`` adds the reason (and, for
-# ``ask``, the scope an "always allow" would cover). Never ``bool`` — see
+# ``ask``, the scopes an "always allow" would cover). Never ``bool`` — see
 # :func:`lovia.approvals.as_verdict`.
 PermissionFn = Callable[[dict[str, Any], "RunContext[Any]"], "Decision | Verdict"]
 # What ``Tool.permission`` accepts: a constant decision/verdict or a predicate.

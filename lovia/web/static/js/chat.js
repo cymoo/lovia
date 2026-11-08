@@ -29,6 +29,14 @@ import {
   setToolStatus,
   toolPath,
 } from './tools.js';
+import {
+  approvalHeading,
+  approvalOutcome,
+  cardRegistry,
+  outcomeText,
+  scopeLabel,
+  splitNote,
+} from './approvals.js';
 import { BlockStream } from './stream-blocks.js';
 import { createSendQueue } from './send-queue.js';
 import { isStep, placeStep, removeStep, sealActivity } from './activity.js';
@@ -838,19 +846,26 @@ function upsertTodoCard(todos) {
 }
 
 // "Always allow" lives on the server: ticking the box on a card remembers the
-// request's own scope (`shell:git push`, `read:~/notes`) for this chat, keyed
-// to the agent and workspace it was given under. A later call in that scope
-// arrives already approved (`granted: true`) and shows as a note, not a card.
-// The list is reviewed and revoked in the grants dialog below.
+// request's own scopes (`shell:git push`, `read:~/notes` — a chained command
+// can need several, remembered together) for this chat, keyed to the agent
+// and workspace it was given under. A later call those scopes cover arrives
+// already approved (`granted: true`) and shows as a note, not a card. The
+// list is reviewed and revoked in the grants dialog below.
+//
+// Whoever decides — this tab, another one, the server's timeout, a stop — the
+// server says so in `approval_resolved`, which settles the card everywhere.
+const approvalCards = cardRegistry();
 
-/** @param {{ id: string, name: string, arguments: string, reason?: string, scope?: string | null, granted?: boolean }} call */
+/** @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], granted?: boolean, expires_at?: number | null }} call */
 function appendApproval(call) {
   if (!store.bubble) return;
+  const scopes = call.scopes ?? [];
   if (call.granted) {
     // A quiet record instead of a card — the decision was already made.
     const note = document.createElement('div');
     note.className = 'lv-approval-auto';
-    note.append(t('approval.auto', { scope: call.scope || call.name }), ' ');
+    const covered = scopes.map(scopeLabel).join(', ') || call.name;
+    note.append(t('approval.auto', { scope: covered }), ' ');
     const manage = document.createElement('button');
     manage.type = 'button';
     manage.className = 'lv-approval-manage';
@@ -865,56 +880,103 @@ function appendApproval(call) {
   }
   setToolStatus(findToolNode(call.id), 'awaiting');
   store.emit('tool-awaiting');
-  const node = cloneTemplate('tmpl-approval');
-  // Why the agent is asking leads the card; the command itself stays visible
-  // underneath, because a summary can be wrong and the arguments cannot.
+  const node = /** @type {HTMLElement} */ (cloneTemplate('tmpl-approval'));
+  node.dataset.callId = call.id;
+  approvalCards.add(call.id, node);
+  // The question leads, in the UI's words; the server's reason (only when
+  // something stands out) goes under it; the call itself stays visible below,
+  // because a summary can be wrong and the arguments cannot.
+  const heading = approvalHeading(call.name);
+  node.tabIndex = -1;
+  node.setAttribute('role', 'group');
+  node.setAttribute('aria-label', heading);
   const head = node.querySelector('.lv-approval-head');
-  if (head) head.textContent = call.reason || t('approval.waiting');
+  if (head) {
+    head.textContent = heading;
+    if (call.reason) {
+      const why = document.createElement('div');
+      why.className = 'lv-approval-why';
+      why.textContent = call.reason;
+      head.after(why);
+    }
+  }
   node.querySelector('.lv-approve').textContent = t('approval.approve');
   node.querySelector('.lv-decline').textContent = t('approval.deny');
   node.querySelector('.lv-approval-name').textContent = call.name;
-  fillParams(node.querySelector('.lv-approval-args'), call.arguments);
+  // The model's own summary goes apart from what acts, marked as its words.
+  const { note, rest } = splitNote(call.arguments);
+  const argsEl = node.querySelector('.lv-approval-args');
+  fillParams(argsEl, rest);
+  if (note) {
+    const said = document.createElement('div');
+    said.className = 'lv-approval-note';
+    said.textContent = note;
+    said.title = t('approval.modelNote');
+    argsEl?.before(said);
+  }
 
   const actions = node.querySelector('.lv-approval-actions');
-  // Offered only when the server names what it would cover; the label shows
-  // exactly that, never a whole tool.
+  // Offered only when the server names what it would cover; the label lists
+  // exactly that — every scope, since ticking it remembers them all.
   let box = null;
-  let always = null;
-  if (call.scope) {
-    always = document.createElement('label');
+  if (scopes.length) {
+    const always = document.createElement('label');
     always.className = 'lv-approval-always';
     box = document.createElement('input');
     box.type = 'checkbox';
-    const scope = document.createElement('code');
-    scope.textContent = call.scope;
-    always.append(box, ` ${t('approval.always')} `, scope);
+    const text = document.createElement('span');
+    text.textContent = t('approval.always');
+    always.append(box, text);
+    for (const s of scopes) {
+      const chip = document.createElement('code');
+      chip.textContent = scopeLabel(s);
+      chip.title = s;
+      always.append(chip);
+    }
     actions?.before(always);
   }
   // An optional reason for denying, passed to the model with the denial so it
-  // changes course instead of retrying the same thing.
-  const why = document.createElement('input');
-  why.type = 'text';
+  // changes course instead of retrying the same thing. Multi-line; ⌘/Ctrl+Enter
+  // denies with it.
+  const why = document.createElement('textarea');
   why.className = 'lv-approval-reason';
+  why.rows = 1;
   why.placeholder = t('approval.denyReason');
   why.setAttribute('aria-label', t('approval.denyReason'));
+  why.setAttribute('aria-keyshortcuts', 'Meta+Enter Control+Enter');
+  why.addEventListener('input', () => {
+    why.style.height = 'auto';
+    why.style.height = `${Math.min(why.scrollHeight, 160)}px`;
+  });
+  why.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) {
+      e.preventDefault();
+      resolve('deny');
+    }
+  });
   actions?.before(why);
+  // When the server will stop waiting: said up front, not discovered after.
+  if (call.expires_at) {
+    const expiry = document.createElement('span');
+    expiry.className = 'lv-approval-expiry';
+    const time = new Date(call.expires_at * 1000).toLocaleTimeString(currentLang(), {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    expiry.textContent = t('approval.expires', { time });
+    actions?.prepend(expiry);
+  }
 
+  /** @param {'approve' | 'deny'} decision */
   const resolve = async (decision) => {
-    node.classList.add('lv-resolved');
+    if (node.classList.contains('lv-resolved')) return;
     // A denial settles as an error result; an approval runs the call.
     if (decision === 'approve') setToolStatus(findToolNode(call.id), 'running');
     const remember = decision === 'approve' && !!box?.checked;
     const reason = decision === 'deny' ? why.value.trim() : '';
-    always?.remove();
-    why.remove();
-    // Leave a record of which way it went instead of just dimming the card.
-    if (actions) {
-      const status = document.createElement('span');
-      status.className = `lv-approval-status lv-${decision}`;
-      status.textContent =
-        decision === 'approve' ? t('approval.approved') : t('approval.denied');
-      actions.replaceChildren(status);
-    }
+    // Settled at once; the server's approval_resolved confirms (or corrects:
+    // a click that lost the race to the timeout).
+    settleApproval(node, decision);
     try {
       const res = await api.approve({
         session_id: store.sessionId,
@@ -936,6 +998,32 @@ function appendApproval(call) {
   // and put the keyboard on the decision unless it's busy typing elsewhere.
   announce(t('a11y.approvalNeeded', { name: call.name }), { assertive: true });
   focusApprovalCard(node);
+}
+
+/**
+ * Freeze a card with which way it went. Idempotent, and the last word wins:
+ * the server's `approval_resolved` may correct a click that came too late.
+ * @param {HTMLElement} node
+ * @param {import('./approvals.js').ApprovalOutcome} outcome
+ */
+function settleApproval(node, outcome) {
+  node.classList.add('lv-resolved');
+  for (const sel of ['.lv-approval-always', '.lv-approval-reason', '.lv-approval-expiry']) {
+    node.querySelector(sel)?.remove();
+  }
+  const status = document.createElement('span');
+  status.className = `lv-approval-status lv-${outcome === 'approve' ? 'approve' : 'deny'}`;
+  status.textContent = outcomeText(outcome);
+  node.querySelector('.lv-approval-actions')?.replaceChildren(status);
+}
+
+/** @param {{ id: string, approved: boolean, cause: 'user' | 'timeout' | 'cancel' }} data */
+function resolveApproval(data) {
+  const node = approvalCards.take(data.id);
+  if (node) settleApproval(node, approvalOutcome(data));
+  // Approved elsewhere (another tab): the call runs now. A denial settles
+  // with its error result, which follows.
+  if (data.approved) setToolStatus(findToolNode(data.id), 'running');
 }
 
 /** The chat's remembered approvals, each with a Revoke button. */
@@ -966,7 +1054,8 @@ export async function showGrants() {
     const row = document.createElement('li');
     row.className = 'lv-grant' + (g.active ? '' : ' lv-grant-inactive');
     const scope = document.createElement('code');
-    scope.textContent = g.scope;
+    scope.textContent = scopeLabel(g.scope);
+    scope.title = g.scope;
     row.append(scope);
     if (!g.active) {
       const note = document.createElement('span');
@@ -1003,11 +1092,13 @@ export async function showGrants() {
   close.addEventListener('click', () => dialog.close());
 }
 
-// Focus the Approve button so keyboard and screen-reader users land on the
-// decision — but only from neutral ground: the page body, or the composer
-// while it's empty (where Enter currently does nothing and the approval is
-// the one thing waiting on the user). Any other focus — a search box, a
-// dialog, a composer holding a draft — is somebody's work in progress.
+// Focus the card so keyboard and screen-reader users land on the decision —
+// the card, not its Approve button: a stray Enter or Space (the reflex of
+// someone who was about to type) must never approve a call. One Tab reaches
+// the controls. Only from neutral ground: the page body, or the composer
+// while it's empty. Any other focus — a search box, a dialog, a composer
+// holding a draft — is somebody's work in progress.
+/** @param {HTMLElement} node */
 function focusApprovalCard(node) {
   if (document.querySelector('dialog[open]')) return;
   const ae = document.activeElement;
@@ -1016,9 +1107,7 @@ function focusApprovalCard(node) {
     ae === document.body ||
     (ae === promptEl && !promptEl.value.trim());
   if (!neutral) return;
-  /** @type {HTMLElement | null} */ (node.querySelector('.lv-approve'))?.focus({
-    preventScroll: true, // scrollDown() already owns the viewport
-  });
+  node.focus({ preventScroll: true }); // scrollDown() already owns the viewport
 }
 
 function appendHandoff(from, to) {
@@ -2601,6 +2690,10 @@ async function applyEvent({ event, data }) {
 
     case 'approval_required':
       appendApproval(data);
+      break;
+
+    case 'approval_resolved':
+      resolveApproval(data);
       break;
 
     case 'handoff':

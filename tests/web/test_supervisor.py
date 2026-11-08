@@ -1036,6 +1036,45 @@ async def test_stop_saves_wire_safe_call_arguments(script) -> None:
 
 
 @pytest.mark.asyncio
+async def test_programmatic_stop_retires_the_reconnect_pointer() -> None:
+    """A stop that bypasses the HTTP cancel (``cancel_subagent`` calls
+    ``supervisor.cancel`` directly) must not leave the pointer: the run is in
+    the Session now, and its checkpoint lives until the tool returns, so a
+    reload would show the turns twice and offer to resume a stopped run."""
+    release = asyncio.Event()
+
+    @tool
+    async def ping() -> str:
+        """Return immediately."""
+        return "pong"
+
+    provider = ScriptedProvider(
+        [call("ping", {}, call_id="c1"), call("block", {}, call_id="c2"), text("x")]
+    )
+    agent = Agent(name="bot", model=provider, tools=[ping, _blocking_tool(release)])
+    store = ChatStore.in_memory()
+    app = _app(agent, store=store)
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_calls(provider, 2)
+        await _wait_run(ac, "s1")
+        app.state.deps.supervisor.cancel("s1")
+        detail = (await ac.get("/api/sessions/s1")).json()
+        assert detail["active_run_id"] is None
+        users = [m for m in detail["entries"] if m["role"] == "user"]
+        assert len(users) == 1  # the stopped turns once, not spliced in again
+        # Bounded: a resumed run would park in block and never end the stream.
+        r = await asyncio.wait_for(
+            ac.post("/api/chat/reconnect", params={"session_id": "s1"}), timeout=3
+        )
+        assert r.status_code == 404
+        release.set()
+        await _kill(task)
+
+
+@pytest.mark.asyncio
 async def test_failed_run_persists_partial_transcript() -> None:
     """A non-resumable failure (non-retryable provider error) folds the run's
     completed turns into the Session and leaves nothing to reconnect to — the

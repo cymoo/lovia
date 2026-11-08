@@ -385,6 +385,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
 
         if store.checkpointer is None:
             raise WebError(404, "feature_unavailable", "no checkpointer configured")
+        # A run stopped a moment ago retires its pointer once saved: never
+        # resume it from the window before that.
+        await deps.supervisor.settle(session_id)
         run_id = await store.get_active_run_id(session_id)
         if run_id is None:
             raise WebError(404, "run_not_found", "no interrupted run")

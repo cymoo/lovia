@@ -539,8 +539,10 @@ class RunController:
         run_id, entries = self._seen()
         if run_id is None or not entries:
             return
+        # The pointer names the current leg — past the mirror's on an
+        # auto-chain hop, the leg the stop kept from starting.
         self._frozen = asyncio.ensure_future(
-            self._write_frozen(run_id, entries, time.time())
+            self._write_frozen(run_id, entries, time.time(), self.run_id)
         )
 
     def _seen(self) -> tuple[str | None, list[TranscriptEntry]]:
@@ -583,11 +585,19 @@ class RunController:
         return run_id, normalize_replayed_entries(entries)
 
     async def _write_frozen(
-        self, run_id: str, entries: list[TranscriptEntry], stopped_at: float
+        self,
+        run_id: str,
+        entries: list[TranscriptEntry],
+        stopped_at: float,
+        pointer: str | None,
     ) -> None:
         # Timed like a segment the loop writes, when the checkpoint knew the
         # leg's start. Best effort, like the run record: a failed write must
         # not break the stop, nor the task's finally that awaits it.
+        # Once saved, the run's reconnect pointer goes too — for every way a
+        # run is stopped, not only the HTTP cancel's eager clear — or a reload
+        # would splice its checkpoint (still there until the run winds down)
+        # in after the same turns, and offer to resume a stopped run.
         store, session = self.deps.store, self.deps.session
         assert session is not None  # freeze() checked
         try:
@@ -605,6 +615,8 @@ class RunController:
                     }
                 }
             await session.append(self.session_id, entries, run_id=run_id, meta=meta)
+            if store.checkpointer is not None and pointer:
+                await store.clear_active_run_id(self.session_id, expected=pointer)
         except Exception as exc:  # noqa: BLE001 — logged; the stop itself stands
             log.warning("could not save stopped run %s: %s", run_id, exc)
 

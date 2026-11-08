@@ -1345,23 +1345,21 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 .lv-turn .lv-body h4,
 .lv-turn .lv-body h5,
 .lv-turn .lv-body h6 {
-  margin: 1.5em 0 0.5em;
-  line-height: 1.3;
-  letter-spacing: -0.015em;
+  margin: 1.6em 0 0.55em;
+  line-height: 1.35;
+  letter-spacing: -0.012em;
   font-weight: 650;
   color: var(--lv-ink);
   text-wrap: pretty;
 }
 .lv-turn .lv-body h1 {
-  font-size: 1.38em;
-  padding-bottom: 0.35em;
-  border-bottom: 1px solid var(--lv-border);
+  font-size: 1.45em;
 }
 .lv-turn .lv-body h2 {
-  font-size: 1.22em;
+  font-size: 1.27em;
 }
 .lv-turn .lv-body h3 {
-  font-size: 1.08em;
+  font-size: 1.1em;
 }
 .lv-turn .lv-body p {
   margin: 0.65em 0;
@@ -1434,8 +1432,8 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   overflow-x: auto;
   background: var(--lv-surface-2);
   border: 1px solid var(--lv-border);
-  border-radius: var(--lv-radius-sm);
-  padding: 38px 16px 14px;
+  border-radius: var(--lv-radius);
+  padding: 40px 16px 14px;
   margin: 1em 0;
   transition: border-color var(--lv-t-fast);
 }
@@ -1447,22 +1445,21 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 }
 .lv-turn .lv-body pre code {
   font-family: var(--lv-mono);
-  font-size: 0.84em;
-  line-height: 1.66;
+  font-size: 0.88em;
+  line-height: 1.62;
 }
 
-/* language label */
+/* language label — the header's left end, opposite the copy button */
 .lv-code-lang {
   position: absolute;
   top: 10px;
-  left: 14px;
-  font-family: var(--lv-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  color: var(--lv-muted-2);
+  left: 16px;
+  font-family: var(--lv-sans);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--lv-muted);
   pointer-events: none;
-  text-transform: uppercase;
   z-index: 1;
 }
 
@@ -1474,41 +1471,27 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3.5px 9px;
+  padding: 3px 8px;
   border-radius: var(--lv-radius-xs);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   font-family: var(--lv-sans);
   color: var(--lv-muted);
-  background: var(--lv-surface);
-  border: 1px solid var(--lv-border);
-  opacity: 0;
-  transform: translateY(-2px);
+  background: transparent;
+  border: 0;
   transition:
-    opacity var(--lv-t-fast),
-    transform var(--lv-t-fast),
     color var(--lv-t-fast),
-    background var(--lv-t-fast),
-    border-color var(--lv-t-fast);
+    background var(--lv-t-fast);
   cursor: pointer;
-  pointer-events: none;
   z-index: 2;
 }
-.lv-turn .lv-body pre:hover .lv-btn-copy-code,
-.lv-btn-copy-code:focus-visible {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-}
+/* Always present (touch has no hover), quiet until pointed at. */
 .lv-btn-copy-code:hover {
   background: var(--lv-surface-3);
   color: var(--lv-ink);
-  border-color: var(--lv-border-strong);
 }
 .lv-btn-copy-code.lv-copied {
   color: var(--lv-ok);
-  border-color: color-mix(in srgb, var(--lv-accent) 40%, transparent);
-  background: var(--lv-accent-soft);
 }
 
 /* ---- Mermaid diagrams ----------------------------------------------------- */
@@ -1521,7 +1504,7 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   cursor: zoom-in;
   background: var(--lv-diagram-paper);
   border: 1px solid var(--lv-border);
-  border-radius: var(--lv-radius-sm);
+  border-radius: var(--lv-radius);
   transition: border-color var(--lv-t-fast);
 }
 .lv-turn .lv-body .lv-mermaid-diagram:hover {
@@ -1654,7 +1637,7 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   margin: 0.8em 0;
   padding: 0.1em 0 0.1em 16px;
   border-left: 2px solid var(--lv-border-strong);
-  color: var(--lv-muted);
+  color: var(--lv-ink-2);
 }
 .lv-turn .lv-body blockquote blockquote {
   margin: 0.4em 0;
@@ -1670,11 +1653,14 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   display: block;
   width: fit-content;
   border: 1px solid var(--lv-border);
-  border-radius: var(--lv-radius-sm);
+  border-radius: var(--lv-radius);
 }
 .lv-turn .lv-body th,
 .lv-turn .lv-body td {
-  padding: 7px 14px;
+  /* a floor, so a narrow column of short values ("+18 −6") stays on one line
+     and the table scrolls instead */
+  min-width: 4.5em;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--lv-border);
   text-align: left;
   vertical-align: top;
@@ -1690,7 +1676,6 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 .lv-turn .lv-body th {
   background: var(--lv-surface-2);
   font-weight: 600;
-  font-size: 0.88em;
   color: var(--lv-ink-2);
 }
 .lv-turn .lv-body tr:last-child td {
@@ -4921,8 +4906,7 @@ body.lv-files-splitting {
   .lv-session-item .lv-session-more::before {
     content: none;
   }
-  .lv-btn-copy,
-  .lv-btn-copy-code {
+  .lv-btn-copy {
     opacity: 1;
     transform: none;
     pointer-events: auto;

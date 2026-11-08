@@ -980,6 +980,61 @@ async def test_stop_answers_a_call_whose_id_an_earlier_turn_used() -> None:
     assert results[1].output.startswith("Interrupted")
 
 
+def _calls(*calls: tuple[str, str, str]) -> AssistantTurn:
+    """A scripted turn requesting ``(call_id, name, arguments)`` calls."""
+    return AssistantTurn(
+        content=None,
+        tool_calls=[ToolCall(id=i, name=n, arguments=a) for i, n, a in calls],
+        usage=Usage(input_tokens=1, output_tokens=1),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "script",
+    [
+        # The bad call shares the turn the stop lands in...
+        [_calls(("c1", "block", "{}"), ("c2", "ping", "{bad")), text("x")],
+        # ...or sits in a turn that finished, rejected by core's preflight.
+        [_calls(("c1", "ping", "{bad")), _calls(("c2", "block", "{}")), text("x")],
+    ],
+    ids=["same-turn", "earlier-turn"],
+)
+async def test_stop_saves_wire_safe_call_arguments(script) -> None:
+    """Malformed arguments the model emitted must not reach the Session raw:
+    history is replayed as is, and every later request would fail on them."""
+    import json
+
+    from lovia.providers.anthropic import _to_anthropic_messages
+    from lovia.transcript import ToolCallEntry
+
+    release = asyncio.Event()
+
+    @tool
+    async def ping() -> str:
+        """Return immediately."""
+        return "pong"
+
+    provider = ScriptedProvider(script)
+    agent = Agent(name="bot", model=provider, tools=[ping, _blocking_tool(release)])
+    store = ChatStore.in_memory()
+    async with _client(_app(agent, store=store)) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_calls(provider, len(script) - 1)
+        await _wait_run(ac, "s1")
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        release.set()
+        await _kill(task)
+    entries = await store.session.load("s1")
+    args = [e.arguments for e in entries if isinstance(e, ToolCallEntry)]
+    assert len(args) == 2
+    assert all(isinstance(json.loads(a), dict) for a in args)
+    assert {"_raw": "{bad"} in [json.loads(a) for a in args]  # original kept
+    _to_anthropic_messages(entries, reasoning_provider="anthropic")  # no raise
+
+
 @pytest.mark.asyncio
 async def test_failed_run_persists_partial_transcript() -> None:
     """A non-resumable failure (non-retryable provider error) folds the run's

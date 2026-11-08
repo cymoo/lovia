@@ -33,6 +33,7 @@ from ..parts import coerce_parts
 from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
 from ..runtime.loop import pending_tool_calls
+from ..runtime.resume import normalize_replayed_entries
 from ..session import TIMING_META_KEY
 from ..steering import InjectedContent, Mailbox
 from ..transcript import (
@@ -576,7 +577,10 @@ class RunController:
             ToolResultEntry(call_id=call.id, output=_INTERRUPTED, is_error=True)
             for call in pending_tool_calls(entries)
         ]
-        return run_id, entries
+        # The mirror holds MessageCompleted's copies, which keep the model's raw
+        # arguments even for a call core rejected and rewrote. Session history
+        # is replayed as is, so make every (now answered) call wire-safe here.
+        return run_id, normalize_replayed_entries(entries)
 
     async def _write_frozen(
         self, run_id: str, entries: list[TranscriptEntry], stopped_at: float

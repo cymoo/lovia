@@ -961,14 +961,11 @@ function appendApproval(call) {
     if (decision === 'approve') setToolStatus(findToolNode(call.id), 'running');
     const kept = decision === 'approve' ? pick.picked() : [];
     const reason = decision === 'deny' ? why.value.trim() : '';
-    // Settled at once, saying what it will remember; the server's
-    // approval_resolved confirms (or corrects: a click that lost the race to
-    // the timeout).
-    settleApproval(
-      node,
-      decision,
-      kept.length ? t('approval.remembered', { scopes: scopeList(kept) }) : '',
-    );
+    // Settled at once; the server's approval_resolved confirms (or corrects:
+    // a click that lost the race to the timeout). What was remembered is said
+    // only once the server has saved it — a failed save, or another tab that
+    // answered first, must not leave a "remembered" behind.
+    settleApproval(node, decision);
     try {
       const res = await api.approve({
         session_id: store.sessionId,
@@ -978,7 +975,12 @@ function appendApproval(call) {
         scopes: kept,
         reason,
       });
-      if (kept.length && !res.remembered) toast(t('approval.notRemembered'), { type: 'error' });
+      if (!kept.length) return;
+      if (res.remembered) {
+        noteRemembered(node, t('approval.remembered', { scopes: scopeList(kept) }));
+      } else {
+        toast(t('approval.notRemembered'), { type: 'error' });
+      }
     } catch (err) { console.error(err); }
   };
   node.querySelector('.lv-approve').addEventListener('click', () => resolve('approve'));
@@ -1047,15 +1049,13 @@ function buildScopePicker(scopes, pick) {
 }
 
 /**
- * Freeze a card with which way it went (and, from this tab, what it
- * remembered). The server's `approval_resolved` has the last word — it may
- * correct a click that came too late — but repeating the same outcome keeps
- * the detail.
+ * Freeze a card with which way it went. The server's `approval_resolved` has
+ * the last word — it may correct a click that came too late — but repeating
+ * the same outcome keeps what the card already says.
  * @param {HTMLElement} node
  * @param {import('./approvals.js').ApprovalOutcome} outcome
- * @param {string} [detail]
  */
-function settleApproval(node, outcome, detail = '') {
+function settleApproval(node, outcome) {
   if (node.dataset.outcome === outcome) return;
   node.dataset.outcome = outcome;
   node.classList.add('lv-resolved');
@@ -1065,14 +1065,22 @@ function settleApproval(node, outcome, detail = '') {
   const status = document.createElement('span');
   status.className = `lv-approval-status lv-${outcome === 'approve' ? 'approve' : 'deny'}`;
   status.textContent = outcomeText(outcome);
-  const parts = [status];
-  if (detail) {
-    const more = document.createElement('span');
-    more.className = 'lv-approval-detail';
-    more.textContent = detail;
-    parts.unshift(more);
-  }
-  node.querySelector('.lv-approval-actions')?.replaceChildren(...parts);
+  node.querySelector('.lv-approval-actions')?.replaceChildren(status);
+}
+
+/**
+ * "Remembering pwd and uname" beside an approved card's status — called once
+ * the server has saved the grants, and only while the card still reads as
+ * approved.
+ * @param {HTMLElement} node
+ * @param {string} text
+ */
+function noteRemembered(node, text) {
+  if (node.dataset.outcome !== 'approve') return;
+  const more = document.createElement('span');
+  more.className = 'lv-approval-detail';
+  more.textContent = text;
+  node.querySelector('.lv-approval-status')?.before(more);
 }
 
 /** @param {{ id: string, approved: boolean, cause: 'user' | 'timeout' | 'cancel' }} data */

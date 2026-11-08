@@ -487,7 +487,7 @@ def test_shell_permission_consults_path_claims(tmp_path) -> None:
     # Outside read claim escalates to ask even without a command rule, and
     # the verdict says why.
     verdict = _shell_permission({"command": "cat /etc/hosts"}, _ctx(coding))
-    assert verdict.action == "ask" and "outside the workspace root" in verdict.reason
+    assert verdict.action == "ask" and "Outside the workspace root" in verdict.reason
     trusted = LocalWorkspaceSession(
         root=str(tmp_path), policy=WorkspacePolicy.trusted()
     )

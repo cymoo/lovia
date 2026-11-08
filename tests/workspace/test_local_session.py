@@ -1617,8 +1617,8 @@ async def test_shell_outside_read_claims_escalate_to_ask(tmp_path) -> None:
     # the one condition: its reason and directory scope ride along.
     verdict = coding.decide_command("ls /etc/hosts")
     etc = os.path.realpath("/etc")  # macOS: /private/etc
-    assert verdict.action == "ask" and verdict.scope == f"read:{etc}"
-    assert "outside the workspace root" in verdict.reason
+    assert verdict.action == "ask" and verdict.scopes == (f"read:{etc}",)
+    assert "Outside the workspace root" in verdict.reason
 
 
 async def test_listing_hides_symlink_to_denied_path(tmp_path) -> None:

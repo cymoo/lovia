@@ -33,18 +33,19 @@ _SEVERITY = {"allow": 0, "ask": 1, "deny": 2}
 
 @dataclass(frozen=True)
 class Verdict:
-    """A policy judgement about one call: the decision, why, and its grant scope.
+    """A policy judgement about one call: the decision, why, and its grant scopes.
 
     ``reason`` is shown to the human when the action is ``ask`` and told to
-    the model when it is ``deny``. ``scope`` names what an "always allow"
-    grant would cover (``"shell:git push"``, ``"read:~/notes"``); ``None``
-    means no such grant should be offered. Only meaningful on ``ask`` —
-    a ``deny`` can never be granted away.
+    the model when it is ``deny``; empty means nothing beyond "not
+    pre-approved". ``scopes`` names what an "always allow" grant would cover
+    (``("shell:git push",)``, ``("read:~/notes",)``) — all of them, since a
+    compound command can need several; empty means no such grant should be
+    offered. Only meaningful on ``ask`` — a ``deny`` can never be granted away.
     """
 
     action: Decision
     reason: str = ""
-    scope: str | None = None
+    scopes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # A dataclass does not enforce the Literal: an unchecked
@@ -54,6 +55,12 @@ class Verdict:
             raise ValueError(
                 f"Verdict.action must be 'allow', 'ask' or 'deny', got {self.action!r}"
             )
+        # A bare string would iterate as one scope per character.
+        if isinstance(self.scopes, str):
+            raise TypeError(
+                f"Verdict.scopes must be a tuple of strings, got {self.scopes!r}"
+            )
+        object.__setattr__(self, "scopes", tuple(self.scopes))
 
 
 def as_verdict(value: object) -> Verdict:
@@ -77,9 +84,9 @@ def merge_verdicts(*verdicts: Verdict) -> Verdict:
     """Combine verdicts, most restrictive wins.
 
     A ``deny`` keeps its own reason. Several ``ask`` conditions are joined
-    into one reason, and the ``scope`` survives only when there is a *sole*
-    ``ask``: granting one condition must never silently cover a second one
-    that also needed approval.
+    into one reason, and their scopes into one set — but only when *every*
+    ask offers some: a grant must cover each condition that needed approval,
+    by name, and one that offers none can never be granted away by the others.
     """
     winner = Verdict("allow")
     for verdict in verdicts:
@@ -88,8 +95,13 @@ def merge_verdicts(*verdicts: Verdict) -> Verdict:
     if winner.action == "ask":
         asks = [v for v in verdicts if v.action == "ask"]
         if len(asks) > 1:
-            reasons = list(dict.fromkeys(v.reason for v in asks if v.reason))
-            winner = Verdict("ask", "; ".join(reasons))
+            reasons = dict.fromkeys(v.reason for v in asks if v.reason)
+            scopes = (
+                dict.fromkeys(s for v in asks for s in v.scopes)
+                if all(v.scopes for v in asks)
+                else {}
+            )
+            winner = Verdict("ask", "; ".join(reasons), tuple(scopes))
     return winner
 
 

@@ -39,8 +39,8 @@ class ApprovalRegistry:
 
     async def await_decision(
         self, session_id: str, ev: events.ApprovalRequired
-    ) -> bool:
-        """Register ``ev`` and await an HTTP decision.
+    ) -> Approval:
+        """Register ``ev`` and await an HTTP decision; returns it.
 
         Registers before its first ``await`` (callers rely on that: a sweep
         issued right after this coroutine starts must see the entry). Always
@@ -68,7 +68,7 @@ class ApprovalRegistry:
             ev.approve()
         else:
             ev.reject(decision.reason)
-        return decision.approved
+        return decision
 
     def pending(self, session_id: str, call_id: str) -> events.ApprovalRequired | None:
         """The pending request, or None once decided / unknown."""
@@ -104,10 +104,15 @@ class ApprovalRegistry:
 
     def deny_pending(
         self, session_id: str, *, reason: str = "the run was cancelled"
-    ) -> None:
+    ) -> bool:
         """Synchronous default-deny of the unclaimed approvals pending for
         ``session_id`` (a cancel signal, the approval timeout). A claimed one
-        is a decision already taken — its owner resolves it."""
+        is a decision already taken — its owner resolves it. Returns whether
+        anything was denied."""
+        denied = False
         for (sid, call_id), _ev in list(self._pending.items()):
             if sid == session_id and (sid, call_id) not in self._claimed:
-                self._channel.resolve(call_id, Approval(False, reason), scope=sid)
+                denied |= self._channel.resolve(
+                    call_id, Approval(False, reason), scope=sid
+                )
+        return denied

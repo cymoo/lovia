@@ -195,10 +195,11 @@ class ApprovalRequired(ToolEvent):
     """Emitted before a tool whose permission verdict is ``ask`` runs.
 
     ``reason`` says why the call needs a human ("Pushes to a remote.",
-    "Reads outside the workspace root (~/.ssh)."); ``scope`` names what an
-    "always allow" grant would cover (``"shell:git push"``), or ``None`` when
-    no such grant should be offered. Both come from the tool's
-    :class:`~lovia.approvals.Verdict`.
+    "Reads outside the workspace root (~/.ssh)."), empty when nothing beyond
+    "not pre-approved"; ``scopes`` names what an "always allow" grant would
+    cover (``("shell:git push",)``; a compound command may need several, all
+    granted together), empty when no such grant should be offered. Both come
+    from the tool's :class:`~lovia.approvals.Verdict`.
 
     A streaming consumer resolves the request by calling :meth:`approve` or
     :meth:`reject` on the event (any time before its loop yields control
@@ -217,7 +218,7 @@ class ApprovalRequired(ToolEvent):
 
     call: ToolCall
     reason: str = ""
-    scope: str | None = None
+    scopes: tuple[str, ...] = ()
     # Back-channel reference. Kept private so events stay declarative —
     # callers should prefer ``approve()`` / ``reject()`` on the event or
     # the channel API on ``RunHandle.approvals``.

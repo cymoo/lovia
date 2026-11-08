@@ -865,7 +865,7 @@ async def test_approval_registry_resolves() -> None:
     waiter = asyncio.create_task(reg.await_decision("s", ev))
     await asyncio.sleep(0)  # let waiter register
     assert await reg.resolve("s", "c1", True) is True
-    assert await waiter is True
+    assert (await waiter).approved is True
     assert verdict.result() is True
 
 
@@ -897,7 +897,7 @@ async def test_approval_registry_release_default_denies() -> None:
     waiter = asyncio.create_task(reg.await_decision("s", ev))
     await asyncio.sleep(0)
     await reg.release("s")
-    assert await waiter is False
+    assert (await waiter).approved is False
     assert verdict.result() is False
 
 

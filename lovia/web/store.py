@@ -824,22 +824,39 @@ class ChatStore:
 
     # ---- remembered approvals ("always allow" grants) -------------------
 
-    async def add_grant(self, session_id: str, scope: str, context: str) -> None:
-        """Remember an approval for ``scope`` in this chat under ``context``.
-        Idempotent: approving the same thing twice is one row."""
-        await self._write(
-            "INSERT OR IGNORE INTO chat_grants (session_id, scope, context, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (session_id, scope, context, time.time()),
-        )
+    async def add_grants(
+        self, session_id: str, scopes: Sequence[str], context: str
+    ) -> None:
+        """Remember an approval for each of ``scopes`` in this chat under
+        ``context``, in one transaction. Idempotent: approving the same thing
+        twice is one row per scope."""
+        now = time.time()
 
-    async def has_grant(self, session_id: str, scope: str, context: str) -> bool:
-        row = await self._read_one(
-            "SELECT 1 FROM chat_grants WHERE session_id = ? AND scope = ? AND context = ?",
-            (session_id, scope, context),
-            lambda r: True,
+        def _impl() -> None:
+            with self._meta._tx() as conn:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO chat_grants "
+                    "(session_id, scope, context, created_at) VALUES (?, ?, ?, ?)",
+                    [(session_id, s, context, now) for s in scopes],
+                )
+
+        await self._meta._run(_impl)
+
+    async def has_grants(
+        self, session_id: str, scopes: Sequence[str], context: str
+    ) -> bool:
+        """Whether *every* one of ``scopes`` is remembered (none: False)."""
+        wanted = set(scopes)
+        if not wanted:
+            return False
+        marks = ", ".join("?" * len(wanted))
+        found = await self._read_one(
+            "SELECT COUNT(DISTINCT scope) FROM chat_grants "
+            f"WHERE session_id = ? AND context = ? AND scope IN ({marks})",
+            (session_id, context, *wanted),
+            lambda r: int(r[0]),
         )
-        return bool(row)
+        return found == len(wanted)
 
     async def list_grants(self, session_id: str) -> Sequence[GrantRow]:
         return await self._read_all(

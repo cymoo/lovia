@@ -37,7 +37,8 @@ from lovia.web.errors import ErrorCode, RunErrorCode, WebError, run_error_code  
 from lovia.web.sse import (  # noqa: E402
     CHAT_EVENTS,
     LIFECYCLE_EVENTS,
-    ApprovalGranted,
+    ApprovalAsked,
+    ApprovalResolved,
     ContextCompactedData,
     LegFrame,
     LegTiming,
@@ -156,7 +157,8 @@ def _every_chat_event() -> list[events.Event | LegFrame]:
         events.ToolCallCompleted(
             call=call, result=[TodoItem(content="x", status="pending")], output=""
         ),
-        events.ApprovalRequired(call=call),
+        ApprovalAsked(request=events.ApprovalRequired(call=call), expires_at=1.0),
+        ApprovalResolved(call_id="c1", approved=False, cause="timeout"),
         events.HandoffOccurred(from_agent=agent, to_agent=agent),
         events.TurnStarted(agent=agent, turn=1),
         events.ModelRetrying(
@@ -174,7 +176,10 @@ def _every_chat_event() -> list[events.Event | LegFrame]:
         ),
         UserTurnRefs(refs=["r:0"]),
         LegTiming(finished_at=1.0, duration=1.0),
-        ApprovalGranted(request=events.ApprovalRequired(call=call, scope="shell:t")),
+        ApprovalAsked(
+            request=events.ApprovalRequired(call=call, scopes=("shell:t",)),
+            granted=True,
+        ),
         events.RunCompleted(
             result=RunResult(
                 output="x", entries=[], final_agent=agent, usage=Usage(), turns=1

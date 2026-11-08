@@ -227,9 +227,11 @@ and the call is denied with a `ToolCallFailed` event).
 
 A `deny` verdict never reaches a human: the model gets `Tool refund was
 denied by policy: <reason>` and nothing runs. An `ask` verdict makes the
-runner emit `ApprovalRequired` — carrying the verdict's `reason` and `scope`
-(what an "always allow" grant would cover; `None` when none should be
-offered) — and a decision is resolved in this order:
+runner emit `ApprovalRequired` — carrying the verdict's `reason` (empty when
+nothing stands out beyond "not pre-approved") and `scopes` (what an "always
+allow" grant would cover — a chained shell command can need several, granted
+together; empty when none should be offered) — and a decision is resolved in
+this order:
 
 1. The streaming consumer calls `event.approve()` or
    `event.reject(reason)`. The reason reaches the model as
@@ -254,7 +256,7 @@ The bundled server exposes the same flow over SSE and
 with `permission` also use this one channel.
 
 Remembering approvals ("always allow `git push` in this chat") is the
-consumer's job, keyed by `request.scope`; a programmatic version is a
+consumer's job, keyed by `request.scopes`; a programmatic version is a
 five-line `approval_handler`:
 
 ```python
@@ -262,11 +264,12 @@ granted: set[str] = set()
 
 
 def remember(request: events.ApprovalRequired, ctx) -> str:
-    return "allow" if request.scope in granted else "ask"
+    covered = request.scopes and set(request.scopes) <= granted
+    return "allow" if covered else "ask"
 
 
 agent = Agent(..., approval_handler=remember)
-# when the user approves and ticks "always": granted.add(request.scope)
+# when the user approves and ticks "always": granted.update(request.scopes)
 ```
 
 Permission is judged in preflight, once per model request (never per retry),

@@ -385,7 +385,7 @@ agent = Agent(
 ```
 
 `coding` 自己不为任何命令担保：不可撤回的操作（`git push`、`rm -r`、`sudo` 等）带理由询问，
-其余问一次、用户可以按对话记住（“本对话中总是允许 `ls`”）；任何模式之下都有一条底线：拒绝危险命令
+其余问一次、用户可以按对话记住（“本对话中总是允许 `ls`”，串起来的 `ls; git status` 两个一起记）；任何模式之下都有一条底线：拒绝危险命令
 （`git push --force`、`rm -rf /`），禁止触碰凭据库，写 `.git` 或 CI 配置前先问。想让检查命令和
 开发工具免问，显式启用：`lovia.workspace.rules` 里的 `command_rules=READ_ONLY + DEV_TOOLS`。
 

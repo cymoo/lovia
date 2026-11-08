@@ -253,7 +253,7 @@ class ToolCallProcessor:
             request = events.ApprovalRequired(
                 call=call,
                 reason=verdict.reason,
-                scope=verdict.scope,
+                scopes=verdict.scopes,
                 _channel=self.approvals,
             )
             yield request

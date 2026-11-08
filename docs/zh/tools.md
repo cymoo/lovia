@@ -200,8 +200,9 @@ result = await handle.result()
 `ToolCallFailed` 事件）。
 
 `deny` 判定不会到人那里：模型收到 `Tool refund was denied by policy: <理由>`，什么都不会执行。
-`ask` 判定让 Runner 发出 `ApprovalRequired`——带着判定的 `reason` 和 `scope`
-（“总是允许”会放开的范围；`None` 表示不该提供这个选项）——并按以下顺序取得决定：
+`ask` 判定让 Runner 发出 `ApprovalRequired`——带着判定的 `reason`（除了“不在允许清单上”
+之外没什么特别时为空）和 `scopes`（“总是允许”会放开的范围；串起来的 shell 命令可能有多个，
+一起授权；为空表示不该提供这个选项）——并按以下顺序取得决定：
 
 1. 流式消费者调用 `event.approve()` 或 `event.reject(reason)`。理由会以
    `Tool refund was not approved: <理由>` 的形式到达模型，让它换做法而不是重试。
@@ -220,7 +221,7 @@ handle.approvals.release(decision=False)  # 拒绝所有仍在等待的调用
 内置服务端通过 SSE 和 `POST /api/chat/approve` 暴露同一流程。Workspace 的 `ask` 判定和
 配置了 `permission` 的 MCP Tool 也使用这个通道。
 
-“记住批准”（“本对话中总是允许 `git push`”）是消费者的事，以 `request.scope` 为键；
+“记住批准”（“本对话中总是允许 `git push`”）是消费者的事，以 `request.scopes` 为键；
 程序化版本就是五行 `approval_handler`：
 
 ```python
@@ -228,11 +229,12 @@ granted: set[str] = set()
 
 
 def remember(request: events.ApprovalRequired, ctx) -> str:
-    return "allow" if request.scope in granted else "ask"
+    covered = request.scopes and set(request.scopes) <= granted
+    return "allow" if covered else "ask"
 
 
 agent = Agent(..., approval_handler=remember)
-# 用户批准并勾选“总是”时：granted.add(request.scope)
+# 用户批准并勾选“总是”时：granted.update(request.scopes)
 ```
 
 权限在预检阶段判定，每次模型请求判一次（重试不重判），并保持请求顺序。谓词或 handler

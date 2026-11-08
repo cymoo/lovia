@@ -22,7 +22,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .. import events
 from ..checkpointer import CheckpointOptions
@@ -57,7 +57,8 @@ from .components import UI_DATA_SINK
 from .errors import WebError
 from .schemas import MessageOut
 from .sse import (
-    ApprovalGranted,
+    ApprovalAsked,
+    ApprovalResolved,
     RunFinishedData,
     RunStartedData,
     SessionData,
@@ -85,6 +86,14 @@ log = logging.getLogger(__name__)
 _INTERRUPTED = (
     "Interrupted: the run stopped before this tool returned; its outcome is unknown."
 )
+
+
+def _span(seconds: float) -> str:
+    """``600`` → ``"10 minutes"``, ``90`` → ``"90 seconds"``."""
+    if seconds >= 60 and seconds % 60 == 0:
+        minutes = int(seconds // 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    return f"{seconds:.0f} seconds"
 
 
 def agent_grant_context(name: str, agent: "Agent[Any]") -> str:
@@ -348,7 +357,7 @@ class RunController:
         self._mirror_run_id: str | None = None
         self.current_turn_entries: list[TranscriptEntry] = []
         self.in_flight_buffer: list[events.Event | LegFrame] = []
-        self.pending_approval: events.ApprovalRequired | None = None
+        self.pending_approval: ApprovalAsked | None = None
         # first-run spec
         self._first_input = first_input
         self._first_ckpt = first_checkpoint
@@ -457,19 +466,20 @@ class RunController:
         return agent_grant_context(self.deps.name_of(active), active)
 
     async def _granted(self, ev: events.ApprovalRequired) -> bool:
-        """Whether a remembered approval for ``ev.scope`` covers this run."""
-        if not ev.scope:
+        """Whether remembered approvals cover every one of ``ev.scopes``."""
+        if not ev.scopes:
             return False
         try:
-            return await self.deps.store.has_grant(
-                self.session_id, ev.scope, self.grant_context()
+            return await self.deps.store.has_grants(
+                self.session_id, ev.scopes, self.grant_context()
             )
         except Exception as exc:  # noqa: BLE001 — a lookup failure asks, never allows
             log.warning("grant lookup failed for %s: %s", self.session_id, exc)
             return False
 
-    async def _await_approval(self, ev: events.ApprovalRequired) -> None:
-        """Await the HTTP decision for ``ev``, denying after ``approval_timeout``.
+    async def _await_approval(self, ev: events.ApprovalRequired) -> ApprovalResolved:
+        """Await the HTTP decision for ``ev``, denying after ``approval_timeout``;
+        returns how it was settled, for the clients' cards.
 
         Without the timeout a clientless (scheduled) run parked on an approval
         holds its concurrency slot forever — ``RunBudget.max_seconds`` is only
@@ -495,27 +505,54 @@ class RunController:
         # rather than cancelling the awaiter, so the model is told "timed
         # out" and not the cancellation path's "run was cancelled".
         decision = self.deps.approvals.await_decision(self.session_id, ev)
-        if self.deps.approval_timeout is None:
-            await decision
-            return
-        timer = asyncio.get_running_loop().call_later(
-            self.deps.approval_timeout, self._deny_timed_out, ev.call.id
+        timed_out = False
+
+        def expire() -> None:
+            nonlocal timed_out
+            # False when a tab had already claimed the decision.
+            timed_out = self._deny_timed_out(ev.call.id)
+
+        timeout = self.deps.approval_timeout
+        timer = (
+            None
+            if timeout is None
+            else asyncio.get_running_loop().call_later(timeout, expire)
         )
         try:
-            await decision
+            approval = await decision
         finally:
-            timer.cancel()
+            if timer is not None:
+                timer.cancel()
+        # A sweep that found the approval still unclaimed decided it: the
+        # timer, or a stop (deny_pending). Anything else was a tab's answer.
+        cause: Literal["user", "timeout", "cancel"] = (
+            "timeout"
+            if timed_out
+            else "cancel"
+            if self.cancel.is_cancelled and not approval.approved
+            else "user"
+        )
+        return ApprovalResolved(ev.call.id, approval.approved, cause)
 
-    def _deny_timed_out(self, call_id: str) -> None:
+    def _deny_timed_out(self, call_id: str) -> bool:
+        """Deny the pending approval for want of an answer; False when a tab
+        has already claimed it (its decision stands)."""
         # Preflight is serial, so the session has at most one pending approval:
         # the registry's per-session deny is exactly this call.
-        log.info(
-            "approval %s for session %s timed out after %.0fs: denied",
-            call_id,
+        timeout = self.deps.approval_timeout or 0
+        # Told to the model, which otherwise guesses at a policy block.
+        denied = self.deps.approvals.deny_pending(
             self.session_id,
-            self.deps.approval_timeout or 0,
+            reason=f"the user did not answer within {_span(timeout)}",
         )
-        self.deps.approvals.deny_pending(self.session_id, reason="approval timed out")
+        if denied:
+            log.info(
+                "approval %s for session %s timed out after %.0fs: denied",
+                call_id,
+                self.session_id,
+                timeout,
+            )
+        return denied
 
     def freeze(self) -> None:
         """Fold what the user has seen of this leg into the durable Session.
@@ -648,7 +685,7 @@ class RunController:
                 events.MessageCompleted,
                 events.ToolCallStarted,
                 events.ToolCallCompleted,
-                events.ApprovalRequired,
+                # (an ApprovalRequired goes out as an ApprovalAsked frame)
                 events.UserMessageInjected,
                 events.HandoffOccurred,
                 events.ContextCompacted,
@@ -692,6 +729,12 @@ class RunController:
     def _publish(self, ev: events.Event) -> None:
         self._ingest(ev)
         self.hub.publish(ev)
+
+    def _publish_frame(self, frame: ApprovalAsked | ApprovalResolved) -> None:
+        # Buffered like the run's own events: a re-attach replays the card
+        # and how it was settled, so it never shows a decided card as open.
+        self.in_flight_buffer.append(frame)
+        self.hub.publish(frame)
 
     def _publish_refs(self, entries: list[TranscriptEntry]) -> None:
         """Name the finished leg's user turns (its segment is keyed by run_id).
@@ -846,9 +889,7 @@ class RunController:
                             # the card's place. Never for a deny — a verdict
                             # with a scope is an ask by construction.
                             ev.approve()
-                            note = ApprovalGranted(ev)
-                            self.in_flight_buffer.append(note)  # replayed on re-attach
-                            self.hub.publish(note)
+                            self._publish_frame(ApprovalAsked(ev, granted=True))
                             continue
                         if self.cancel.is_cancelled:
                             # A stop landed during the grant lookup, before the
@@ -856,6 +897,28 @@ class RunController:
                             # find: answer it here or the run parks forever.
                             ev.reject("the run was cancelled")
                             continue
+                        # The loop gates on the consumer: do not advance the
+                        # iterator until the decision lands. The awaiter is
+                        # THIS task, not the HTTP request, so a detach can't
+                        # release it. The card goes out with its deadline and
+                        # is settled by a frame naming who decided.
+                        timeout = self.deps.approval_timeout
+                        asked = ApprovalAsked(
+                            ev,
+                            expires_at=None
+                            if timeout is None
+                            else time.time() + timeout,
+                        )
+                        self._publish_frame(asked)
+                        self.pending_approval = asked
+                        self.status = "blocked_on_approval"
+                        try:
+                            resolved = await self._await_approval(ev)
+                        finally:
+                            self.pending_approval = None
+                            self.status = "running"
+                        self._publish_frame(resolved)
+                        continue
                     if isinstance(ev, events.RunFailed):
                         error_seen = True
                     if isinstance(ev, events.RunCompleted) and self.run_id:
@@ -870,18 +933,6 @@ class RunController:
                         self.usage.add(ev.result.usage)
                         if ev.result.last_input_tokens is not None:
                             self.last_input_tokens = ev.result.last_input_tokens
-                    if isinstance(ev, events.ApprovalRequired):
-                        # The loop gates on the consumer: do not advance the
-                        # iterator until the decision lands (mirrors the old
-                        # drive_stream). The awaiter is THIS task, not the HTTP
-                        # request, so a detach can't release it.
-                        self.pending_approval = ev
-                        self.status = "blocked_on_approval"
-                        try:
-                            await self._await_approval(ev)
-                        finally:
-                            self.pending_approval = None
-                            self.status = "running"
                 if not succeeded:
                     # The stream ends with RunFailed instead of raising;
                     # re-raise the terminal error here so the except path

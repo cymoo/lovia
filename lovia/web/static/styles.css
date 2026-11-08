@@ -1,15 +1,16 @@
 /* ==========================================================================
    lovia — chat UI
    --------------------------------------------------------------------------
-   Design language, in one breath: a quiet cool-slate canvas; assistant turns
+   Design language, in one breath: a quiet neutral canvas; assistant turns
    are open typography on the canvas (no card chrome), user turns are compact
-   accent-tinted bubbles on the right; structure comes from a glass topbar the
-   content scrolls beneath and a floating composer pill; activity (reasoning,
-   tools, context events) shares one quiet-card vocabulary.
+   neutral bubbles on the right; structure comes from surfaces, not lines — a
+   glass topbar the content scrolls beneath, a recessed sidebar, a floating
+   composer pill; activity (reasoning, tools, context events) shares one
+   quiet-card vocabulary.
 
-   One hue family throughout: both themes are cool slate, and the accent is the
-   only colour that carries meaning — status, focus, inline code, the user's
-   bubble. Nothing else introduces a hue of its own.
+   Restraint is the rule: both themes are a warm-neutral gray ramp, and the
+   accent is the only colour, kept for action and live state — the send button,
+   switches, links, progress. Content (bubbles, inline code) stays neutral.
 
    Contracts: every class name here is load-bearing for static/js/* — rename
    nothing without updating the JS. Tokens first; components in DOM order.
@@ -28,25 +29,25 @@
   /* Native form controls / scrollbars follow the active theme. */
   color-scheme: light;
 
-  /* surfaces — cool slate: the chat canvas is the paper (white); the sidebar
-     is chrome, a recessed off-white plane beside it. Mirrors the dark theme's
-     hue family so both themes read as one system. */
+  /* surfaces — warm neutral: the chat canvas is the paper (white); the sidebar
+     is chrome, a recessed off-white plane beside it, set apart by tone alone
+     (no divider line). Mirrors the dark theme's ramp so both read as one system. */
   --lv-bg: #ffffff;
-  --lv-sidebar-surface: #f7f8fa;
+  --lv-sidebar-surface: #f9f9f8;
   --lv-surface: #ffffff;
-  --lv-surface-2: #f0f2f5;
-  --lv-surface-3: #e6e9ee;
+  --lv-surface-2: #f4f4f2;
+  --lv-surface-3: #ebebe8;
   /* Diagrams always render on a light "paper" (mermaid's light theme), even in
      dark mode — defined once here and intentionally NOT overridden for dark. */
-  --lv-diagram-paper: #fcfcfd;
-  --lv-border: #e4e7ec;
-  --lv-border-strong: #d2d7df;
+  --lv-diagram-paper: #fcfcfb;
+  --lv-border: #e8e8e5;
+  --lv-border-strong: #d8d8d4;
 
-  /* ink ramp — cool near-black slate */
-  --lv-ink: #16181d;
-  --lv-ink-2: #3d424c;
-  --lv-muted: #6b7280;
-  --lv-muted-2: #9aa1ad;
+  /* ink ramp — warm near-black down to stone */
+  --lv-ink: #1b1b19;
+  --lv-ink-2: #3d3d3a;
+  --lv-muted: #6e6e69;
+  --lv-muted-2: #9e9e98;
 
   /* brand accent — restrained green, used for meaning, not decoration. Its
      tints derive from it, so a rebrand only has to set --lv-accent per theme. */
@@ -55,13 +56,12 @@
   --lv-accent-soft: color-mix(in srgb, var(--lv-accent) 11%, var(--lv-surface));
   --lv-accent-text: color-mix(in srgb, var(--lv-accent) 77%, black);
 
-  /* the user's voice — the slate surface carrying a trace of the accent, so
-     the bubble belongs to the brand's hue family instead of introducing a
-     second one. Deliberately weaker than --lv-accent-soft: that token is the
-     inline-code chip, and a bubble wearing it would read as a giant chip. */
-  --lv-user-surface: color-mix(in srgb, var(--lv-accent) 7%, var(--lv-surface-2));
-  --lv-user-border: color-mix(in srgb, var(--lv-accent) 20%, var(--lv-border-strong));
-  --lv-user-shadow: 0 1px 2px rgba(20, 24, 33, 0.05);
+  /* the user's voice — one quiet neutral fill, no outline or lift: the bubble's
+     place on the right already says whose turn it is. Border and shadow stay
+     tokens so a deployer can bring them back. */
+  --lv-user-surface: var(--lv-surface-2);
+  --lv-user-border: transparent;
+  --lv-user-shadow: none;
 
   /* charts (charts.js reads these at render time) — the one place hues are
      plural: series need identity. Validated as an 8-slot categorical palette
@@ -90,11 +90,11 @@
   --lv-danger-border: #f0cfc9;
   --lv-ok: #2d8a6e;
 
-  /* elevation — two-layer, cool slate-tinted */
-  --lv-shadow-xs: 0 1px 2px rgba(20, 24, 33, 0.04);
-  --lv-shadow-sm: 0 1px 2px rgba(20, 24, 33, 0.05), 0 2px 8px -2px rgba(20, 24, 33, 0.06);
-  --lv-shadow-md: 0 2px 4px rgba(20, 24, 33, 0.04), 0 10px 28px -8px rgba(20, 24, 33, 0.11);
-  --lv-shadow-lg: 0 4px 12px -2px rgba(20, 24, 33, 0.07), 0 20px 56px -12px rgba(20, 24, 33, 0.16);
+  /* elevation — two-layer, neutral */
+  --lv-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --lv-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px -2px rgba(0, 0, 0, 0.06);
+  --lv-shadow-md: 0 1px 3px rgba(0, 0, 0, 0.04), 0 8px 24px -8px rgba(0, 0, 0, 0.10);
+  --lv-shadow-lg: 0 4px 12px -2px rgba(0, 0, 0, 0.06), 0 20px 56px -12px rgba(0, 0, 0, 0.16);
 
   /* type — system stacks only: no webfont request, native CJK rendering */
   --lv-sans:
@@ -125,33 +125,33 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* surfaces — cool slate: neutral blue-gray, crisp elevation ramp.
+  /* surfaces — warm neutral graphite, lifted off black so long reading stays
+     soft. The sidebar recedes below the canvas; panels and cards step up.
      bg (canvas) < surface (panels) < surface-2 (cards) < surface-3 (hover). */
-  --lv-bg: #0d0e12;
-  --lv-sidebar-surface: #16181e;
-  --lv-surface: #16181e;
-  --lv-surface-2: #1d2027;
-  --lv-surface-3: #272b35;
-  --lv-border: #262a33;
-  --lv-border-strong: #363b47;
+  --lv-bg: #1b1b1a;
+  --lv-sidebar-surface: #161615;
+  --lv-surface: #222221;
+  --lv-surface-2: #2a2a28;
+  --lv-surface-3: #343432;
+  --lv-border: #2f2f2d;
+  --lv-border-strong: #3e3e3b;
 
-  /* ink ramp — cool near-white down to slate */
-  --lv-ink: #e6e8ec;
-  --lv-ink-2: #bfc3cd;
-  --lv-muted: #8b909b;
-  --lv-muted-2: #656b78;
+  /* ink ramp — warm near-white down to stone */
+  --lv-ink: #ececea;
+  --lv-ink-2: #c8c8c4;
+  --lv-muted: #9b9b96;
+  --lv-muted-2: #6f6f6a;
 
-  /* brand accent — restrained emerald, legible on slate */
+  /* brand accent — restrained emerald, legible on graphite */
   --lv-accent: #3ecb8f;
   --lv-accent-hover: color-mix(in srgb, var(--lv-accent) 86%, white);
   --lv-accent-soft: color-mix(in srgb, var(--lv-accent) 12%, var(--lv-bg));
   --lv-accent-text: color-mix(in srgb, var(--lv-accent) 92%, white);
 
-  /* the user's voice — same recipe as light, a touch stronger: the accent
-     needs more presence to separate from the dark slate card surface */
-  --lv-user-surface: color-mix(in srgb, var(--lv-accent) 9%, var(--lv-surface-2));
-  --lv-user-border: color-mix(in srgb, var(--lv-accent) 22%, var(--lv-border-strong));
-  --lv-user-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  /* the user's voice — same recipe as light */
+  --lv-user-surface: var(--lv-surface-2);
+  --lv-user-border: transparent;
+  --lv-user-shadow: none;
 
   /* the same eight hues, stepped for the dark surface (all ≥ 3:1) */
   --lv-chart-1: #3987e5;
@@ -282,7 +282,6 @@ html {
 .lv-sidebar {
   grid-area: sidebar;
   background: var(--lv-sidebar-surface);
-  border-right: 1px solid var(--lv-border);
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -313,9 +312,9 @@ body.lv-sidebar-collapsed .lv-sidebar {
   gap: 2px;
 }
 .lv-sidebar-title {
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: -0.011em;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
   color: var(--lv-ink);
 }
 /* ChatUI(logo=...): sized to the title's line, whatever the file's size. */
@@ -379,11 +378,9 @@ body.lv-sidebar-collapsed .lv-sidebar {
 .lv-sidebar-section-label {
   flex-shrink: 0;
   padding: 12px 22px 6px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--lv-muted-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--lv-muted);
 }
 
 .lv-sidebar-search {
@@ -420,8 +417,7 @@ body.lv-sidebar-collapsed .lv-sidebar {
 }
 .lv-search-input:focus {
   background: var(--lv-surface);
-  border-color: var(--lv-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lv-accent) 12%, transparent);
+  border-color: var(--lv-border-strong);
 }
 .lv-search-input::placeholder {
   color: var(--lv-muted-2);
@@ -906,7 +902,6 @@ body.lv-view-open #files-btn {
   background: color-mix(in srgb, var(--lv-bg) 82%, transparent);
   -webkit-backdrop-filter: blur(14px) saturate(1.1);
   backdrop-filter: blur(14px) saturate(1.1);
-  border-bottom: 1px solid color-mix(in srgb, var(--lv-border) 72%, transparent);
 }
 .lv-topbar :is(.lv-sidebar-expand-btn, .lv-topbar-new-chat) {
   display: none;
@@ -1090,10 +1085,10 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 }
 .lv-empty-state h2 {
   margin: 0 0 10px;
-  font-size: clamp(26px, 3.4vw, 32px);
-  font-weight: 700;
+  font-size: clamp(24px, 3vw, 28px);
+  font-weight: 600;
   color: var(--lv-ink);
-  letter-spacing: -0.025em;
+  letter-spacing: -0.02em;
   line-height: 1.2;
   text-wrap: balance;
 }
@@ -1211,17 +1206,19 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   width: fit-content;
   min-width: min(120px, 100%);
   max-width: min(640px, 84%);
-  padding: 11px 16px;
+  padding: 10px 17px;
   background: var(--lv-user-surface);
   border: 1px solid var(--lv-user-border);
-  border-radius: var(--lv-radius-lg);
+  border-radius: var(--lv-radius-xl);
   box-shadow: var(--lv-user-shadow);
   transition: border-color var(--lv-t-fast);
 }
 /* A message queued mid-run, not yet consumed by the agent. */
 .lv-turn.lv-user.lv-queued .lv-bubble {
   position: relative;
-  border-style: dashed;
+  /* the outline is the only shape a queued bubble has: the default bubble
+     border is transparent, so name a colour */
+  border: 1px dashed var(--lv-border-strong);
   box-shadow: none;
   background: transparent;
 }
@@ -1425,12 +1422,10 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
 .lv-turn .lv-body :not(pre) > code {
   font-family: var(--lv-mono);
   font-size: 0.86em;
-  background: var(--lv-accent-soft);
-  color: var(--lv-accent-text);
-  border: 1px solid color-mix(in srgb, var(--lv-accent) 16%, transparent);
+  background: var(--lv-surface-2);
+  color: var(--lv-ink);
   border-radius: var(--lv-radius-xs);
-  padding: 1.5px 6px;
-  font-weight: 500;
+  padding: 2px 5px;
 }
 
 /* ---- Code blocks ---------------------------------------------------------- */
@@ -2721,19 +2716,17 @@ button.lv-question-option:hover {
   max-width: var(--lv-content-w);
   margin: 0 auto;
   background: var(--lv-surface);
-  border: 1px solid var(--lv-border);
+  border: 1px solid var(--lv-border-strong);
   border-radius: 28px;
   padding: 10px 10px 10px 12px;
-  box-shadow: var(--lv-shadow-md);
+  box-shadow: var(--lv-shadow-sm);
   transition:
     border-color var(--lv-t-med) var(--lv-ease),
     box-shadow var(--lv-t-med) var(--lv-ease);
 }
+/* Focus lifts the pill instead of ringing it in the accent. */
 .lv-composer-inner:focus-within {
-  border-color: color-mix(in srgb, var(--lv-accent) 55%, var(--lv-border));
-  box-shadow:
-    var(--lv-shadow-md),
-    0 0 0 3.5px color-mix(in srgb, var(--lv-accent) 9%, transparent);
+  box-shadow: var(--lv-shadow-md);
 }
 /* No attach button: the text starts clear of the pill's round end. */
 .lv-composer-inner:has(> .lv-btn-attach[hidden]) {

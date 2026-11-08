@@ -229,14 +229,14 @@ export async function exportSessionHtml(sessionId, title) {
 // keeps the file dependency-free. hljs colors mirror static/styles.css.
 const EXPORT_CSS = `
 :root, [data-theme="light"] {
-  --lv-bg:#fff; --lv-surface:#fff; --lv-surface-2:#f0f2f5; --lv-border:#e4e7ec;
-  --lv-ink:#16181d; --lv-ink-2:#3d424c; --lv-muted:#6b7280; --lv-muted-2:#9aa1ad;
-  --lv-accent:#2d8a6e; --lv-accent-text:#1c6b54; --lv-user-surface:#eaf1f9; --lv-user-border:#d3e0ef;
+  --lv-bg:#fff; --lv-surface:#fff; --lv-surface-2:#f4f4f2; --lv-border:#e8e8e5;
+  --lv-ink:#1b1b19; --lv-ink-2:#3d3d3a; --lv-muted:#6e6e69; --lv-muted-2:#9e9e98;
+  --lv-accent:#2d8a6e; --lv-accent-text:#1c6b54; --lv-user-surface:#f4f4f2;
 }
 [data-theme="dark"] {
-  --lv-bg:#0d0e12; --lv-surface:#16181e; --lv-surface-2:#1d2027; --lv-border:#262a33;
-  --lv-ink:#e6e8ec; --lv-ink-2:#bfc3cd; --lv-muted:#8b909b; --lv-muted-2:#656b78;
-  --lv-accent:#3ecb8f; --lv-accent-text:#53d19c; --lv-user-surface:#1b2942; --lv-user-border:#2d4166;
+  --lv-bg:#1b1b1a; --lv-surface:#222221; --lv-surface-2:#2a2a28; --lv-border:#2f2f2d;
+  --lv-ink:#ececea; --lv-ink-2:#c8c8c4; --lv-muted:#9b9b96; --lv-muted-2:#6f6f6a;
+  --lv-accent:#3ecb8f; --lv-accent-text:#53d19c; --lv-user-surface:#2a2a28;
 }
 * { box-sizing:border-box; }
 body {
@@ -256,8 +256,7 @@ body {
 }
 .lv-msg-body, .lv-msg-reasoning, .lv-msg-tool { font-size:15px; }
 .lv-msg-user .lv-msg-body {
-  background:var(--lv-user-surface); border:1px solid var(--lv-user-border);
-  border-radius:12px; padding:2px 16px;
+  background:var(--lv-user-surface); border-radius:16px; padding:2px 16px;
 }
 .lv-msg-reasoning {
   border-left:2px solid var(--lv-accent); padding:2px 0 2px 14px; margin-bottom:12px;

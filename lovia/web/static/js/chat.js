@@ -35,6 +35,7 @@ import {
   cardRegistry,
   outcomeText,
   scopeLabel,
+  splitNote,
 } from './approvals.js';
 import { BlockStream } from './stream-blocks.js';
 import { createSendQueue } from './send-queue.js';
@@ -902,7 +903,17 @@ function appendApproval(call) {
   node.querySelector('.lv-approve').textContent = t('approval.approve');
   node.querySelector('.lv-decline').textContent = t('approval.deny');
   node.querySelector('.lv-approval-name').textContent = call.name;
-  fillParams(node.querySelector('.lv-approval-args'), call.arguments);
+  // The model's own summary goes apart from what acts, marked as its words.
+  const { note, rest } = splitNote(call.arguments);
+  const argsEl = node.querySelector('.lv-approval-args');
+  fillParams(argsEl, rest);
+  if (note) {
+    const said = document.createElement('div');
+    said.className = 'lv-approval-note';
+    said.textContent = note;
+    said.title = t('approval.modelNote');
+    argsEl?.before(said);
+  }
 
   const actions = node.querySelector('.lv-approval-actions');
   // Offered only when the server names what it would cover; the label lists

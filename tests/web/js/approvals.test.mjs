@@ -11,6 +11,7 @@ import {
   cardRegistry,
   outcomeText,
   scopeLabel,
+  splitNote,
 } from '../../../lovia/web/static/js/approvals.js';
 import { setDefaultView } from '../../../lovia/web/static/js/tool-views.js';
 
@@ -27,6 +28,25 @@ test('scope chips: the command for shell, a verb for paths, else verbatim', () =
   assert.equal(scopeLabel('mail:external'), 'mail:external');
   assert.equal(scopeLabel('shell:'), 'shell:');
   assert.equal(scopeLabel('plain'), 'plain');
+});
+
+test("the model's description is set apart from the arguments that act", () => {
+  const args = JSON.stringify({ command: 'git status', description: ' Check (read-only) ' });
+  assert.deepEqual(splitNote(args), {
+    note: 'Check (read-only)',
+    rest: JSON.stringify({ command: 'git status' }),
+  });
+  // Nothing to split: the arguments pass through untouched.
+  for (const plain of [
+    JSON.stringify({ command: 'ls' }),
+    JSON.stringify({ command: 'ls', description: '  ' }),
+    JSON.stringify({ description: { nested: true } }),
+    '["a"]',
+    'not json',
+    undefined,
+  ]) {
+    assert.deepEqual(splitNote(plain), { note: null, rest: plain });
+  }
 });
 
 test('a reused call id settles the newest card, once', () => {

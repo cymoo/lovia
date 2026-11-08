@@ -33,6 +33,27 @@ export function scopeLabel(scope) {
 }
 
 /**
+ * Split the model's own summary of the call (a string `description`
+ * argument, which the shell tool asks for) from the arguments that act. The
+ * card shows it apart, marked as the model's words: "read-only" in a
+ * description is a claim nothing checked; the command is what runs.
+ * @param {string | undefined} args the call's JSON arguments
+ * @returns {{ note: string | null, rest: string | undefined }}
+ */
+export function splitNote(args) {
+  let obj;
+  try {
+    obj = JSON.parse(args ?? '');
+  } catch {
+    return { note: null, rest: args };
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { note: null, rest: args };
+  const { description, ...rest } = obj;
+  if (typeof description !== 'string' || !description.trim()) return { note: null, rest: args };
+  return { note: description.trim(), rest: JSON.stringify(rest) };
+}
+
+/**
  * The card each pending call id was drawn as. A provider may reuse a call id
  * across turns, so the page can hold two cards under one id: a settling frame
  * is for the newest — never the first a selector happens to find, which would

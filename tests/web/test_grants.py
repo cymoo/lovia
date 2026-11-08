@@ -290,6 +290,100 @@ async def test_deny_with_reason_reaches_the_model(tmp_path: Path) -> None:
     assert done == {"id": "c1", "approved": False, "cause": "user"}
 
 
+def _chained_agent(tmp_path: Path, *steps) -> Agent:
+    @tool(permission=Verdict("ask", "", ("shell:pwd", "shell:python", "shell:git")))
+    async def chain() -> str:
+        return "ran"
+
+    return Agent(
+        name="bot",
+        model=ScriptedProvider(list(steps)),
+        tools=[chain],
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_remember_keeps_only_the_picked_scopes(tmp_path: Path) -> None:
+    # The user leaves `python` out: the call still runs, only the others are
+    # remembered — so a later call needing all three asks again.
+    store = ChatStore.in_memory()
+    agent = _chained_agent(
+        tmp_path,
+        call("chain", {}, call_id="c1"),
+        text("first"),
+        call("chain", {}, call_id="c2"),
+        text("second"),
+    )
+    async with _client(_app(agent, store=store)) as ac:
+        task, lines = await _run_until_approval(ac, "s1")
+        r = await ac.post(
+            "/api/chat/approve",
+            json={
+                "session_id": "s1",
+                "call_id": "c1",
+                "decision": "approve",
+                "remember": True,
+                "scopes": ["shell:git", "shell:pwd"],
+            },
+        )
+        assert r.json() == {"ok": True, "remembered": True}
+        await asyncio.wait_for(task, timeout=5)
+        await _wait_run(ac, "s1", gone=True)
+        assert any("ran" in str(d.get("result")) for d in _frames(lines, "tool_result"))
+        # python left out.
+        assert {g.scope for g in await store.list_grants("s1")} == {
+            "shell:pwd",
+            "shell:git",
+        }
+        # Not every scope is granted: the next call asks again.
+        task2, _ = await _run_until_approval(ac, "s1")
+        await ac.post(
+            "/api/chat/approve",
+            json={"session_id": "s1", "call_id": "c2", "decision": "deny"},
+        )
+        await asyncio.wait_for(task2, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_remember_rejects_a_scope_the_request_did_not_offer(
+    tmp_path: Path,
+) -> None:
+    # A client can only narrow: naming anything else is a 400, checked before
+    # the claim — the approval is still pending and can be answered properly.
+    store = ChatStore.in_memory()
+    agent = _chained_agent(tmp_path, call("chain", {}, call_id="c1"), text("ok"))
+    async with _client(_app(agent, store=store)) as ac:
+        task, _ = await _run_until_approval(ac, "s1")
+        bad = await ac.post(
+            "/api/chat/approve",
+            json={
+                "session_id": "s1",
+                "call_id": "c1",
+                "decision": "approve",
+                "remember": True,
+                "scopes": ["shell:pwd", "shell:rm"],
+            },
+        )
+        assert bad.status_code == 400
+        assert bad.json()["detail"]["code"] == "invalid_request"
+        assert await store.list_grants("s1") == []
+        ok = await ac.post(
+            "/api/chat/approve",
+            json={
+                "session_id": "s1",
+                "call_id": "c1",
+                "decision": "approve",
+                "remember": True,
+                "scopes": [],
+            },
+        )
+        # An empty pick approves and remembers nothing.
+        assert ok.json() == {"ok": True, "remembered": False}
+        await asyncio.wait_for(task, timeout=5)
+        assert await store.list_grants("s1") == []
+
+
 @pytest.mark.asyncio
 async def test_remember_without_scope_approves_but_saves_nothing(
     tmp_path: Path,

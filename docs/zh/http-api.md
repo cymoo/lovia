@@ -148,7 +148,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/chat` | 执行一次**阻塞式** Turn → `{output, session_id, usage}`：托管 Run，请求等待其结束（[详见](#阻塞式-turn)） |
 | `POST /api/chat/stream` | **SSE**：启动 Run，或连接到 Session 中正在执行的 Run（新消息会作为追加指令注入） |
 | `POST /api/chat/reconnect?session_id=` | **SSE**：重新连接，或从 Checkpoint 恢复中断的 Run |
-| `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision, remember?, reason?}` → `{ok, remembered}`。`remember`（仅允许时）同时为这条请求自己的每个 `scopes` 在本对话各记一条“总是允许”；`reason`（仅拒绝时）会传给模型。授权先落库再唤醒运行，同范围的下一条调用不会在此期间再问；请求没有 scopes 或保存失败时 `remembered` 为 false（本次允许照常生效） |
+| `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision, remember?, scopes?, reason?}` → `{ok, remembered}`。`remember`（仅允许时）同时为这条请求自己的每个 `scopes` 在本对话各记一条“总是允许”——传了 `scopes` 时只记其中列出的，只能缩小、不能扩大（列出请求没有的范围 → `400 invalid_request`，本次不做任何决定）；`reason`（仅拒绝时）会传给模型。授权先落库再唤醒运行，同范围的下一条调用不会在此期间再问；一个都没选、请求没有 scopes 或保存失败时 `remembered` 为 false（本次允许照常生效） |
 | `POST /api/chat/cancel?session_id=` | 取消正在执行的 Run（保留已完成的 Turn） |
 | `POST /api/chat/inject` / `uninject` | 为正在执行的 Run 排队或撤回[追加指令](cancellation.md#在运行中追加指令) |
 | `GET /api/sessions?q=&limit=&offset=` | 列出或搜索对话（置顶优先，支持分页）；`DELETE` 清空全部对话 |

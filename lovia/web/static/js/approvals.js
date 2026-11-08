@@ -1,7 +1,7 @@
 // Approval cards: the words on them. The card itself lives in chat.js (it is
 // woven into the bubble and the composer); what it says is decided here.
 
-import { t } from './i18n.js';
+import { currentLang, t } from './i18n.js';
 import { toolLabel } from './tool-views.js';
 
 /**
@@ -30,6 +30,43 @@ export function scopeLabel(scope) {
     if (kind === 'write') return t('approval.scopeWrite', { path: what });
   }
   return scope;
+}
+
+/**
+ * Which of a card's scopes "always allow" will remember. Nothing is picked
+ * until the user says so; the checkbox picks all of them, and each chip can
+ * then be left out — so the common case stays one click, and a broad scope
+ * (`python`, `git`) need not ride along with harmless ones.
+ * @param {string[]} scopes the request's own, in its order
+ */
+export function scopePick(scopes) {
+  const picked = new Set();
+  return {
+    /** @returns {'none' | 'some' | 'all'} */
+    state() {
+      if (picked.size === 0) return 'none';
+      return picked.size === scopes.length ? 'all' : 'some';
+    },
+    /** @param {string} scope */
+    has: (scope) => picked.has(scope),
+    /** @param {boolean} on */
+    setAll(on) {
+      picked.clear();
+      if (on) scopes.forEach((s) => picked.add(s));
+    },
+    /**
+     * Include or leave out one scope. From nothing picked, a chip picks just
+     * itself: clicking the one you want is a choice too.
+     * @param {string} scope
+     */
+    toggle(scope) {
+      if (!scopes.includes(scope)) return;
+      if (picked.has(scope)) picked.delete(scope);
+      else picked.add(scope);
+    },
+    /** The picked scopes, in the request's order. */
+    picked: () => scopes.filter((s) => picked.has(s)),
+  };
 }
 
 /**
@@ -78,6 +115,20 @@ export function cardRegistry() {
       return node?.isConnected ? node : null;
     },
   };
+}
+
+/**
+ * Scopes as a sentence's list, in the page language ("pwd、uname和git",
+ * "pwd, uname, and git").
+ * @param {string[]} scopes
+ */
+export function scopeList(scopes) {
+  const labels = scopes.map(scopeLabel);
+  try {
+    return new Intl.ListFormat(currentLang(), { type: 'conjunction' }).format(labels);
+  } catch {
+    return labels.join(', '); // a deployer language Intl does not know
+  }
 }
 
 /** @typedef {'approve' | 'deny' | 'timeout' | 'cancel'} ApprovalOutcome */

@@ -205,10 +205,14 @@ class ApprovalRequest(BaseModel):
     session_id: str
     call_id: str
     decision: Literal["approve", "deny"]
-    # Approve only: also remember this approval for the chat, under every one
-    # of the request's own ``scopes`` (the server takes them from the pending
+    # Approve only: also remember this approval for the chat, under the
+    # request's own ``scopes`` (the server takes them from the pending
     # request — a client cannot widen them). Ignored when it offers none.
     remember: bool = False
+    # With ``remember``: only these of the request's scopes (the user's pick
+    # on the card); omitted = all of them. One the request does not offer is
+    # a 400.
+    scopes: list[str] | None = None
     # Deny only: why — passed to the model with the denial so it can change
     # course instead of retrying.
     reason: str = ""

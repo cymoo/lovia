@@ -297,28 +297,46 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         owner — a second request for the same call gets 404, and the timeout /
         cancel sweeps leave it alone — and the ``finally`` honours the user's
         decision even if saving the grant fails (then ``remembered`` is false).
+
+        ``scopes`` narrows what is remembered to some of the request's own —
+        checked before the claim, so a malformed request decides nothing.
         """
         sid, cid = req.session_id, req.call_id
+        pending = deps.approvals.pending(sid, cid)
+        if (
+            req.scopes is not None
+            and pending is not None
+            and not set(req.scopes) <= set(pending.scopes)
+        ):
+            raise WebError(
+                400,
+                "invalid_request",
+                "scopes must be among the pending request's own",
+                hint=f"offered: {', '.join(pending.scopes) or '(none)'}",
+            )
         if not deps.approvals.claim(sid, cid):
             raise WebError(404, "approval_not_found", "no pending approval matches")
         approved = req.decision == "approve"
         remembered = False
         try:
             if approved and req.remember:
-                remembered = await _remember(sid, cid)
+                remembered = await _remember(sid, cid, req.scopes)
         finally:
             await deps.approvals.resolve(sid, cid, Approval(approved, req.reason))
         return ApprovalResponse(ok=True, remembered=remembered)
 
-    async def _remember(sid: str, cid: str) -> bool:
-        # The scopes come from the pending request itself, never from the
-        # client; the context from the run as it is bound right now.
+    async def _remember(sid: str, cid: str, picked: list[str] | None) -> bool:
+        # The scopes come from the pending request itself — the client may
+        # only narrow them; the context from the run as it is bound right now.
         pending = deps.approvals.pending(sid, cid)
         ctrl = deps.supervisor.get(sid)
-        if pending is None or not pending.scopes or ctrl is None:
+        if pending is None or ctrl is None:
+            return False
+        scopes = [s for s in pending.scopes if picked is None or s in picked]
+        if not scopes:
             return False
         try:
-            await deps.store.add_grants(sid, pending.scopes, ctrl.grant_context())
+            await deps.store.add_grants(sid, scopes, ctrl.grant_context())
         except Exception as exc:  # noqa: BLE001 — the approval itself still stands
             log.warning("could not remember approval %s for %s: %s", cid, sid, exc)
             return False

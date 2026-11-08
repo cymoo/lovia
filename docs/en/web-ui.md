@@ -328,8 +328,12 @@ stray Enter never approves anything.
 When the verdict names *scopes* (`shell:git push`, `read:~/notes`), the card
 also offers **Always allow in this chat** for exactly those — a chained
 command such as `echo a; uname -a | head -1` lists each command it would
-remember (`echo` `uname` `head`), all granted together, and none at all when
-one of its parts cannot be granted (`sudo`, a `$VAR` the shell expands). The
+remember (`echo` `uname` `head`), and none at all when one of its parts cannot
+be granted (`sudo`, a `$VAR` the shell expands). The checkbox picks them all;
+click a chip to leave it out (or, before ticking anything, to pick just that
+one) — so `pwd` and `uname` can be remembered without `python`. The call
+itself still runs whole; the pick only decides what later calls skip asking.
+The
 grants are kept on the server, per chat, and tied to the agent and workspace
 root they were given under: a later call they fully cover is approved before
 anyone sees it and shows as a one-line note; a chat rebound to another

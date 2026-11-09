@@ -388,7 +388,7 @@ agent = Agent(
 其余问一次、用户可以按对话记住（“本对话中总是允许 `ls`”，串起来的 `ls; git status` 两个一起记）；任何模式之下都有一条底线：拒绝危险命令
 （`git push --force`、`rm -rf /`），禁止触碰凭据库，写 `.git` 或 CI 配置前先问。想让检查命令和
 开发工具免问，显式启用：`lovia.workspace.rules` 里的 `command_rules=READ_ONLY + DEV_TOOLS`——`lovia web`
-默认就启用了（`--auto-allow none` 则每条命令都问）。
+默认就启用了（在设置 → 工作区里取消勾选，则每条命令都问）。
 
 Shell 命令继承最小环境，包括 Windows 系统、命令解释器、临时目录和用户目录变量，
 确保默认配置下 socket 和用户主目录查找可以正常工作。API key 和代理配置不会自动继承；需要的变量通过
@@ -467,6 +467,8 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 
 - **开箱即用的完整聊天** —— SSE 流式输出、可从任一回复分支的会话、运行中插话或排队到本轮完成后发送、审批、定时任务、记忆编辑与文件上传；
   浏览器断开后运行仍在服务端继续。
+- **设置不用重启** —— `lovia web` 的模型、工作区模式、运行上限、记忆和系统提示都在设置页里改，
+  从下次运行起生效。
 - **富工具结果** —— 工具返回 `ui_result(kind, props)` 即可渲染 UI；内置表格、ECharts 图表
   和沙箱 HTML 页面（`show_table`、`show_chart`、`show_html`）。
 - **页面可定制** —— `ChatUI(...)` 与 `assets=` 修改文案、logo、样式和脚本；脚本通过

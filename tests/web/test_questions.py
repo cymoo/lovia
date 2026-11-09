@@ -9,14 +9,13 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-import lovia.web.__main__ as cli
 from lovia import Agent
 from lovia.exceptions import ToolError
 from lovia.plugins import Subagents
 from lovia.tools.human import HumanChannel
 from lovia.web import QuestionRegistry, RouterDeps, build_api_router, create_app
 from lovia.web.approvals import ApprovalRegistry
-from lovia.web.builder import build_default_agent
+from lovia.web.builder import Deployment, build_default_agent
 from lovia.web.store import ChatStore
 
 from ..scripted_provider import ScriptedProvider
@@ -190,11 +189,9 @@ def test_build_default_agent_wires_ask_human_parent_only(
     from lovia.providers import provider_from_string
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
-    args = cli.build_parser().parse_args([])
     channel = HumanChannel()
     agent = build_default_agent(
-        args,
+        Deployment(),
         ChatStore.in_memory(),
         provider_from_string("test-model"),
         question_channel=channel,
@@ -213,9 +210,7 @@ def test_build_default_agent_without_channel_has_no_ask_human(
     from lovia.providers import provider_from_string
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
-    args = cli.build_parser().parse_args([])
     agent = build_default_agent(
-        args, ChatStore.in_memory(), provider_from_string("test-model")
+        Deployment(), ChatStore.in_memory(), provider_from_string("test-model")
     )
     assert "ask_human" not in {t.name for t in agent.tools}

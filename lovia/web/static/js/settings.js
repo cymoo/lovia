@@ -1,13 +1,15 @@
 // settings.js — the Settings dialog: a left-rail shell (General / Models /
-// Search / About) in a wide dialog. General holds the client-side preferences
-// (localStorage: language, theme, text size, Enter behavior, notifications,
-// sound); Models/Search edit the server's config.json through model-config.js
-// and appear only when the server reports features.model_config.
+// Search / Skills / Workspace / Agent / About) in a wide dialog. General holds
+// the client-side preferences (localStorage: language, theme, text size,
+// Enter behavior, notifications, sound); the server panes edit config.json
+// through model-config.js and agent-config.js and appear only when the
+// server reports features.model_config.
 import { segmented, showDialog, setThemePref, themePref } from './ui.js';
 import { t, languages, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
 import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
+import { buildAgentPane, buildWorkspacePane } from './agent-config.js';
 
 const NOTIF_KEY = 'lovia-notify';
 const SOUND_KEY = 'lovia-sound';
@@ -267,7 +269,7 @@ function buildGeneralPane() {
 
 /**
  * Open the Settings dialog on a given tab.
- * @param {'general' | 'models' | 'search' | 'skills' | 'about'} [initialTab]
+ * @param {'general' | 'models' | 'search' | 'skills' | 'workspace' | 'agent' | 'about'} [initialTab]
  */
 export function openSettings(initialTab = 'general') {
   const tabs = [
@@ -278,6 +280,8 @@ export function openSettings(initialTab = 'general') {
       { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
       { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
       { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
+      { id: 'workspace', label: t('settings.tabWorkspace'), build: buildWorkspacePane },
+      { id: 'agent', label: t('settings.tabAgent'), build: buildAgentPane },
     );
   }
   tabs.push({ id: 'about', label: t('settings.tabAbout'), build: buildAboutPane });

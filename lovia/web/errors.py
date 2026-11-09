@@ -70,6 +70,8 @@ ErrorCode = Literal[
     "schedule_not_fired",
     "model_exists",
     "model_in_use",
+    "config_read_only",
+    "workspace_locked",
     "file_too_large",
     "unsupported_file_type",
     "too_many_runs",

@@ -133,6 +133,8 @@ API 路由抛出的错误都使用同一种响应体：
 | `schedule_not_fired` | 409 | 定时任务暂时无法触发 |
 | `model_exists` | 409 | 该 id 的模型配置已存在 |
 | `model_in_use` | 409 | 默认聊天模型不能删除 |
+| `config_read_only` | 409 | `config.json` 不可写（比如只读挂载） |
+| `workspace_locked` | 403 | 工作区设置由 `lovia web` 的启动方式固定 |
 | `file_too_large` | 413 | 超过工作区读取或上传上限 |
 | `unsupported_file_type` | 415 | 不支持内联预览，或扩展名不允许上传 |
 | `too_many_runs` | 429 | 已达到并发 Run 上限 |

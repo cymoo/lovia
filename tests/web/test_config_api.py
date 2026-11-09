@@ -15,8 +15,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Skills  # noqa: E402
 from lovia.web import create_app  # noqa: E402
-from lovia.web.__main__ import build_parser  # noqa: E402
+from lovia.web.builder import Deployment  # noqa: E402
 from lovia.web.config import (  # noqa: E402
+    AgentSettings,
     ConfigRuntime,
     LoadedConfig,
     ValidationOutcome,
@@ -26,21 +27,25 @@ from lovia.web.config import (  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 
+def _lean() -> WebConfig:
+    """A fresh document with memory and subagents off (no disk, fewer parts)."""
+    return WebConfig(agent=AgentSettings(memory=False, subagents=False))
+
+
 @pytest.fixture
 def served(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> Iterator[tuple[TestClient, ConfigRuntime, Any]]:
     """An unconfigured app serving the config API, cwd-isolated to tmp."""
     monkeypatch.chdir(tmp_path)
-    args = build_parser().parse_args(["--no-memory", "--no-subagents"])
     loaded = LoadedConfig(
-        WebConfig(),
+        _lean(),
         storage.project_config_path(),
         storage.PROJECT_CONFIG_LABEL,
         exists=False,
     )
     runtime = ConfigRuntime(
-        args=args, loaded=loaded, store=ChatStore.in_memory(), question_channel=None
+        deployment=Deployment(), loaded=loaded, store=ChatStore.in_memory()
     )
     app = create_app({}, store=runtime.store, config_runtime=runtime, titles=False)
     # base_url localhost => a loopback Host header, passing the rebinding guard.
@@ -557,15 +562,14 @@ def test_token_auth_lifts_the_host_restriction(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    args = build_parser().parse_args(["--no-memory", "--no-subagents"])
     loaded = LoadedConfig(
-        WebConfig(),
+        _lean(),
         storage.project_config_path(),
         storage.PROJECT_CONFIG_LABEL,
         exists=False,
     )
     runtime = ConfigRuntime(
-        args=args, loaded=loaded, store=ChatStore.in_memory(), question_channel=None
+        deployment=Deployment(), loaded=loaded, store=ChatStore.in_memory()
     )
     app = create_app(
         {},
@@ -587,3 +591,197 @@ def test_token_auth_lifts_the_host_restriction(
         )
         # ...but the token itself is still required.
         assert client.get("/api/config").status_code == 401
+
+
+# ------------------------------------------- workspace / run / agent -
+
+
+def _served_with(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, deployment: Deployment
+) -> tuple[TestClient, ConfigRuntime]:
+    monkeypatch.chdir(tmp_path)
+    loaded = LoadedConfig(
+        _lean(), storage.project_config_path(), storage.PROJECT_CONFIG_LABEL, False
+    )
+    runtime = ConfigRuntime(
+        deployment=deployment, loaded=loaded, store=ChatStore.in_memory()
+    )
+    app = create_app({}, store=runtime.store, config_runtime=runtime, titles=False)
+    return TestClient(app, base_url="http://localhost"), runtime
+
+
+def test_run_settings_apply_to_the_next_run(served) -> None:
+    client, runtime, app = served
+    _add_model(client)
+    deps = app.state.deps
+    res = client.put(
+        "/api/config/run", json={"max_turns": 7, "max_retries": 2, "followups": False}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["config"]["run"] == {
+        "max_turns": 7,
+        "max_retries": 2,
+        "followups": False,
+    }
+    # Read by every run at its start: the next one gets these.
+    assert deps.max_turns == 7
+    assert deps.retry.max_attempts == 3
+    assert client.get("/api/info").json()["features"]["followups"] is False
+    # An explicit null restores the agent's own retry posture.
+    client.put("/api/config/run", json={"max_retries": None})
+    assert deps.retry is None and deps.max_turns == 7
+
+
+def test_run_settings_reject_nulls_and_out_of_range(served) -> None:
+    client, *_ = served
+    assert client.put("/api/config/run", json={"max_turns": None}).status_code == 400
+    assert client.put("/api/config/run", json={"max_turns": 0}).status_code == 422
+
+
+def test_workspace_change_rebuilds_the_agent_and_spares_a_held_copy(served) -> None:
+    client, runtime, app = served
+    _add_model(client)
+    deps = app.state.deps
+    held = deps.agents["lovia"]  # what an in-flight run would be holding
+    assert held.workspace.policy.write == "allow"  # coding by default
+    res = client.put("/api/config/workspace", json={"default_mode": "readonly"})
+    assert res.status_code == 200, res.text
+    ws = res.json()["config"]["workspace"]
+    assert ws["default_mode"] == ws["effective_mode"] == "readonly"
+    assert deps.agents["lovia"].workspace.policy.write == "deny"
+    assert held.workspace.policy.write == "allow"  # untouched
+    saved = json.loads(runtime.loaded.path.read_text())
+    assert saved["workspace"]["default_mode"] == "readonly"
+
+
+def test_auto_allow_change_reaches_the_command_policy(served) -> None:
+    client, _runtime, app = served
+    _add_model(client)
+    deps = app.state.deps
+    assert deps.agents["lovia"].workspace.policy.decide_command("ls").action == "allow"
+    res = client.put("/api/config/workspace", json={"auto_allow": []})
+    assert res.status_code == 200, res.text
+    assert deps.agents["lovia"].workspace.policy.decide_command("ls").action == "ask"
+
+
+def test_agent_settings_apply(served, tmp_path: Path) -> None:
+    client, _runtime, app = served
+    _add_model(client)
+    res = client.put(
+        "/api/config/agent",
+        json={"instructions": "Answer in haiku.", "subagents": True},
+    )
+    assert res.status_code == 200, res.text
+    agent = app.state.deps.agents["lovia"]
+    assert agent.instructions.startswith("Answer in haiku.")
+    assert any(type(p).__name__ == "Subagents" for p in agent.plugins)
+    assert client.put("/api/config/agent", json={"memory": None}).status_code == 400
+
+
+def test_max_tokens_round_trips_through_a_profile(served) -> None:
+    client, _runtime, app = served
+    out = _add_model(client, max_tokens=4096)
+    model = out["config"]["models"][0]
+    assert model["max_tokens"] == 4096
+    assert app.state.deps.agents["lovia"].settings.max_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    ("deployment", "lock"),
+    [
+        (Deployment(loopback=False), "remote"),
+        (Deployment(readonly=True), "readonly"),
+        (Deployment(workspace=None), "no_workspace"),
+    ],
+)
+def test_locked_workspace_settings_refuse_server_side(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, deployment: Deployment, lock: str
+) -> None:
+    client, runtime = _served_with(monkeypatch, tmp_path, deployment)
+    with client:
+        ws = client.get("/api/config").json()["workspace"]
+        assert ws["lock"] == lock
+        res = client.put("/api/config/workspace", json={"default_mode": "readonly"})
+        assert res.status_code == 403
+        assert res.json()["detail"]["code"] == "workspace_locked"
+        # Other settings stay editable from the browser.
+        assert client.put("/api/config/run", json={"max_turns": 9}).status_code == 200
+    assert runtime.config.workspace.default_mode == "coding"
+
+
+def test_readonly_flag_shows_the_effective_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, _runtime = _served_with(monkeypatch, tmp_path, Deployment(readonly=True))
+    with client:
+        ws = client.get("/api/config").json()["workspace"]
+    # The file keeps the user's choice; runs get what the flag allows.
+    assert ws["default_mode"] == "coding"
+    assert ws["effective_mode"] == "readonly"
+    assert ws["modes"] == ["readonly"]
+
+
+def test_remote_switch_never_offers_trusted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    deployment = Deployment(loopback=False, allow_workspace_edit=True)
+    client, _runtime = _served_with(monkeypatch, tmp_path, deployment)
+    with client:
+        assert client.get("/api/config").json()["workspace"]["modes"] == [
+            "readonly",
+            "coding",
+        ]
+        res = client.put("/api/config/workspace", json={"default_mode": "trusted"})
+        assert res.status_code == 400
+        res = client.put("/api/config/workspace", json={"default_mode": "readonly"})
+        assert res.status_code == 200, res.text
+
+
+def test_read_only_config_boots_and_refuses_every_write(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, runtime = _served_with(monkeypatch, tmp_path, Deployment())
+    monkeypatch.setattr(storage, "config_writable", lambda path: False)
+    monkeypatch.setattr("lovia.web.config.runtime.config_writable", lambda path: False)
+    with client:
+        cfg = client.get("/api/config").json()
+        assert cfg["writable"] is False
+        for method, url, body in (
+            ("post", "/api/config/models", {"model": "m"}),
+            ("put", "/api/config/run", {"max_turns": 3}),
+            ("put", "/api/config/workspace", {"auto_allow": []}),
+            ("put", "/api/config/agent", {"memory": False}),
+            ("put", "/api/config/search", {"backend": "off"}),
+            ("put", "/api/config/skills", {"dirs": []}),
+        ):
+            res = getattr(client, method)(url, json=body)
+            assert res.status_code == 409, url
+            assert res.json()["detail"]["code"] == "config_read_only"
+    assert not runtime.loaded.path.exists()
+
+
+def test_config_writable_follows_file_and_directory(tmp_path: Path) -> None:
+    import os
+    import stat
+
+    target = tmp_path / "a" / "b" / "config.json"
+    assert storage.config_writable(target)  # nearest existing dir is writable
+    target.parent.mkdir(parents=True)
+    target.write_text("{}")
+    assert storage.config_writable(target)
+    target.chmod(stat.S_IRUSR)
+    try:
+        if os.access(target, os.W_OK):  # pragma: no cover - running as root
+            pytest.skip("permission bits are not enforced for this user")
+        assert not storage.config_writable(target)
+    finally:
+        target.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
+def test_settings_save_before_any_model_and_apply_when_one_arrives(served) -> None:
+    client, runtime, app = served
+    res = client.put("/api/config/run", json={"max_turns": 5})
+    assert res.status_code == 200, res.text
+    assert json.loads(runtime.loaded.path.read_text())["run"]["max_turns"] == 5
+    _add_model(client)
+    assert app.state.deps.max_turns == 5

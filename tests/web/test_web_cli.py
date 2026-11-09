@@ -17,11 +17,15 @@ from lovia.exceptions import UserError  # noqa: E402
 from lovia.web import ChatStore  # noqa: E402
 from lovia.web import __main__ as cli  # noqa: E402
 from lovia.web import builder  # noqa: E402
+from lovia.workspace import Workspace  # noqa: E402
 from lovia.web.config import (  # noqa: E402
+    AgentSettings,
     ModelProfile,
+    RunSettings,
     SearchConfig,
     SkillsConfig,
     WebConfig,
+    WorkspaceSettings,
     resolve_skills_dirs,
 )
 
@@ -105,15 +109,14 @@ def test_resolve_skills_legacy_dir_ignored_with_hint(
 
 
 def test_resolve_memory_disabled() -> None:
-    assert builder.resolve_memory("./anywhere", no_memory=True) is None
+    assert builder.resolve_memory(False, "./anywhere") is None
 
 
 def test_resolve_memory_default_root(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
-    mem = builder.resolve_memory(None, no_memory=False)
+    mem = builder.resolve_memory(True, AgentSettings().memory_dir)
     assert isinstance(mem, Memory)
     assert mem.index is not None  # default builds both the notes and archive tiers
     # The default root is created eagerly under cwd.
@@ -122,37 +125,16 @@ def test_resolve_memory_default_root(
 
 def test_resolve_memory_explicit_dir(tmp_path: Path) -> None:
     target = tmp_path / "mem"
-    mem = builder.resolve_memory(str(target), no_memory=False)
+    mem = builder.resolve_memory(True, str(target))
     assert isinstance(mem, Memory)
     assert target.is_dir()
-
-
-def test_resolve_memory_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    envmem = tmp_path / "envmem"
-    monkeypatch.setenv("LOVIA_MEMORY_DIR", str(envmem))
-    mem = builder.resolve_memory(None, no_memory=False)
-    assert isinstance(mem, Memory)
-    assert envmem.is_dir()
-
-
-def test_resolve_memory_flag_beats_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    envmem = tmp_path / "envmem"
-    flagmem = tmp_path / "flagmem"
-    monkeypatch.setenv("LOVIA_MEMORY_DIR", str(envmem))
-    mem = builder.resolve_memory(str(flagmem), no_memory=False)
-    assert isinstance(mem, Memory)
-    # The flag root is used; the env root is left untouched.
-    assert flagmem.is_dir()
-    assert not envmem.exists()
 
 
 def test_resolve_memory_path_is_file(tmp_path: Path) -> None:
     f = tmp_path / "notadir"
     f.write_text("x", encoding="utf-8")
     with pytest.raises(UserError, match="not a directory"):
-        builder.resolve_memory(str(f), no_memory=False)
+        builder.resolve_memory(True, str(f))
 
 
 # ------------------------------------------------------------ built-in tools -
@@ -209,47 +191,49 @@ def test_resolve_tools_tavily_without_key_warns_and_degrades(
 # ---------------------------------------------------------- instructions -
 
 
-def test_resolve_instructions_inline() -> None:
-    assert builder.resolve_instructions("be terse", None) == "be terse"
-
-
-def test_resolve_instructions_file(tmp_path: Path) -> None:
-    f = tmp_path / "prompt.md"
-    f.write_text("from file", encoding="utf-8")
-    assert builder.resolve_instructions(None, str(f)) == "from file"
-
-
-def test_resolve_instructions_file_missing(tmp_path: Path) -> None:
-    with pytest.raises(UserError, match="instructions file not found"):
-        builder.resolve_instructions(None, str(tmp_path / "nope.md"))
+def test_resolve_instructions_custom_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert builder.resolve_instructions("  be terse \n") == "be terse"
 
 
 def test_resolve_instructions_convention_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.delenv("LOVIA_INSTRUCTIONS_FILE", raising=False)
     monkeypatch.chdir(tmp_path)
     (tmp_path / "AGENTS.md").write_text("conventional prompt", encoding="utf-8")
-    assert builder.resolve_instructions(None, None) == "conventional prompt"
+    assert builder.resolve_instructions() == "conventional prompt"
+
+
+def test_resolve_instructions_custom_then_agents_md(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "AGENTS.md").write_text("project rules", encoding="utf-8")
+    assert builder.resolve_instructions("be terse") == "be terse\n\nproject rules"
 
 
 def test_resolve_instructions_generic_fallback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.delenv("LOVIA_INSTRUCTIONS_FILE", raising=False)
     monkeypatch.chdir(tmp_path)
-    assert builder.resolve_instructions(None, None) == builder.GENERIC_INSTRUCTIONS
+    assert builder.resolve_instructions() == builder.GENERIC_INSTRUCTIONS
 
 
 # ------------------------------------------------------------- workspace -
 
 
+def _ws_config(**fields: object) -> WebConfig:
+    return WebConfig(workspace=WorkspaceSettings.model_validate(fields))
+
+
 def test_resolve_workspace_disabled() -> None:
-    assert builder.resolve_workspace(".", "trusted", no_workspace=True) is None
+    assert builder.resolve_workspace(builder.Deployment(workspace=None)) is None
 
 
 def test_resolve_workspace_default_mode_is_coding(tmp_path: Path) -> None:
-    ws = builder.resolve_workspace(str(tmp_path), None, no_workspace=False)
+    ws = builder.resolve_workspace(builder.Deployment(workspace=str(tmp_path)))
     assert ws is not None
     # Matches the core ``Workspace.local`` default: writes allowed inside the
     # root, but shell and out-of-root reads go through approval — no unprompted
@@ -259,21 +243,20 @@ def test_resolve_workspace_default_mode_is_coding(tmp_path: Path) -> None:
     assert ws.policy.write == "allow"
 
 
-def test_resolve_workspace_mode_from_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("LOVIA_WORKSPACE_MODE", "readonly")
-    ws = builder.resolve_workspace(str(tmp_path), None, no_workspace=False)
+def test_resolve_workspace_mode_from_config(tmp_path: Path) -> None:
+    ws = builder.resolve_workspace(
+        builder.Deployment(workspace=str(tmp_path)),
+        _ws_config(default_mode="readonly"),
+    )
     assert ws is not None
     assert ws.policy.write == "deny"
     assert ws.policy.allow_shell is False
 
 
 def test_coding_auto_allows_inspection_and_dev_tools_by_default(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("LOVIA_AUTO_ALLOW", raising=False)
-    ws = builder.resolve_workspace(str(tmp_path), None, no_workspace=False)
+    ws = builder.resolve_workspace(builder.Deployment(workspace=str(tmp_path)))
     assert ws is not None
     for cmd in ("ls", "pwd", "echo hi", "git status", "pytest -q", "ruff check ."):
         assert ws.policy.decide_command(cmd).action == "allow", cmd
@@ -283,57 +266,69 @@ def test_coding_auto_allows_inspection_and_dev_tools_by_default(
     assert ws.policy.decide_command("git push --force").action == "deny"
 
 
-def test_auto_allow_flag_and_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    root = str(tmp_path)
-    none = builder.resolve_workspace(root, None, False, auto_allow="none")
+def test_auto_allow_bundles_from_config(tmp_path: Path) -> None:
+    deployment = builder.Deployment(workspace=str(tmp_path))
+    none = builder.resolve_workspace(deployment, _ws_config(auto_allow=[]))
     assert none is not None and none.policy.decide_command("ls").action == "ask"
-    only = builder.resolve_workspace(root, None, False, auto_allow=" read-only ")
+    only = builder.resolve_workspace(deployment, _ws_config(auto_allow=["read-only"]))
     assert only is not None
     assert only.policy.decide_command("ls").action == "allow"
     assert only.policy.decide_command("pytest").action == "ask"
-    monkeypatch.setenv("LOVIA_AUTO_ALLOW", "dev-tools")
-    env = builder.resolve_workspace(root, None, False)
-    assert env is not None and env.policy.decide_command("ls").action == "ask"
-    assert env.policy.decide_command("pytest").action == "allow"
-    # The flag beats the env.
-    assert builder.resolve_auto_allow("read-only") == ("read-only",)
 
 
-@pytest.mark.parametrize("bad", ["bogus", "read-only,cat", "none,read-only", ","])
-def test_auto_allow_rejects_unknown_bundles(tmp_path: Path, bad: str) -> None:
-    # Checked in every mode: a typo fails at boot, not on a later switch.
-    with pytest.raises(UserError, match="invalid --auto-allow"):
-        builder.resolve_workspace(str(tmp_path), "readonly", False, auto_allow=bad)
+@pytest.mark.parametrize("bad", ["bogus", "cat"])
+def test_auto_allow_rejects_unknown_bundles(bad: str) -> None:
+    with pytest.raises(ValueError, match="auto_allow"):
+        _ws_config(auto_allow=["read-only", bad])
 
 
-def test_resolve_workspace_invalid_mode(tmp_path: Path) -> None:
-    with pytest.raises(UserError, match="invalid workspace mode"):
-        builder.resolve_workspace(str(tmp_path), "bogus", no_workspace=False)
+def test_resolve_workspace_invalid_mode() -> None:
+    with pytest.raises(ValueError, match="default_mode"):
+        _ws_config(default_mode="bogus")
 
 
 def test_resolve_workspace_missing_dir(tmp_path: Path) -> None:
     with pytest.raises(UserError, match="workspace directory not found"):
-        builder.resolve_workspace(str(tmp_path / "nope"), "trusted", no_workspace=False)
+        builder.resolve_workspace(builder.Deployment(workspace=str(tmp_path / "no")))
 
 
-def test_workspace_flags_map_to_modes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    args = cli.build_parser().parse_args(["--readonly"])
-    assert builder._mode_flag(args) == "readonly"
-    # The flag wins over the env var, like every other option.
-    monkeypatch.setenv("LOVIA_WORKSPACE_MODE", "trusted")
-    ws = builder.resolve_workspace(
-        str(tmp_path), builder._mode_flag(args), args.no_workspace
-    )
+def test_readonly_flag_beats_the_configured_mode(tmp_path: Path) -> None:
+    deployment = builder.Deployment(workspace=str(tmp_path), readonly=True)
+    ws = builder.resolve_workspace(deployment, _ws_config(default_mode="trusted"))
     assert ws is not None
     assert ws.policy.write == "deny"
     assert ws.policy.allow_shell is False
 
-    assert builder._mode_flag(cli.build_parser().parse_args(["--trusted"])) == "trusted"
-    assert builder._mode_flag(cli.build_parser().parse_args([])) is None
+
+@pytest.mark.parametrize(
+    ("deployment", "modes", "trusted_runs_as", "lock"),
+    [
+        (builder.Deployment(), ("readonly", "coding", "trusted"), "trusted", None),
+        (builder.Deployment(readonly=True), ("readonly",), "readonly", "readonly"),
+        (
+            builder.Deployment(loopback=False),
+            ("readonly", "coding"),
+            "coding",
+            "remote",
+        ),
+        (
+            builder.Deployment(loopback=False, allow_workspace_edit=True),
+            ("readonly", "coding"),
+            "coding",
+            None,
+        ),
+        (builder.Deployment(workspace=None), (), None, "no_workspace"),
+    ],
+)
+def test_deployment_bounds_modes_and_edits(
+    deployment: builder.Deployment,
+    modes: tuple[str, ...],
+    trusted_runs_as: str | None,
+    lock: str | None,
+) -> None:
+    assert deployment.modes() == modes
+    assert deployment.effective_mode("trusted") == trusted_runs_as
+    assert deployment.workspace_lock() == lock
 
 
 # -------------------------------------------------------------- --app -
@@ -429,11 +424,6 @@ def test_main_serves_a_built_app_as_is(
     err = capsys.readouterr().err
     assert "ignoring options it was built without: --title" in err
 
-    # Ignored means ignored: a value that would fail validation doesn't block.
-    rc = cli.main(["--app", "appmod_b:app", "--max-retries", "-1"])
-    assert rc == 0
-    assert "--max-retries" in capsys.readouterr().err
-
 
 def _unexpected_create_app(*a: object, **k: object) -> None:
     raise AssertionError("a built --app must not be rebuilt")
@@ -499,23 +489,21 @@ def test_parser_rejects_the_removed_skills_dir_flag() -> None:
 
 def test_parser_workspace_flags_are_mutually_exclusive() -> None:
     with pytest.raises(SystemExit):
-        cli.build_parser().parse_args(["--readonly", "--trusted"])
-    with pytest.raises(SystemExit):
-        cli.build_parser().parse_args(["--trusted", "--no-workspace"])
+        cli.build_parser().parse_args(["--readonly", "--no-workspace"])
 
 
 def test_parser_defaults_are_none() -> None:
     args = cli.build_parser().parse_args([])
     assert args.host is None and args.port is None
-    assert args.no_workspace is False
-    assert args.readonly is False and args.trusted is False
-    assert args.memory_dir is None and args.no_memory is False
+    assert args.dir is None and args.workspace is None
+    assert args.no_workspace is False and args.readonly is False
+    assert args.allow_workspace_switch is False
 
 
-def test_parser_memory_flags() -> None:
-    args = cli.build_parser().parse_args(["--memory-dir", "mem", "--no-memory"])
-    assert args.memory_dir == "mem"
-    assert args.no_memory is True
+def test_parser_takes_the_workspace_as_dir() -> None:
+    assert cli.build_parser().parse_args(["~/notes"]).dir == "~/notes"
+    # The older spelling still parses (hidden from --help).
+    assert cli.build_parser().parse_args(["--workspace", "x"]).workspace == "x"
 
 
 def test_parser_has_no_model_connection_flags() -> None:
@@ -541,9 +529,63 @@ def test_help_defaults_render_from_core_constants() -> None:
     # they can never drift from what the library actually does.
     help_text = cli.build_parser().format_help()
     assert f"default {cli.DEFAULT_TIMEOUT:g}" in help_text
-    assert f"{builder.DEFAULT_RETRIES} retries" in help_text
-    assert f"default {builder.DEFAULT_MAX_TURNS}" in help_text
-    assert builder.DEFAULT_WORKSPACE_MODE in help_text
+
+
+# ------------------------------------------------------- removed options -
+
+
+@pytest.mark.parametrize(
+    ("argv", "where"),
+    [
+        (["--max-turns", "20"], "run.max_turns"),
+        (["--max-retries=3"], "run.max_retries"),
+        (["--no-followups"], "run.followups"),
+        (["--trusted"], "workspace.default_mode"),
+        (["--auto-allow", "none"], "workspace.auto_allow"),
+        (["--no-memory"], "agent.memory"),
+        (["--memory-dir", "m"], "agent.memory_dir"),
+        (["--no-subagents"], "agent.subagents"),
+        (["--instructions", "x"], "agent.instructions"),
+        (["--instructions-file", "x"], "agent.instructions"),
+        (["--max-tokens", "9"], "models[].max_tokens"),
+    ],
+)
+def test_main_points_a_removed_option_at_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    where: str,
+) -> None:
+    monkeypatch.setattr(cli, "serve", _unexpected_create_app)
+    assert cli.main(argv) == 2
+    err = capsys.readouterr().err
+    assert argv[0].split("=")[0] in err and where in err
+
+
+def test_main_points_removed_env_vars_at_settings(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "serve", _unexpected_create_app)
+    monkeypatch.setenv("LOVIA_MAX_TURNS", "10")
+    monkeypatch.setenv("LOVIA_WORKSPACE_MODE", "readonly")
+    assert cli.main([]) == 2
+    err = capsys.readouterr().err
+    # Every hit at once, each with its new home.
+    assert "LOVIA_MAX_TURNS → Settings → Agent (config.json run.max_turns)" in err
+    assert "LOVIA_WORKSPACE_MODE → --readonly" in err
+
+
+def test_removed_options_after_double_dash_are_not_flags() -> None:
+    cli.check_removed_options(["--", "--max-turns"], env={})
+
+
+def test_main_rejects_two_workspace_roots(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "serve", _unexpected_create_app)
+    assert cli.main(["a", "--workspace", "b"]) == 2
+    assert "two workspace roots" in capsys.readouterr().err
 
 
 def test_help_is_grouped_and_plain_text() -> None:
@@ -576,13 +618,18 @@ def _provider(model: str = "test-model") -> object:
     return provider_from_string(model)
 
 
+_DEPLOY = builder.Deployment()
+
+
+def _agent_config(**agent: object) -> WebConfig:
+    return WebConfig(agent=AgentSettings.model_validate(agent))
+
+
 def test_build_default_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
     (tmp_path / ".agents" / "skills").mkdir(parents=True)
-    args = cli.build_parser().parse_args([])
     provider = _provider()
-    agent = builder.build_default_agent(args, ChatStore.in_memory(), provider)
+    agent = builder.build_default_agent(_DEPLOY, ChatStore.in_memory(), provider)
     assert agent.name == "lovia"
     assert agent.model is provider
     assert agent.instructions == builder.GENERIC_INSTRUCTIONS
@@ -604,8 +651,9 @@ def test_build_default_agent_no_memory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    args = cli.build_parser().parse_args(["--no-memory"])
-    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(
+        _DEPLOY, ChatStore.in_memory(), _provider(), config=_agent_config(memory=False)
+    )
     assert all(not isinstance(p, Memory) for p in agent.plugins)
 
 
@@ -615,10 +663,8 @@ def test_build_default_agent_subagents_child_composition(
     from lovia import Subagents
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
     (tmp_path / ".agents" / "skills").mkdir(parents=True)
-    args = cli.build_parser().parse_args([])
-    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(_DEPLOY, ChatStore.in_memory(), _provider())
     (plugin,) = [p for p in agent.plugins if isinstance(p, Subagents)]
     (child,) = plugin._catalog.values()
     # The child keeps the basic capabilities (Skills, Todo) and sheds the
@@ -635,8 +681,12 @@ def test_build_default_agent_no_subagents(
     from lovia import Subagents
 
     monkeypatch.chdir(tmp_path)
-    args = cli.build_parser().parse_args(["--no-subagents"])
-    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(
+        _DEPLOY,
+        ChatStore.in_memory(),
+        _provider(),
+        config=_agent_config(subagents=False),
+    )
     assert all(not isinstance(p, Subagents) for p in agent.plugins)
 
 
@@ -646,8 +696,9 @@ def test_build_default_agent_shows_ui_components_parent_only(
     from lovia import Subagents
 
     monkeypatch.chdir(tmp_path)
-    args = cli.build_parser().parse_args(["--no-memory"])
-    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(
+        _DEPLOY, ChatStore.in_memory(), _provider(), config=_agent_config(memory=False)
+    )
     ui_tools = {"show_chart", "show_table", "show_html"}
     assert ui_tools <= {t.name for t in agent.tools}
     (plugin,) = [p for p in agent.plugins if isinstance(p, Subagents)]
@@ -659,9 +710,9 @@ def test_build_default_agent_wires_the_vision_role(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    args = cli.build_parser().parse_args(["--no-memory"])
     config = WebConfig.model_validate(
         {
+            "agent": {"memory": False},
             "models": [
                 {"id": "chat", "model": "text-model"},
                 {"id": "eyes", "model": "glm-4.6v", "api_key": "sk-v"},
@@ -674,7 +725,7 @@ def test_build_default_agent_wires_the_vision_role(
     # The main model must be text-only, or images would go inline instead.
     blind = provider_from_string("text-model", supports_vision=False)
     agent = builder.build_default_agent(
-        args, ChatStore.in_memory(), blind, config=config
+        _DEPLOY, ChatStore.in_memory(), blind, config=config
     )
     assert "describe_image" in {t.name for t in agent.tools}
 
@@ -690,8 +741,7 @@ def test_build_default_agent_injects_current_date(
     from lovia.run_context import RunContext
 
     monkeypatch.chdir(tmp_path)
-    args = cli.build_parser().parse_args([])
-    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(_DEPLOY, ChatStore.in_memory(), _provider())
 
     ctx = RunContext(deps=None, entries=[], agent=agent)
     system_prompt = asyncio.run(agent.render_system_prompt(ctx))
@@ -709,8 +759,7 @@ def test_build_default_agent_declares_render_surface(
     from lovia.web import SURFACE_NOTE
 
     monkeypatch.chdir(tmp_path)
-    args = cli.build_parser().parse_args([])
-    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(_DEPLOY, ChatStore.in_memory(), _provider())
 
     ctx = RunContext(deps=None, entries=[], agent=agent)
     system_prompt = asyncio.run(agent.render_system_prompt(ctx))
@@ -721,9 +770,15 @@ def test_build_default_agent_max_tokens(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    args = cli.build_parser().parse_args(["--max-tokens", "1234"])
-    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
+    config = WebConfig.model_validate(
+        {"models": [{"id": "m", "model": "test-model", "max_tokens": 1234}]}
+    )
+    agent = builder.build_default_agent(
+        _DEPLOY, ChatStore.in_memory(), _provider(), config=config
+    )
     assert agent.settings.max_tokens == 1234
+    (child,) = next(p for p in agent.plugins if type(p).__name__ == "Subagents").agents
+    assert child.settings.max_tokens == 1234
 
 
 # ----------------------------------------------------------------- main -
@@ -850,7 +905,7 @@ def test_main_passes_db_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 def test_warn_when_trusted_workspace_exposed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ws = builder.resolve_workspace(str(tmp_path), "trusted", no_workspace=False)
+    ws = Workspace.local(str(tmp_path), mode="trusted")
     calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
     cli._warn_if_exposed("0.0.0.0", ws)
@@ -858,7 +913,7 @@ def test_warn_when_trusted_workspace_exposed(
 
 
 def test_no_warn_on_loopback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ws = builder.resolve_workspace(str(tmp_path), "trusted", no_workspace=False)
+    ws = Workspace.local(str(tmp_path), mode="trusted")
     calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
     cli._warn_if_exposed("127.0.0.1", ws)
@@ -868,11 +923,32 @@ def test_no_warn_on_loopback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 def test_no_warn_on_readonly_workspace(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ws = builder.resolve_workspace(str(tmp_path), "readonly", no_workspace=False)
+    ws = Workspace.local(str(tmp_path), mode="readonly")
     calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
     cli._warn_if_exposed("0.0.0.0", ws)
     assert not calls
+
+
+@pytest.mark.parametrize(
+    ("host", "deployment", "warns"),
+    [
+        ("0.0.0.0", builder.Deployment(loopback=False), True),
+        ("0.0.0.0", builder.Deployment(loopback=False, readonly=True), False),
+        ("0.0.0.0", builder.Deployment(workspace=None, loopback=False), False),
+        ("127.0.0.1", builder.Deployment(), False),
+    ],
+)
+def test_default_agent_warns_by_the_widest_allowed_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    host: str,
+    deployment: builder.Deployment,
+    warns: bool,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
+    cli._warn_if_remote_capable(host, deployment)
+    assert bool(calls) is warns
 
 
 def test_no_warn_without_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -885,64 +961,23 @@ def test_no_warn_without_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
 # ------------------------------------------ reliability / model knobs -
 
 
-def test_resolve_max_retries_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LOVIA_MAX_RETRIES", raising=False)
-    # No flag, no env -> None: the agent's own retry posture applies.
-    assert builder.resolve_max_retries(None) is None
-    monkeypatch.setenv("LOVIA_MAX_RETRIES", "5")
-    assert builder.resolve_max_retries(None) == 5  # env
-    assert builder.resolve_max_retries(0) == 0  # flag wins; 0 disables retries
+def test_resolve_retry() -> None:
+    # None: the agent's own retry posture applies.
+    assert builder.resolve_retry(RunSettings()) is None
+    policy = builder.resolve_retry(RunSettings(max_retries=0))
+    assert policy is not None and policy.max_attempts == 1  # 0 disables retries
 
 
-def test_resolve_max_retries_rejects_negative() -> None:
-    with pytest.raises(UserError, match="must be >= 0"):
-        builder.resolve_max_retries(-1)
-
-
-def test_resolve_max_turns_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LOVIA_MAX_TURNS", raising=False)
-    assert builder.resolve_max_turns(None) == 50  # default
-    monkeypatch.setenv("LOVIA_MAX_TURNS", "10")
-    assert builder.resolve_max_turns(None) == 10  # env
-    assert builder.resolve_max_turns(5) == 5  # flag wins
-
-
-def test_resolve_max_turns_rejects_zero() -> None:
-    with pytest.raises(UserError, match="must be >= 1"):
-        builder.resolve_max_turns(0)
-
-
-def test_resolve_max_tokens_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LOVIA_MAX_TOKENS", raising=False)
-    assert builder.resolve_max_tokens(None) is None  # provider default
-    monkeypatch.setenv("LOVIA_MAX_TOKENS", "1024")
-    assert builder.resolve_max_tokens(None) == 1024  # env
-    assert builder.resolve_max_tokens(4096) == 4096  # flag wins
-
-
-def test_resolve_max_tokens_rejects_non_positive() -> None:
-    with pytest.raises(UserError, match="must be > 0"):
-        builder.resolve_max_tokens(0)
+def test_run_settings_reject_out_of_range() -> None:
+    with pytest.raises(ValueError):
+        RunSettings(max_turns=0)
+    with pytest.raises(ValueError):
+        RunSettings(max_retries=-1)
 
 
 def test_parser_reliability_flags() -> None:
-    args = cli.build_parser().parse_args(
-        [
-            "--max-retries",
-            "4",
-            "--provider-timeout",
-            "90",
-            "--max-tokens",
-            "2048",
-            "--max-turns",
-            "20",
-            "--trust-env",
-        ]
-    )
-    assert args.max_retries == 4
+    args = cli.build_parser().parse_args(["--provider-timeout", "90", "--trust-env"])
     assert args.provider_timeout == 90.0
-    assert args.max_tokens == 2048
-    assert args.max_turns == 20
     assert args.trust_env is True
 
 
@@ -964,11 +999,9 @@ def test_app_warns_about_agent_flags(
     monkeypatch.setattr(
         cli.log, "warning", lambda msg, *a: warned.append(msg % a if a else msg)
     )
-    args = cli.build_parser().parse_args(
-        ["--app", "m:a", "--workspace", ".", "--max-tokens", "5"]
-    )
+    args = cli.build_parser().parse_args(["--app", "m:a", "--readonly", "."])
     cli._warn_ignored_agent_flags(args)
-    assert warned and "--workspace" in warned[0] and "--max-tokens" in warned[0]
+    assert warned and "DIR" in warned[0] and "--readonly" in warned[0]
 
 
 def test_main_missing_api_key_serves_the_setup_ui(
@@ -1218,9 +1251,9 @@ def test_main_passes_retry_and_context_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    write_config(context_window=111_111)
+    write_config(context_window=111_111, run={"max_retries": 1, "max_turns": 7})
     captured = _capture_serving(monkeypatch)
-    rc = cli.main(["--max-retries", "1", "--max-turns", "7"])
+    rc = cli.main([])
     assert rc == 0
     retry = captured["retry"]
     assert isinstance(retry, RetryPolicy)
@@ -1320,25 +1353,6 @@ def test_main_boots_with_the_saved_extra_body(
 # ------------------------------------------------------------- followups -
 
 
-def test_resolve_followups_on_by_default() -> None:
-    """The CLI is a finished chat app; the library default is the opposite."""
-    assert builder.resolve_followups(False) is True
-
-
-def test_resolve_followups_flag_disables() -> None:
-    assert builder.resolve_followups(True) is False
-
-
-def test_resolve_followups_env_disables(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LOVIA_FOLLOWUPS", "0")
-    assert builder.resolve_followups(False) is False
-
-
-def test_resolve_followups_flag_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LOVIA_FOLLOWUPS", "1")
-    assert builder.resolve_followups(True) is False
-
-
 def test_resolve_aux_model_unassigned() -> None:
     assert builder.resolve_aux_model(None) is None
 
@@ -1377,5 +1391,6 @@ def test_main_passes_followups_to_serve(
     assert seen["followup_model"] is None
 
     seen.clear()
-    assert cli.main(["--no-followups"]) == 0
+    write_config(run={"followups": False})
+    assert cli.main([]) == 0
     assert seen["followups"] is False

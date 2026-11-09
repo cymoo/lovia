@@ -34,7 +34,6 @@ from ..exceptions import UserError
 from ..http_config import DEFAULT_TIMEOUT
 from ..log_config import enable_logging
 from ..providers import Provider
-from ..reliability import RetryPolicy
 from ..tools import HumanChannel
 from . import config as webconfig
 from .app import (
@@ -48,21 +47,7 @@ from fastapi import FastAPI  # after .app: its import names a missing [web] extr
 
 from .api import RouterDeps
 from .auth import is_loopback
-from .builder import (
-    AUTO_ALLOW_BUNDLES,
-    DEFAULT_AUTO_ALLOW,
-    DEFAULT_MAX_TURNS,
-    DEFAULT_MEMORY_DIR,
-    DEFAULT_RETRIES,
-    DEFAULT_WORKSPACE_MODE,
-    INSTRUCTIONS_FILES,
-    _first,
-    _mode_flag,
-    resolve_auto_allow,
-    resolve_followups,
-    resolve_max_retries,
-    resolve_max_turns,
-)
+from .builder import Deployment, resolve_retry
 from .store import ChatStore
 
 log = logging.getLogger("lovia.web.cli")
@@ -73,28 +58,59 @@ DESCRIPTION = """\
 Launch the lovia chat UI in your browser.
 
 Serves a ready-made agent — skills, long-term memory, todos, web search,
-scheduled runs, and a workspace rooted at the current directory. The model
-connection is configured once, in the browser (Settings → Models), and
-saved to config.json so it is never retyped.
+scheduled runs, and a workspace rooted at DIR (default: the current
+directory). Everything about the agent — models, workspace mode, run limits,
+memory, the system prompt — is set in the browser (Settings) and saved to
+config.json, applying from the next run without a restart.
 """
 
 EPILOG = """\
 examples:
   lovia web                                # first run: configure in the browser
-  lovia web --port 9000
-  lovia web --workspace ~/notes --readonly # let it read, not write
+  lovia web ~/notes --port 9000
+  lovia web ~/notes --readonly             # let it read, never write
   lovia web --app myagents:assistant       # serve your own agent
   lovia web --app myserver:app             # ... or your own create_app() app
   lovia web init-ui ui                     # scaffold a UI directory for ChatUI(assets=)
 
 configuration:
-  The model connection (model, base URL, API key, context window), extra
-  models, web search, role assignments and skill directories live in
+  Models, web search, skills, the workspace mode and auto-allowed commands,
+  run limits, memory, subagents and the system prompt live in
   ./.lovia/config.json — the project file wins — or ~/.lovia/config.json
   (any directory). Managed in the web UI's Settings; inspect with --check.
-  The server and agent options above stay flags, each with the LOVIA_*
-  variable shown.
+  The flags above are the server's own, plus the workspace locks a
+  deployment needs; on a non-loopback --host the browser can't change the
+  workspace settings unless --allow-workspace-switch is given.
 """
+
+# Options that moved into config.json (Settings) in 0.9.146. Each still
+# answers with where it went instead of argparse's bare "unrecognized
+# arguments" — kept through the 0.9 series, dropped at 0.10.
+_SETTINGS = "Settings → {pane} (config.json {key})"
+REMOVED_OPTIONS: dict[str, str] = {
+    "--trusted": _SETTINGS.format(pane="Workspace", key="workspace.default_mode"),
+    "--auto-allow": _SETTINGS.format(pane="Workspace", key="workspace.auto_allow"),
+    "--max-turns": _SETTINGS.format(pane="Agent", key="run.max_turns"),
+    "--max-retries": _SETTINGS.format(pane="Agent", key="run.max_retries"),
+    "--no-followups": _SETTINGS.format(pane="Agent", key="run.followups"),
+    "--memory-dir": _SETTINGS.format(pane="Agent", key="agent.memory_dir"),
+    "--no-memory": _SETTINGS.format(pane="Agent", key="agent.memory"),
+    "--no-subagents": _SETTINGS.format(pane="Agent", key="agent.subagents"),
+    "--instructions": _SETTINGS.format(pane="Agent", key="agent.instructions"),
+    "--instructions-file": _SETTINGS.format(pane="Agent", key="agent.instructions"),
+    "--max-tokens": _SETTINGS.format(pane="Models", key="models[].max_tokens"),
+}
+REMOVED_ENV: dict[str, str] = {
+    "LOVIA_WORKSPACE_MODE": "--readonly to lock read-only; otherwise "
+    + REMOVED_OPTIONS["--trusted"],
+    "LOVIA_AUTO_ALLOW": REMOVED_OPTIONS["--auto-allow"],
+    "LOVIA_MAX_TURNS": REMOVED_OPTIONS["--max-turns"],
+    "LOVIA_MAX_RETRIES": REMOVED_OPTIONS["--max-retries"],
+    "LOVIA_FOLLOWUPS": REMOVED_OPTIONS["--no-followups"],
+    "LOVIA_MEMORY_DIR": REMOVED_OPTIONS["--memory-dir"],
+    "LOVIA_INSTRUCTIONS_FILE": REMOVED_OPTIONS["--instructions-file"],
+    "LOVIA_MAX_TOKENS": REMOVED_OPTIONS["--max-tokens"],
+}
 
 
 class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
@@ -118,6 +134,43 @@ class _Parser(argparse.ArgumentParser):
 
 class CliError(UserError):
     """A user-facing CLI misconfiguration; rendered without a traceback."""
+
+
+def _first(*values: str | None) -> str | None:
+    """Return the first non-empty value (the precedence helper)."""
+    for value in values:
+        if value:
+            return value
+    return None
+
+
+def check_removed_options(
+    argv: list[str], env: Mapping[str, str] | None = None
+) -> None:
+    """Refuse options and variables that moved into Settings, saying where.
+
+    Silently ignoring them would leave a deployment running on settings it
+    no longer has; argparse's own "unrecognized arguments" would not say
+    what replaced them. Every hit is reported at once.
+    """
+    env = os.environ if env is None else env
+    hits: list[str] = []
+    for arg in argv:
+        if arg == "--":
+            break
+        name = arg.split("=", 1)[0]
+        if name in REMOVED_OPTIONS:
+            hits.append(f"{name} → {REMOVED_OPTIONS[name]}")
+    for name, where in REMOVED_ENV.items():
+        if name in env:
+            hits.append(f"{name} → {where}")
+    if hits:
+        raise CliError(
+            "these options moved into Settings and are no longer read:\n  "
+            + "\n  ".join(hits),
+            hint="remove them; a custom --app sets its run limits in code "
+            "(create_app(max_turns=..., retry=..., followups=...))",
+        )
 
 
 def _env_int(name: str, default: int) -> int:
@@ -151,6 +204,13 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "(0 reachable, 2 not)",
     )
 
+    p.add_argument(
+        "dir",
+        nargs="?",
+        metavar="DIR",
+        help="the workspace root the agent reads, edits and runs in "
+        "(env LOVIA_WORKSPACE, default .)",
+    )
     agent = p.add_argument_group(
         "agent", "the default agent; --app serves your own instead, ignoring the rest"
     )
@@ -161,59 +221,22 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "of one) instead (env LOVIA_APP)",
     )
     agent.add_argument(
-        "--instructions-file",
-        metavar="FILE",
-        help="system prompt file (env LOVIA_INSTRUCTIONS_FILE; "
-        f"default: ./{'/'.join(INSTRUCTIONS_FILES)} if present)",
-    )
-    agent.add_argument(
-        "--instructions",
-        metavar="TEXT",
-        help="system prompt text, overriding --instructions-file",
-    )
-    agent.add_argument(
-        "--memory-dir",
-        metavar="DIR",
-        help="long-term memory directory, created if missing "
-        f"(env LOVIA_MEMORY_DIR, default {DEFAULT_MEMORY_DIR})",
-    )
-    agent.add_argument(
-        "--no-memory", action="store_true", help="disable long-term memory"
-    )
-    agent.add_argument(
-        "--no-subagents",
-        action="store_true",
-        help="disable background subagents (spawn_subagent etc.)",
-    )
-    agent.add_argument(
-        "--workspace",
-        metavar="DIR",
-        help="root the agent can read/edit/run in (env LOVIA_WORKSPACE, default .); "
-        f"mode defaults to {DEFAULT_WORKSPACE_MODE} — writes inside the root, "
-        "shell asks first",
-    )
+        "--workspace", metavar="DIR", help=argparse.SUPPRESS
+    )  # the positional DIR's older spelling
     ws = agent.add_mutually_exclusive_group()
     ws.add_argument(
         "--readonly",
         action="store_true",
-        help="reads inside the root only — no writes, no shell "
-        "(LOVIA_WORKSPACE_MODE=readonly)",
-    )
-    ws.add_argument(
-        "--trusted",
-        action="store_true",
-        help="shell and reads outside the root, unprompted "
-        "(LOVIA_WORKSPACE_MODE=trusted)",
+        help="lock every run read-only — no writes, no shell; Settings can't change it",
     )
     ws.add_argument(
         "--no-workspace", action="store_true", help="no filesystem/shell workspace"
     )
     agent.add_argument(
-        "--auto-allow",
-        metavar="BUNDLES",
-        help="command bundles coding mode runs without asking: a comma list of "
-        f"{', '.join(AUTO_ALLOW_BUNDLES)}, or none (env LOVIA_AUTO_ALLOW, "
-        f"default {DEFAULT_AUTO_ALLOW})",
+        "--allow-workspace-switch",
+        action="store_true",
+        help="on a non-loopback --host, let the browser change the workspace "
+        "mode and auto-allowed commands (trusted stays loopback-only)",
     )
 
     server = p.add_argument_group("server")
@@ -238,38 +261,12 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     server.add_argument("--title", help="page title (env LOVIA_TITLE, default lovia)")
     server.add_argument(
-        "--no-followups",
-        action="store_true",
-        help="don't suggest follow-up questions after a reply (env LOVIA_FOLLOWUPS=0)",
-    )
-    server.add_argument(
         "--db",
         metavar="FILE",
         help="SQLite file for chat history (env LOVIA_DB, default ./.lovia/<agent>.db)",
     )
 
     advanced = p.add_argument_group("advanced")
-    advanced.add_argument(
-        "--max-turns",
-        type=int,
-        metavar="N",
-        help="max agent turns per message (env LOVIA_MAX_TURNS, "
-        f"default {DEFAULT_MAX_TURNS})",
-    )
-    advanced.add_argument(
-        "--max-tokens",
-        type=int,
-        metavar="N",
-        help="max output tokens per response (env LOVIA_MAX_TOKENS, "
-        "default: the provider's)",
-    )
-    advanced.add_argument(
-        "--max-retries",
-        type=int,
-        metavar="N",
-        help="attempts after the first on transient provider errors "
-        f"(env LOVIA_MAX_RETRIES, default {DEFAULT_RETRIES} retries; 0 disables)",
-    )
     advanced.add_argument(
         "--provider-timeout",
         type=float,
@@ -327,19 +324,23 @@ def load_app_target(
     return cast("Agent[Any] | Mapping[str, Agent[Any]] | FastAPI", obj)
 
 
+def _workspace_arg(args: argparse.Namespace) -> str | None:
+    """The workspace root from ``DIR`` (or ``--workspace``), else the env."""
+    if args.dir and args.workspace and args.dir != args.workspace:
+        raise CliError(
+            f"two workspace roots given: {args.dir!r} and --workspace "
+            f"{args.workspace!r}",
+            hint="pass DIR alone",
+        )
+    return _first(args.dir, args.workspace, os.getenv("LOVIA_WORKSPACE"))
+
+
 def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
     flags = [
-        ("--memory-dir", args.memory_dir is not None),
-        ("--no-memory", args.no_memory),
-        ("--no-subagents", args.no_subagents),
-        ("--workspace", args.workspace is not None),
+        ("DIR", args.dir is not None or args.workspace is not None),
         ("--readonly", args.readonly),
-        ("--trusted", args.trusted),
         ("--no-workspace", args.no_workspace),
-        ("--auto-allow", args.auto_allow is not None),
-        ("--instructions", args.instructions is not None),
-        ("--instructions-file", args.instructions_file is not None),
-        ("--max-tokens", args.max_tokens is not None),
+        ("--allow-workspace-switch", args.allow_workspace_switch),
     ]
     ignored = [name for name, given in flags if given]
     if ignored:
@@ -352,9 +353,6 @@ def _warn_ignored_app_flags(args: argparse.Namespace) -> None:
         ("--token", args.token is not None),
         ("--title", args.title is not None),
         ("--db", args.db is not None),
-        ("--no-followups", args.no_followups),
-        ("--max-turns", args.max_turns is not None),
-        ("--max-retries", args.max_retries is not None),
     ]
     ignored = [name for name, given in flags if given]
     if ignored:
@@ -388,20 +386,34 @@ def _warn_if_exposed(host: str, workspace: object) -> None:
         )
 
 
-def _workspace_desc(args: argparse.Namespace, workspace: object) -> str:
-    """Human line for the startup summary, e.g. ``/path/to/dir (coding)``."""
-    if workspace is None:
-        return "(none)"
-    mode = (
-        _first(_mode_flag(args), os.getenv("LOVIA_WORKSPACE_MODE"))
-        or DEFAULT_WORKSPACE_MODE
+def _warn_if_remote_capable(host: str, deployment: Deployment) -> None:
+    """The default agent's version of :func:`_warn_if_exposed`: judged by the
+    widest mode the deployment allows, since Settings may switch to it."""
+    if is_loopback(host) or "coding" not in deployment.modes():
+        return
+    log.warning(
+        "binding to non-loopback host %r with a write/shell-capable workspace: "
+        "anyone holding the API token can make the agent edit files or run "
+        "shell commands. Use --readonly, --no-workspace, or bind to 127.0.0.1.",
+        host,
     )
-    root = getattr(workspace, "root", ".")
+
+
+def _workspace_desc(deployment: Deployment, config: webconfig.WebConfig) -> str:
+    """Human line for the startup summary, e.g. ``/path/to/dir (coding)``."""
+    if deployment.workspace is None:
+        return "(none)"
+    settings = config.workspace
+    mode = deployment.effective_mode(settings.default_mode) or "none"
+    desc = mode
     if mode == "coding":
-        # Already validated when the workspace was built.
-        allowed = ", ".join(resolve_auto_allow(args.auto_allow)) or "none"
-        mode = f"coding, auto-allow: {allowed}"
-    return f"{Path(root).resolve()} ({mode})"
+        desc = f"coding, auto-allow: {', '.join(settings.auto_allow) or 'none'}"
+    if mode != settings.default_mode:
+        why = "--readonly" if deployment.readonly else "non-loopback host"
+        desc += f"; {settings.default_mode} in config.json, capped by {why}"
+    elif deployment.readonly:
+        desc += ", locked by --readonly"
+    return f"{Path(deployment.workspace).resolve()} ({desc})"
 
 
 def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
@@ -410,6 +422,13 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         from .scaffold import main as init_ui
 
         return init_ui(argv[1:], prog=f"{prog or 'python -m lovia.web'} init-ui")
+    try:
+        # Before parsing: argparse would reject a moved option without
+        # saying where it went.
+        check_removed_options(argv)
+    except CliError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     args = build_parser(prog).parse_args(argv)
     try:
         level = (_first(args.log_level, os.getenv("LOVIA_LOG_LEVEL")) or "info").upper()
@@ -477,6 +496,10 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # The runtime-reconfiguration surface behind /api/config — built for
         # the default agent only (a custom --app configures itself in code).
         config_runtime: webconfig.ConfigRuntime | None = None
+        # Run limits: the default agent's come from config.json (and follow
+        # Settings live); a custom --app agent gets the CLI defaults —
+        # anything else is create_app()'s job in its own code.
+        run = webconfig.RunSettings()
         app_target = _first(args.app, os.getenv("LOVIA_APP"))
         if app_target:
             if args.check:
@@ -524,10 +547,33 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             # "serve the setup screen": the browser's Settings is the one
             # write path, on a TTY exactly like everywhere else.
             unconfigured = bool(conn.missing())
+            run = loaded.config.run
+            deployment = Deployment(
+                workspace=None if args.no_workspace else _workspace_arg(args) or ".",
+                readonly=args.readonly,
+                loopback=is_loopback(host),
+                allow_workspace_edit=args.allow_workspace_switch,
+            )
+            settings = loaded.config.workspace
+            effective = deployment.effective_mode(settings.default_mode)
+            # --readonly is the person's own word; only the silent cap of a
+            # non-loopback bind deserves a line.
+            if (
+                effective is not None
+                and effective != settings.default_mode
+                and not deployment.readonly
+            ):
+                log.warning(
+                    "config.json asks for %s workspace mode; this server runs %s "
+                    "(trusted is offered on loopback hosts only)",
+                    settings.default_mode,
+                    effective,
+                )
+            _warn_if_remote_capable(host, deployment)
             store = ChatStore.sqlite(db_desc)
             question_channel = HumanChannel()
             config_runtime = webconfig.ConfigRuntime(
-                args=args,
+                deployment=deployment,
                 loaded=loaded,
                 store=store,
                 question_channel=question_channel,
@@ -545,7 +591,6 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     agent, _provider, context_policy, aux_model = config_runtime.build()
                 except (UserError, ValueError) as exc:
                     raise CliError(str(exc)) from exc
-                _warn_if_exposed(host, agent.workspace)
                 summary = webconfig.format_summary(
                     conn,
                     version=__version__,
@@ -553,7 +598,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     config_desc=(
                         loaded.label if loaded.exists else "(not saved — session only)"
                     ),
-                    workspace_desc=_workspace_desc(args, agent.workspace),
+                    workspace_desc=_workspace_desc(deployment, loaded.config),
                     db_desc=db_desc,
                 )
                 agent_or_agents = agent
@@ -562,14 +607,6 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # level, while log lines keep flowing to stderr.
         print(summary, flush=True)
         if built_app is None:
-            # Resolved only here: a built --app ignores these, bad values too.
-            max_retries = resolve_max_retries(args.max_retries)
-            # None = no override: the agent's own retry posture applies.
-            retry = (
-                RetryPolicy(max_attempts=max_retries + 1)
-                if max_retries is not None
-                else None
-            )
             built_app = create_app(
                 agent_or_agents,
                 title=title,
@@ -578,10 +615,13 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 store=store,
                 db_path=db_path,
                 context_policy=context_policy,
-                max_turns=resolve_max_turns(args.max_turns),
-                retry=retry,
+                max_turns=run.max_turns,
+                # None = no override: the agent's own retry posture applies.
+                retry=resolve_retry(run),
                 token=token or _generated_token(host),
-                followups=resolve_followups(args.no_followups),
+                # On, unlike create_app's default: the bundled CLI is a
+                # finished chat app where the chips are part of it.
+                followups=run.followups,
                 title_model=aux_model,
                 followup_model=aux_model,
                 # Deny an unanswered tool approval after 10 minutes. Without it

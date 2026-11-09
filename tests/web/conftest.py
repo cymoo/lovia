@@ -71,6 +71,7 @@ def write_config(fake_home: Path):
         models: list[dict] | None = None,
         roles: dict | None = None,
         search: dict | None = None,
+        **sections: dict,
     ) -> Path:
         if models is None:
             profile: dict = {"id": "default", "model": model, "vision": vision}
@@ -86,6 +87,7 @@ def write_config(fake_home: Path):
             doc["roles"] = roles
         if search is not None:
             doc["search"] = search
+        doc.update(sections)  # workspace= / run= / agent=
         root = fake_home if scope == "user" else Path.cwd()
         target = root / ".lovia" / "config.json"
         target.parent.mkdir(parents=True, exist_ok=True)

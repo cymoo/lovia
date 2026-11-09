@@ -344,7 +344,7 @@ export const api = {
   // Only served when /api/info reports features.model_config. API keys never
   // round-trip: reads carry { set, hint }; writes use null=keep, ''=clear.
   getConfig: () => request('/api/config').then(_json),
-  /** @param {object} body Profile fields: { id?, name?, model, flavor?, base_url?, api_key?, context_window?, vision?, extra_body? }. */
+  /** @param {object} body Profile fields: { id?, name?, model, flavor?, base_url?, api_key?, context_window?, max_tokens?, vision?, extra_body? }. */
   createModel: (body) =>
     request('/api/config/models', {
       method: 'POST',
@@ -385,6 +385,29 @@ export const api = {
   /** @param {{ dirs: string[] }} body */
   setSkills: (body) =>
     request('/api/config/skills', {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
+  // Settings → Workspace / Agent. Each sends only the fields to change;
+  // all apply from the next run. resolve to { config }.
+  /** @param {{ default_mode?: string, auto_allow?: string[] }} body */
+  setWorkspaceSettings: (body) =>
+    request('/api/config/workspace', {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
+  /** @param {{ max_turns?: number, max_retries?: number | null, followups?: boolean }} body */
+  setRunSettings: (body) =>
+    request('/api/config/run', {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
+  /** @param {{ memory?: boolean, memory_dir?: string, subagents?: boolean, instructions?: string }} body */
+  setAgentSettings: (body) =>
+    request('/api/config/agent', {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),

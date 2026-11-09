@@ -35,7 +35,7 @@ CLI 创建的默认 Agent 包含 Todo、Memory、时间与 HTTP Tool、Web 搜�
 DuckDuckGo 后端。
 
 默认功能会产生主 Run 之外的模型调用：Memory 默认在每个已完成 Run 后提炼一次，定期整理时
-再调用一次；标题和追问建议也各自独立调用。可以用 `--no-memory`、`--no-followups` 关闭对应功能，
+再调用一次；标题和追问建议也各自独立调用。可以在**设置 → 智能体**里关闭长期记忆或追问建议，
 或把辅助任务指派给更便宜的模型。Memory 的完整成本边界见[记忆](memory.md#使用建议)。
 
 !!! danger "默认仅供本机使用"
@@ -70,8 +70,8 @@ API Key 只写不读：服务端只返回是否已设置及脱敏提示，不会
 经过这个档案的每一次调用都会带上这些字段——主回复、后台子 Agent、上下文压缩摘要，以及被指派为
 视觉或辅助角色时的图片描述、标题和追问。同一端点想要第二套参数，就是第二个档案：**复制**在服务端
 完成（连密钥一起，因为页面从不持有它），所以"标题不思考"就是复制一份、写上
-`enable_thinking: false`、指派给辅助角色。思考模型需要输出空间：这里的 `max_tokens` 对该端点
-优先于 `--max-tokens`，但上下文策略的输出预留不会跟着变。
+`enable_thinking: false`、指派给辅助角色。思考模型需要输出空间：可以在档案的高级选项里设置
+**最大输出 tokens**（额外字段里的 `max_tokens` 优先于它），但上下文策略的输出预留不会跟着变。
 
 搜索后端、Tavily Key 与 Skill 目录也保存在 `config.json` 中。模型连接、多模型档案、
 角色指派、搜索和 Skills 配置没有对应的 CLI 参数；请通过设置页或直接维护配置文件。
@@ -220,30 +220,51 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
   切换主题会重新加载页面。
 - 导出的 HTML 不含脚本，因此只显示页面的源码。
 
-## 常用 CLI 选项
+## 不用重启的设置
 
-除模型、搜索和 Skills 配置外，其余选项按“命令行参数 → 环境变量 → 默认值”解析。
+默认 Agent 的设置都保存在 `config.json` 里，在设置页修改。保存后从下次运行起生效；正在进行的
+回复仍按开始时的设置完成。
+
+| 设置页 | `config.json` | 默认值 |
+| --- | --- | --- |
+| **模型** → 档案的高级选项 | `models[].max_tokens` | 沿用 Provider 的默认值 |
+| **工作区** → 权限模式 | `workspace.default_mode` | `coding`，见[模式](workspace.md#模式) |
+| **工作区** → 不询问直接运行的命令 | `workspace.auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
+| **智能体** → 自定义指令 | `agent.instructions` | 空：使用启动目录的 `AGENTS.md`，没有就用通用提示；填写后 `AGENTS.md` 接在后面 |
+| **智能体** → 最大轮数 / 重试次数 | `run.max_turns` / `run.max_retries` | `50` / Agent 自己的设置（`4`） |
+| **智能体** → 生成追问建议 | `run.followups` | 开启 |
+| **智能体** → 后台子任务 | `agent.subagents` | 开启 |
+| **智能体** → 长期记忆 | `agent.memory` / `agent.memory_dir` | 开启，`./.lovia/memory` |
+
+`config.json` 不可写时（比如只读挂载），服务照常启动，设置页里这些设置只能查看。
+
+## CLI 选项
+
+命令行只保留服务自身的选项和部署方需要的工作区限制，按“命令行参数 → 环境变量 → 默认值”解析。
 
 | 命令行选项 | 环境变量 | 默认值 |
 | --- | --- | --- |
+| `DIR`（位置参数） | `LOVIA_WORKSPACE` | `.`：工作区根目录 |
+| `--readonly` | — | 关闭。开启后所有运行都是只读，设置页不能修改 |
+| `--no-workspace` | — | 关闭。开启后没有文件和 shell 工具 |
+| `--allow-workspace-switch` | — | 关闭。监听非本机地址时，允许在浏览器里修改工作区设置（`trusted` 仍只在本机地址提供） |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--root-path` | `LOVIA_ROOT_PATH` | 无；代理发布应用时使用的路径前缀（[详见](web-server.md#部署在路径前缀下)） |
 | `--token` | `LOVIA_WEB_TOKEN` | 回环地址无需设置；其他地址自动生成 |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent（或使用自己的 Agent、映射或应用） |
-| `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
-| `--workspace`，`--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`、`LOVIA_WORKSPACE_MODE` | `.`（coding 模式） |
-| `--auto-allow` | `LOVIA_AUTO_ALLOW` | `read-only,dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；`none` 表示没有规则放行的命令一律询问 |
-| `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | 若存在则使用 `AGENTS.md` |
-| `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
-| `--max-tokens` | `LOVIA_MAX_TOKENS` | 沿用 Provider 的默认值；模型配置“额外请求参数”里的 `max_tokens` 优先 |
 | `--title` | `LOVIA_TITLE` | `lovia` |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
-| `--no-followups` | `LOVIA_FOLLOWUPS` | 追问建议默认开启 |
-| `--no-subagents` | — | 后台子 Agent 默认开启 |
 | `--check` | — | 检查模型配置并退出 |
 
-完整列表以 `lovia web --help` 为准。
+监听非本机地址时，浏览器不能放宽权限：工作区设置在设置页里只读，`trusted` 按 `coding` 运行。
+要修改，请编辑 `config.json` 后重启，或加 `--allow-workspace-switch`。
+
+0.9.146 起移到设置页的选项（`--trusted`、`--auto-allow`、`--max-turns`、`--max-retries`、
+`--max-tokens`、`--no-followups`、`--memory-dir`、`--no-memory`、`--no-subagents`、
+`--instructions`、`--instructions-file` 及对应的 `LOVIA_*` 环境变量）会让 CLI 报错退出，并说明
+改到了哪个设置。自定义的 `--app` Agent 使用 CLI 默认值，要调整上限请在代码里用
+`create_app(max_turns=…, retry=…, followups=…)`。完整列表以 `lovia web --help` 为准。
 
 ## 审批
 
@@ -289,8 +310,8 @@ serve(create_app(agent, question_channel=channel, question_timeout=600))
 
 ## 追问建议
 
-追问建议来自一次独立模型调用，不会写入 Transcript。关闭它可以避免这次额外调用；服务端使用
-`--no-followups`，也可以把辅助任务角色指派给更便宜的模型（见[模型配置与切换](#模型配置与切换)）。
+追问建议来自一次独立模型调用，不会写入 Transcript。关闭它可以避免这次额外调用：在**设置 →
+智能体**里关闭，也可以把辅助任务角色指派给更便宜的模型（见[模型配置与切换](#模型配置与切换)）。
 通过 `create_app()` 托管自定义 Agent 时，该功能默认关闭，需要显式开启，见
 [Web 服务端](web-server.md#追问建议)。
 
@@ -328,7 +349,7 @@ Run 执行期间也可以添加附件，它们随消息一起发送，无论排�
 
 ## 后台子 Agent
 
-`lovia web` 默认启用[后台子 Agent](multi-agent.md#后台子-agent)，可用 `--no-subagents` 关闭。
+`lovia web` 默认启用[后台子 Agent](multi-agent.md#后台子-agent)，可在**设置 → 智能体**里关闭。
 默认子 Agent 保留 Skills、Todo、Tool 和 Workspace，但不加载 Scheduling、Memory 或 Subagents，
 因此不会递归派生。
 

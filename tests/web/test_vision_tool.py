@@ -146,19 +146,3 @@ def test_resolve_vision_tool_bad_profile_degrades(
     with caplog.at_level("WARNING", logger="lovia.web.builder"):
         assert resolve_vision_tool(text_prov, ws, bad) is None
     assert "describe_image disabled" in caplog.text
-
-
-def test_env_bool_parses_values_and_guards_model_specs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from lovia.web.builder import _env_bool
-
-    monkeypatch.delenv("X_FLAG", raising=False)
-    assert _env_bool("X_FLAG") is None  # unset
-    monkeypatch.setenv("X_FLAG", "1")
-    assert _env_bool("X_FLAG") is True
-    monkeypatch.setenv("X_FLAG", "off")
-    assert _env_bool("X_FLAG") is False
-    # The footgun (a model spec in a boolean flag) reads false, not truthy.
-    monkeypatch.setenv("X_FLAG", "openai:qwen-vl")
-    assert _env_bool("X_FLAG") is False

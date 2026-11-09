@@ -181,7 +181,9 @@ ALTER TABLE chat_sessions ADD COLUMN workspace_mode TEXT;  -- readonly / coding 
 
 ### 6. 库 API
 
-```python
+下面是提案中的接口（第二、三期实现），现在还不存在，所以示例按纯文本给出，不参与文档检查。
+
+```text
 from lovia.web import create_app, WorkspaceSwitch
 
 app = create_app(agent)                                                   # 固定：和现在一样
@@ -190,7 +192,7 @@ app = create_app(agent, workspaces=WorkspaceSwitch(roots=["/srv/repos"])) # 只�
 app = create_app(agent, workspaces=WorkspaceSwitch(roots=None))           # 目录固定，只切模式
 ```
 
-```python
+```text
 @dataclass(frozen=True)
 class WorkspaceSwitch:
     # "any"：任意目录；列表：只能是这些目录或其子目录；None：固定为 Agent 自带的根目录。

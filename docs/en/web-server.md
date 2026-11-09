@@ -768,7 +768,7 @@ create_app(agent, followups=True, followup_model="<small-model>")
 Off by default: unlike a title, this costs one model call per *run*, so the
 serving layer doesn't presume it. `followup_model` points that call at a
 cheaper model than the Agent's own. The bundled `lovia web` CLI opts in on its
-own behalf — disable it with `--no-followups` or `LOVIA_FOLLOWUPS=0`, and point
+own behalf — turn it off in Settings → Agent, and point
 it at a small model by assigning that model the
 [aux role](web-ui.md#models-and-switching).
 

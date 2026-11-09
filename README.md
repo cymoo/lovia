@@ -421,7 +421,7 @@ denies the dangerous (`git push --force`, `rm -rf /`), keeps credential
 stores off-limits and asks before writing `.git` or CI configuration. To run
 inspection and dev tools unprompted, opt in: `command_rules=READ_ONLY +
 DEV_TOOLS` from `lovia.workspace.rules` — `lovia web` does, by default
-(`--auto-allow none` to ask for every command).
+(clear the bundles in Settings → Workspace to ask for every command).
 
 Shell commands inherit a minimal environment, including Windows system,
 shell, temporary-directory, and user-profile variables so sockets and home
@@ -504,6 +504,9 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   any reply, messages that steer a running run or queue until it completes,
   approvals, schedules, a memory editor and file attachments; runs survive
   browser disconnects.
+- **Settings without restarts** — `lovia web` keeps models, the workspace
+  mode, run limits, memory and the system prompt in Settings; a change
+  applies from the next run.
 - **Rich tool results** — a tool returns `ui_result(kind, props)` to draw UI;
   tables, ECharts charts and sandboxed HTML pages come built in
   (`show_table`, `show_chart`, `show_html`).

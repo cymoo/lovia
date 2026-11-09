@@ -13,7 +13,6 @@ and never see this class.
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import logging
 from contextlib import suppress
@@ -28,10 +27,11 @@ from ...tools import HumanChannel
 from ..sse import ConfigChangedData
 from .check import mask_key
 from .schema import Connection, WebConfig
-from .storage import LoadedConfig, save_config
+from .storage import LoadedConfig, config_writable, save_config
 
 if TYPE_CHECKING:
     from ..api.deps import RouterDeps
+    from ..builder import Deployment
     from ..store import ChatStore
 
 log = logging.getLogger("lovia.web.config")
@@ -45,24 +45,24 @@ _RETIRE_POLL = 5.0
 class ConfigRuntime:
     """Applies a :class:`WebConfig` to a running server.
 
-    Built by the CLI with everything agent assembly needs (the argparse
-    namespace for topology flags, the shared store, the ask_human channel),
-    then bound to the app's ``RouterDeps`` by ``create_app``. ``apply()`` is
-    the one write path: validate by building first, persist, then swap.
+    Built by the CLI with everything agent assembly needs (the deployment's
+    launch constraints, the shared store, the ask_human channel), then bound
+    to the app's ``RouterDeps`` by ``create_app``. ``apply()`` is the one
+    write path: validate by building first, persist, then swap.
     """
 
     def __init__(
         self,
         *,
-        args: argparse.Namespace,
+        deployment: "Deployment | None" = None,
         loaded: LoadedConfig,
         store: "ChatStore",
         question_channel: HumanChannel | None = None,
         agent_key: str | None = None,
     ) -> None:
-        from ..builder import DEFAULT_AGENT_NAME
+        from ..builder import DEFAULT_AGENT_NAME, Deployment
 
-        self.args = args
+        self.deployment = deployment if deployment is not None else Deployment()
         self.loaded = loaded
         self.store = store
         self.question_channel = question_channel
@@ -80,6 +80,12 @@ class ConfigRuntime:
     @property
     def config(self) -> WebConfig:
         return self.loaded.config
+
+    @property
+    def writable(self) -> bool:
+        """Whether Settings can save: a read-only ``config.json`` (say, a
+        read-only mount) makes every config write refuse up front."""
+        return config_writable(self.loaded.path)
 
     def bind(self, deps: "RouterDeps") -> None:
         """Attach the mutation surface (called once by ``create_app``)."""
@@ -134,7 +140,7 @@ class ConfigRuntime:
             extra_body=profile.extra_body,
         )
         agent = build_default_agent(
-            self.args,
+            self.deployment,
             self.store,
             provider,
             question_channel=self.question_channel,
@@ -145,15 +151,31 @@ class ConfigRuntime:
 
     # ---------------------------------------------------------- applying -
 
-    async def apply(self, config: WebConfig, *, persist: bool = True) -> None:
+    async def apply(
+        self, config: WebConfig, *, persist: bool = True, settings_only: bool = False
+    ) -> None:
         """Adopt ``config``: build (validates), persist, swap the served agent.
 
         Ordering is the safety story: nothing is written or served until the
         new configuration proved it can build. In-flight runs keep their
-        agent copies; the old provider is retired (closed) once no live run
-        still holds it. Serialized — concurrent writes apply one at a time.
+        agent copies (and the run limits they started with); the old provider
+        is retired (closed) once no live run still holds it. Serialized —
+        concurrent writes apply one at a time.
+
+        ``settings_only`` marks a write that touches no model (workspace,
+        run, agent settings): before a model is configured there is nothing
+        to build or serve, so it is saved for when one arrives instead of
+        refused.
         """
+        from ..builder import resolve_retry
+
         async with self._lock:
+            if settings_only and self.serveable(config):
+                self.loaded.config = config
+                if persist:
+                    save_config(config, self.loaded.path)
+                    self.loaded.exists = True
+                return
             agent, provider, policy, aux_model = self.build(config)
             self.loaded.config = config
             if persist:
@@ -162,6 +184,11 @@ class ConfigRuntime:
             deps = self._deps
             if deps is None:  # not bound yet (boot builds its own agent)
                 return
+            # Run limits are read when a run starts, so the next run gets
+            # these and a running one keeps what it began with.
+            deps.max_turns = config.run.max_turns
+            deps.retry = resolve_retry(config.run)
+            deps.followups = config.run.followups
             old = deps.agents.get(self.agent_key)
             old_aux = deps.followup_model
             deps.agents[self.agent_key] = agent

@@ -105,6 +105,24 @@ def load_active() -> LoadedConfig:
     )
 
 
+def config_writable(path: Path) -> bool:
+    """Whether :func:`save_config` could write ``path`` right now.
+
+    The write is a temp file beside the target plus a rename, so the
+    deciding permission is the directory's — and the file's own, when it
+    exists (a read-only mount refuses both). A directory not created yet
+    is writable when its nearest existing ancestor is.
+    """
+    if path.exists() and not os.access(path, os.W_OK):
+        return False
+    directory = path.parent
+    while not directory.exists():
+        if directory.parent == directory:
+            return False
+        directory = directory.parent
+    return directory.is_dir() and os.access(directory, os.W_OK | os.X_OK)
+
+
 def save_config(config: WebConfig, path: Path | None = None) -> Path:
     """Write the whole document atomically, owner-only (``0600``)."""
     path = path or user_config_path()

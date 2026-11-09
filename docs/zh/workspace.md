@@ -53,7 +53,7 @@ agent = Agent(
 `policy=WorkspacePolicy(...)` 完全替换（与简写配置项互斥）。
 
 `coding` 自己**不为任何命令担保**：路径守卫是词法的，审计不了程序的选项，所以哪些命令免问是一个选择——
-部署方启用规则包（`lovia web` 默认启用 `READ_ONLY` + `DEV_TOOLS`，用 `--auto-allow` 调整），或用户在审批卡片上按对话决定（“本对话中总是允许 `ls`”；没有规则命中的命令，卡片
+部署方启用规则包（`lovia web` 默认启用 `READ_ONLY` + `DEV_TOOLS`，在设置 → 工作区里调整），或用户在审批卡片上按对话决定（“本对话中总是允许 `ls`”；没有规则命中的命令，卡片
 提供的范围就是它的命令词，串起来的命令每个命令各一个）。规则包在 `lovia.workspace.rules`：`READ_ONLY`（`ls`、`du`、`stat`、`tree`、
 `git status`、`git log` 等；Windows 上是 `dir`、`where` 等——只收录**不打印文件内容**的检查命令：每个
 内容读取器都有自己不点名就读到文件的办法，`grep -r`、`sort --files0-from`、`git diff --no-index`、通配符，

@@ -17,11 +17,14 @@ import { confirmDialog, segmented } from './ui.js';
 /** Fetch (or refresh) the masked config document into store.modelConfig. */
 export async function loadConfig() {
   store.modelConfig = await api.getConfig();
+  // The server's follow-ups switch lives in Settings → Agent now; keep the
+  // capability flag the composer reads in step with it.
+  if (store.modelConfig?.run) store.canSuggest = !!store.modelConfig.run.followups;
   store.emit('config-loaded', store.modelConfig);
   return store.modelConfig;
 }
 
-function cfg() {
+export function cfg() {
   return store.modelConfig;
 }
 
@@ -53,16 +56,41 @@ function flavorDefault(flavor) {
 
 // ---- small DOM helpers ----------------------------------------------------
 
-function el(tag, className, text) {
+export function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
 }
 
-function field(labelText, control, hintText) {
+/** A plain note above a settings form. */
+export function notice(text) {
+  const box = el('div', 'lv-cfg-notice', text);
+  box.setAttribute('role', 'note');
+  return box;
+}
+
+/**
+ * The "config.json isn't writable" note, or null when it is. The server
+ * refuses every write then (409 config_read_only); this says so up front,
+ * before someone fills in a form that can't be saved.
+ */
+export function readOnlyNotice() {
+  const c = cfg();
+  return c && c.writable === false ? notice(t('cfg.readOnly', { file: c.scope.label })) : null;
+}
+
+let _fieldIds = 0;
+
+export function field(labelText, control, hintText) {
   const wrap = el('div', 'lv-cfg-field');
-  const label = el('label', 'lv-cfg-label', labelText);
+  const label = /** @type {HTMLLabelElement} */ (el('label', 'lv-cfg-label', labelText));
+  // Name a lone form control by its label (screen readers, and a click on
+  // the label focuses it); composite controls keep their own naming.
+  if (control.matches('input, textarea, select')) {
+    if (!control.id) control.id = `cfg-field-${++_fieldIds}`;
+    label.htmlFor = control.id;
+  }
   // A <label> names one control; a radio group takes its name as aria-label.
   if (control.getAttribute('role') === 'radiogroup') control.setAttribute('aria-label', labelText);
   wrap.append(label, control);
@@ -70,13 +98,25 @@ function field(labelText, control, hintText) {
   return wrap;
 }
 
-function input(value, { mono = false, placeholder = '', type = 'text' } = {}) {
+export function input(value, { mono = false, placeholder = '', type = 'text' } = {}) {
   const node = /** @type {HTMLInputElement} */ (el('input', 'lv-dialog-input lv-cfg-input'));
   node.type = type;
   node.value = value ?? '';
   node.placeholder = placeholder;
   if (mono) node.classList.add('lv-mono');
   return node;
+}
+
+/**
+ * A positive integer typed by a person ("128,000" and "128 000" included),
+ * or undefined for an empty or unusable value.
+ * @param {string} raw
+ */
+export function positiveInt(raw) {
+  const text = raw.trim();
+  if (!text) return undefined;
+  const n = parseInt(text.replace(/[,\s]/g, ''), 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 function ghostBtn(label, onClick) {
@@ -223,6 +263,8 @@ export function buildModelsPane() {
       }
     }
     pane.replaceChildren(view.name === 'list' ? renderList() : renderForm(view.id));
+    const ro = readOnlyNotice();
+    if (ro) pane.prepend(ro);
   }
 
   function renderList() {
@@ -479,6 +521,11 @@ export function buildModelsPane() {
     });
     windowIn.inputMode = 'numeric';
     adv.appendChild(field(t('cfg.contextWindow'), windowIn));
+    const maxTokensIn = input(stored?.max_tokens ? String(stored.max_tokens) : '', {
+      placeholder: t('cfg.maxTokensAuto'),
+    });
+    maxTokensIn.inputMode = 'numeric';
+    adv.appendChild(field(t('cfg.maxTokens'), maxTokensIn, t('cfg.maxTokensHint')));
     let vision = stored?.vision || 'auto';
     adv.appendChild(
       field(
@@ -503,7 +550,7 @@ export function buildModelsPane() {
     const extras = extraBodyEditor(stored?.extra_body, () => flavor);
     adv.appendChild(field(t('cfg.extraBody'), extras.node, t('cfg.extraBodyHint')));
     const hasExtras = stored && Object.keys(stored.extra_body || {}).length > 0;
-    if (stored?.context_window || (stored && stored.vision !== 'auto') || hasExtras) {
+    if (stored?.context_window || stored?.max_tokens || (stored && stored.vision !== 'auto') || hasExtras) {
       adv.open = true;
     }
     form.appendChild(adv);
@@ -567,10 +614,7 @@ export function buildModelsPane() {
     }
 
     function parseWindow() {
-      const raw = windowIn.value.trim();
-      if (!raw) return undefined;
-      const n = parseInt(raw.replace(/[,\s]/g, ''), 10);
-      return Number.isFinite(n) && n > 0 ? n : undefined;
+      return positiveInt(windowIn.value);
     }
 
     renderKey();
@@ -602,6 +646,7 @@ export function buildModelsPane() {
         flavor,
         base_url: urlIn.value.trim() || null,
         context_window: parseWindow() ?? null,
+        max_tokens: positiveInt(maxTokensIn.value) ?? null,
         vision,
         extra_body: extraBody,
       };
@@ -658,6 +703,8 @@ export function buildSearchPane() {
     const c = cfg();
     pane.replaceChildren();
     pane.appendChild(el('div', 'lv-cfg-pane-title', t('cfg.searchTitle')));
+    const ro = readOnlyNotice();
+    if (ro) pane.appendChild(ro);
     const form = el('div', 'lv-cfg-form');
 
     const select = /** @type {HTMLSelectElement} */ (el('select', 'lv-dialog-input'));
@@ -799,6 +846,8 @@ export function buildSkillsPane() {
 
     pane.replaceChildren();
     pane.appendChild(el('div', 'lv-cfg-pane-title', t('cfg.skillsTitle')));
+    const ro = readOnlyNotice();
+    if (ro) pane.appendChild(ro);
     pane.appendChild(el('div', 'lv-cfg-hint lv-skills-intro', t('cfg.skillsIntro')));
 
     const list = el('div', 'lv-model-list');

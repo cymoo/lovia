@@ -41,8 +41,8 @@ when its key is configured, otherwise it tries the optional DuckDuckGo backend.
 
 Default features can make model calls outside the main Run. Memory performs one
 digest after each completed Run and another call when a periodic dream is due;
-titles and follow-up suggestions also use separate calls. Disable the relevant
-features with `--no-memory` or `--no-followups`, or assign auxiliary work to a
+titles and follow-up suggestions also use separate calls. Turn memory or
+follow-ups off in **Settings → Agent**, or assign auxiliary work to a
 cheaper model. See [Memory](memory.md#sharp-edges) for the full cost boundary.
 
 !!! danger "Local use by default"
@@ -91,8 +91,11 @@ role, image descriptions or titles and follow-ups. A second parameter set on the
 same endpoint is a second profile: **Duplicate** copies one server-side (key
 included, since the page never holds it), so "thinking off for titles" is a
 copy with `enable_thinking: false` assigned to the aux role. Thinking models
-need output room: a `max_tokens` here overrides `--max-tokens` for that
-endpoint, but the context policy's output reserve does not follow it.
+need output room: set **Max output tokens** under the profile's advanced
+fields (a `max_tokens` in the extra fields wins over it). It caps the chat
+replies and background subagents that run on the profile, not titles,
+follow-ups or image descriptions, and the context policy's output reserve
+does not follow it.
 
 The search backend, Tavily key, and skill directories also live in
 `config.json`. Model connections, additional profiles, role assignments,
@@ -289,31 +292,57 @@ What the page can and can't do:
 - The chat's HTML export has no scripts, so it shows the page's source
   instead.
 
-## Useful CLI options
+## Settings that apply without a restart
 
-Apart from model, search, and skills configuration, options resolve as CLI
-flag, environment variable, then default.
+Everything about the default Agent lives in `config.json` and is edited in
+Settings. A save applies from the next run; a reply already streaming
+finishes with what it started with.
+
+| Settings pane | `config.json` | Default |
+| --- | --- | --- |
+| **Models** → a profile's advanced fields | `models[].max_tokens` | The provider's |
+| **Workspace** → Permission mode | `workspace.default_mode` | `coding` — see [modes](workspace.md#modes) |
+| **Workspace** → Commands that run without asking | `workspace.auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
+| **Agent** → Custom instructions | `agent.instructions` | Empty: the launch directory's `AGENTS.md`, else a generic prompt; set, `AGENTS.md` is appended |
+| **Agent** → Max turns / Retries | `run.max_turns` / `run.max_retries` | `50` / the Agent's own (`4`) |
+| **Agent** → Suggest follow-up questions | `run.followups` | On |
+| **Agent** → Background tasks | `agent.subagents` | On |
+| **Agent** → Long-term memory | `agent.memory` / `agent.memory_dir` | On, `./.lovia/memory` |
+
+When `config.json` isn't writable (a read-only mount, say), the server still
+starts and Settings shows these as view-only.
+
+## CLI options
+
+The flags are the server's own, plus the workspace limits a deployment sets.
+Each resolves as flag, environment variable, then default.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
+| `DIR` (positional) | `LOVIA_WORKSPACE` | `.`: the workspace root |
+| `--readonly` | — | Off. On, every run is read-only and Settings can't change it |
+| `--no-workspace` | — | Off. On, no file or shell tools |
+| `--allow-workspace-switch` | — | Off. On a non-loopback `--host`, lets the browser change the workspace settings (`trusted` stays loopback-only) |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--root-path` | `LOVIA_ROOT_PATH` | None; the prefix a proxy serves the app under ([details](web-server.md#serving-under-a-path-prefix)) |
 | `--token` | `LOVIA_WEB_TOKEN` | Not needed on loopback; generated otherwise |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent (or: an Agent, mapping, or app of your own) |
-| `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
-| `--workspace`, `--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`, `LOVIA_WORKSPACE_MODE` | `.` in coding mode |
-| `--auto-allow` | `LOVIA_AUTO_ALLOW` | `read-only,dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, … ; `pytest`, `ruff`, …); `none` asks for every command no rule allows |
-| `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |
-| `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
-| `--max-tokens` | `LOVIA_MAX_TOKENS` | The provider's; a `max_tokens` in a profile's extra request fields wins |
 | `--title` | `LOVIA_TITLE` | `lovia` |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
-| `--no-followups` | `LOVIA_FOLLOWUPS` | Follow-up suggestions enabled |
-| `--no-subagents` | — | Background subagents enabled |
 | `--check` | — | Check model configuration and exit |
 
-Use `lovia web --help` for the complete list.
+On a non-loopback `--host`, the browser can't widen permissions: the
+workspace settings are read-only there and `trusted` runs as `coding`. Edit
+`config.json` and restart instead, or pass `--allow-workspace-switch`.
+
+The options that moved into Settings in 0.9.146 (`--trusted`,
+`--auto-allow`, `--max-turns`, `--max-retries`, `--max-tokens`,
+`--no-followups`, `--memory-dir`, `--no-memory`, `--no-subagents`,
+`--instructions`, `--instructions-file`, and their `LOVIA_*` variables) stop
+the CLI with a message naming the setting that replaced them. A custom `--app`
+Agent runs with the CLI defaults; set its limits with `create_app(max_turns=…,
+retry=…, followups=…)` in code. Use `lovia web --help` for the complete list.
 
 ## Approvals
 
@@ -377,7 +406,7 @@ serve(create_app(agent, question_channel=channel, question_timeout=600))
 ## Follow-up suggestions
 
 Follow-up suggestions use a separate model call and never enter the Transcript.
-Disable them to avoid that extra call with `--no-followups`, or point them at a
+Turn them off in **Settings → Agent** to avoid that extra call, or point them at a
 cheaper model by assigning it the aux role ([Models and
 switching](#models-and-switching)). They are opt-in for a custom Agent served
 through `create_app()`; see [Web server](web-server.md#follow-up-suggestions).
@@ -432,7 +461,7 @@ this conversation and links back to the chat that started it.
 ## Background subagents
 
 `lovia web` enables [background subagents](multi-agent.md#background-subagents)
-by default; disable them with `--no-subagents`. A default child keeps Skills,
+by default; turn them off in **Settings → Agent**. A default child keeps Skills,
 Todo, Tools, and Workspace, but omits Scheduling, Memory, and Subagents, so it
 cannot spawn recursively.
 

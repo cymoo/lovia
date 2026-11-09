@@ -1,6 +1,6 @@
 """Regenerate the Web UI screenshots in ``docs/images/``.
 
-Runs a real ``lovia web`` (the default agent, coding workspace, ``--trusted``)
+Runs a real ``lovia web`` (the default agent, a ``trusted`` workspace)
 against a scripted OpenAI-compatible stub built into this file, so no API key is
 spent and nothing is nondeterministic. The tools really execute: the agent plans
 with ``todo_write``, reads ``sales.csv``, writes and runs ``analyze.py``, and
@@ -453,6 +453,8 @@ def main() -> None:
             "models": [model],
             "roles": {"chat": "stub", "aux": "stub"},
             "skills": {"dirs": []},
+            # Unprompted shell, so the scripted run never parks on a card.
+            "workspace": {"default_mode": "trusted"},
         }
         (run / ".lovia" / "config.json").write_text(json.dumps(config))
         subprocess.run([args.python, __file__, "--seed", str(db)], check=True)
@@ -461,7 +463,7 @@ def main() -> None:
         log = root / "server.log"
         with log.open("wb") as log_file:
             cmd = [args.python, "-m", "lovia.web", "--port", str(port)]
-            cmd += ["--db", str(db), "--workspace", str(ws), "--trusted"]
+            cmd += ["--db", str(db), str(ws)]
             proc = subprocess.Popen(
                 cmd,
                 cwd=run,

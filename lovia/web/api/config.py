@@ -25,6 +25,7 @@ from ..config.probe import unlisted_model_note, validate_connection
 from ..config.runtime import ConfigRuntime
 from ..config.schema import (
     ANTHROPIC_FLAVOR,
+    AutoAllowBundle,
     DEFAULT_SKILLS_DIR,
     OPENAI_FLAVOR,
     USER_SKILLS_DIR,
@@ -34,6 +35,7 @@ from ..config.schema import (
     SearchBackend,
     VisionMode,
     WebConfig,
+    WorkspaceModeName,
     slugify,
 )
 from ..config.skills import scan_skills_status
@@ -72,6 +74,7 @@ class ProfileIn(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     context_window: int | None = Field(default=None, ge=1)
+    max_tokens: int | None = Field(default=None, ge=1)
     vision: VisionMode = "auto"
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
@@ -88,6 +91,7 @@ class ProfileIn(BaseModel):
             base_url=self.base_url,
             api_key=key,
             context_window=self.context_window,
+            max_tokens=self.max_tokens,
             vision=self.vision,
             extra_body=self.extra_body,
         )
@@ -112,6 +116,31 @@ class SkillsIn(BaseModel):
     """Full-list replacement for the skill directories (order = precedence)."""
 
     dirs: list[str]
+
+
+class WorkspaceIn(BaseModel):
+    """Workspace-settings updates; only the fields present change."""
+
+    default_mode: WorkspaceModeName | None = None
+    auto_allow: list[AutoAllowBundle] | None = None
+
+
+class RunIn(BaseModel):
+    """Run-limit updates; only the fields present change (an explicit
+    ``max_retries: null`` restores the agent's own retry posture)."""
+
+    max_turns: int | None = Field(default=None, ge=1)
+    max_retries: int | None = Field(default=None, ge=0)
+    followups: bool | None = None
+
+
+class AgentIn(BaseModel):
+    """Agent-settings updates; only the fields present change."""
+
+    memory: bool | None = None
+    memory_dir: str | None = Field(default=None, min_length=1)
+    subagents: bool | None = None
+    instructions: str | None = None
 
 
 class TestIn(BaseModel):
@@ -163,11 +192,43 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             hint="set --token to configure through a proxy",
         )
 
+    def _guard_write(request: Request) -> None:
+        """Every config write: the rebinding guard, then a writable file.
+
+        A read-only ``config.json`` (a read-only mount, say) refuses up
+        front rather than after the swap — Settings shows it read-only too.
+        """
+        _guard_host(request)
+        if not runtime.writable:
+            raise WebError(
+                409,
+                "config_read_only",
+                f"{runtime.loaded.label} is not writable",
+                hint="edit the file directly, then restart lovia web",
+            )
+
+    def _workspace_out() -> dict[str, object]:
+        from ..builder import AUTO_ALLOW_BUNDLES
+
+        settings = runtime.config.workspace
+        deployment = runtime.deployment
+        return {
+            "default_mode": settings.default_mode,
+            "auto_allow": list(settings.auto_allow),
+            # What runs actually get, once the deployment had its say.
+            "effective_mode": deployment.effective_mode(settings.default_mode),
+            "modes": list(deployment.modes()),
+            "bundles": list(AUTO_ALLOW_BUNDLES),
+            # None, or why the browser can't change this section.
+            "lock": deployment.workspace_lock(),
+        }
+
     def _config_out() -> dict[str, object]:
         cfg = runtime.config
         return {
             "configured": runtime.configured,
             "missing": ConfigRuntime.serveable(cfg),
+            "writable": runtime.writable,
             "scope": {
                 "label": runtime.loaded.label,
                 "exists": runtime.loaded.exists,
@@ -188,6 +249,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                     "base_url": p.base_url,
                     "api_key": _mask(p.api_key),
                     "context_window": p.context_window,
+                    "max_tokens": p.max_tokens,
                     "vision": p.vision,
                     "extra_body": p.extra_body,
                 }
@@ -199,12 +261,15 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                 "tavily_api_key": _mask(cfg.search.tavily_api_key),
             },
             "skills": cfg.skills.model_dump(),
+            "workspace": _workspace_out(),
+            "run": cfg.run.model_dump(),
+            "agent": cfg.agent.model_dump(),
         }
 
-    async def _apply(config: WebConfig) -> None:
+    async def _apply(config: WebConfig, *, settings_only: bool = False) -> None:
         """Run the swap; translate build failures into API errors."""
         try:
-            await runtime.apply(config)
+            await runtime.apply(config, settings_only=settings_only)
         except (UserError, ValueError) as exc:
             raise WebError.from_exc(400, "invalid_request", exc) from exc
 
@@ -230,7 +295,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
 
     @router.post("/models", status_code=201)
     async def create_model(body: ProfileIn, request: Request) -> dict[str, object]:
-        _guard_host(request)
+        _guard_write(request)
         cfg = runtime.config
         taken = {p.id for p in cfg.models}
         profile_id = body.id or slugify(body.name or body.model, taken)
@@ -251,7 +316,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
     async def update_model(
         profile_id: str, body: ProfileIn, request: Request
     ) -> dict[str, object]:
-        _guard_host(request)
+        _guard_write(request)
         cfg = runtime.config
         stored = cfg.profile(profile_id)
         if stored is None:
@@ -272,7 +337,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         """A server-side copy, API key included — the key never reaches the
         browser, so a variant of the same endpoint (say, thinking off for the
         aux role) can't be made by copying the form."""
-        _guard_host(request)
+        _guard_write(request)
         cfg = runtime.config
         stored = cfg.profile(profile_id)
         if stored is None:
@@ -288,7 +353,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
 
     @router.delete("/models/{profile_id}")
     async def delete_model(profile_id: str, request: Request) -> dict[str, object]:
-        _guard_host(request)
+        _guard_write(request)
         cfg = runtime.config
         if cfg.profile(profile_id) is None:
             raise WebError(404, "model_not_found", f"unknown model {profile_id!r}")
@@ -309,7 +374,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
 
     @router.put("/roles")
     async def update_roles(body: RolesIn, request: Request) -> dict[str, object]:
-        _guard_host(request)
+        _guard_write(request)
         roles = runtime.config.roles.model_dump()
         # Only the fields the client sent change; explicit null clears
         # (vision/aux) or is rejected (chat must always point somewhere).
@@ -322,7 +387,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
 
     @router.put("/search")
     async def update_search(body: SearchIn, request: Request) -> dict[str, object]:
-        _guard_host(request)
+        _guard_write(request)
         search = runtime.config.search.model_dump()
         if body.backend is not None:
             search["backend"] = body.backend
@@ -333,8 +398,66 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
 
     @router.put("/skills")
     async def update_skills(body: SkillsIn, request: Request) -> dict[str, object]:
-        _guard_host(request)
+        _guard_write(request)
         await _apply(_copy(skills={"dirs": body.dirs}))
+        return {"config": _config_out()}
+
+    @router.put("/workspace")
+    async def update_workspace(
+        body: WorkspaceIn, request: Request
+    ) -> dict[str, object]:
+        _guard_write(request)
+        deployment = runtime.deployment
+        lock = deployment.workspace_lock()
+        if lock is not None:
+            raise WebError(
+                403,
+                "workspace_locked",
+                "workspace settings are fixed by how lovia web was started",
+                hint={
+                    "no_workspace": "started with --no-workspace",
+                    "readonly": "started with --readonly",
+                    "remote": "a non-loopback server; edit config.json and "
+                    "restart, or start with --allow-workspace-switch",
+                }[lock],
+            )
+        workspace = runtime.config.workspace.model_dump()
+        if body.default_mode is not None:
+            if body.default_mode not in deployment.modes():
+                raise WebError(
+                    400,
+                    "invalid_request",
+                    f"mode {body.default_mode!r} is not available on this server",
+                    hint=f"choose one of: {', '.join(deployment.modes())}",
+                )
+            workspace["default_mode"] = body.default_mode
+        if body.auto_allow is not None:
+            workspace["auto_allow"] = body.auto_allow
+        await _apply(_copy(workspace=workspace), settings_only=True)
+        return {"config": _config_out()}
+
+    @router.put("/run")
+    async def update_run(body: RunIn, request: Request) -> dict[str, object]:
+        _guard_write(request)
+        run = runtime.config.run.model_dump()
+        for name in body.model_fields_set:
+            value = getattr(body, name)
+            if value is None and name != "max_retries":
+                raise WebError(400, "invalid_request", f"run.{name} cannot be null")
+            run[name] = value
+        await _apply(_copy(run=run), settings_only=True)
+        return {"config": _config_out()}
+
+    @router.put("/agent")
+    async def update_agent(body: AgentIn, request: Request) -> dict[str, object]:
+        _guard_write(request)
+        agent = runtime.config.agent.model_dump()
+        for name in body.model_fields_set:
+            value = getattr(body, name)
+            if value is None:
+                raise WebError(400, "invalid_request", f"agent.{name} cannot be null")
+            agent[name] = value
+        await _apply(_copy(agent=agent), settings_only=True)
         return {"config": _config_out()}
 
     @router.get("/skills")

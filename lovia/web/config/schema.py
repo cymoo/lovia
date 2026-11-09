@@ -97,6 +97,8 @@ class ModelProfile(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     context_window: int | None = Field(default=None, ge=1)
+    # Max output tokens per response; None leaves the provider's default.
+    max_tokens: int | None = Field(default=None, ge=1)
     vision: VisionMode = "auto"
     # Raw fields merged into every request to this endpoint — the provider's
     # ``extra_body`` (reasoning knobs, vLLM's ``chat_template_kwargs``, ...).
@@ -195,6 +197,61 @@ class SkillsConfig(BaseModel):
         return self
 
 
+WorkspaceModeName = Literal["readonly", "coding", "trusted"]
+# Named command bundles a ``coding`` workspace runs without asking; the rules
+# behind each name live in :mod:`lovia.web.builder`.
+AutoAllowBundle = Literal["read-only", "dev-tools"]
+DEFAULT_AUTO_ALLOW: tuple[AutoAllowBundle, ...] = ("read-only", "dev-tools")
+DEFAULT_MAX_TURNS = 50
+DEFAULT_MEMORY_DIR = "./.lovia/memory"
+
+
+class WorkspaceSettings(BaseModel):
+    """How the default agent's workspace behaves.
+
+    Deployment flags (``--readonly``, a non-loopback bind) may narrow what
+    actually applies — see :class:`lovia.web.builder.Deployment`; the file
+    keeps what the user chose.
+    """
+
+    model_config = ConfigDict(extra="ignore", validate_assignment=True)
+
+    default_mode: WorkspaceModeName = "coding"
+    auto_allow: list[AutoAllowBundle] = Field(
+        default_factory=lambda: list(DEFAULT_AUTO_ALLOW)
+    )
+
+    @model_validator(mode="after")
+    def _dedupe(self) -> "WorkspaceSettings":
+        self.__dict__["auto_allow"] = list(dict.fromkeys(self.auto_allow))
+        return self
+
+
+class RunSettings(BaseModel):
+    """Per-run limits and extras for every chat turn the server drives."""
+
+    model_config = ConfigDict(extra="ignore", validate_assignment=True)
+
+    max_turns: int = Field(default=DEFAULT_MAX_TURNS, ge=1)
+    # Attempts after the first on transient provider errors; None keeps the
+    # agent's own retry posture.
+    max_retries: int | None = Field(default=None, ge=0)
+    followups: bool = True
+
+
+class AgentSettings(BaseModel):
+    """What the default agent carries besides its model and tools."""
+
+    model_config = ConfigDict(extra="ignore", validate_assignment=True)
+
+    memory: bool = True
+    memory_dir: str = Field(default=DEFAULT_MEMORY_DIR, min_length=1)
+    subagents: bool = True
+    # Server-wide system prompt. Empty means the launch directory's AGENTS.md,
+    # or a generic prompt when there is none; set, AGENTS.md is appended.
+    instructions: str = ""
+
+
 class WebConfig(BaseModel):
     """The whole ``config.json`` document."""
 
@@ -205,6 +262,9 @@ class WebConfig(BaseModel):
     roles: Roles = Field(default_factory=Roles)
     search: SearchConfig = Field(default_factory=SearchConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
+    run: RunSettings = Field(default_factory=RunSettings)
+    agent: AgentSettings = Field(default_factory=AgentSettings)
 
     @model_validator(mode="after")
     def _check_references(self) -> "WebConfig":

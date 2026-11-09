@@ -141,6 +141,8 @@ normalizes all three.
 | `schedule_not_fired` | 409 | the schedule couldn't fire right now |
 | `model_exists` | 409 | a model profile with that id exists |
 | `model_in_use` | 409 | the default chat model can't be deleted |
+| `config_read_only` | 409 | `config.json` is not writable (e.g. a read-only mount) |
+| `workspace_locked` | 403 | the workspace settings are fixed by how `lovia web` was started |
 | `file_too_large` | 413 | over the workspace read or upload limit |
 | `unsupported_file_type` | 415 | not previewable inline, or an extension uploads don't allow |
 | `too_many_runs` | 429 | at the concurrent-run cap |

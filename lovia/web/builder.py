@@ -1,17 +1,15 @@
 """Assembly of the CLI's default agent: tools, plugins, workspace, models.
 
-Everything model-flavoured arrives resolved (a provider, a
-:class:`~lovia.web.config.WebConfig`) — this module reads the environment
-only for the agent-topology knobs that stay flag/env-driven (workspace,
-memory, skills, turn/token caps). Shared by the CLI boot and, from 0.9.38,
-runtime reconfiguration — both build agents through the same path.
+Everything arrives resolved: a provider, the Settings-managed
+:class:`~lovia.web.config.WebConfig`, and the :class:`Deployment` — the few
+launch flags that constrain what the browser may change. Shared by the CLI
+boot and runtime reconfiguration, so both build agents through one path.
 """
 
 from __future__ import annotations
 
-import argparse
 import logging
-import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast, get_args
 
@@ -33,7 +31,13 @@ from ..tools import (
 from ..workspace import DEV_TOOLS, READ_ONLY, LocalWorkspace, Workspace, WorkspaceMode
 from ..workspace.policy import CommandRule
 from .charts import show_chart
-from .config import ModelProfile, SearchConfig, WebConfig, resolve_skills_dirs
+from .config import (
+    ModelProfile,
+    RunSettings,
+    SearchConfig,
+    WebConfig,
+    resolve_skills_dirs,
+)
 from .html import show_html
 from .scheduling import Scheduling
 from .store import ChatStore
@@ -45,119 +49,94 @@ log = logging.getLogger("lovia.web.builder")
 
 WORKSPACE_MODES: tuple[str, ...] = get_args(WorkspaceMode)
 INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
-DEFAULT_MEMORY_DIR = "./.lovia/memory"
 DEFAULT_AGENT_NAME = "lovia"
-DEFAULT_MAX_TURNS = 50
-# Rendered into --help from the core defaults so the text can never drift.
-DEFAULT_RETRIES = RetryPolicy().max_attempts - 1
-# Match the core library's ``Workspace.local`` default: shell and out-of-root
-# reads go through human approval. ``trusted`` (unprompted shell, read
-# anywhere) stays available via --trusted / LOVIA_WORKSPACE_MODE.
-DEFAULT_WORKSPACE_MODE = "coding"
 # The command bundles a ``coding`` workspace runs without asking, by name
-# (--auto-allow / LOVIA_AUTO_ALLOW). Core opts into none; `lovia web` is a
-# coding agent the person running it launched, so inspection that prints no
-# file contents and the project's own test/lint/build tools need no card —
-# a prompt for `ls` or `pytest` is noise that trains people to click
-# Approve. ``none`` restores the core default. The baseline (dangerous
-# commands, credential stores, protected config) applies either way.
+# (Settings → Workspace; ``workspace.auto_allow`` in config.json). Core opts
+# into none; `lovia web` is a coding agent the person running it launched, so
+# inspection that prints no file contents and the project's own
+# test/lint/build tools need no card — a prompt for `ls` or `pytest` is noise
+# that trains people to click Approve. An empty list restores the core
+# default. The baseline (dangerous commands, credential stores, protected
+# config) applies either way.
 AUTO_ALLOW_BUNDLES: dict[str, tuple[CommandRule, ...]] = {
     "read-only": READ_ONLY,
     "dev-tools": DEV_TOOLS,
 }
-DEFAULT_AUTO_ALLOW = "read-only,dev-tools"
 GENERIC_INSTRUCTIONS = (
     "You are a helpful assistant running in the lovia web UI. "
     "Be concise and accurate, and use your tools and skills when they help."
 )
 
 
-def _first(*values: str | None) -> str | None:
-    """Return the first non-empty value (the precedence helper)."""
-    for value in values:
-        if value:
-            return value
-    return None
+@dataclass(frozen=True)
+class Deployment:
+    """The launch flags that bound what Settings can change.
 
+    Everything else about the default agent lives in ``config.json``; these
+    stay flags because they protect the deployment *from* the browser:
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise UserError(f"invalid integer for {name}: {raw!r}") from exc
-
-
-def _env_int_optional(name: str) -> int | None:
-    raw = os.getenv(name)
-    if not raw:
-        return None
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise UserError(f"invalid integer for {name}: {raw!r}") from exc
-
-
-def _env_bool(name: str) -> bool | None:
-    """Parse a boolean-ish env var: True/False for set values, None when unset."""
-    raw = os.getenv(name)
-    if raw is None:
-        return None
-    value = raw.strip().lower()
-    if value in ("1", "true", "yes", "on"):
-        return True
-    if value in ("0", "false", "no", "off", ""):
-        return False
-    log.warning("%s=%r is not a boolean (use 1 or 0); treating as false", name, raw)
-    return False
-
-
-def resolve_max_retries(cli: int | None) -> int | None:
-    """Explicit provider retry count, or ``None`` for the agent's posture.
-
-    Precedence: ``--max-retries`` flag, then ``LOVIA_MAX_RETRIES``. ``None``
-    means no override — the agent's own :class:`RetryPolicy` default applies.
+    * ``workspace`` — the root (``None`` for ``--no-workspace``).
+    * ``readonly`` — ``--readonly``: every run is read-only, whatever the
+      configured default mode says.
+    * ``loopback`` — the server binds a loopback address. Off it, the
+      browser (anyone holding the token) must not widen permissions, and
+      ``trusted`` is never offered.
+    * ``allow_workspace_edit`` — ``--allow-workspace-switch``: a non-loopback
+      deployment opts into editing the workspace settings from the browser
+      anyway (``trusted`` stays loopback-only).
     """
-    value = cli if cli is not None else _env_int_optional("LOVIA_MAX_RETRIES")
-    if value is not None and value < 0:
-        raise UserError(f"--max-retries must be >= 0, got {value}")
-    return value
 
+    workspace: str | None = "."
+    readonly: bool = False
+    loopback: bool = True
+    allow_workspace_edit: bool = False
 
-def resolve_max_turns(cli: int | None) -> int:
-    """Per-run agent turn cap (flag > LOVIA_MAX_TURNS > 50)."""
-    value = cli if cli is not None else _env_int("LOVIA_MAX_TURNS", DEFAULT_MAX_TURNS)
-    if value < 1:
-        raise UserError(f"--max-turns must be >= 1, got {value}")
-    return value
+    def modes(self) -> tuple[str, ...]:
+        """The workspace modes this deployment allows, narrowest first."""
+        if self.workspace is None:
+            return ()
+        if self.readonly:
+            return ("readonly",)
+        return WORKSPACE_MODES if self.loopback else ("readonly", "coding")
 
+    def effective_mode(self, configured: str) -> str | None:
+        """The mode a run gets for the configured default (``None``: no
+        workspace). An unavailable mode caps to the widest allowed one —
+        modes are ordered, so the allowed set is always a prefix."""
+        allowed = self.modes()
+        if not allowed:
+            return None
+        return configured if configured in allowed else allowed[-1]
 
-def resolve_max_tokens(cli: int | None) -> int | None:
-    """Max output tokens per response (flag > LOVIA_MAX_TOKENS > provider default)."""
-    value = cli if cli is not None else _env_int_optional("LOVIA_MAX_TOKENS")
-    if value is not None and value <= 0:
-        raise UserError(f"--max-tokens must be > 0, got {value}")
-    return value
+    def workspace_lock(self) -> str | None:
+        """Why the browser can't edit the workspace settings, or ``None``.
 
-
-def resolve_memory(cli_dir: str | None, no_memory: bool) -> Memory | None:
-    """Build the default :class:`Memory` plugin unless ``--no-memory`` is set.
-
-    Storage-root precedence: ``--memory-dir`` > ``LOVIA_MEMORY_DIR`` >
-    ``./.lovia/memory``. The directory need not exist yet — the notes file and
-    archive db are created under it on first write.
-    """
-    if no_memory:
+        ``"no_workspace"`` / ``"readonly"`` name the flag; ``"remote"`` is a
+        non-loopback bind without ``--allow-workspace-switch``.
+        """
+        if self.workspace is None:
+            return "no_workspace"
+        if self.readonly:
+            return "readonly"
+        if not self.loopback and not self.allow_workspace_edit:
+            return "remote"
         return None
-    root = _first(cli_dir, os.getenv("LOVIA_MEMORY_DIR")) or DEFAULT_MEMORY_DIR
-    path = Path(root)
+
+
+def resolve_memory(enabled: bool, root: str) -> Memory | None:
+    """The default :class:`Memory` plugin, rooted at ``root``, unless disabled.
+
+    The directory need not exist yet — the notes file and archive db are
+    created under it on first write.
+    """
+    if not enabled:
+        return None
+    path = Path(root).expanduser()
     if path.exists() and not path.is_dir():
         raise UserError(f"memory path is not a directory: {path}")
     log.info("memory enabled at %s", path)
     # Long-lived server: curation must not hold back each run's final event.
-    return Memory(root, curate_in_background=True)
+    return Memory(str(path), curate_in_background=True)
 
 
 def resolve_tools(search: SearchConfig | None = None) -> list[Tool]:
@@ -264,82 +243,58 @@ def resolve_aux_model(profile: ModelProfile | None) -> Provider | None:
         return None
 
 
-def resolve_followups(cli_off: bool) -> bool:
-    """Follow-up chips: on unless ``--no-followups`` or ``LOVIA_FOLLOWUPS=0``.
+def resolve_retry(run: RunSettings) -> RetryPolicy | None:
+    """The server's retry override for ``run.max_retries`` (``None``: the
+    agent's own posture applies)."""
+    if run.max_retries is None:
+        return None
+    return RetryPolicy(max_attempts=run.max_retries + 1)
 
-    The opposite of the library default (``create_app(followups=False)``), on
-    purpose: an embedder must never silently gain a model call per run, while
-    the bundled CLI is a finished chat app where the chips are part of it.
+
+def resolve_instructions(custom: str = "") -> str:
+    """The default agent's system prompt.
+
+    ``custom`` (Settings → Agent) is the server-wide prompt; the launch
+    directory's ``AGENTS.md`` (the cross-agent convention) is appended to it.
+    Without one the file alone serves, and without either a generic prompt.
+    Read on every build, so an edited ``AGENTS.md`` applies on the next
+    Settings change as well as at boot.
     """
-    if cli_off:
-        return False
-    env = _env_bool("LOVIA_FOLLOWUPS")
-    return True if env is None else env
-
-
-def resolve_instructions(cli_text: str | None, cli_file: str | None) -> str:
-    if cli_text is not None:
-        return cli_text
-    file = _first(cli_file, os.getenv("LOVIA_INSTRUCTIONS_FILE"))
-    if file:
-        path = Path(file)
-        if not path.is_file():
-            raise UserError(f"instructions file not found: {path}")
-        return path.read_text(encoding="utf-8")
+    project = ""
     for name in INSTRUCTIONS_FILES:
         path = Path(name)
         if path.is_file():
             log.info("using instructions from %s", path)
-            return path.read_text(encoding="utf-8")
-    return GENERIC_INSTRUCTIONS
-
-
-def resolve_auto_allow(cli_value: str | None) -> tuple[str, ...]:
-    """The bundle names ``coding`` runs unprompted: ``--auto-allow`` >
-    ``LOVIA_AUTO_ALLOW`` > the default; ``none`` is the empty choice."""
-    raw = _first(cli_value, os.getenv("LOVIA_AUTO_ALLOW")) or DEFAULT_AUTO_ALLOW
-    names = tuple(dict.fromkeys(n.strip() for n in raw.split(",") if n.strip()))
-    if names == ("none",):
-        return ()
-    unknown = [n for n in names if n not in AUTO_ALLOW_BUNDLES]
-    if unknown or not names:
-        raise UserError(
-            f"invalid --auto-allow value: {raw!r}",
-            hint=f"a comma list of {', '.join(AUTO_ALLOW_BUNDLES)}, or none",
-        )
-    return names
+            project = path.read_text(encoding="utf-8")
+            break
+    custom = custom.strip()
+    if custom and project:
+        return f"{custom}\n\n{project}"
+    return custom or project or GENERIC_INSTRUCTIONS
 
 
 def resolve_workspace(
-    cli_dir: str | None,
-    cli_mode: str | None,
-    no_workspace: bool,
-    auto_allow: str | None = None,
+    deployment: Deployment, config: WebConfig | None = None
 ) -> LocalWorkspace | None:
-    if no_workspace:
+    """The default agent's workspace: the deployment's root, in the
+    configured mode as the deployment allows it."""
+    settings = (config or WebConfig()).workspace
+    mode = deployment.effective_mode(settings.default_mode)
+    if mode is None or deployment.workspace is None:
         return None
-    root = _first(cli_dir, os.getenv("LOVIA_WORKSPACE")) or "."
-    mode = _first(cli_mode, os.getenv("LOVIA_WORKSPACE_MODE")) or DEFAULT_WORKSPACE_MODE
-    if mode not in WORKSPACE_MODES:
-        raise UserError(
-            f"invalid workspace mode: {mode!r}",
-            hint=f"choose one of: {', '.join(WORKSPACE_MODES)}",
-        )
-    # Parsed in every mode, so a typo fails at boot rather than on a switch
-    # to coding; only coding uses it (readonly has no shell, trusted asks
-    # for nothing).
-    bundles = resolve_auto_allow(auto_allow)
-    path = Path(root)
+    path = Path(deployment.workspace)
     if not path.is_dir():
         raise UserError(f"workspace directory not found: {path}")
     if mode != "coding":
         return Workspace.local(str(path), mode=cast(WorkspaceMode, mode))
-    rules = tuple(rule for name in bundles for rule in AUTO_ALLOW_BUNDLES[name])
+    rules = tuple(
+        rule for name in settings.auto_allow for rule in AUTO_ALLOW_BUNDLES[name]
+    )
     return Workspace.local(str(path), mode="coding", command_rules=rules)
 
 
 def build_default_agent(
-    args: argparse.Namespace,
+    deployment: Deployment,
     store: ChatStore,
     provider: Provider,
     question_channel: HumanChannel | None = None,
@@ -348,12 +303,14 @@ def build_default_agent(
 ) -> Agent[Any]:
     """The ready-made agent ``lovia web`` serves.
 
-    ``config`` supplies the Settings-managed extras (search backend, vision
-    role, skill directories); the argparse namespace supplies the topology
-    flags.
+    ``config`` supplies everything Settings manages (search backend, vision
+    role, skill directories, workspace mode, memory, subagents, the prompt);
+    ``deployment`` bounds the workspace.
     """
     config = config or WebConfig()
-    instructions = resolve_instructions(args.instructions, args.instructions_file)
+    profile = config.default_profile()
+    settings = ModelSettings(max_tokens=profile.max_tokens if profile else None)
+    instructions = resolve_instructions(config.agent.instructions)
     skills_dirs = resolve_skills_dirs(config.skills)
     plugins: list[Plugin] = []
     if skills_dirs:
@@ -363,17 +320,15 @@ def build_default_agent(
     # Let the model create Scheduled runs from chat (gated by approval). Closes
     # over the app's store so it writes the rows the scheduler polls.
     plugins.append(Scheduling(store))
-    memory = resolve_memory(args.memory_dir, args.no_memory)
+    memory = resolve_memory(config.agent.memory, config.agent.memory_dir)
     if memory is not None:
         plugins.append(memory)
-    workspace = resolve_workspace(
-        args.workspace, _mode_flag(args), args.no_workspace, args.auto_allow
-    )
+    workspace = resolve_workspace(deployment, config)
     tools = resolve_tools(config.search)
     vision_tool = resolve_vision_tool(provider, workspace, config.vision_profile())
     if vision_tool is not None:
         tools.append(vision_tool)
-    if not args.no_subagents:
+    if config.agent.subagents:
         # Background subagents, on by default. The child is the same
         # assistant minus the plugins that must not ride along: Subagents
         # itself (no recursive spawning), Scheduling (a child schedules
@@ -385,7 +340,7 @@ def build_default_agent(
             name=f"{DEFAULT_AGENT_NAME}-sub",
             instructions=instructions,
             model=provider,
-            settings=ModelSettings(max_tokens=resolve_max_tokens(args.max_tokens)),
+            settings=settings,
             plugins=[p for p in plugins if isinstance(p, (Skills, Todo))],
             tools=tools,
             workspace=workspace,
@@ -402,7 +357,7 @@ def build_default_agent(
         name=DEFAULT_AGENT_NAME,
         instructions=instructions,
         model=provider,
-        settings=ModelSettings(max_tokens=resolve_max_tokens(args.max_tokens)),
+        settings=settings,
         plugins=plugins,
         tools=tools,
         workspace=workspace,
@@ -416,8 +371,3 @@ def build_default_agent(
     # within a prompt-cache window; precise time stays the `now` tool's job.
     agent.instruction(current_date())
     return agent
-
-
-def _mode_flag(args: argparse.Namespace) -> str | None:
-    """Workspace mode selected by the boolean flags, if any."""
-    return "readonly" if args.readonly else "trusted" if args.trusted else None

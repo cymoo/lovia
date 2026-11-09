@@ -92,8 +92,10 @@ same endpoint is a second profile: **Duplicate** copies one server-side (key
 included, since the page never holds it), so "thinking off for titles" is a
 copy with `enable_thinking: false` assigned to the aux role. Thinking models
 need output room: set **Max output tokens** under the profile's advanced
-fields (a `max_tokens` in the extra fields wins over it), but the context
-policy's output reserve does not follow it.
+fields (a `max_tokens` in the extra fields wins over it). It caps the chat
+replies and background subagents that run on the profile, not titles,
+follow-ups or image descriptions, and the context policy's output reserve
+does not follow it.
 
 The search backend, Tavily key, and skill directories also live in
 `config.json`. Model connections, additional profiles, role assignments,

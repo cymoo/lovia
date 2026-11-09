@@ -5,13 +5,23 @@
 //
 // Every save applies from the next run: a reply already streaming keeps the
 // settings it started with. Two things can make a pane read-only, and the
-// server enforces both — config.json isn't writable, or (Workspace only) the
-// way lovia web was started fixes the workspace settings.
+// server enforces both — config.json isn't writable (every config pane says
+// so), or (Workspace only) the way lovia web was started fixes the
+// workspace settings.
 import { api } from './api.js';
 import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { segmented } from './ui.js';
-import { cfg, el, field, input, loadConfig, positiveInt } from './model-config.js';
+import {
+  cfg,
+  el,
+  field,
+  input,
+  loadConfig,
+  notice,
+  positiveInt,
+  readOnlyNotice,
+} from './model-config.js';
 
 /**
  * An on/off switch for a form row; `value()` reads it back.
@@ -43,12 +53,6 @@ function switchRow(labelText, control, hintText) {
   return row;
 }
 
-function notice(text) {
-  const box = el('div', 'lv-cfg-notice', text);
-  box.setAttribute('role', 'note');
-  return box;
-}
-
 /**
  * Shared pane scaffolding: load the config, draw the title, then hand the
  * body to `build`. `build` returns the payload reader and the controls a
@@ -71,7 +75,8 @@ function settingsPane(title, build, send) {
     }
     const c = cfg();
     pane.replaceChildren(el('div', 'lv-cfg-pane-title', title));
-    if (!c.writable) pane.appendChild(notice(t('cfg.readOnly', { file: c.scope.label })));
+    const ro = readOnlyNotice();
+    if (ro) pane.appendChild(ro);
     const form = el('div', 'lv-cfg-form');
     const { read, controls, locked } = build(c, form);
     const frozen = !c.writable || !!locked;
@@ -264,10 +269,13 @@ export function buildAgentPane() {
         controls: [prompt, turns, retries, followups.node, subagents.node, memory.node, memDir],
       };
     },
+    // Agent first: it is the half the server can still refuse (a memory
+    // directory that is a file), and the run limits are checked above —
+    // so a refusal leaves nothing half-saved.
     /** @param {any} body */
     async (body) => {
-      await api.setRunSettings(body.run);
       await api.setAgentSettings(body.agent);
+      await api.setRunSettings(body.run);
     },
   );
 }

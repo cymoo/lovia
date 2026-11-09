@@ -63,6 +63,23 @@ export function el(tag, className, text) {
   return node;
 }
 
+/** A plain note above a settings form. */
+export function notice(text) {
+  const box = el('div', 'lv-cfg-notice', text);
+  box.setAttribute('role', 'note');
+  return box;
+}
+
+/**
+ * The "config.json isn't writable" note, or null when it is. The server
+ * refuses every write then (409 config_read_only); this says so up front,
+ * before someone fills in a form that can't be saved.
+ */
+export function readOnlyNotice() {
+  const c = cfg();
+  return c && c.writable === false ? notice(t('cfg.readOnly', { file: c.scope.label })) : null;
+}
+
 let _fieldIds = 0;
 
 export function field(labelText, control, hintText) {
@@ -246,6 +263,8 @@ export function buildModelsPane() {
       }
     }
     pane.replaceChildren(view.name === 'list' ? renderList() : renderForm(view.id));
+    const ro = readOnlyNotice();
+    if (ro) pane.prepend(ro);
   }
 
   function renderList() {
@@ -684,6 +703,8 @@ export function buildSearchPane() {
     const c = cfg();
     pane.replaceChildren();
     pane.appendChild(el('div', 'lv-cfg-pane-title', t('cfg.searchTitle')));
+    const ro = readOnlyNotice();
+    if (ro) pane.appendChild(ro);
     const form = el('div', 'lv-cfg-form');
 
     const select = /** @type {HTMLSelectElement} */ (el('select', 'lv-dialog-input'));
@@ -825,6 +846,8 @@ export function buildSkillsPane() {
 
     pane.replaceChildren();
     pane.appendChild(el('div', 'lv-cfg-pane-title', t('cfg.skillsTitle')));
+    const ro = readOnlyNotice();
+    if (ro) pane.appendChild(ro);
     pane.appendChild(el('div', 'lv-cfg-hint lv-skills-intro', t('cfg.skillsIntro')));
 
     const list = el('div', 'lv-model-list');

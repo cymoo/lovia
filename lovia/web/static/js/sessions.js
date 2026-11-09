@@ -217,6 +217,12 @@ export function initEventStream() {
       updateSessionTitle(d.session_id, d.title);
     } catch { /* ignore */ }
   });
+  // A chat's permission mode was switched (this tab or another).
+  es.addEventListener('session_workspace_changed', (e) => {
+    try {
+      store.emit('session-workspace-changed', JSON.parse(e.data));
+    } catch { /* malformed payload — the next load resyncs */ }
+  });
   // The model configuration changed (this tab or another): model-config.js
   // owns the reaction (chip label, config cache, agent refetch).
   es.addEventListener('config_changed', (e) => {
@@ -237,6 +243,7 @@ async function refreshTranscript() {
     const data = await api.getSession(id);
     if (store.sessionId !== id || store.streaming) return; // superseded
     store.currentParentId = data.parent_id || null;
+    store.emit('session-meta', data);
     renderTasksButton();
     renderOrigin(data.origin);
     if (chatTitleEl) chatTitleEl.textContent = data.title || t('session.newChat');
@@ -882,6 +889,7 @@ export async function switchSession(id) {
     const data = await api.getSession(id);
     if (store.sessionId !== id) return; // a newer switch superseded this one
     store.currentParentId = data.parent_id || null;
+    store.emit('session-meta', data);
     renderTasksButton();
     renderOrigin(data.origin);
     // Align the switcher with the chat's own agent BEFORE the history replay:

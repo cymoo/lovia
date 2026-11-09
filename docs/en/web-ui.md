@@ -301,7 +301,7 @@ finishes with what it started with.
 | Settings pane | `config.json` | Default |
 | --- | --- | --- |
 | **Models** → a profile's advanced fields | `models[].max_tokens` | The provider's |
-| **Workspace** → Permission mode | `workspace.default_mode` | `coding` — see [modes](workspace.md#modes) |
+| **Workspace** → Permission mode for new chats | `workspace.default_mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
 | **Workspace** → Commands that run without asking | `workspace.auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
 | **Agent** → Custom instructions | `agent.instructions` | Empty: the launch directory's `AGENTS.md`, else a generic prompt; set, `AGENTS.md` is appended |
 | **Agent** → Max turns / Retries | `run.max_turns` / `run.max_retries` | `50` / the Agent's own (`4`) |
@@ -311,6 +311,22 @@ finishes with what it started with.
 
 When `config.json` isn't writable (a read-only mount, say), the server still
 starts and Settings shows these as view-only.
+
+## Permission mode per chat
+
+Each chat has its own permission mode — **Read-only**, **Coding** or
+**Trusted** ([modes](workspace.md#modes)) — on the chip beside the model
+chip in the composer. A new chat starts in Settings' default; pick another
+before sending to start it there. Switching a chat applies from its next run:
+a reply already streaming finishes in the mode it began, and the chat's
+background processes (a dev server, say) keep running. The chats a run
+creates — background subagent tasks, chats started with `start_session`,
+the fresh chats of a schedule set up from it — take the mode that run used.
+
+The chip offers what the server allows (see the limits below). A chat set to
+a mode the server no longer offers — it was restarted with `--readonly`, say
+— runs in the widest offered mode below it, and the chip says so; it is never
+run wider.
 
 ## CLI options
 

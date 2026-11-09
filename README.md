@@ -506,7 +506,8 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   browser disconnects.
 - **Settings without restarts** — `lovia web` keeps models, the workspace
   mode, run limits, memory and the system prompt in Settings; a change
-  applies from the next run.
+  applies from the next run. Each chat picks its own permission mode
+  (`create_app(workspaces=WorkspaceSwitch())` in your own app).
 - **Rich tool results** — a tool returns `ui_result(kind, props)` to draw UI;
   tables, ECharts charts and sandboxed HTML pages come built in
   (`show_table`, `show_chart`, `show_html`).

@@ -235,6 +235,13 @@ def _make_tool(store: ChatStore) -> Tool:
         # model only opts out (a fresh session per fire) when the user asks.
         # Falls back to a fresh session if this run has no session to continue.
         session_id = ctx.session_id if (continue_session and ctx.session_id) else None
+        # Fires run under this chat's permissions: a schedule set up from a
+        # read-only chat can't run its fresh chats wider.
+        server = RUN_SERVER.get()
+        workspace_mode = server.run_mode(ctx.session_id) if server else None
+        if workspace_mode is None and ctx.session_id:
+            meta = await store.get(ctx.session_id)
+            workspace_mode = meta.workspace_mode if meta else None
         now = time.time()
         row = ScheduleRow(
             id=uuid.uuid4().hex,
@@ -256,6 +263,7 @@ def _make_tool(store: ChatStore) -> Tool:
             # The fires run in this run's context (the page's, when a user
             # message started it), as if the user had sent them from here.
             context=RUN_CLIENT.get(),
+            workspace_mode=workspace_mode,
         )
         await store.add_schedule(row)
 
@@ -421,8 +429,19 @@ def _make_start_tool() -> Tool:
             if not alive:
                 raise ToolError("Nothing started: chats are being deleted.")
             try:
+                # The new chat works under this run's permissions, so a
+                # read-only chat can't start a writer.
+                root, mode = deps.new_chat_binding(
+                    agent,
+                    deps.run_mode(origin) or (row.workspace_mode if row else None),
+                )
                 await deps.store.upsert(
-                    sid, agent=agent_key, title=shown, spawned_from=origin
+                    sid,
+                    agent=agent_key,
+                    title=shown,
+                    spawned_from=origin,
+                    workspace_root=root,
+                    workspace_mode=mode,
                 )
                 await deps.supervisor.start(
                     session_id=sid,

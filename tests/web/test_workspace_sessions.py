@@ -201,3 +201,24 @@ async def test_registry_reopens_on_workspace_config_change(tmp_path) -> None:
     # The old session was closed — its background process died with it.
     assert _wait_dead(start.pid)
     await reg.aclose()
+
+
+async def test_registry_keeps_the_session_when_only_the_mode_changes(tmp_path) -> None:
+    reg = WorkspaceSessions()
+    coding = Agent(name="a", model=None, workspace=Workspace.local(str(tmp_path)))
+    s1 = await (await reg.bind("chat", coding)).workspace.open()
+    start = await s1.spawn("sleep 30")
+
+    readonly = Agent(
+        name="a",
+        model=None,
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+    )
+    s2 = await (await reg.bind("chat", readonly)).workspace.open()
+    # Same session — the dev server it started survives the switch …
+    assert s2 is s1
+    assert not _wait_dead(start.pid, timeout=0.3)
+    # … and from now on it is judged by the new policy.
+    assert s1.policy.write == "deny" and s1.policy.allow_shell is False
+    await reg.aclose()
+    assert _wait_dead(start.pid)

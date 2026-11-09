@@ -108,6 +108,16 @@ class Deployment:
             return None
         return configured if configured in allowed else allowed[-1]
 
+    def chat_modes(self, default_mode: str) -> tuple[str, ...]:
+        """The modes a chat may pick. Off loopback, unless
+        ``--allow-workspace-switch``, nothing wider than the mode the server
+        started with: a token holder must not widen what the deployer set."""
+        allowed = self.modes()
+        if self.loopback or self.allow_workspace_edit or not allowed:
+            return allowed
+        ceiling = self.effective_mode(default_mode)
+        return allowed[: allowed.index(ceiling) + 1] if ceiling else allowed
+
     def workspace_lock(self) -> str | None:
         """Why the browser can't edit the workspace settings, or ``None``.
 

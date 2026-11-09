@@ -63,15 +63,44 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     session = deps.session
 
     async def upsert_session(
-        sid: str, agent_name: str, message: str, *, is_new: bool
+        sid: str, agent: Agent[Any], req: ChatRequest, *, is_new: bool
     ) -> None:
-        """Insert/touch the session's metadata row (announcing a new chat)."""
-        title = provisional_title(message) if is_new else None
-        await store.upsert(sid, agent=agent_name, title=title)
+        """Insert/touch the session's metadata row (announcing a new chat).
+
+        A new chat records its workspace binding — the agent's root and the
+        mode the page picked — which its runs then read (supervisor.start).
+        """
+        agent_name = deps.name_of(agent)
+        title = provisional_title(req.message) if is_new else None
+        switch = deps.workspace_switch
+        asked = req.workspace_mode or (switch.default_mode if switch else None)
+        root, mode = deps.new_chat_binding(agent, asked) if is_new else (None, None)
+        await store.upsert(
+            sid,
+            agent=agent_name,
+            title=title,
+            workspace_root=root,
+            workspace_mode=mode,
+        )
         if is_new:
             deps.emit(
                 "session_created",
                 SessionCreatedData(session_id=sid, agent=agent_name, title=title),
+            )
+
+    def check_mode(req: ChatRequest) -> None:
+        """A new chat may only ask for a mode this server offers."""
+        mode = req.workspace_mode
+        if mode is None:
+            return
+        switch = deps.workspace_switch
+        if switch is None or mode not in switch.modes:
+            offered = ", ".join(switch.modes) if switch else "none"
+            raise WebError(
+                400,
+                "invalid_request",
+                f"mode {mode!r} is not available on this server",
+                hint=f"offered: {offered}",
             )
 
     def resolve_agent(meta: ChatMeta | None, requested: str | None) -> Agent[Any]:
@@ -98,6 +127,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
         agent = resolve_agent(meta, req.agent)
         is_new = meta is None
+        if is_new:
+            check_mode(req)
         if deps.supervisor.get(sid) is not None:
             # Unlike a stream, this turn can't join the live run: it would
             # have no answer of its own to return.
@@ -123,7 +154,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             client_context=client,
         )
         run_deps = await build_run_deps(deps.run_deps, trigger)
-        await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
+        await upsert_session(sid, agent, req, is_new=is_new)
         # The chat's interrupted run, superseded by this one: read before the
         # start, deleted only after it, so a refused start (409/429) leaves it
         # resumable.
@@ -173,6 +204,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
         agent = resolve_agent(meta, req.agent)
         is_new = meta is None
+        if is_new:
+            check_mode(req)
         # Build the message once — this validates attachments (dropping any
         # that are missing or escape the workspace), so an attachments-only
         # request whose attachments are all invalid reads as empty here. It
@@ -198,7 +231,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         run_deps = None
         if decided:
             run_deps = await build_run_deps(deps.run_deps, trigger)
-        await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
+        await upsert_session(sid, agent, req, is_new=is_new)
 
         def attach(live: RunController) -> EventSourceResponse:
             # A run is already live for this session: a new message injects

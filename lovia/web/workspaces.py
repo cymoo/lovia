@@ -22,16 +22,93 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from pathlib import Path
+from typing import Any, cast, get_args
 
 from ..agent import Agent
-from ..workspace import LocalWorkspace
+from ..exceptions import UserError
+from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
+from ..workspace.local import LocalWorkspaceSession
 from ..workspace.protocol import WorkspaceSession
 
 log = logging.getLogger(__name__)
 
-__all__ = ["WorkspaceSessions"]
+__all__ = ["WorkspaceSessions", "WorkspaceSwitch"]
+
+# Narrowest first: a mode may only ever be capped toward the front.
+MODE_ORDER: tuple[str, ...] = get_args(WorkspaceMode)
+
+
+@dataclass(frozen=True)
+class WorkspaceSwitch:
+    """Let each chat pick its own permission mode: ``create_app(workspaces=)``.
+
+    Without it the served agent's workspace is what every chat gets. With it
+    a chat stores a mode — chosen in the composer, or with ``workspace_mode``
+    on its first message — and each of its runs gets the agent's workspace
+    rebuilt for that mode. The root stays the agent's.
+
+    * ``modes`` — what a chat may pick; ``readonly`` is always among them.
+      A stored mode this server doesn't offer (a deployment narrowed since)
+      runs as the widest offered mode below it: only ever narrower.
+    * ``default_mode`` — what the page preselects for a new chat; ``None``
+      runs new chats on the agent's own workspace until one is picked.
+    * ``build`` — ``(root, mode) -> LocalWorkspace``. The default is the
+      ``Workspace.local`` preset for the mode, keeping the agent workspace's
+      env, limits, executor, ``inherit_env`` and shell timeout — but not a
+      custom policy's rules. Pass ``build`` to carry those across modes.
+
+    A chat that never picked a mode stays on the agent's own workspace,
+    custom policy and all.
+    """
+
+    modes: Sequence[WorkspaceMode] = ("readonly", "coding")
+    default_mode: WorkspaceMode | None = None
+    build: Callable[[Path, WorkspaceMode], LocalWorkspace] | None = None
+
+    def __post_init__(self) -> None:
+        unknown = [m for m in self.modes if m not in MODE_ORDER]
+        if unknown:
+            raise UserError(
+                f"unknown workspace modes: {', '.join(map(repr, unknown))}",
+                hint=f"choose from: {', '.join(MODE_ORDER)}",
+            )
+        if "readonly" not in self.modes:
+            raise UserError(
+                "WorkspaceSwitch.modes must include 'readonly'",
+                hint="it is the floor a mode this server doesn't offer caps to",
+            )
+        ordered = tuple(m for m in MODE_ORDER if m in self.modes)
+        object.__setattr__(self, "modes", ordered)
+        if self.default_mode is not None and self.default_mode not in ordered:
+            raise UserError(
+                f"default_mode {self.default_mode!r} is not one of the offered modes"
+            )
+
+    def effective(self, mode: str) -> WorkspaceMode:
+        """``mode`` as this server runs it: itself when offered, else the
+        widest offered mode below it."""
+        if mode in self.modes:
+            return cast(WorkspaceMode, mode)
+        rank = MODE_ORDER.index(mode) if mode in MODE_ORDER else 0
+        below = [m for m in self.modes if MODE_ORDER.index(m) <= rank]
+        return below[-1]
+
+    def workspace(self, base: LocalWorkspace, mode: WorkspaceMode) -> LocalWorkspace:
+        """The agent's workspace ``base`` rebuilt for ``mode``."""
+        if self.build is not None:
+            return self.build(Path(base.root), mode)
+        return Workspace.local(
+            base.root,
+            mode=mode,
+            env=base.env,
+            shell_timeout=base.shell_timeout,
+            limits=base.limits,
+            inherit_env=base.inherit_env,
+            executor=base.executor,
+        )
 
 
 async def _close_quietly(session_id: str, session: WorkspaceSession) -> None:
@@ -75,11 +152,21 @@ class WorkspaceSessions:
         async with self._lock:
             held = self._live.get(session_id)
             if held is not None and not (held[0] is cfg or held[0] == cfg):
-                # The chat switched to an agent with a different workspace
-                # config (root/policy): the old session must not keep serving
-                # — close it (killing its background processes) and reopen.
-                await _close_quietly(session_id, held[1])
-                held = None
+                if replace(held[0], policy=cfg.policy) == cfg and isinstance(
+                    held[1], LocalWorkspaceSession
+                ):
+                    # Only the permissions changed (the chat switched mode):
+                    # keep the session — and the dev server it runs — and
+                    # judge from now on by the new policy.
+                    held[1].set_policy(cfg.policy)
+                    held = (cfg, held[1])
+                    self._live[session_id] = held
+                else:
+                    # A different workspace (root, env, ...): the old session
+                    # must not keep serving — close it (killing its
+                    # background processes) and reopen.
+                    await _close_quietly(session_id, held[1])
+                    held = None
             if held is None:
                 held = (cfg, await cfg.open())
                 self._live[session_id] = held

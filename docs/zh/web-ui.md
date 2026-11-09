@@ -229,7 +229,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | 设置页 | `config.json` | 默认值 |
 | --- | --- | --- |
 | **模型** → 档案的高级选项 | `models[].max_tokens` | 沿用 Provider 的默认值 |
-| **工作区** → 权限模式 | `workspace.default_mode` | `coding`，见[模式](workspace.md#模式) |
+| **工作区** → 新对话的权限模式 | `workspace.default_mode` | `coding`，见[模式](workspace.md#模式)和[下文](#每个对话的权限模式) |
 | **工作区** → 不询问直接运行的命令 | `workspace.auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
 | **智能体** → 自定义指令 | `agent.instructions` | 空：使用启动目录的 `AGENTS.md`，没有就用通用提示；填写后 `AGENTS.md` 接在后面 |
 | **智能体** → 最大轮数 / 重试次数 | `run.max_turns` / `run.max_retries` | `50` / Agent 自己的设置（`4`） |
@@ -238,6 +238,16 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | **智能体** → 长期记忆 | `agent.memory` / `agent.memory_dir` | 开启，`./.lovia/memory` |
 
 `config.json` 不可写时（比如只读挂载），服务照常启动，设置页里这些设置只能查看。
+
+## 每个对话的权限模式
+
+每个对话有自己的权限模式——**只读**、**编码**或**信任**（见[模式](workspace.md#模式)），在输入框里模型按钮旁边切换。
+新对话默认使用设置页里的模式，发送前也可以先改。切换已有对话从下次运行起生效：正在进行的回复仍按开始时的
+模式完成，对话的后台进程（比如开发服务器）也不受影响。运行中创建的对话——后台子任务、用 `start_session`
+启动的对话、在这个对话里设置的定时任务新开的对话——沿用这次运行的模式。
+
+按钮只提供服务端允许的模式（见下面的限制）。对话设置的模式服务端已不再提供时（比如重启时加了 `--readonly`），
+按它下方最宽的可用模式运行，按钮上会注明；不会按更宽的模式运行。
 
 ## CLI 选项
 

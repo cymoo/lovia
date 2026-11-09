@@ -128,6 +128,14 @@ class UploadedFile(BaseModel):
     size: int
 
 
+class WorkspaceModesInfo(BaseModel):
+    """What a chat may pick (``create_app(workspaces=)``), narrowest first."""
+
+    modes: list[str]
+    # Preselected for a new chat; None runs it on the agent's own workspace.
+    default: str | None = None
+
+
 class ServerInfo(BaseModel):
     """Server-level capabilities, for a custom UI to introspect on load."""
 
@@ -139,6 +147,8 @@ class ServerInfo(BaseModel):
     # to chat with until /api/config receives a model).
     configured: bool = True
     features: dict[str, bool] = Field(default_factory=dict)
+    # Per-chat permission modes; None when chats can't pick one.
+    workspace_modes: WorkspaceModesInfo | None = None
 
 
 class Attachment(BaseModel):
@@ -179,6 +189,10 @@ class ChatRequest(BaseModel):
     # into that run (its next turn); "reject" answers 409 run_active and never
     # injects — for a message meant to start a run of its own (a follow-up).
     busy: Literal["inject", "reject"] = "inject"
+    # A new chat's permission mode, on a server with create_app(workspaces=);
+    # like ``agent``, an existing chat keeps its own (PATCH the session to
+    # change it).
+    workspace_mode: Literal["readonly", "coding", "trusted"] | None = None
 
     _bounded = field_validator("context")(lambda value: _bounded_context(value))
 
@@ -316,6 +330,9 @@ class SessionDetail(BaseModel):
     parent_id: str | None = None
     # Set on a fork or a spawn: the chat it came from — the UI's link back.
     origin: SessionOrigin | None = None
+    # The chat's permission mode as stored (None: the agent's own workspace);
+    # a server that offers fewer modes runs a wider one capped down.
+    workspace_mode: str | None = None
 
 
 class ChatSessionInfo(BaseModel):
@@ -334,6 +351,8 @@ class ChatSessionInfo(BaseModel):
     # Where the chat came from (see SessionDetail.origin). The sidebar marks
     # a "fork", since a branch starts with its source's title.
     origin_kind: Literal["fork", "spawn"] | None = None
+    # See SessionDetail.workspace_mode.
+    workspace_mode: str | None = None
 
 
 class RunInfo(BaseModel):
@@ -481,10 +500,13 @@ class RewindResponse(BaseModel):
 
 
 class SessionPatch(BaseModel):
-    """Partial update for a session — rename, (un)pin, or both."""
+    """Partial update for a session — rename, (un)pin, switch its permission
+    mode; applies whichever fields are set."""
 
     title: str | None = Field(default=None, min_length=1, max_length=120)
     pinned: bool | None = None
+    # Applies from the chat's next run; a live run keeps the mode it began in.
+    workspace_mode: Literal["readonly", "coding", "trusted"] | None = None
 
 
 class TodoItemOut(BaseModel):

@@ -16,6 +16,7 @@ from collections import Counter
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...agent import Agent
@@ -24,6 +25,7 @@ from ...providers import Provider
 from ...reliability import RetryPolicy, RunBudget
 from ...session import Session
 from ...tracing import Tracer
+from ...workspace import LocalWorkspace
 from ..approvals import ApprovalRegistry
 from ..errors import WebError
 from ..followups import (
@@ -35,7 +37,7 @@ from ..followups import (
 from ..sse import SessionRetitledData, frame
 from ..store import ChatStore
 from ..titles import generate_title, provisional_title
-from ..workspaces import WorkspaceSessions
+from ..workspaces import WorkspaceSessions, WorkspaceSwitch
 
 if TYPE_CHECKING:
     from ..config import ConfigRuntime
@@ -99,6 +101,9 @@ class RouterDeps:
     # end. Bound by the supervisor at run start; closed on chat deletion and
     # at app shutdown. Per-process, like the supervisor.
     workspaces: WorkspaceSessions = field(default_factory=WorkspaceSessions)
+    # Per-chat permission modes (create_app(workspaces=)); None: every chat
+    # runs on its agent's own workspace.
+    workspace_switch: WorkspaceSwitch | None = None
     # The CLI's runtime-reconfiguration surface, set by ``create_app`` when it
     # received one. ``None`` — the embedder case — means no ``/api/config``
     # routes and no ``model_config`` feature flag.
@@ -254,6 +259,55 @@ class RouterDeps:
         wall-clock/tool-call state never bleeds between runs — the same reason
         :func:`~lovia.handoff.agent_as_tool` copies its budget per invocation."""
         return replace(self.budget) if self.budget is not None else None
+
+    # ------------------------------------------------- workspace binding -
+
+    def effective_mode(self, mode: str | None) -> str | None:
+        """The mode a chat storing ``mode`` runs in; None: the agent's own."""
+        switch = self.workspace_switch
+        if switch is None or mode is None:
+            return None
+        return switch.effective(mode)
+
+    def bind_workspace(self, agent: Agent[Any], mode: str | None) -> Agent[Any]:
+        """``agent`` with its workspace rebuilt for the chat's ``mode``.
+
+        Unchanged without a switch, without a mode, or for an agent whose
+        workspace isn't a plain ``LocalWorkspace`` (a custom backend's
+        permissions are its own business).
+        """
+        effective = self.effective_mode(mode)
+        base = agent.workspace
+        if effective is None or not isinstance(base, LocalWorkspace):
+            return agent
+        assert self.workspace_switch is not None
+        workspace = self.workspace_switch.workspace(base, effective)  # type: ignore[arg-type]
+        return agent.clone(workspace=workspace)
+
+    def new_chat_binding(
+        self, agent: Agent[Any], mode: str | None
+    ) -> tuple[str | None, str | None]:
+        """``(workspace_root, workspace_mode)`` to store on a new chat.
+
+        The root is the agent workspace's, resolved; the mode is ``mode`` as
+        given (an inherited None stays None: the agent's own workspace) —
+        None without a switch.
+        """
+        base = agent.workspace
+        base = getattr(base, "workspace", base)  # a session binding's config
+        root = (
+            Path(base.root).expanduser().resolve().as_posix()
+            if isinstance(base, LocalWorkspace)
+            else None
+        )
+        return root, mode if self.workspace_switch is not None else None
+
+    def run_mode(self, session_id: str | None) -> str | None:
+        """The mode the chat's live run started with, if one is live."""
+        if session_id is None or self._supervisor is None:
+            return None
+        ctrl = self._supervisor.get(session_id)
+        return ctrl.workspace_mode if ctrl is not None else None
 
     @property
     def default_agent(self) -> str | None:

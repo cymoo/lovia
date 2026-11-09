@@ -188,10 +188,16 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         # agent — a follow-up message in the finished task then runs the
         # served agent closest to it.
         agent_key: str | None = None
+        # The task works under the permissions of the run that spawned it —
+        # its snapshot, not the chat's mode now, which may have been switched
+        # since that run began.
+        parent_mode = deps.run_mode(spec.parent_session_id)
         if spec.parent_session_id is not None:
             row = await deps.store.get(spec.parent_session_id)
             if row is not None:
                 agent_key = row.agent
+                if parent_mode is None:
+                    parent_mode = row.workspace_mode
         # A task works for the chat that spawned it, so in its context. The
         # run_deps hook decides before the task chat exists: a refusal
         # fails the spawn and leaves nothing behind.
@@ -217,11 +223,14 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         async with gate as alive:
             if not alive:
                 raise RunCancelled("the chat that spawned this task was deleted")
+            root, mode = deps.new_chat_binding(spec.agent, parent_mode)
             await deps.store.upsert(
                 child_sid,
                 agent=agent_key,
                 title=f"[{spec.id}] {provisional_title(spec.prompt)}",
                 parent_id=parent,
+                workspace_root=root,
+                workspace_mode=mode,
             )
             try:
                 ctrl = await deps.supervisor.start(

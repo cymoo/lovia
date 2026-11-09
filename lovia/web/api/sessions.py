@@ -23,7 +23,11 @@ from ...plugins import todos_from_entries
 from ...transcript import InputEntry, ToolResultEntry, entries_to_messages
 from ..errors import WebError
 from ..followups import FollowupRequest
-from ..sse import SessionCreatedData, SessionRetitledData
+from ..sse import (
+    SessionCreatedData,
+    SessionRetitledData,
+    SessionWorkspaceChangedData,
+)
 from ..schemas import (
     ChatSessionInfo,
     FollowupsResponse,
@@ -233,6 +237,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             active_run_id=active_run_id,
             parent_id=meta.parent_id if meta else None,
             origin=origin,
+            workspace_mode=meta.workspace_mode if meta else None,
         )
 
     @router.get("/api/sessions/{session_id}/ui-data/{ref}")
@@ -318,14 +323,33 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
 
     @router.patch("/api/sessions/{session_id}", response_model=ChatSessionInfo)
     async def update_session(session_id: str, req: SessionPatch) -> ChatSessionInfo:
-        """Rename and/or (un)pin a session — applies whichever fields are set."""
+        """Rename, (un)pin, and/or switch the permission mode of a session —
+        applies whichever fields are set."""
         meta = await store.get(session_id)
         if meta is None:
             raise WebError(404, "session_not_found", "session not found")
+        mode = req.workspace_mode
+        if mode is not None:
+            switch = deps.workspace_switch
+            if switch is None:
+                raise WebError(
+                    404,
+                    "feature_unavailable",
+                    "this server doesn't let chats pick a permission mode",
+                )
+            if mode not in switch.modes:
+                raise WebError(
+                    400,
+                    "invalid_request",
+                    f"mode {mode!r} is not available on this server",
+                    hint=f"choose one of: {', '.join(switch.modes)}",
+                )
         if req.title is not None:
             await store.set_title(session_id, req.title)
         if req.pinned is not None:
             await store.set_pinned(session_id, req.pinned)
+        if mode is not None:
+            await store.set_workspace_mode(session_id, mode)
         meta = await store.get(session_id)
         if meta is None:  # deleted concurrently between the update and re-read
             raise WebError(404, "session_not_found", "session not found")
@@ -333,6 +357,13 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             deps.emit(
                 "session_retitled",
                 SessionRetitledData(session_id=session_id, title=meta.title),
+            )
+        if mode is not None:
+            deps.emit(
+                "session_workspace_changed",
+                SessionWorkspaceChangedData(
+                    session_id=session_id, workspace_mode=meta.workspace_mode
+                ),
             )
         return session_info(meta)
 

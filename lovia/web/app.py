@@ -36,7 +36,9 @@ from .store import ChatStore
 
 if TYPE_CHECKING:
     from .config import ConfigRuntime
+from ..workspace import LocalWorkspace
 from .run_deps import RunDepsFn
+from .workspaces import WorkspaceSwitch
 from .ui import ASSETS_PATH, ChatUI, build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
@@ -207,6 +209,7 @@ def create_app(
     lifespan: Lifespan | None = None,
     config_runtime: ConfigRuntime | None = None,
     run_deps: RunDepsFn | None = None,
+    workspaces: WorkspaceSwitch | None = None,
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
 
@@ -290,6 +293,11 @@ def create_app(
     ``/api/config`` routes and allows an *empty* agents mapping — the
     not-yet-configured state whose first ``/api/config`` write brings the
     default agent up. Embedders leave it ``None``.
+
+    ``workspaces`` (a :class:`~lovia.web.WorkspaceSwitch`) lets each chat
+    pick its own permission mode — the composer offers the switch's modes,
+    and each run rebuilds its agent's workspace for the chat's mode. ``None``
+    (default) runs every chat on its agent's own workspace.
     """
     agents = _normalise(agent_or_agents)
     if not agents and config_runtime is None:
@@ -319,9 +327,23 @@ def create_app(
         else None
     )
 
+    if (
+        workspaces is not None
+        and agents
+        and not any(
+            isinstance(getattr(a.workspace, "workspace", a.workspace), LocalWorkspace)
+            for a in agents.values()
+        )
+    ):
+        raise ValueError(
+            "workspaces= switches a local workspace's mode, but no served "
+            "agent has one (Workspace.local(...))"
+        )
+
     deps = RouterDeps(
         agents=agents,
         store=chat_store,
+        workspace_switch=workspaces,
         config_runtime=config_runtime,
         run_deps=run_deps,
         title=title,

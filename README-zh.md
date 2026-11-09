@@ -468,7 +468,7 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 - **开箱即用的完整聊天** —— SSE 流式输出、可从任一回复分支的会话、运行中插话或排队到本轮完成后发送、审批、定时任务、记忆编辑与文件上传；
   浏览器断开后运行仍在服务端继续。
 - **设置不用重启** —— `lovia web` 的模型、工作区模式、运行上限、记忆和系统提示都在设置页里改，
-  从下次运行起生效。
+  从下次运行起生效。每个对话可以单独选择权限模式（自己的应用里用 `create_app(workspaces=WorkspaceSwitch())`）。
 - **富工具结果** —— 工具返回 `ui_result(kind, props)` 即可渲染 UI；内置表格、ECharts 图表
   和沙箱 HTML 页面（`show_table`、`show_chart`、`show_html`）。
 - **页面可定制** —— `ChatUI(...)` 与 `assets=` 修改文案、logo、样式和脚本；脚本通过

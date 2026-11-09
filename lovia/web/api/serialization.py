@@ -42,6 +42,7 @@ def session_info(
         parent_id=meta.parent_id,
         last_run_status=last_run_status,
         origin_kind=origin_kind(meta.origin_kind),
+        workspace_mode=meta.workspace_mode,
     )
 
 

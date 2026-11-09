@@ -26,6 +26,7 @@ import { initSchedules } from './schedules.js';
 import { initFiles } from './files.js';
 import { initMemory } from './memory.js';
 import { initModelConfig } from './model-config.js';
+import { initWorkspaceMode } from './workspace-mode.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 import { loadExtensions } from './extensions.js';
@@ -362,6 +363,8 @@ window.lovia = lovia;
     store.configured = info.configured !== false;
     // The model chip + first-run setup; a no-op on embedder servers.
     initModelConfig();
+    // The permission-mode chip, where chats may pick one.
+    initWorkspaceMode();
     // The welcome view rendered before /api/info resolved; an unconfigured
     // server replaces it with the setup hero (no session exists yet).
     if (store.canConfigureModels && !store.configured) renderEmptyState();

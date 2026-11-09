@@ -134,6 +134,9 @@ class WorkspaceModesInfo(BaseModel):
     modes: list[str]
     # Preselected for a new chat; None runs it on the agent's own workspace.
     default: str | None = None
+    # The mode a chat with none stored runs in (the agent's own workspace),
+    # where it has a name; None when that workspace is a custom policy.
+    own: str | None = None
 
 
 class WorkspaceItem(BaseModel):

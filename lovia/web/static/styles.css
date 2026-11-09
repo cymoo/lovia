@@ -6195,11 +6195,13 @@ body.lv-files-splitting {
   color: var(--lv-ink);
   font-weight: 570;
 }
+/* One height for every tab: switching tabs never resizes (and re-centers)
+   the dialog; a longer pane scrolls inside it. */
 .lv-settings-pane-host {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  max-height: min(62vh, 560px);
+  height: min(62vh, 560px);
   padding-right: 2px;
 }
 @media (max-width: 640px) {
@@ -6661,8 +6663,11 @@ body.lv-files-splitting {
   display: block;
   margin-top: 1px;
 }
-.lv-cfg-dim {
-  opacity: 0.55;
+.lv-cfg-off .lv-cfg-label {
+  color: var(--lv-muted-2);
+}
+.lv-cfg-off .lv-cfg-input:disabled {
+  opacity: 0.6;
 }
 .lv-cfg-input.lv-invalid {
   border-color: var(--lv-danger);
@@ -6793,6 +6798,18 @@ body.lv-files-splitting {
 }
 .lv-mode-item {
   align-items: flex-start;
+}
+.lv-mode-chip {
+  gap: 5px;
+}
+.lv-mode-chip-icon,
+.lv-mode-item-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.lv-mode-item-icon {
+  margin-top: 2px;
+  color: var(--lv-muted);
 }
 .lv-mode-item-text {
   display: flex;

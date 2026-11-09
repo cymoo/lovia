@@ -632,6 +632,22 @@ def test_run_settings_apply_to_the_next_run(served) -> None:
     assert deps.retry is None and deps.max_turns == 7
 
 
+def test_the_page_learns_what_unset_values_mean(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lovia.web import WorkspaceSwitch
+
+    client, runtime = _served_with(monkeypatch, tmp_path, Deployment(readonly=True))
+    client.app.state.deps.workspace_switch = WorkspaceSwitch(modes=("readonly",))
+    with client:
+        # Retries left empty: the core default, as a number to show.
+        assert client.get("/api/config").json()["defaults"]["max_retries"] == 4
+        # A chat with no mode stored runs the CLI agent's own workspace —
+        # built in the default mode as this server runs it: name it.
+        modes = client.get("/api/info").json()["workspace_modes"]
+        assert modes["own"] == modes["default"] == "readonly"
+
+
 def test_run_settings_reject_nulls_and_out_of_range(served) -> None:
     client, *_ = served
     assert client.put("/api/config/run", json={"max_turns": None}).status_code == 400

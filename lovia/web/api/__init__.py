@@ -58,7 +58,11 @@ def _workspace_modes(deps: RouterDeps) -> WorkspaceModesInfo | None:
         )
     if default is not None:
         default = switch.effective(default)
-    return WorkspaceModesInfo(modes=list(switch.modes), default=default)
+    # A chat with no mode stored runs on the agent's own workspace. The CLI
+    # builds that one in the default mode, so it can say which; an embedder's
+    # may carry a custom policy no mode name describes.
+    own = default if runtime is not None else None
+    return WorkspaceModesInfo(modes=list(switch.modes), default=default, own=own)
 
 
 def build_api_router(deps: RouterDeps) -> APIRouter:

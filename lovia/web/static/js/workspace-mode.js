@@ -18,6 +18,7 @@ import { api } from './api.js';
 import { store } from './store.js';
 import { t } from './i18n.js';
 import { toast } from './toast.js';
+import { icon } from './icons.js';
 
 /** @type {HTMLButtonElement | null} */
 let _chip = null;
@@ -37,14 +38,30 @@ let _rev = -1;
 let _shownId = /** @type {string | null} */ (null);
 
 const ORDER = ['readonly', 'coding', 'trusted'];
+/** Each mode's glyph: view, edit, everything. */
+const GLYPH = /** @type {Record<string, string>} */ ({
+  readonly: 'shield-check',
+  coding: 'shield-pen',
+  trusted: 'shield-alert',
+});
 
 function offer() {
   return store.serverInfo?.workspace_modes || null;
 }
 
-/** @param {string | null | undefined} mode */
+/**
+ * A mode's name. None stored means the agent's own workspace: named by the
+ * mode it runs in where the server says (the CLI's), else "Default".
+ * @param {string | null | undefined} mode
+ */
 function label(mode) {
-  return mode ? t(`cfg.mode${mode[0].toUpperCase()}${mode.slice(1)}`) : t('mode.default');
+  const named = mode || offer()?.own;
+  return named ? t(`cfg.mode${named[0].toUpperCase()}${named.slice(1)}`) : t('mode.default');
+}
+
+/** @param {string | null | undefined} mode */
+function glyph(mode) {
+  return icon(GLYPH[mode || offer()?.own || ''] || 'shield-check', { size: 14 });
 }
 
 /**
@@ -93,6 +110,8 @@ function render() {
   _chip.hidden = stored === undefined && !!store.sessionId;
   const text = _chip.querySelector('.lv-model-chip-label');
   if (text) text.textContent = label(runs);
+  const mark = _chip.querySelector('.lv-mode-chip-icon');
+  if (mark) mark.innerHTML = glyph(runs);
   _chip.title =
     stored && runs !== stored
       ? t('mode.capped', { mode: label(stored), runs: label(runs) })
@@ -153,6 +172,10 @@ function openMenu() {
     item.setAttribute('role', 'menuitemradio');
     item.setAttribute('aria-checked', String(mode === current));
     item.setAttribute('aria-label', label(mode));
+    const mark = document.createElement('span');
+    mark.className = 'lv-mode-item-icon';
+    mark.setAttribute('aria-hidden', 'true');
+    mark.innerHTML = glyph(mode);
     const text = document.createElement('span');
     text.className = 'lv-mode-item-text';
     const name = document.createElement('span');
@@ -162,7 +185,7 @@ function openMenu() {
     hint.className = 'lv-mode-item-hint';
     hint.textContent = t(`cfg.modeHint_${mode}`);
     text.append(name, hint);
-    item.appendChild(text);
+    item.append(mark, text);
     if (mode === current) {
       const check = document.createElement('span');
       check.className = 'lv-model-chip-item-check';
@@ -224,9 +247,12 @@ export function initWorkspaceMode() {
   chip.className = 'lv-model-chip lv-mode-chip';
   chip.setAttribute('aria-haspopup', 'menu');
   chip.setAttribute('aria-expanded', 'false');
+  const mark = document.createElement('span');
+  mark.className = 'lv-mode-chip-icon';
+  mark.setAttribute('aria-hidden', 'true');
   const text = document.createElement('span');
   text.className = 'lv-model-chip-label';
-  chip.appendChild(text);
+  chip.append(mark, text);
   chip.addEventListener('click', (e) => {
     e.stopPropagation();
     openMenu();

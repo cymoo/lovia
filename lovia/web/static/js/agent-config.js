@@ -178,8 +178,11 @@ export function buildWorkspacePane() {
 
       function sync() {
         modeHint.textContent = t(`cfg.modeHint_${mode}`);
-        // Bundles only matter in coding mode; say so instead of hiding them.
-        bundleField.classList.toggle('lv-cfg-dim', mode !== 'coding');
+        // Auto-allowed commands mean something in coding mode only: the
+        // other modes never ask (trusted) or never run one (read-only).
+        // Hidden there, not greyed — a dimmed list reads as a setting that
+        // still applies. Its choices are kept, and saved, either way.
+        bundleField.hidden = mode !== 'coding';
       }
       sync();
 
@@ -214,8 +217,9 @@ export function buildAgentPane() {
       turns.inputMode = 'numeric';
       form.appendChild(field(t('cfg.maxTurns'), turns, t('cfg.maxTurnsHint')));
 
+      // Empty means the agent's own retry posture: say how many that is.
       const retries = input(run.max_retries == null ? '' : String(run.max_retries), {
-        placeholder: t('cfg.maxRetriesAuto'),
+        placeholder: t('cfg.maxRetriesAuto', { n: c.defaults?.max_retries ?? 4 }),
       });
       retries.inputMode = 'numeric';
       form.appendChild(field(t('cfg.maxRetries'), retries, t('cfg.maxRetriesHint')));
@@ -231,11 +235,19 @@ export function buildAgentPane() {
       const memDir = input(agent.memory_dir, { mono: true });
       const memDirField = field(t('cfg.memoryDir'), memDir);
       form.appendChild(memDirField);
+      // Disabled with memory off, not hidden: the field sits right under its
+      // switch, and taking it out of the layout would shift the pane (and
+      // what the pointer is on) at the click.
       const syncMemory = () => {
-        memDirField.hidden = !memory.value();
+        const on = memory.value();
+        memDir.disabled = !on || memory.node.hasAttribute('disabled');
+        memDirField.classList.toggle('lv-cfg-off', !on);
       };
       memory.node.addEventListener('change', syncMemory);
       syncMemory();
+      // Once the pane has applied a read-only state to the switch (after
+      // this builder returns), which the folder then follows too.
+      queueMicrotask(syncMemory);
 
       /** @param {HTMLInputElement} node */
       const invalid = (node) => {
@@ -266,7 +278,8 @@ export function buildAgentPane() {
             },
           };
         },
-        controls: [prompt, turns, retries, followups.node, subagents.node, memory.node, memDir],
+        // The memory folder follows its switch (syncMemory), not this list.
+        controls: [prompt, turns, retries, followups.node, subagents.node, memory.node],
       };
     },
     // Agent first: it is the half the server can still refuse (a memory

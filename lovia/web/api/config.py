@@ -21,6 +21,7 @@ from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, Field, ValidationError
 
 from ...exceptions import UserError
+from ...reliability import RetryPolicy
 from ..config.probe import unlisted_model_note, validate_connection
 from ..config.runtime import ConfigRuntime
 from ..config.schema import (
@@ -238,6 +239,9 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             "defaults": {
                 "openai_base_url": OPENAI_FLAVOR.default_base_url,
                 "anthropic_base_url": ANTHROPIC_FLAVOR.default_base_url,
+                # Retries when run.max_retries is unset: the agent's own
+                # posture (the core RetryPolicy default).
+                "max_retries": RetryPolicy().max_attempts - 1,
             },
             "models": [
                 {

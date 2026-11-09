@@ -305,7 +305,7 @@ finishes with what it started with.
 | --- | --- | --- |
 | **Models** → a profile's advanced fields | `models[].max_tokens` | The provider's |
 | **Workspace** → Permission mode for new chats | `workspace.default_mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
-| **Workspace** → Commands that run without asking | `workspace.auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
+| **Workspace** → Commands that run without asking (shown for Edit in workspace) | `workspace.auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
 | **Agent** → Custom instructions | `agent.instructions` | Empty: the chat directory's `AGENTS.md`, else a generic prompt; set, `AGENTS.md` is appended |
 | **Agent** → Max turns / Retries | `run.max_turns` / `run.max_retries` | `50` / the Agent's own (`4`) |
 | **Agent** → Suggest follow-up questions | `run.followups` | On |
@@ -343,8 +343,10 @@ there is nothing to pick, and the sidebar lists chats by date as before.
 
 ## Permission mode per chat
 
-Each chat has its own permission mode — **Read-only**, **Coding** or
-**Trusted** ([modes](workspace.md#modes)) — on the chip beside the folder
+Each chat has its own permission mode — **View only**, **Edit in
+workspace** or **Full access** (`readonly`, `coding` and `trusted` in
+`config.json` and the API; see [modes](workspace.md#modes)) — on the chip
+beside the folder
 chip in the composer. A new chat starts in Settings' default; pick another
 before sending to start it there. Switching a chat applies from its next run:
 a reply already streaming finishes in the mode it began, and the chat's

@@ -200,18 +200,24 @@ async def test_fork_keeps_the_source_binding(tmp_path: Path) -> None:
     assert (meta.workspace_root, meta.workspace_mode) == ("/r", "readonly")
 
 
-def test_run_mode_is_the_live_run_snapshot(tmp_path: Path) -> None:
+def test_a_live_run_passes_on_its_snapshot_none_included(tmp_path: Path) -> None:
     from lovia.web.api.deps import RouterDeps
 
     deps = RouterDeps(agents={}, store=ChatStore.in_memory())
     deps.workspace_switch = WorkspaceSwitch()
 
     class _Ctrl:
-        workspace_mode = "readonly"
+        workspace_mode: str | None = "readonly"
 
-    deps.supervisor._controllers["s"] = _Ctrl()  # type: ignore[assignment]
-    assert deps.run_mode("s") == "readonly"
-    assert deps.run_mode("other") is None
+    ctrl = _Ctrl()
+    deps.supervisor._controllers["s"] = ctrl  # type: ignore[assignment]
+    assert deps.inherited_mode("s", "coding") == "readonly"
+    # A run on the agent's own workspace passes that on — not the mode the
+    # chat was switched to since it began.
+    ctrl.workspace_mode = None
+    assert deps.inherited_mode("s", "coding") is None
+    # No live run: the chat's stored mode.
+    assert deps.inherited_mode("other", "coding") == "coding"
     # An inherited None stays None (the agent's own workspace), whatever
     # the switch's default for page-made chats.
     deps.workspace_switch = WorkspaceSwitch(default_mode="coding")
@@ -390,3 +396,53 @@ async def test_a_self_cloned_task_gets_its_own_session(tmp_path: Path) -> None:
     assert mine is not None and theirs is not None and mine is not theirs
     mine.set_policy(Workspace.local(str(tmp_path), mode="readonly").policy)
     assert theirs.policy.write == "allow"
+
+
+async def test_a_handoff_targets_subagents_run_in_the_chat_mode(
+    tmp_path: Path,
+) -> None:
+    from lovia import Subagents
+
+    writer = _agent(tmp_path, [_WRITE, text("wrote")]).clone(name="writer")
+    plugin = Subagents(writer)
+    lead = Agent(
+        name="lead",
+        model=ScriptedProvider(
+            [call("spawn_subagent", {"prompt": "write"}), text("ok")]
+        ),
+        plugins=[plugin],
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+    )
+    front = Agent(
+        name="front",
+        model=ScriptedProvider([call("transfer_to_lead", {}), text("unused")]),
+        handoffs=[lead],
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+    )
+    app = create_app(
+        front, store=ChatStore.in_memory(), titles=False, workspaces=WorkspaceSwitch()
+    )
+    # Reached only through a handoff, and still adapted to this app.
+    assert plugin.run_child is not None
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="front", workspace_mode="readonly")
+    await deps.supervisor.start(
+        session_id="p",
+        agent=front,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+    )
+
+    async def task_done() -> bool:
+        kids = await deps.store.list_children("p")
+        if len(kids) != 1:
+            return False
+        run = await deps.store.latest_run_for(f"subagent:{kids[0].id}")
+        return run is not None and run.status != "running"
+
+    await _until(task_done)
+    (task,) = await deps.store.list_children("p")
+    assert task.workspace_mode == "readonly"
+    assert not (tmp_path / "out.txt").exists()

@@ -153,17 +153,20 @@ function openMenu() {
   /** @type {HTMLElement | null} */ (menu.querySelector('[aria-checked="true"]'))?.focus();
 }
 
+/** A new chat starts from the default: a pick was for the chat it started. */
+function resetDraft() {
+  _draft = _default;
+  _draftPicked = false;
+}
+
 /** @param {string | null} id */
 function onSessionId(id) {
   closeMenu();
   const wasNew = _shownId === null;
   _shownId = id;
   if (!id) {
-    // A new chat starts from the default again: a pick was for the chat it
-    // started, not for every chat after it.
     _current = undefined;
-    _draft = _default;
-    _draftPicked = false;
+    resetDraft();
   } else if (wasNew && store.streaming) {
     // The new chat just got its id from its first run: it was saved with
     // the draft mode that message carried.
@@ -215,6 +218,13 @@ export function initWorkspaceMode() {
   });
 
   store.on('session-id', onSessionId);
+  // "New chat" on a new chat changes no id, but starts over all the same.
+  store.on('new-chat', () => {
+    if (store.sessionId) return; // the id change resets it
+    closeMenu();
+    resetDraft();
+    render();
+  });
   // The open chat's detail (a switch, a refresh) carries its stored mode.
   store.on('session-meta', (/** @type {any} */ data) => {
     if (data?.id !== store.sessionId) return;

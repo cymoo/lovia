@@ -33,9 +33,12 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
+from ..agent import Agent
 from ..exceptions import RunCancelled
+from ..handoff import Handoff
 from ..plugins.subagents import (
     ChildSpec,
     DeliverFn,
@@ -192,13 +195,13 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         # The task works under the permissions of the run that spawned it —
         # its snapshot, not the chat's mode now, which may have been switched
         # since that run began.
-        parent_mode = deps.run_mode(spec.parent_session_id)
+        stored_mode: str | None = None
         if spec.parent_session_id is not None:
             row = await deps.store.get(spec.parent_session_id)
             if row is not None:
                 agent_key = row.agent
-                if parent_mode is None:
-                    parent_mode = row.workspace_mode
+                stored_mode = row.workspace_mode
+        parent_mode = deps.inherited_mode(spec.parent_session_id, stored_mode)
         # A task works for the chat that spawned it, so in its context. The
         # run_deps hook decides before the task chat exists: a refusal
         # fails the spawn and leaves nothing behind.
@@ -332,7 +335,7 @@ def _wire(deps: "RouterDeps") -> int:
     deliver = subagent_deliver(deps)
     run_child = subagent_runner(deps)
     wired: set[int] = set()
-    for agent in deps.agents.values():
+    for agent in _reachable(deps.agents.values()):
         for plugin in agent.plugins:
             if (
                 isinstance(plugin, Subagents)
@@ -344,6 +347,29 @@ def _wire(deps: "RouterDeps") -> int:
                 plugin.run_child = run_child
                 wired.add(id(plugin))
     return len(wired)
+
+
+def _reachable(roots: "Iterable[Agent[Any]]") -> list["Agent[Any]"]:
+    """Every agent a served agent's run can reach: itself, its handoff
+    targets, and its Subagents' children — transitively.
+
+    A Subagents plugin on any of them would otherwise spawn through the
+    core's in-process path, outside this app: its tasks would neither show
+    in the UI nor run under the chat's permission mode.
+    """
+    seen: dict[int, Agent[Any]] = {}
+    stack = list(roots)
+    while stack:
+        agent = stack.pop()
+        if id(agent) in seen:
+            continue
+        seen[id(agent)] = agent
+        for h in agent.handoffs:
+            stack.append(h.target if isinstance(h, Handoff) else h)
+        for plugin in agent.plugins:
+            if isinstance(plugin, Subagents):
+                stack.extend(plugin._catalog.values())
+    return list(seen.values())
 
 
 def wire_subagents(deps: "RouterDeps") -> int:

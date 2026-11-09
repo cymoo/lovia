@@ -946,6 +946,9 @@ export function startNewChat() {
   closeView();
   closeSidebar();
   clearChat();
+  // Even when the chat on screen is already a new one (no id change):
+  // per-chat state such as the picked permission mode starts over.
+  store.emit('new-chat');
   document.getElementById('prompt')?.focus();
 }
 

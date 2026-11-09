@@ -159,6 +159,9 @@ export function initEventStream() {
     _eventsLive = true;
     clearTimeout(_pollTimer);
     refresh();
+    // Every (re)connect: state that only events keep current may have moved
+    // while disconnected — listeners resync what the list snapshot can't.
+    store.emit('events-open');
     // A run may have ended while disconnected, its run_finished missed.
     store.emit('runs-changed');
   };

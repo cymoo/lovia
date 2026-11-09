@@ -220,12 +220,34 @@ export function initWorkspaceMode() {
 
   store.on('session-id', onSessionId);
   // A list snapshot — the first load, or the one after an event-stream
-  // reconnect — is the truth for the open chat's mode.
-  store.on('sessions-loaded', () => {
-    const row = store.sessions.find((s) => s.id === store.sessionId);
-    if (!row || (row.workspace_mode ?? null) === _current) return;
-    _current = row.workspace_mode ?? null;
-    render();
+  // reconnect — is the truth for the open chat's mode. After a (re)connect,
+  // a chat the list doesn't show (past the first page, filtered out by a
+  // search, a task chat) reads its own detail instead: a switch made in
+  // another tab while disconnected sent no event here.
+  let resync = false;
+  store.on('events-open', () => {
+    resync = true; // settled by the snapshot this connect fetches
+  });
+  store.on('sessions-loaded', async () => {
+    const id = store.sessionId;
+    const row = id ? store.sessions.find((s) => s.id === id) : undefined;
+    const pending = resync;
+    resync = false;
+    if (row) {
+      if ((row.workspace_mode ?? null) === _current) return;
+      _current = row.workspace_mode ?? null;
+      render();
+      return;
+    }
+    if (!id || !pending) return;
+    try {
+      const data = await api.getSession(id);
+      if (store.sessionId !== id) return; // moved on meanwhile
+      _current = data.workspace_mode ?? null;
+      render();
+    } catch {
+      /* transient — the next switch or reconnect resyncs */
+    }
   });
   // "New chat" on a new chat changes no id, but starts over all the same.
   store.on('new-chat', () => {

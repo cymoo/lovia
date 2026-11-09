@@ -315,10 +315,36 @@ finishes with what it started with.
 When `config.json` isn't writable (a read-only mount, say), the server still
 starts and Settings shows these as view-only.
 
+## Workspaces
+
+Each chat works in a folder of its own. The sidebar groups chats by folder:
+the one `lovia web` was launched in first, then the rest by recent activity,
+with the general workspace (`~/.lovia/workspace`, for chats that belong to
+no project) always listed. A folder's **+** starts a new chat there; its
+**⋯** removes it from the list — files and chats stay, and adding the folder
+again brings its chats back. The folder button beside **Workspaces** adds
+one, completing the path as you type.
+
+A new chat starts in the folder this tab last used — the folder chip in the
+composer shows which, with the full path on hover; pick another there before
+sending. A chat keeps its folder for good: to work elsewhere, start a new
+chat. Attachments are saved into the draft's folder, so the chip locks while
+the draft holds some. The Files panel shows the open chat's folder, and the
+agent reads that folder's `AGENTS.md` and skills.
+
+Chats from before folders existed gather under **Not linked**. Reading them
+needs nothing; the first message to one asks which folder it works in
+(folders where its approvals were given come first), and **Link…** on the
+group links several at once. A link can't be changed later.
+
+A server started with `--lock-workspace`, or on a non-loopback `--host`
+without `--allow-workspace-switch`, keeps every chat in its launch folder:
+there is nothing to pick, and the sidebar lists chats by date as before.
+
 ## Permission mode per chat
 
 Each chat has its own permission mode — **Read-only**, **Coding** or
-**Trusted** ([modes](workspace.md#modes)) — on the chip beside the model
+**Trusted** ([modes](workspace.md#modes)) — on the chip beside the folder
 chip in the composer. A new chat starts in Settings' default; pick another
 before sending to start it there. Switching a chat applies from its next run:
 a reply already streaming finishes in the mode it began, and the chat's

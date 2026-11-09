@@ -1,6 +1,7 @@
 // util.js — tiny helpers shared across modules.
 // (marked / DOMPurify / hljs are optional CDN globals — everything degrades.)
 import { api } from './api.js';
+import { t } from './i18n.js';
 
 /**
  * Escape HTML metacharacters so `s` renders as literal text, never markup.
@@ -325,6 +326,30 @@ export function formatTimeSmart(ts) {
   const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   if (d.getFullYear() === now.getFullYear()) return `${md} ${hm}`;
   return `${d.getFullYear()}-${md} ${hm}`;
+}
+
+/**
+ * How long ago `ts` was, as briefly as a sidebar row has room for: "now",
+ * then minutes, hours, days, weeks, months, years (the largest whole unit).
+ * @param {number} ts
+ * @param {number} [now] milliseconds
+ * @returns {string}
+ */
+export function shortAge(ts, now = Date.now()) {
+  const sec = Math.max(0, (now - toDate(ts).getTime()) / 1000);
+  /** @type {[string, number][]} */
+  const units = [
+    ['age.y', 365 * 86400],
+    ['age.mo', 30 * 86400],
+    ['age.w', 7 * 86400],
+    ['age.d', 86400],
+    ['age.h', 3600],
+    ['age.m', 60],
+  ];
+  for (const [key, size] of units) {
+    if (sec >= size) return t(key, { n: Math.floor(sec / size) });
+  }
+  return t('age.now');
 }
 
 /**

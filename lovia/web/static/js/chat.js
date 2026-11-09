@@ -2,6 +2,7 @@
 import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { draftWorkspaceMode } from './workspace-mode.js';
+import { draftWorkspaceRoot, ensureLinked, scopeRoot, workspaceName } from './workspaces.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
 import { copyToClipboard, openImageLightbox, showDialog } from './ui.js';
@@ -375,6 +376,9 @@ let _userTurnCount = 0;
 
 async function rewindTo(node, message) {
   const { ref, userTurn } = node.dataset;
+  // Before the rewind: a chat from before chats had a directory picks one
+  // first, or the turns after this one would go with nothing to replace them.
+  if (!(await ensureLinked())) return false;
   try {
     const res = await api.rewindSession(
       store.sessionId,
@@ -3017,9 +3021,10 @@ function renderFollowups(items) {
     // composer — a follow-up sends instead, and wearing both fired both.
     btn.className = 'lv-chip lv-followup';
     btn.textContent = text;
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       // Unlike a starter prompt (which only fills the composer), a follow-up
       // sends: one click is the whole point of the affordance.
+      if (!store.streaming && !(await ensureLinked())) return;
       document.getElementById('empty-state')?.remove();
       appendUserTurn(text);
       runStream(text); // fire-and-forget; clearFollowups runs at its head
@@ -3357,6 +3362,7 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
         context: collectContext(),
         busy,
         workspace_mode: draftWorkspaceMode(),
+        workspace: draftWorkspaceRoot(),
       },
       { signal: _streamAbortController.signal }
     );
@@ -3800,6 +3806,22 @@ function updateSendEnabled() {
   syncQueueEdit();
 }
 
+/**
+ * The chat on screen now works in `root`: attachments saved in another
+ * folder can't go with its messages (the server would drop them), so they
+ * leave the tray — saying where the files are. `undefined`: not known yet.
+ * @param {string | null | undefined} root
+ */
+function dropStrayAttachments(root) {
+  if (root === undefined) return;
+  const stray = _pendingAttachments.filter((a) => a.root !== undefined && a.root !== root);
+  if (!stray.length) return;
+  _pendingAttachments = _pendingAttachments.filter((a) => !stray.includes(a));
+  renderAttachTray();
+  updateSendEnabled();
+  toast(t('ws.attachmentsLeft', { n: stray.length, name: workspaceName(stray[0].root) }));
+}
+
 function syncAttachButton() {
   const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById('attach'));
   if (!btn) return;
@@ -3814,6 +3836,8 @@ function syncAttachButton() {
 }
 
 function renderAttachTray() {
+  // A draft's files live in its directory: the workspace chip locks on them.
+  store.emit('draft-attachments', _pendingAttachments.length);
   const tray = document.getElementById('attach-tray');
   if (!tray) return;
   tray.replaceChildren();
@@ -3873,6 +3897,8 @@ async function uploadFiles(files) {
       uploading: true,
       name: file.name,
       kind: file.type?.startsWith('image/') ? 'image' : 'file',
+      // The folder it is saved in: it can only go with a message there.
+      root: scopeRoot(),
     };
     _pendingAttachments.push(chip);
     renderAttachTray();
@@ -3990,6 +4016,7 @@ function splitAttachmentNote(text) {
 export async function sendText(message) {
   _resumeAutoScroll();
   if (!store.streaming) {
+    if (!(await ensureLinked())) return;
     document.getElementById('empty-state')?.remove();
     appendUserTurn(message);
     await runStream(message);
@@ -4372,6 +4399,7 @@ export function initComposer() {
   }
   store.on('agents-loaded', syncAttachButton);
   store.on('agent-changed', syncAttachButton);
+  store.on('workspace-scope-changed', dropStrayAttachments);
   syncAttachButton();
 
   // Files panel → composer: reference an existing workspace file on the next
@@ -4459,6 +4487,9 @@ export function initComposer() {
     _steerOnce = false;
 
     if (!message && !attachments.length) return;
+    // A chat from before chats had a directory picks one first; backing out
+    // leaves the draft as it was.
+    if (!(await ensureLinked())) return;
     const payload = attachmentPayload(attachments);
     promptEl.value = '';
     autoresize();

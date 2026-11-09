@@ -1216,6 +1216,15 @@ export function initFiles() {
       refreshProcs();
     }
   });
+  // The panel shows the directory the chat on screen works in (a draft's,
+  // for a new chat): a different one is a different tree — start over.
+  store.on('workspace-scope-changed', () => {
+    state.browsePath = '';
+    state.filter = '';
+    if (els.filter) els.filter.value = '';
+    closeViewer();
+    if (state.open) refresh();
+  });
   // "touched" (and the edit revisions) are scoped to the chat on screen —
   // and so are background processes.
   store.on('session-switched', () => {

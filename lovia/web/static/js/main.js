@@ -27,6 +27,7 @@ import { initFiles } from './files.js';
 import { initMemory } from './memory.js';
 import { initModelConfig } from './model-config.js';
 import { initWorkspaceMode } from './workspace-mode.js';
+import { initWorkspaces } from './workspaces.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 import { loadExtensions } from './extensions.js';
@@ -365,6 +366,9 @@ window.lovia = lovia;
     initModelConfig();
     // The permission-mode chip, where chats may pick one.
     initWorkspaceMode();
+    // Directories: the composer's workspace chip and the sidebar's groups,
+    // before the first session list so it draws grouped from the start.
+    await initWorkspaces();
     // The welcome view rendered before /api/info resolved; an unconfigured
     // server replaces it with the setup hero (no session exists yet).
     if (store.canConfigureModels && !store.configured) renderEmptyState();

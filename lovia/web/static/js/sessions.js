@@ -8,7 +8,8 @@ import { createRunNotices } from './run-notices.js';
 import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
 import { notificationsEnabled, playCompletionSound } from './settings.js';
-import { dateBucket, formatDateTime, formatTimeSmart } from './util.js';
+import { dateBucket, formatDateTime, formatTimeSmart, shortAge } from './util.js';
+import { addWorkspaceDialog, canAddWorkspace, groupHeader, sidebarGroups } from './workspaces.js';
 import { closeView, currentView } from './views.js';
 import { OPEN_SESSION_EVENT } from './builtin-views.js';
 
@@ -335,6 +336,9 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
 // A cheap fingerprint of what renderSessions() draws, so repeated polls with
 // identical data don't tear down and rebuild the whole sidebar.
 let _lastRenderSig = null;
+// Bumped when the workspace list or a group's folding changes: both shape the
+// sidebar but live outside store.sessions.
+let _workspacesRev = 0;
 function sessionsSignature() {
   return JSON.stringify([
     new Date().toDateString(), // the date groups move at midnight
@@ -346,7 +350,10 @@ function sessionsSignature() {
     store.sessions.map((s) => [
       s.id, s.title ?? '', s.updated_at, s.pinned ? 1 : 0, s.agent ?? '',
       s.parent_id ?? '', s.last_run_status ?? '', s.origin_kind ?? '',
+      s.workspace_root ?? '',
     ]),
+    // The workspace list and which groups are folded (sidebarGroups reads both).
+    _workspacesRev,
     // Live-run status flips (running → blocked_on_approval) re-badge tasks.
     [...(store.runsBySession || new Map())].map(([id, r]) => `${id}:${r.status}`).sort(),
   ]);
@@ -541,6 +548,18 @@ function renderSessions() {
   // Task sessions (parent_id set) never render here — they belong to their
   // chat's topbar Tasks popover, not the global list.
   const chats = store.sessions.filter((s) => !s.parent_id);
+  // Chats grouped by the directory they work in, where chats have one — a
+  // search shows its matches flat (a chat whose directory left the list too).
+  const searching = !!sessionSearch?.value.trim();
+  const grouped = sidebarGroups(chats);
+  syncSectionLabel(!!grouped);
+  const groups = searching ? null : grouped;
+  if (groups) {
+    renderGroups(groups);
+    renderMore();
+    syncHeader();
+    return;
+  }
   if (!chats.length) {
     const empty = document.createElement('div');
     empty.className = 'lv-sessions-empty';
@@ -564,6 +583,19 @@ function renderSessions() {
       sessionsList.appendChild(head);
     }
     prevGroup = group;
+    sessionsList.appendChild(buildRow(s));
+  }
+  renderMore();
+  syncHeader();
+}
+
+/**
+ * One chat's sidebar row. `age` puts how long ago it was active at the end
+ * (workspace groups have no date headings), or a pin mark if pinned.
+ * @param {any} s
+ * @param {{ age?: boolean }} [opts]
+ */
+function buildRow(s, { age = false } = {}) {
     const item = document.createElement('div');
     item.className = 'lv-session-item';
     if (s.id === store.sessionId) item.classList.add('lv-active');
@@ -594,12 +626,84 @@ function renderSessions() {
       chip.textContent = s.agent;
       main.appendChild(chip);
     }
+    if (age) {
+      const end = document.createElement('span');
+      if (s.pinned) {
+        end.className = 'lv-session-pinmark';
+        end.innerHTML = icon('pin', { size: 12 });
+        end.title = t('nav.group.pinned');
+      } else {
+        end.className = 'lv-session-age';
+        end.textContent = shortAge(s.updated_at);
+      }
+      main.appendChild(end);
+    }
     main.addEventListener('click', () => switchSession(s.id));
 
     item.append(main, rowActions(s, item));
-    sessionsList.appendChild(item);
-  }
+    return item;
+}
 
+/** @param {import('./workspaces.js').SidebarGroup[]} groups */
+function renderGroups(groups) {
+  if (!sessionsList) return;
+  const rerender = () => {
+    _workspacesRev++;
+    renderSessions();
+  };
+  for (const g of groups) {
+    const section = document.createElement('section');
+    section.className = 'lv-ws-group';
+    section.dataset.kind = g.kind;
+    section.appendChild(groupHeader(g, rerender));
+    if (!g.collapsed) {
+      const rows = document.createElement('div');
+      rows.className = 'lv-ws-group-rows';
+      for (const s of g.chats) rows.appendChild(buildRow(s, { age: true }));
+      if (!g.chats.length) {
+        const empty = document.createElement('div');
+        empty.className = 'lv-ws-group-empty';
+        empty.textContent = t('ws.empty');
+        rows.appendChild(empty);
+      }
+      section.appendChild(rows);
+    }
+    sessionsList.appendChild(section);
+  }
+}
+
+/**
+ * The list's label: "Workspaces" over groups — with an add-a-folder button
+ * where more may be opened — else "Chats".
+ * @param {boolean} grouped
+ */
+function syncSectionLabel(grouped) {
+  const label = document.querySelector('[data-part="sessions-label"]');
+  if (!label) return;
+  let text = /** @type {HTMLElement | null} */ (label.querySelector('.lv-section-label-text'));
+  if (!text) {
+    text = document.createElement('span');
+    text.className = 'lv-section-label-text';
+    label.replaceChildren(text);
+  }
+  text.textContent = t(grouped ? 'ws.section' : 'nav.chats');
+  let add = /** @type {HTMLButtonElement | null} */ (label.querySelector('.lv-section-label-add'));
+  const want = grouped && canAddWorkspace();
+  if (want && !add) {
+    add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'lv-btn-icon lv-section-label-add';
+    add.title = add.ariaLabel = t('ws.add');
+    add.innerHTML = icon('folder-plus', { size: 15 });
+    add.addEventListener('click', () => void addWorkspaceDialog());
+    label.appendChild(add);
+  } else if (!want && add) {
+    add.remove();
+  }
+}
+
+function renderMore() {
+  if (!sessionsList) return;
   // More chats exist than the sidebar page shows — open the full, paged list.
   if (_hasMore) {
     const more = document.createElement('button');
@@ -611,8 +715,9 @@ function renderSessions() {
     );
     sessionsList.appendChild(more);
   }
+}
 
-  // Sync header
+function syncHeader() {
   if (store.sessionId) {
     const active = store.sessions.find(s => s.id === store.sessionId);
     if (active?.title) {
@@ -1147,6 +1252,13 @@ export function initSessions() {
 
   initExportMenu();
   store.on('clear-chat', clearChat);
+  // A workspace group's "+" (and the composer chip's menu): its directory is
+  // already this tab's pick.
+  store.on('new-chat-request', startNewChat);
+  store.on('workspaces-changed', () => {
+    _workspacesRev++;
+    renderSessions();
+  });
   // Agents usually land after the first session render — the signature covers
   // the flip, so this redraws exactly once to add the agent chips.
   store.on('agents-loaded', renderSessions);

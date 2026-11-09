@@ -173,6 +173,9 @@ function openMenu() {
     menu.appendChild(item);
   }
   _chip.insertAdjacentElement('afterend', menu);
+  // Opens over its chip, wherever the bar put it.
+  menu.style.left = `${_chip.offsetLeft}px`;
+  menu.style.right = 'auto';
   _menu = menu;
   _chip.setAttribute('aria-expanded', 'true');
   /** @type {HTMLElement | null} */ (menu.querySelector('[aria-checked="true"]'))?.focus();
@@ -211,8 +214,9 @@ function onSessionId(id) {
  */
 export function initWorkspaceMode() {
   const info = offer();
-  const inner = document.querySelector('.lv-composer-inner');
-  if (!info || !inner || _chip) return;
+  // The composer bar's left side, with what else shapes the next message.
+  const tools = document.querySelector('.lv-composer-tools');
+  if (!info || !tools || _chip) return;
   _default = _draft = info.default ?? null;
   const chip = document.createElement('button');
   chip.type = 'button';
@@ -227,8 +231,7 @@ export function initWorkspaceMode() {
     e.stopPropagation();
     openMenu();
   });
-  const before = document.getElementById('model-chip') || document.getElementById('context-ring');
-  inner.insertBefore(chip, before);
+  tools.appendChild(chip);
   _chip = chip;
 
   document.addEventListener('click', (e) => {

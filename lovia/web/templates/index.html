@@ -183,32 +183,39 @@
     <!-- Pending uploads for the next send (thumbnails / file chips). -->
     <div id="attach-tray" class="lv-attach-tray" aria-label="Attachments" hidden></div>
     <div class="lv-composer-inner">
-      <!-- Attach button: uploads to the workspace; hidden until the agent has
-           one (same switch as the Files panel). -->
-      <button id="attach" class="lv-btn-attach" type="button" aria-label="Attach image or file" title="Attach image or file" hidden data-part="attach" data-i18n-title="composer.attach" data-i18n-aria="composer.attach">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-      </button>
       <label class="lv-vh" for="prompt" data-i18n="composer.message">message</label>
       <textarea id="prompt" name="prompt" rows="1" placeholder="Send a message…" data-i18n-placeholder="composer.placeholder"></textarea>
-      {% block composer_actions %}{% endblock %}
-      <!-- Context ring: how full the model's window is, once a turn reports
-           usage. Click for details (tokens, cache, model). Sits in the action
-           cluster by Send — the composer's left edge is reserved for the
-           upcoming attach button. -->
-      <button id="context-ring" class="lv-context-ring lv-hidden" type="button"
-              aria-haspopup="dialog" aria-expanded="false" aria-controls="context-popover" data-part="context-ring">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-          <circle class="lv-context-ring-track" cx="12" cy="12" r="9.5" pathLength="100"/>
-          <circle class="lv-context-ring-fill" cx="12" cy="12" r="9.5" pathLength="100"/>
-        </svg>
-      </button>
-      <div id="context-popover" class="lv-context-popover" role="dialog" aria-label="Context details" hidden>
-        <div class="lv-context-popover-rows"></div>
+      <!-- The bar under the message: what shapes the next message on the left
+           (attachments, the chat's workspace and permission mode, a deployer's
+           composer_actions), what sends it on the right. -->
+      <div class="lv-composer-bar">
+        <div class="lv-composer-tools" data-part="composer-tools">
+          <!-- Attach button: uploads to the workspace; hidden until the agent
+               has one (same switch as the Files panel). -->
+          <button id="attach" class="lv-btn-attach" type="button" aria-label="Attach image or file" title="Attach image or file" hidden data-part="attach" data-i18n-title="composer.attach" data-i18n-aria="composer.attach">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          </button>
+          {% block composer_actions %}{% endblock %}
+        </div>
+        <div class="lv-composer-end" data-part="composer-end">
+          <!-- Context ring: how full the model's window is, once a turn reports
+               usage. Click for details (tokens, cache, model). -->
+          <button id="context-ring" class="lv-context-ring lv-hidden" type="button"
+                  aria-haspopup="dialog" aria-expanded="false" aria-controls="context-popover" data-part="context-ring">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+              <circle class="lv-context-ring-track" cx="12" cy="12" r="9.5" pathLength="100"/>
+              <circle class="lv-context-ring-fill" cx="12" cy="12" r="9.5" pathLength="100"/>
+            </svg>
+          </button>
+          <div id="context-popover" class="lv-context-popover" role="dialog" aria-label="Context details" hidden>
+            <div class="lv-context-popover-rows"></div>
+          </div>
+          <button id="stop" class="lv-btn lv-btn-danger" type="button" aria-label="Stop" style="display:none" data-i18n="composer.stop" data-i18n-aria="composer.stop">Stop</button>
+          <button id="send" class="lv-btn-send" type="submit" aria-label="Send message" title="Send (Enter)" disabled data-i18n-aria="composer.send">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+          </button>
+        </div>
       </div>
-      <button id="stop" class="lv-btn lv-btn-danger" type="button" aria-label="Stop" style="display:none" data-i18n="composer.stop" data-i18n-aria="composer.stop">Stop</button>
-      <button id="send" class="lv-btn-send" type="submit" aria-label="Send message" title="Send (Enter)" disabled data-i18n-aria="composer.send">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
-      </button>
     </div>
   </form>
 </div>

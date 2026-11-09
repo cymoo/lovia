@@ -137,6 +137,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `workspace_locked` | 403 | 工作区设置由 `lovia web` 的启动方式固定 |
 | `workspace_not_allowed` | 409 | 服务端不允许对话在这个目录里工作（`hint` 写明是哪条约束）；只拒绝，不换目录 |
 | `workspace_missing` | 409 | 对话的目录已不存在 |
+| `workspace_unassociated` | 409 | 早于目录绑定的旧对话：先关联一个目录（`POST /api/sessions/associate`） |
 | `workspace_fixed` | 409 | 对话已经绑定了目录，目录不能再改 |
 | `workspace_not_found` | 404 | 工作区列表里没有这一项（固定的几项不能移除） |
 | `file_too_large` | 413 | 超过工作区读取或上传上限 |

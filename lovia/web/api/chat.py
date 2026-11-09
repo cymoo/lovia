@@ -41,7 +41,7 @@ from ..sse import SessionCreatedData, _coerce, usage_dict
 from ..store import ChatMeta
 from ..supervisor import RunController, forward
 from ..titles import provisional_title
-from ..workspaces import ChatBinding
+from ..workspaces import ChatBinding, own_root
 from .deps import RouterDeps
 from .serialization import Run, segments_runs
 
@@ -95,9 +95,26 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         message is read (its attachments live in that directory) or anything
         is written. A new chat takes the request's directory and mode, which
         must be ones this server offers; an existing one its own."""
-        if meta is not None:
-            return deps.chat_binding(agent, meta)
         switch = deps.workspace_switch
+        if meta is not None:
+            if (
+                meta.workspace_root is None
+                and switch is not None
+                and switch.roots is not None
+                and own_root(agent) is not None
+            ):
+                # From before chats had a directory, on a server where they
+                # may work elsewhere: which one is the person's call — never
+                # a guess. Clientless runs (schedules, task reports) carry
+                # on in the agent's own, as they always did.
+                raise WebError(
+                    409,
+                    "workspace_unassociated",
+                    "this chat has no directory yet",
+                    hint="pick one: PATCH /api/sessions/{id} with workspace_root, "
+                    "or POST /api/sessions/associate",
+                )
+            return deps.chat_binding(agent, meta)
         mode = req.workspace_mode
         if mode is not None and (switch is None or mode not in switch.modes):
             offered = ", ".join(switch.modes) if switch else "none"

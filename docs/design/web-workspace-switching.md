@@ -1,6 +1,6 @@
 # 运行时切换工作区和权限模式
 
-> 状态：v3 定稿，作为实现基线；剩余边界在各期 PR 的实现评审和测试中处理 · 2026-11-09 · 第一期已合入（0.9.146，#364）；第二期见 0.9.147，其中三处与原文不同：模式越界时降到允许的最宽模式而不是拒绝（§4）；旧对话的关联推迟到第三期（§8）；运行中切换用提示说明，不在输入框里显示两个状态（§4） · 对应 [cymoo/lovia#355](https://github.com/cymoo/lovia/issues/355) · 范围：`lovia/web`（`__main__`、`builder`、`config/`、`api/`、`supervisor`、`subagents`、`scheduler`、`workspaces`、`store`、前端）、`lovia/workspace`（一个小改动）
+> 状态：v3 定稿，作为实现基线；剩余边界在各期 PR 的实现评审和测试中处理 · 2026-11-09 · 第一期已合入（0.9.146，#364）；第二期见 0.9.147，其中三处与原文不同：模式越界时降到允许的最宽模式而不是拒绝（§4）；旧对话的关联推迟到第三期（§8）；运行中切换用提示说明，不在输入框里显示两个状态（§4）；第三期见 0.9.148（#368，服务端）和 0.9.149（界面），与原文不同的三处：`WorkspaceSwitch` 多了 `general` 字段承载通用工作区（§5、§6）；未关联对话只在用户发消息时要求先关联，定时任务和子任务报告这类无客户端的运行仍在 Agent 自己的目录里继续（§8）；从列表移除的目录，其对话不在侧栏分组里显示，搜索可以找到（§7） · 对应 [cymoo/lovia#355](https://github.com/cymoo/lovia/issues/355) · 范围：`lovia/web`（`__main__`、`builder`、`config/`、`api/`、`supervisor`、`subagents`、`scheduler`、`workspaces`、`store`、前端）、`lovia/workspace`（一个小改动）
 >
 > 行号指向 `main`（`612d4d9`，v0.9.145）。
 

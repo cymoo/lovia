@@ -166,6 +166,13 @@ class ConfigRuntime:
         assert workspace is not None  # a switch exists only with a workspace
         return workspace
 
+    def agent_for(self, agent: Agent[Any], root: Path) -> Agent[Any]:
+        """``WorkspaceSwitch.agent_for`` for the CLI: the directory's
+        ``AGENTS.md`` and skills, by the current configuration."""
+        from ..builder import project_agent
+
+        return project_agent(agent, root, self.config)
+
     # ---------------------------------------------------------- applying -
 
     async def apply(

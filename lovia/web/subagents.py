@@ -196,16 +196,17 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         # agent — a follow-up message in the finished task then runs the
         # served agent closest to it.
         agent_key: str | None = None
-        # The task works under the permissions of the run that spawned it —
-        # its snapshot, not the chat's mode now, which may have been switched
-        # since that run began.
-        stored_mode: str | None = None
-        if spec.parent_session_id is not None:
-            row = await deps.store.get(spec.parent_session_id)
-            if row is not None:
-                agent_key = row.agent
-                stored_mode = row.workspace_mode
-        parent_mode = deps.inherited_mode(spawned_by, stored_mode)
+        # The task works in the directory and under the permissions of the
+        # run that spawned it — its snapshot, not the chat's mode now, which
+        # may have been switched since that run began.
+        row = (
+            await deps.store.get(spec.parent_session_id)
+            if spec.parent_session_id is not None
+            else None
+        )
+        if row is not None:
+            agent_key = row.agent
+        inherited = deps.inherited(spawned_by, row)
         # A task works for the chat that spawned it, so in its context. The
         # run_deps hook decides before the task chat exists: a refusal
         # fails the spawn and leaves nothing behind.
@@ -240,14 +241,14 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 ws = child.workspace
                 if isinstance(ws, WorkspaceSessionBinding):
                     child = child.clone(workspace=ws.workspace)
-            root, mode = deps.new_chat_binding(child, parent_mode)
+            binding = deps.new_chat_binding(child, inherited.mode, inherited.root)
             await deps.store.upsert(
                 child_sid,
                 agent=agent_key,
                 title=f"[{spec.id}] {provisional_title(spec.prompt)}",
                 parent_id=parent,
-                workspace_root=root,
-                workspace_mode=mode,
+                workspace_root=binding.root,
+                workspace_mode=binding.mode,
             )
             try:
                 ctrl = await deps.supervisor.start(

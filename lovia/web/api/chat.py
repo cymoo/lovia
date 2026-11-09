@@ -41,6 +41,7 @@ from ..sse import SessionCreatedData, _coerce, usage_dict
 from ..store import ChatMeta
 from ..supervisor import RunController, forward
 from ..titles import provisional_title
+from ..workspaces import ChatBinding
 from .deps import RouterDeps
 from .serialization import Run, segments_runs
 
@@ -63,38 +64,42 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     session = deps.session
 
     async def upsert_session(
-        sid: str, agent: Agent[Any], req: ChatRequest, *, is_new: bool
+        sid: str, agent: Agent[Any], req: ChatRequest, binding: ChatBinding | None
     ) -> None:
         """Insert/touch the session's metadata row (announcing a new chat).
 
-        A new chat records its workspace binding — the agent's root and the
-        mode the page picked — which its runs then read (supervisor.start).
+        A new chat (``binding`` given) records where and how it works — the
+        directory and the mode the page picked — which its runs then read
+        (supervisor.start); its directory joins the workspace list.
         """
         agent_name = deps.name_of(agent)
+        is_new = binding is not None
         title = provisional_title(req.message) if is_new else None
-        switch = deps.workspace_switch
-        asked = req.workspace_mode or (switch.default_mode if switch else None)
-        root, mode = deps.new_chat_binding(agent, asked) if is_new else (None, None)
         await store.upsert(
             sid,
             agent=agent_name,
             title=title,
-            workspace_root=root,
-            workspace_mode=mode,
+            workspace_root=binding.root if binding else None,
+            workspace_mode=binding.mode if binding else None,
         )
-        if is_new:
+        if binding is not None:
+            if deps.workspace_switch is not None and binding.root is not None:
+                await store.touch_workspace(binding.root)
             deps.emit(
                 "session_created",
                 SessionCreatedData(session_id=sid, agent=agent_name, title=title),
             )
 
-    def check_mode(req: ChatRequest) -> None:
-        """A new chat may only ask for a mode this server offers."""
-        mode = req.workspace_mode
-        if mode is None:
-            return
+    def bind(agent: Agent[Any], meta: ChatMeta | None, req: ChatRequest) -> ChatBinding:
+        """Where and how this turn's chat works — checked now, before the
+        message is read (its attachments live in that directory) or anything
+        is written. A new chat takes the request's directory and mode, which
+        must be ones this server offers; an existing one its own."""
+        if meta is not None:
+            return deps.chat_binding(agent, meta)
         switch = deps.workspace_switch
-        if switch is None or mode not in switch.modes:
+        mode = req.workspace_mode
+        if mode is not None and (switch is None or mode not in switch.modes):
             offered = ", ".join(switch.modes) if switch else "none"
             raise WebError(
                 400,
@@ -102,6 +107,15 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 f"mode {mode!r} is not available on this server",
                 hint=f"offered: {offered}",
             )
+        if req.workspace is not None and switch is None:
+            raise WebError(
+                400,
+                "invalid_request",
+                "this server doesn't let a chat pick its directory",
+                hint="leave out workspace: chats work in the agent's own",
+            )
+        asked = mode or (switch.default_mode if switch else None)
+        return deps.new_chat_binding(agent, asked, req.workspace)
 
     def resolve_agent(meta: ChatMeta | None, requested: str | None) -> Agent[Any]:
         """The agent that runs this turn, given the session's metadata (if any).
@@ -127,8 +141,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
         agent = resolve_agent(meta, req.agent)
         is_new = meta is None
-        if is_new:
-            check_mode(req)
+        binding = bind(agent, meta, req)
         if deps.supervisor.get(sid) is not None:
             # Unlike a stream, this turn can't join the live run: it would
             # have no answer of its own to return.
@@ -138,7 +151,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 "a run is active for this session",
                 hint="use /api/chat/stream to attach or inject",
             )
-        user_input = build_user_input(req, agent)
+        scoped = deps.at_root(agent, binding)
+        user_input = build_user_input(req, scoped)
         if isinstance(user_input, str) and not user_input.strip():
             # Attachments were given but all invalid (missing / outside the
             # workspace) and there's no text — nothing to run.
@@ -148,13 +162,13 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # refused message leaves no trace.
         trigger = RunTrigger(
             session_id=sid,
-            agent=agent,
+            agent=scoped,
             source="user",
             request=request,
             client_context=client,
         )
         run_deps = await build_run_deps(deps.run_deps, trigger)
-        await upsert_session(sid, agent, req, is_new=is_new)
+        await upsert_session(sid, agent, req, binding if is_new else None)
         # The chat's interrupted run, superseded by this one: read before the
         # start, deleted only after it, so a refused start (409/429) leaves it
         # resumable.
@@ -204,13 +218,13 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
         agent = resolve_agent(meta, req.agent)
         is_new = meta is None
-        if is_new:
-            check_mode(req)
+        binding = bind(agent, meta, req)
+        scoped = deps.at_root(agent, binding)
         # Build the message once — this validates attachments (dropping any
-        # that are missing or escape the workspace), so an attachments-only
-        # request whose attachments are all invalid reads as empty here. It
-        # starts a run, or steers the live one.
-        content = user_content(req.message, req.attachments, agent)
+        # that are missing or escape the chat's directory), so an
+        # attachments-only request whose attachments are all invalid reads as
+        # empty here. It starts a run, or steers the live one.
+        content = user_content(req.message, req.attachments, scoped)
         empty = isinstance(content, str) and not content.strip()
         # An empty turn is only meaningful as a pure attach to a live run;
         # rejecting it otherwise before the upsert avoids littering empty rows.
@@ -219,7 +233,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         client = req.context or {}
         trigger = RunTrigger(
             session_id=sid,
-            agent=agent,
+            agent=scoped,
             source="user",
             request=request,
             client_context=client,
@@ -231,7 +245,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         run_deps = None
         if decided:
             run_deps = await build_run_deps(deps.run_deps, trigger)
-        await upsert_session(sid, agent, req, is_new=is_new)
+        await upsert_session(sid, agent, req, binding if is_new else None)
 
         def attach(live: RunController) -> EventSourceResponse:
             # A run is already live for this session: a new message injects
@@ -455,6 +469,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 f"agent {snapshot.agent_name!r} is no longer registered",
             )
         agent = deps.agents[snapshot.agent_name]
+        # Checked before the hook, like a fresh turn: a chat whose directory
+        # this server no longer allows is refused, not resumed elsewhere.
+        binding = deps.chat_binding(agent, await store.get(session_id))
         # The run's own client context (a checkpoint keeps none), with the
         # reconnecting request for identity.
         client = await store.get_active_context(session_id) or {}
@@ -462,7 +479,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             deps.run_deps,
             RunTrigger(
                 session_id=session_id,
-                agent=agent,
+                agent=deps.at_root(agent, binding),
                 source="user",
                 request=request,
                 client_context=client,

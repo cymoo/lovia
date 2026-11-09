@@ -755,37 +755,61 @@ The renderer you get is the one registered at the time of the call, so a
 wrapper may also replace the kind it wraps — re-register `chart` around the
 built-in one, say — without calling itself.
 
-## Per-chat permission modes
+## Per-chat directories and permission modes
 
-Pass a `WorkspaceSwitch` and each chat picks its own permission mode for the
-agent's workspace — the page shows a picker in the composer, and every run
-rebuilds the workspace for its chat's mode:
+Pass a `WorkspaceSwitch` and each chat works in a directory of its own, in a
+permission mode of its own — the page lists the directories and shows a mode
+picker in the composer, and every run rebuilds the agent's workspace for its
+chat:
 
 ```python
 from lovia.web import WorkspaceSwitch, create_app
 
-app = create_app(agent, workspaces=WorkspaceSwitch())  # readonly / coding
+app = create_app(agent, workspaces=WorkspaceSwitch())  # any directory; readonly / coding
+app = create_app(agent, workspaces=WorkspaceSwitch(roots=["/srv/repos"]))  # only under these
+app = create_app(agent, workspaces=WorkspaceSwitch(roots=None))  # the agent's own; modes only
 app = create_app(
     agent,
     workspaces=WorkspaceSwitch(modes=("readonly", "coding", "trusted"), default_mode="coding"),
 )
 ```
 
+- `roots` is where a chat may work: `"any"` (the default), a list — those
+  directories and everything under them — or `None`, the agent's own
+  directory only. The agent's own directory is always allowed.
 - `modes` is what a chat may pick, and must include `"readonly"`. A chat
   stored with a mode the switch doesn't offer runs in the widest offered mode
   below it — narrowed, never widened.
 - `default_mode` is what the page preselects for a new chat. A chat that
-  never picked one runs on the agent's own workspace, custom policy and all.
-- `build(root, mode)` returns the `LocalWorkspace` for a mode. The default is
-  the `Workspace.local` preset, keeping the agent workspace's `env`,
-  `limits`, `executor`, `inherit_env` and shell timeout — not a custom
+  never picked one keeps the agent's own policy, custom rules and all, moved
+  to its directory.
+- `build(root, mode)` returns the `LocalWorkspace` for a directory and mode.
+  The default is the `Workspace.local` preset, keeping the agent workspace's
+  `env`, `limits`, `executor`, `inherit_env` and shell timeout — not a custom
   policy's rules; pass `build` to carry those across modes.
+- `agent_for(agent, root)` returns the agent for a chat in `root` — the
+  project-specific rest, such as instructions from that directory's
+  `AGENTS.md`, or its skills. It runs on every run, before the workspace is
+  set (a workspace it sets is replaced), and nothing is cached.
+- `general` is a catch-all directory for chats that belong to no project:
+  always listed and allowed, created on first use. `lovia web` uses
+  `~/.lovia/workspace`.
+
+A chat's directory is set when it is created — the first message's
+`workspace`, else the agent's own — and never changes; every run checks it
+against `roots` first, so a chat in a directory the server no longer allows
+is refused (409 `workspace_not_allowed`), never moved. Attachments, the Files
+panel and uploads work in the chat's directory (a draft names its own with
+`?root=`). Every agent a run can reach — handoff targets too — works there.
 
 A chat's mode applies from its next run; a run in flight keeps the one it
-started with, and so do the subagent tasks, spawned chats and schedule fires
-it creates. Without `workspaces=` (the default), every chat runs on its
-agent's own workspace. See [HTTP API](http-api.md) for `workspace_mode` on
-requests and sessions.
+started with. The chats a run creates — subagent tasks, spawned chats,
+schedule fires — work in that run's directory and mode. Without
+`workspaces=` (the default), every chat runs on its agent's own workspace.
+Chats from before chats had a directory report `workspace_root: null` and
+run in the agent's own until bound with `POST /api/sessions/associate`. See
+[HTTP API](http-api.md) for `workspace` and `workspace_mode` on requests,
+and the `/api/workspaces` list.
 
 ## Follow-up suggestions
 

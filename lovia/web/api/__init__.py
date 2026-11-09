@@ -32,6 +32,7 @@ from .memory import build_memory_router, memory_plugin
 from .schedules import build_schedules_router
 from .sessions import build_sessions_router
 from .workspace import build_workspace_router, workspace_cfg
+from .workspaces import build_workspaces_router
 
 __all__ = ["RouterDeps", "build_api_router"]
 
@@ -95,6 +96,10 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 # /api/config exists: the model connection is editable from
                 # the UI (the CLI's default agent only — never embedders).
                 "model_config": deps.config_runtime is not None,
+                # create_app(workspaces=): chats pick a mode, and a directory
+                # from GET /api/workspaces (whose can_add says if any beyond
+                # the agent's own may be added).
+                "workspace_switch": deps.workspace_switch is not None,
             },
             workspace_modes=_workspace_modes(deps),
         )
@@ -109,5 +114,6 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
     router.include_router(build_sessions_router(deps))
     router.include_router(build_schedules_router(deps))
     router.include_router(build_workspace_router(deps))
+    router.include_router(build_workspaces_router(deps))
     router.include_router(build_memory_router(deps))
     return router

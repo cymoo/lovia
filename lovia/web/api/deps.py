@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ...agent import Agent
 from ...handoff import Handoff
@@ -26,7 +26,7 @@ from ...providers import Provider
 from ...reliability import RetryPolicy, RunBudget
 from ...session import Session
 from ...tracing import Tracer
-from ...workspace import LocalWorkspace
+from ...workspace import WorkspaceMode
 from ..approvals import ApprovalRegistry
 from ..errors import WebError
 from ..followups import (
@@ -35,10 +35,17 @@ from ..followups import (
     coerce_suggestions,
     generate_followups,
 )
-from ..sse import SessionRetitledData, frame
-from ..store import ChatStore
+from ..sse import SessionRetitledData, SessionWorkspaceChangedData, frame
+from ..store import ChatMeta, ChatStore
 from ..titles import generate_title, provisional_title
-from ..workspaces import WorkspaceSessions, WorkspaceSwitch
+from ..workspaces import (
+    ChatBinding,
+    WorkspaceSessions,
+    WorkspaceSwitch,
+    own_root,
+    resolve_root,
+    workspace_config,
+)
 
 if TYPE_CHECKING:
     from ..config import ConfigRuntime
@@ -270,87 +277,194 @@ class RouterDeps:
             return None
         return switch.effective(mode)
 
-    def bind_workspace(self, agent: Agent[Any], mode: str | None) -> Agent[Any]:
-        """``agent`` with its workspace rebuilt for the chat's ``mode``.
+    def admit_root(self, agent: Agent[Any], root: str | Path) -> Path:
+        """``root`` resolved, once this server lets ``agent``'s chats work
+        there — else a 409 naming the constraint. The switch's ``general``
+        directory is created here, on first use."""
+        switch = self.workspace_switch
+        own = own_root(agent)
+        path = Path(root).expanduser()
+        if not path.is_absolute():
+            raise WebError(
+                400,
+                "invalid_request",
+                f"workspace {str(root)!r} is not an absolute path",
+                hint="give the full path, e.g. /home/me/project or ~/project",
+            )
+        path = path.resolve()
+        why = (
+            switch.refusal(path, own)
+            if switch is not None
+            else (
+                None if path == own else "this server keeps every chat in its directory"
+            )
+        )
+        if why is not None:
+            raise WebError(
+                409, "workspace_not_allowed", f"{path} is not allowed", hint=why
+            )
+        if switch is not None and path == switch.general:
+            path.mkdir(parents=True, exist_ok=True)
+        if not path.is_dir():
+            raise WebError(
+                409,
+                "workspace_missing",
+                f"{path} is not a directory",
+                hint="it was moved or deleted; start a new chat in another directory",
+            )
+        return path
 
-        Every agent the run can hand off to is rebuilt too: a handoff opens
-        its target's own workspace, so a read-only chat must not regain
-        writes by transferring to an agent whose workspace allows them.
-        Unchanged without a switch or a mode; an agent whose workspace isn't
-        a plain ``LocalWorkspace`` (a custom backend) keeps its own.
+    def new_chat_binding(
+        self, agent: Agent[Any], mode: str | None, root: str | Path | None = None
+    ) -> ChatBinding:
+        """The binding to store on a new chat of ``agent``.
+
+        ``root`` (checked by :meth:`admit_root`) defaults to the agent's own;
+        ``mode`` is stored as given (an inherited None stays None: the
+        agent's own policy) — both None-free only with a switch.
         """
-        effective = self.effective_mode(mode)
-        if effective is None:
+        own = own_root(agent)
+        if own is None:
+            return ChatBinding(None, None)
+        if self.workspace_switch is None:
+            return ChatBinding(own.as_posix(), None)
+        path = own if root is None else self.admit_root(agent, root)
+        return ChatBinding(path.as_posix(), mode)
+
+    def chat_binding(self, agent: Agent[Any], meta: ChatMeta | None) -> ChatBinding:
+        """Where and how a stored chat of ``agent`` runs, checked against
+        this server's constraints now (a 409 when its directory isn't
+        allowed — a chat is never moved). A chat stored with no directory
+        (from before chats had one) runs in the agent's own. The mode is the
+        one the run gets: capped to what this server offers."""
+        own = own_root(agent)
+        if own is None or self.workspace_switch is None:
+            return ChatBinding(own.as_posix() if own else None, None)
+        mode = self.effective_mode(meta.workspace_mode if meta is not None else None)
+        stored = meta.workspace_root if meta is not None else None
+        path = own if stored is None else self.admit_root(agent, stored)
+        return ChatBinding(path.as_posix(), mode)
+
+    def effective_agent(self, agent: Agent[Any], binding: ChatBinding) -> Agent[Any]:
+        """``agent`` as a run of a chat with ``binding`` uses it.
+
+        Each agent the run can reach — the entry agent and every handoff
+        target, which opens its own workspace — gets ``agent_for`` for the
+        chat's directory, then its workspace rebuilt there in the chat's
+        mode (capped to what this server offers). Unchanged without a
+        switch; an agent whose workspace isn't a plain ``LocalWorkspace``
+        (a custom backend) keeps its own. The original is never touched.
+        """
+        if self.workspace_switch is None:
             return agent
-        return self._rebind(agent, effective, {})
+        root = Path(binding.root) if binding.root is not None else None
+        mode = cast("WorkspaceMode | None", self.effective_mode(binding.mode))
+        return self._rebind(agent, root, mode, {})
 
     def _rebind(
-        self, agent: Agent[Any], mode: str, done: dict[int, Agent[Any]]
+        self,
+        agent: Agent[Any],
+        root: Path | None,
+        mode: WorkspaceMode | None,
+        done: dict[int, Agent[Any]],
     ) -> Agent[Any]:
         if id(agent) in done:  # handoffs may form a cycle
             return done[id(agent)]
-        assert self.workspace_switch is not None
-        base = agent.workspace
+        switch = self.workspace_switch
+        assert switch is not None
+        source = agent
         # A session binding (a self-cloned subagent's) → its config: the
         # rebuilt workspace opens a session of its own.
-        base = getattr(base, "workspace", base)
-        workspace = (
-            self.workspace_switch.workspace(base, mode)  # type: ignore[arg-type]
-            if isinstance(base, LocalWorkspace)
-            else agent.workspace
-        )
+        base = workspace_config(agent)
+        if base is not None:
+            where = root or resolve_root(base.root)
+            if switch.agent_for is not None:
+                agent = switch.agent_for(agent, where)
+            workspace: Any = switch.workspace(base, where, mode)
+        else:
+            workspace = agent.workspace
         # A fresh handoffs list, filled after registering the copy so a cycle
-        # resolves to it — the original agent is never touched.
+        # resolves to it.
         copy = agent.clone(workspace=workspace, handoffs=[])
-        done[id(agent)] = copy
+        done[id(source)] = copy
         for h in agent.handoffs:
             if isinstance(h, Handoff):
                 copy.handoffs.append(
-                    replace(h, target=self._rebind(h.target, mode, done))
+                    replace(h, target=self._rebind(h.target, root, mode, done))
                 )
             else:
-                copy.handoffs.append(self._rebind(h, mode, done))
+                copy.handoffs.append(self._rebind(h, root, mode, done))
         return copy
 
-    def new_chat_binding(
-        self, agent: Agent[Any], mode: str | None
-    ) -> tuple[str | None, str | None]:
-        """``(workspace_root, workspace_mode)`` to store on a new chat.
+    @staticmethod
+    def at_root(agent: Agent[Any], binding: ChatBinding) -> Agent[Any]:
+        """``agent`` with its workspace moved to the chat's directory, and
+        nothing else: what attachments resolve against, and the agent a
+        ``run_deps`` hook is shown, before the run binds the whole thing."""
+        base = workspace_config(agent)
+        if base is None or binding.root is None:
+            return agent
+        return agent.clone(workspace=replace(base, root=binding.root))
 
-        The root is the agent workspace's, resolved; the mode is ``mode`` as
-        given (an inherited None stays None: the agent's own workspace) —
-        None without a switch.
-        """
-        base = agent.workspace
-        base = getattr(base, "workspace", base)  # a session binding's config
-        root = (
-            Path(base.root).expanduser().resolve().as_posix()
-            if isinstance(base, LocalWorkspace)
-            else None
-        )
-        return root, mode if self.workspace_switch is not None else None
-
-    def run_snapshot(self, session_id: str | None) -> tuple[bool, str | None]:
-        """``(live, mode)`` of the run live in ``session_id``, read now.
+    def run_snapshot(self, session_id: str | None) -> ChatBinding | None:
+        """The binding of the run live in ``session_id``, read now; None when
+        none is.
 
         Take it before the first ``await`` of whatever creates a chat from
-        that run: a stop meanwhile removes the run, and its mode with it.
+        that run: a stop meanwhile removes the run, and its binding with it.
         """
         if session_id is not None and self._supervisor is not None:
             ctrl = self._supervisor.get(session_id)
             if ctrl is not None:
-                return True, ctrl.workspace_mode
-        return False, None
+                return ctrl.binding
+        return None
 
     @staticmethod
-    def inherited_mode(
-        snapshot: tuple[bool, str | None], stored: str | None
-    ) -> str | None:
-        """The mode a chat created from that run inherits: the run's own —
-        ``None`` (the agent's own workspace) included, never a mode the chat
-        was switched to since the run began — else the chat's ``stored``."""
-        live, mode = snapshot
-        return mode if live else stored
+    def inherited(snapshot: ChatBinding | None, meta: ChatMeta | None) -> ChatBinding:
+        """The binding a chat created from that run inherits: the run's own —
+        a ``None`` mode (the agent's own policy) included, never a mode the
+        chat was switched to since the run began — else the chat's stored
+        one (an empty binding without a chat: the agent's own)."""
+        if snapshot is not None:
+            return snapshot
+        if meta is None:
+            return ChatBinding(None, None)
+        return ChatBinding(meta.workspace_root, meta.workspace_mode)
+
+    async def associate(
+        self, session_ids: Sequence[str], root: str
+    ) -> tuple[str, Sequence[str]]:
+        """Bind the chats of ``session_ids`` that have no directory yet to
+        ``root`` — checked for each chat's agent first, so a refusal binds
+        none. Returns the resolved root and the chats it bound; announces
+        each on the event stream."""
+        metas = [m for m in [await self.store.get(s) for s in session_ids] if m]
+        if not metas:
+            raise WebError(404, "session_not_found", "session not found")
+        resolved = ""
+        for meta in metas:
+            agent = self.agents.get(meta.agent or "") or self.pick(None)
+            resolved = self.admit_root(agent, root).as_posix()
+        bound = await self.store.associate([m.id for m in metas], resolved)
+        if bound:
+            await self.store.touch_workspace(resolved)
+        for sid in bound:
+            now = await self.store.get(sid)
+            if now is not None:
+                self.emit_workspace(now)
+        return resolved, bound
+
+    def emit_workspace(self, meta: ChatMeta) -> None:
+        """Announce a chat's binding (``session_workspace_changed``)."""
+        self.emit(
+            "session_workspace_changed",
+            SessionWorkspaceChangedData(
+                session_id=meta.id,
+                workspace_mode=meta.workspace_mode,
+                workspace_mode_rev=meta.workspace_mode_rev,
+                workspace_root=meta.workspace_root,
+            ),
+        )
 
     @property
     def default_agent(self) -> str | None:

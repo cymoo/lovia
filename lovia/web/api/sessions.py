@@ -26,7 +26,6 @@ from ..followups import FollowupRequest
 from ..sse import (
     SessionCreatedData,
     SessionRetitledData,
-    SessionWorkspaceChangedData,
 )
 from ..schemas import (
     ChatSessionInfo,
@@ -46,6 +45,7 @@ from ..schemas import (
     TodosResponse,
 )
 from ..supervisor import agent_grant_context
+from ..workspaces import ChatBinding
 from .deps import RouterDeps
 from .serialization import (
     Run,
@@ -239,6 +239,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             origin=origin,
             workspace_mode=meta.workspace_mode if meta else None,
             workspace_mode_rev=meta.workspace_mode_rev if meta else 0,
+            workspace_root=meta.workspace_root if meta else None,
         )
 
     @router.get("/api/sessions/{session_id}/ui-data/{ref}")
@@ -345,6 +346,24 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                     f"mode {mode!r} is not available on this server",
                     hint=f"choose one of: {', '.join(switch.modes)}",
                 )
+        root = req.workspace_root
+        if root is not None:
+            if deps.workspace_switch is None:
+                raise WebError(
+                    404,
+                    "feature_unavailable",
+                    "this server doesn't let chats pick a directory",
+                )
+            if meta.workspace_root is not None:
+                raise WebError(
+                    409,
+                    "workspace_fixed",
+                    "this chat already works in a directory",
+                    hint="a chat's directory never changes: start a new chat "
+                    "in the other one",
+                )
+            # Bound (and announced) first: a refused directory changes nothing.
+            await deps.associate([session_id], root)
         if req.title is not None:
             await store.set_title(session_id, req.title)
         if req.pinned is not None:
@@ -360,14 +379,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 SessionRetitledData(session_id=session_id, title=meta.title),
             )
         if mode is not None:
-            deps.emit(
-                "session_workspace_changed",
-                SessionWorkspaceChangedData(
-                    session_id=session_id,
-                    workspace_mode=meta.workspace_mode,
-                    workspace_mode_rev=meta.workspace_mode_rev,
-                ),
-            )
+            deps.emit_workspace(meta)
         return session_info(meta)
 
     @router.get("/api/sessions/{session_id}/grants", response_model=list[GrantInfo])
@@ -405,7 +417,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         agent = deps.agents.get(meta.agent) if meta and meta.agent else None
         if meta is None or meta.agent is None or agent is None:
             return None
-        return agent_grant_context(meta.agent, agent)
+        # In the chat's own directory (none stored: the agent's own).
+        where = ChatBinding(meta.workspace_root, None)
+        return agent_grant_context(meta.agent, deps.at_root(agent, where))
 
     @router.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, bool]:

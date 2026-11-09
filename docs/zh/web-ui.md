@@ -28,6 +28,8 @@ CLI 创建的默认 Agent 包含 Todo、Memory、时间与 HTTP Tool、Web 搜�
 - `AGENTS.md`：作为 Agent instructions；
 - `./.agents/skills` 与 `~/.agents/skills`：作为 Skills 目录（项目目录优先；
   目录列表在设置 → 技能中管理）；
+
+前两项每次运行都从对话所在的目录读取，所以在另一个项目里的对话会遵循那个项目的 `AGENTS.md` 和技能；
 - `./.lovia/memory`：作为 Memory 目录。
 
 旧的 `./skills` 不再自动加载；可以迁移到 `./.agents/skills`，或在设置 → 技能中
@@ -231,7 +233,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | **模型** → 档案的高级选项 | `models[].max_tokens` | 沿用 Provider 的默认值 |
 | **工作区** → 新对话的权限模式 | `workspace.default_mode` | `coding`，见[模式](workspace.md#模式)和[下文](#每个对话的权限模式) |
 | **工作区** → 不询问直接运行的命令 | `workspace.auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
-| **智能体** → 自定义指令 | `agent.instructions` | 空：使用启动目录的 `AGENTS.md`，没有就用通用提示；填写后 `AGENTS.md` 接在后面 |
+| **智能体** → 自定义指令 | `agent.instructions` | 空：使用对话所在目录的 `AGENTS.md`，没有就用通用提示；填写后 `AGENTS.md` 接在后面 |
 | **智能体** → 最大轮数 / 重试次数 | `run.max_turns` / `run.max_retries` | `50` / Agent 自己的设置（`4`） |
 | **智能体** → 生成追问建议 | `run.followups` | 开启 |
 | **智能体** → 后台子任务 | `agent.subagents` | 开启 |
@@ -255,20 +257,21 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 
 | 命令行选项 | 环境变量 | 默认值 |
 | --- | --- | --- |
-| `DIR`（位置参数） | `LOVIA_WORKSPACE` | `.`：工作区根目录 |
+| `DIR`（位置参数） | `LOVIA_WORKSPACE` | `.`：新对话工作的目录；在主目录或根目录启动时改用通用工作区 `~/.lovia/workspace` |
 | `--readonly` | — | 关闭。开启后所有运行都是只读，设置页不能修改 |
 | `--no-workspace` | — | 关闭。开启后没有文件和 shell 工具 |
-| `--allow-workspace-switch` | — | 关闭。监听非本机地址时，允许在浏览器里修改工作区设置（`trusted` 仍只在本机地址提供） |
+| `--allow-workspace-switch` | — | 关闭。监听非本机地址时，允许在浏览器里打开其他目录、修改工作区设置（`trusted` 仍只在本机地址提供） |
+| `--lock-workspace` | — | 关闭。开启后所有对话都在 `DIR` 里工作，浏览器不能打开其他目录（优先于 `--allow-workspace-switch`） |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--root-path` | `LOVIA_ROOT_PATH` | 无；代理发布应用时使用的路径前缀（[详见](web-server.md#部署在路径前缀下)） |
 | `--token` | `LOVIA_WEB_TOKEN` | 回环地址无需设置；其他地址自动生成 |
-| `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
+| `--db` | `LOVIA_DB` | `~/.lovia/lovia.db`，所有目录共用一份历史；启动目录下已有 `./.lovia/lovia.db`（0.9.148 之前的）时继续用它 |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent（或使用自己的 Agent、映射或应用） |
 | `--title` | `LOVIA_TITLE` | `lovia` |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--check` | — | 检查模型配置并退出 |
 
-监听非本机地址时，浏览器不能放宽权限：工作区设置在设置页里只读，`trusted` 按 `coding` 运行。
+监听非本机地址时，浏览器不能放宽权限：所有对话都在 `DIR` 里工作，工作区设置在设置页里只读，`trusted` 按 `coding` 运行。
 要修改，请编辑 `config.json` 后重启，或加 `--allow-workspace-switch`。
 
 0.9.146 起移到设置页的选项（`--trusted`、`--auto-allow`、`--max-turns`、`--max-retries`、

@@ -671,29 +671,43 @@ window.lovia.registerRenderer('trend', {
 拿到的是调用那一刻注册的渲染器，所以包装渲染器也可以替换它所包装的 kind（比如围绕内置的
 `chart` 重新注册 `chart`），而不会调用到自己。
 
-## 每个对话的权限模式
+## 每个对话的目录和权限模式
 
-传入 `WorkspaceSwitch` 后，每个对话可以给 Agent 的工作区选择自己的权限模式：页面在输入框里显示切换按钮，
-每次运行都按对话的模式重建工作区。
+传入 `WorkspaceSwitch` 后，每个对话在自己的目录里、按自己的权限模式工作：页面列出可选的目录，并在输入框里显示模式切换按钮；
+每次运行都按对话的目录和模式重建 Agent 的工作区。
 
 ```python
 from lovia.web import WorkspaceSwitch, create_app
 
-app = create_app(agent, workspaces=WorkspaceSwitch())  # readonly / coding
+app = create_app(agent, workspaces=WorkspaceSwitch())  # 任意目录；readonly / coding
+app = create_app(agent, workspaces=WorkspaceSwitch(roots=["/srv/repos"]))  # 只能是这些目录之下
+app = create_app(agent, workspaces=WorkspaceSwitch(roots=None))  # 只用 Agent 自己的目录，只切模式
 app = create_app(
     agent,
     workspaces=WorkspaceSwitch(modes=("readonly", "coding", "trusted"), default_mode="coding"),
 )
 ```
 
+- `roots` 是对话可以工作的目录：`"any"`（默认）、一个列表（这些目录及其子目录），或 `None`（只有 Agent 自己的目录）。
+  Agent 自己的目录始终允许。
 - `modes` 是对话可选的模式，必须包含 `"readonly"`。对话保存的模式不在其中时，按它下方最宽的可用模式运行——
   只收紧，不放宽。
-- `default_mode` 是页面给新对话预选的模式。从未选过模式的对话使用 Agent 自带的工作区，自定义 policy 原样保留。
-- `build(root, mode)` 返回某个模式的 `LocalWorkspace`。默认用 `Workspace.local` 的预设，沿用 Agent 工作区的
+- `default_mode` 是页面给新对话预选的模式。从未选过模式的对话沿用 Agent 自带的 policy（自定义规则原样保留），只是换到对话的目录。
+- `build(root, mode)` 返回某个目录和模式的 `LocalWorkspace`。默认用 `Workspace.local` 的预设，沿用 Agent 工作区的
   `env`、`limits`、`executor`、`inherit_env` 和 shell 超时，但不带自定义 policy 的规则；要在切换后保留它们，就传入 `build`。
+- `agent_for(agent, root)` 返回在 `root` 里工作时的 Agent，负责项目相关的其余部分，比如读该目录的 `AGENTS.md`
+  作为指令、加载它的技能。每次运行都调用，在设置工作区之前（它设置的工作区会被替换），不做缓存。
+- `general` 是不属于任何项目的对话用的通用目录：始终在列表里、始终允许，第一次用到时才创建。`lovia web` 用的是
+  `~/.lovia/workspace`。
 
-对话的模式从下次运行起生效；进行中的运行保持开始时的模式，它创建的子任务、派生对话和定时任务也一样。
-不传 `workspaces=`（默认）时，所有对话都使用各自 Agent 的工作区。请求和会话里的 `workspace_mode` 见 [HTTP API](http-api.md)。
+对话的目录在创建时确定（第一条消息的 `workspace`，不带则用 Agent 自己的目录），之后不再改变；每次运行前都按 `roots`
+校验，服务端不再允许的目录会被拒绝（409 `workspace_not_allowed`），不会被换掉。附件、文件面板和上传都在对话的目录里
+（还没发送的草稿用 `?root=` 指明自己的目录）。运行能到达的每个 Agent（包括 handoff 的目标）都在这个目录里工作。
+
+对话的模式从下次运行起生效；进行中的运行保持开始时的模式。运行创建的子任务、派生对话和定时任务，都在这次运行的目录里、
+按它的模式工作。不传 `workspaces=`（默认）时，所有对话都使用各自 Agent 的工作区。早于目录绑定的旧对话返回
+`workspace_root: null`，在用 `POST /api/sessions/associate` 关联之前，仍在 Agent 自己的目录里运行。请求和会话里的
+`workspace`、`workspace_mode` 以及 `/api/workspaces` 列表见 [HTTP API](http-api.md)。
 
 ## 追问建议
 

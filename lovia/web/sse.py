@@ -267,6 +267,7 @@ class SessionWorkspaceChangedData(TypedDict):
     session_id: str
     workspace_mode: str | None
     workspace_mode_rev: int
+    workspace_root: str | None
 
 
 class ConfigChangedData(TypedDict):

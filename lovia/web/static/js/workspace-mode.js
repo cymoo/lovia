@@ -135,6 +135,9 @@ function openMenu() {
   if (_menu) return closeMenu();
   const info = offer();
   if (!info || !_chip) return;
+  // A new chat's first message is out and its chat not created yet: it was
+  // sent with the draft's mode, so a pick now would be silently lost.
+  if (!store.sessionId && store.streaming) return;
   const menu = document.createElement('div');
   menu.className = 'lv-model-chip-menu lv-mode-menu';
   menu.setAttribute('role', 'menu');

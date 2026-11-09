@@ -135,6 +135,10 @@ API 路由抛出的错误都使用同一种响应体：
 | `model_in_use` | 409 | 默认聊天模型不能删除 |
 | `config_read_only` | 409 | `config.json` 不可写（比如只读挂载） |
 | `workspace_locked` | 403 | 工作区设置由 `lovia web` 的启动方式固定 |
+| `workspace_not_allowed` | 409 | 服务端不允许对话在这个目录里工作（`hint` 写明是哪条约束）；只拒绝，不换目录 |
+| `workspace_missing` | 409 | 对话的目录已不存在 |
+| `workspace_fixed` | 409 | 对话已经绑定了目录，目录不能再改 |
+| `workspace_not_found` | 404 | 工作区列表里没有这一项（固定的几项不能移除） |
 | `file_too_large` | 413 | 超过工作区读取或上传上限 |
 | `unsupported_file_type` | 415 | 不支持内联预览，或扩展名不允许上传 |
 | `too_many_runs` | 429 | 已达到并发 Run 上限 |
@@ -168,8 +172,12 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/sessions/{id}/ui-data/{ref}` | UI 组件的完整 props，由本聊天运行中的 `put_ui_data` 保存（[详情](web-server.md#大块数据)） |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
 | `GET /api/schedules/{id}/runs` | 按时间倒序列出定时任务的运行记录 |
-| `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | 读取 Agent [工作区](workspace.md)中的文件 |
-| `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束 |
+| `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | 读取 Agent [工作区](workspace.md)中的文件；带 `?session=` 时读该对话的目录，带 `?root=` 时读还没发送的草稿的目录（按新对话的规则校验） |
+| `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束；`?session=` / `?root=` 同文件面板 |
+| `GET /api/workspaces` | 启用 `create_app(workspaces=)` 时：新对话可选的目录，`{workspaces: [{id, root, name, kind, last_used_at}], default, can_add, roots}`。`kind` 为 `"default"`（Agent 自己的目录，新标签页从这里开始）、`"general"`（通用工作区）或 `"added"`；前两种没有 `id`，始终在列表里。`can_add` 表示能否添加其他目录；只允许部分目录时，`roots` 列出允许的目录树 |
+| `POST /api/workspaces` · `DELETE /api/workspaces/{id}` | `{path}` → 该项：添加一个存在且允许的目录（解析符号链接）· 从列表移除一项（文件和对话都保留；之后在那里新建对话会重新加入列表） |
+| `GET /api/workspaces/dirs?path=` | 输入目录时的补全：按输入的写法返回子目录路径（保留 `~`），只限可添加的范围 |
+| `POST /api/sessions/associate` | `{session_ids, root}` → `{associated, root}`：把还没有目录的旧对话（`workspace_root: null`）关联到一个目录，关联后不能再改；单个对话也可以用 `PATCH /api/sessions/{id}` 的 `workspace_root` |
 | `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget, dreamed_at}`） |
 | `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
 | `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `PUT /api/config/workspace` · `PUT /api/config/run` · `PUT /api/config/agent` · `POST /api/config/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 默认 Agent 的[模型配置](web-ui.md#模型配置与切换)与 [Skill 目录](web-ui.md#skills)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
@@ -179,9 +187,12 @@ API 路由抛出的错误都使用同一种响应体：
 `create_app(run_deps=...)` 以 `trigger.client_context` 收到的客户端上下文（见[运行依赖](web-server.md#运行依赖)）。
 加入一个进行中运行的消息不会改变那次运行的上下文。
 
-服务端启用了 `create_app(workspaces=)` 时，新对话的请求可以带 `workspace_mode`（`"readonly"`、
-`"coding"` 或 `"trusted"`，须在 `/api/info` 的 `workspace_modes.modes` 之中）；已有对话保持自己的模式，
-用 `PATCH /api/sessions/{id}` 修改，从下次运行起生效。会话里返回的是保存的 `workspace_mode`，
+服务端启用了 `create_app(workspaces=)` 时（`features.workspace_switch`），新对话的请求可以带
+`workspace`——它的目录，绝对路径（`~` 会展开），按服务端的 `roots` 校验（不带则用 Agent 自己的目录）——
+以及 `workspace_mode`（`"readonly"`、`"coding"` 或 `"trusted"`，须在 `/api/info` 的
+`workspace_modes.modes` 之中）。目录在对话的整个生命周期内不变，每次运行前都会重新校验：服务端不再允许的目录
+会被拒绝（409 `workspace_not_allowed`），不会被换掉。已有对话也保持自己的模式，
+用 `PATCH /api/sessions/{id}` 修改，从下次运行起生效。会话里还返回 `workspace_root`（`null` 表示对话早于目录绑定）。会话里返回的是保存的 `workspace_mode`，
 以及每次切换都会加 1 的 `workspace_mode_rev`：同一对话的模式有多份报告时（列表、详情、`PATCH` 的响应、事件），
 无论到达顺序如何，版本号更大的那份更新。服务端已不提供的模式，按它下方最宽的可用模式运行。
 
@@ -200,7 +211,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `run_finished` | `{session_id, run_id, status, error, source}` |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
-| `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev}` |
+| `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev, workspace_root}` |
 | `config_changed` | `{configured, model, profile_id, name}`：重新拉取 `/api/config` 即可同步 |
 
 事件流不重放历史；客户端每次连接或重连时，

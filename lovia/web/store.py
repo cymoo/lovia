@@ -53,7 +53,7 @@ _SCHED_COLS = (
     "id, agent, input, session_id, trigger_kind, trigger_expr, "
     "next_fire, active, last_session_id, created_at, updated_at, "
     "until, max_fires, expires_at, fire_count, finished_reason, context_json, "
-    "workspace_mode"
+    "workspace_mode, workspace_root"
 )
 
 
@@ -286,6 +286,19 @@ def _workspace_mode_rev(conn: sqlite3.Connection) -> None:
         )
 
 
+def _workspace_list(conn: sqlite3.Connection) -> None:
+    """Multiple workspaces (0.9.148): the directory a schedule's fresh chats
+    work in, and the list of directories the page offers new chats."""
+    present = {r[1] for r in conn.execute("PRAGMA table_info(chat_schedules)")}
+    if "workspace_root" not in present:
+        conn.execute("ALTER TABLE chat_schedules ADD COLUMN workspace_root TEXT")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS chat_workspaces ("
+        "id TEXT PRIMARY KEY, root TEXT NOT NULL UNIQUE, name TEXT NOT NULL, "
+        "last_used_at REAL NOT NULL)"
+    )
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     _reconcile_unversioned,
     _fork_origin,
@@ -293,6 +306,7 @@ _MIGRATIONS: tuple[Migration, ...] = (
     _grants,
     _workspace_binding,
     _workspace_mode_rev,
+    _workspace_list,
 )
 
 
@@ -394,6 +408,18 @@ class GrantRow:
         }
 
 
+@dataclass(frozen=True)
+class WorkspaceRow:
+    """One directory of the page's workspace list (``chat_workspaces``) —
+    interface state, not a permission: what may be opened is the server's
+    ``WorkspaceSwitch.roots``."""
+
+    id: str
+    root: str
+    name: str
+    last_used_at: float
+
+
 def grant_context(agent: str | None, root: str | Path | None) -> str:
     """The unambiguous key for *where* an approval was given: agent name and
     resolved workspace root, JSON-encoded (an agent name may contain any
@@ -434,6 +460,9 @@ class ScheduleRow:
     # The permission mode its fires run with: the chat's that made it, so a
     # schedule set up from a read-only chat can't run its fresh chats wider.
     workspace_mode: str | None = None
+    # The directory its fresh chats work in: likewise the chat's that made
+    # it (None: the agent's own).
+    workspace_root: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "ScheduleRow":
@@ -456,6 +485,7 @@ class ScheduleRow:
             finished_reason=row[15],
             context=json.loads(row[16]) if row[16] else None,
             workspace_mode=row[17],
+            workspace_root=row[18],
         )
 
     def to_dict(self) -> JsonObject:
@@ -478,6 +508,7 @@ class ScheduleRow:
             "finished_reason": self.finished_reason,
             "context": self.context,
             "workspace_mode": self.workspace_mode,
+            "workspace_root": self.workspace_root,
         }
 
 
@@ -702,6 +733,72 @@ class ChatStore:
             "workspace_mode_rev = workspace_mode_rev + 1 WHERE id = ?",
             (mode, session_id),
         )
+
+    async def associate(self, session_ids: Sequence[str], root: str) -> Sequence[str]:
+        """Bind each chat of ``session_ids`` that has no directory yet (from
+        before chats had one) to ``root``; return the ids it bound. A chat's
+        directory, once set, never changes."""
+        ids = list(dict.fromkeys(session_ids))
+
+        def _impl() -> list[str]:
+            bound: list[str] = []
+            with self._meta._tx() as conn:
+                for sid in ids:
+                    cur = conn.execute(
+                        "UPDATE chat_sessions SET workspace_root = ? "
+                        "WHERE id = ? AND workspace_root IS NULL",
+                        (root, sid),
+                    )
+                    if cur.rowcount:
+                        bound.append(sid)
+            return bound
+
+        return await self._meta._run(_impl)
+
+    # ---- the workspace list ---------------------------------------------
+
+    async def touch_workspace(self, root: str) -> WorkspaceRow:
+        """Add ``root`` to the workspace list, or mark it used now."""
+        now = time.time()
+        name = Path(root).name or root
+
+        def _impl() -> WorkspaceRow:
+            with self._meta._tx() as conn:
+                conn.execute(
+                    "INSERT INTO chat_workspaces (id, root, name, last_used_at) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT(root) DO UPDATE SET "
+                    "last_used_at = excluded.last_used_at",
+                    (uuid.uuid4().hex, root, name, now),
+                )
+                row = conn.execute(
+                    "SELECT id, root, name, last_used_at FROM chat_workspaces "
+                    "WHERE root = ?",
+                    (root,),
+                ).fetchone()
+            return WorkspaceRow(*row)
+
+        return await self._meta._run(_impl)
+
+    async def list_workspaces(self) -> Sequence[WorkspaceRow]:
+        """The workspace list, most recently used first."""
+        return await self._read_all(
+            "SELECT id, root, name, last_used_at FROM chat_workspaces "
+            "ORDER BY last_used_at DESC",
+            (),
+            lambda r: WorkspaceRow(*r),
+        )
+
+    async def remove_workspace(self, workspace_id: str) -> bool:
+        """Drop an entry from the list (its chats and files stay)."""
+
+        def _impl() -> bool:
+            with self._meta._tx() as conn:
+                cur = conn.execute(
+                    "DELETE FROM chat_workspaces WHERE id = ?", (workspace_id,)
+                )
+                return bool(cur.rowcount)
+
+        return await self._meta._run(_impl)
 
     async def set_pinned(self, session_id: str, pinned: bool) -> None:
         """Pin or unpin a session (pinned sessions sort to the top)."""
@@ -1098,7 +1195,7 @@ class ChatStore:
     async def add_schedule(self, row: ScheduleRow) -> None:
         await self._write(
             f"INSERT INTO chat_schedules ({_SCHED_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row.id,
                 row.agent,
@@ -1118,6 +1215,7 @@ class ChatStore:
                 row.finished_reason,
                 _dumps_context(row.context),
                 row.workspace_mode,
+                row.workspace_root,
             ),
         )
 

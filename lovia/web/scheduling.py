@@ -53,6 +53,7 @@ from .scheduler import initial_next_fire, validate_trigger
 from .sse import SessionCreatedData
 from .store import ChatStore, ScheduleRow
 from .titles import provisional_title
+from .workspaces import ChatBinding
 
 _DESCRIPTION = (
     "Schedule a run to execute later, after a delay, or on a recurring basis. "
@@ -235,15 +236,19 @@ def _make_tool(store: ChatStore) -> Tool:
         # model only opts out (a fresh session per fire) when the user asks.
         # Falls back to a fresh session if this run has no session to continue.
         session_id = ctx.session_id if (continue_session and ctx.session_id) else None
-        # Fires run under this chat's permissions: a schedule set up from a
-        # read-only chat can't run its fresh chats wider.
+        # Fires run in this chat's directory, under its permissions: a
+        # schedule set up from a read-only chat can't run its fresh chats wider.
         server = RUN_SERVER.get()
         # The run's snapshot before any await (a stop would take it away).
-        made_by = server.run_snapshot(ctx.session_id) if server else (False, None)
+        made_by = server.run_snapshot(ctx.session_id) if server else None
         meta = await store.get(ctx.session_id) if ctx.session_id else None
-        stored_mode = meta.workspace_mode if meta else None
-        workspace_mode = (
-            server.inherited_mode(made_by, stored_mode) if server else stored_mode
+        binding = (
+            server.inherited(made_by, meta)
+            if server
+            else ChatBinding(
+                meta.workspace_root if meta else None,
+                meta.workspace_mode if meta else None,
+            )
         )
         now = time.time()
         row = ScheduleRow(
@@ -266,7 +271,8 @@ def _make_tool(store: ChatStore) -> Tool:
             # The fires run in this run's context (the page's, when a user
             # message started it), as if the user had sent them from here.
             context=RUN_CLIENT.get(),
-            workspace_mode=workspace_mode,
+            workspace_mode=binding.mode,
+            workspace_root=binding.root,
         )
         await store.add_schedule(row)
 
@@ -433,21 +439,17 @@ def _make_start_tool() -> Tool:
             if not alive:
                 raise ToolError("Nothing started: chats are being deleted.")
             try:
-                # The new chat works under this run's permissions, so a
-                # read-only chat can't start a writer.
-                root, mode = deps.new_chat_binding(
-                    agent,
-                    deps.inherited_mode(
-                        started_by, row.workspace_mode if row else None
-                    ),
-                )
+                # The new chat works in this run's directory, under its
+                # permissions, so a read-only chat can't start a writer.
+                inherited = deps.inherited(started_by, row)
+                binding = deps.new_chat_binding(agent, inherited.mode, inherited.root)
                 await deps.store.upsert(
                     sid,
                     agent=agent_key,
                     title=shown,
                     spawned_from=origin,
-                    workspace_root=root,
-                    workspace_mode=mode,
+                    workspace_root=binding.root,
+                    workspace_mode=binding.mode,
                 )
                 await deps.supervisor.start(
                     session_id=sid,

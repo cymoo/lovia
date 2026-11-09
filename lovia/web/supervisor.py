@@ -75,6 +75,7 @@ from ..types import JsonObject
 from ..workspace.workspace import LocalWorkspace, WorkspaceSessionBinding
 from .run_deps import RUN_CLIENT, RUN_SERVER
 from .store import RunRow, grant_context
+from .workspaces import ChatBinding
 
 if TYPE_CHECKING:
     from ..agent import Agent
@@ -343,10 +344,11 @@ class RunController:
         self.started_at = time.time()
         # Where a snapshot's untimed (pre-timing) history starts from.
         self.chat_created_at = chat_created_at or self.started_at
-        # The permission mode this run's workspace was built for (None: the
-        # agent's own). A subagent it spawns runs in the same one, whatever
-        # the chat is switched to meanwhile.
-        self.workspace_mode: str | None = None
+        # The directory and permission mode this run's workspace was built
+        # for (a None mode: the agent's own policy). The chats it creates — a
+        # subagent task, a spawned chat — work the same way, whatever the
+        # chat is switched to meanwhile.
+        self.binding = ChatBinding(None, None)
         # Cumulative usage across auto-chained legs, for the durable run record.
         self.usage = Usage()
         # Final model call's prompt size (context fill), from the last leg that
@@ -1193,10 +1195,11 @@ class RunSupervisor:
         async with self._start_lock(session_id):
             self._check_slot(session_id)
             meta = await self.deps.store.get(session_id)
-            agent_name = self.deps.name_of(agent)  # before bind() copies the agent
-            # The chat's permission mode, read now: a switch lands on the next run.
-            mode = self.deps.effective_mode(meta.workspace_mode if meta else None)
-            agent = self.deps.bind_workspace(agent, mode)
+            agent_name = self.deps.name_of(agent)  # before binding copies the agent
+            # The chat's directory, checked against the server's constraints,
+            # and its permission mode, read now: a switch lands on the next run.
+            binding = self.deps.chat_binding(agent, meta)
+            agent = self.deps.effective_agent(agent, binding)
             # Every run of one web session shares that session's workspace session
             # (lazily opened here), so background processes survive across runs —
             # they die with the *chat* (deletion/shutdown), not with the turn.
@@ -1233,7 +1236,7 @@ class RunSupervisor:
                 await_approvals=await_approvals,
                 chat_created_at=meta.created_at if meta else None,
             )
-            ctrl.workspace_mode = mode
+            ctrl.binding = binding
             # Reserve the session slot BEFORE the checkpoint await: two concurrent
             # starts (e.g. two tabs submitting at once) would otherwise both pass the
             # caller's live-check and the second would silently orphan the first's
@@ -1276,10 +1279,10 @@ class RunSupervisor:
         async with self._start_lock(session_id):
             self._check_slot(session_id, cap=False)
             meta = await self.deps.store.get(session_id)
-            agent_name = self.deps.name_of(agent)  # before bind() copies the agent
-            # The chat's mode as it is now, like a fresh run's.
-            mode = self.deps.effective_mode(meta.workspace_mode if meta else None)
-            agent = self.deps.bind_workspace(agent, mode)
+            agent_name = self.deps.name_of(agent)  # before binding copies the agent
+            # The chat's binding as it is now, like a fresh run's.
+            binding = self.deps.chat_binding(agent, meta)
+            agent = self.deps.effective_agent(agent, binding)
             # Same chat-scoped workspace binding as start(): the resumed leg's
             # background processes are gone (they never survive a restart), but
             # its shell/file tools must land on the chat's one live session.
@@ -1317,7 +1320,7 @@ class RunSupervisor:
                 run_deps=run_deps,
                 chat_created_at=meta.created_at if meta else None,
             )
-            ctrl.workspace_mode = mode
+            ctrl.binding = binding
             ctrl.record_id = record_id
             ctrl.usage = _spent_before(
                 records[0].usage if records else None, snapshot.usage

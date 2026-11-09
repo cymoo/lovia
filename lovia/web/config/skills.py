@@ -37,17 +37,20 @@ def _kind(raw: str) -> str:
     return "custom"
 
 
-def skill_roots(skills: SkillsConfig) -> list[SkillRoot]:
+def skill_roots(skills: SkillsConfig, base: Path | None = None) -> list[SkillRoot]:
     """Every configured entry in precedence order — one row per string.
 
-    Deliberately no identity folding: entries that resolve to the same
-    directory (``"x"`` and ``"./x"``) each keep their own row, so the
-    Settings pane can remove any of them; :func:`resolve_skills_dirs`
-    dedupes when building the actual plugin roots.
+    A relative entry resolves against ``base`` (a chat's directory), else the
+    current directory. Deliberately no identity folding: entries that
+    resolve to the same directory (``"x"`` and ``"./x"``) each keep their
+    own row, so the Settings pane can remove any of them;
+    :func:`resolve_skills_dirs` dedupes when building the actual plugin roots.
     """
     roots: list[SkillRoot] = []
     for raw in skills.dirs:
         expanded = Path(raw).expanduser()
+        if base is not None and not expanded.is_absolute():
+            expanded = base / expanded
         roots.append(
             SkillRoot(
                 kind=_kind(raw), path=raw, resolved=expanded, exists=expanded.is_dir()
@@ -59,22 +62,28 @@ def skill_roots(skills: SkillsConfig) -> list[SkillRoot]:
 _legacy_hint_emitted = False  # the ./skills nudge fires once per process
 
 
-def resolve_skills_dirs(skills: SkillsConfig | None) -> list[Path]:
-    """The existing skill roots, in precedence order (first root wins).
+def resolve_skills_dirs(
+    skills: SkillsConfig | None, base: Path | None = None, *, quiet: bool = False
+) -> list[Path]:
+    """The existing skill roots, in precedence order (first root wins);
+    relative ones resolved against ``base`` (see :func:`skill_roots`).
 
     Never raises: a listed directory that doesn't exist is skipped with an
     info log (the defaults are commonly absent; the Settings pane reports
     per-directory status), so a stale ``config.json`` can never make the
-    server unbootable. A bare ``./skills`` was the default before 0.9.13;
-    it is no longer auto-loaded (the generic name collides with non-skill
-    directories), so we point at the move once per process.
+    server unbootable. ``quiet`` skips the logging, for a per-run call. A
+    bare ``./skills`` was the default before 0.9.13; it is no longer
+    auto-loaded (the generic name collides with non-skill directories), so
+    we point at the move once per process.
     """
     global _legacy_hint_emitted
     skills = skills or SkillsConfig()
     dirs: list[Path] = []
     seen: set[Path] = set()
-    for root in skill_roots(skills):
+    for root in skill_roots(skills, base):
         if not root.exists:
+            if quiet:
+                continue
             if (
                 root.kind == "project_default"
                 and Path("skills").is_dir()

@@ -331,6 +331,115 @@ def test_deployment_bounds_modes_and_edits(
     assert deployment.workspace_lock() == lock
 
 
+@pytest.mark.parametrize(
+    ("deployment", "roots"),
+    [
+        (builder.Deployment(), "any"),
+        (builder.Deployment(lock_workspace=True), None),
+        (builder.Deployment(loopback=False), None),
+        (builder.Deployment(loopback=False, allow_workspace_edit=True), "any"),
+        (
+            builder.Deployment(
+                loopback=False, allow_workspace_edit=True, lock_workspace=True
+            ),
+            None,
+        ),
+        (builder.Deployment(workspace=None), None),
+    ],
+)
+def test_deployment_bounds_the_directories_a_chat_opens(
+    deployment: builder.Deployment, roots: str | None
+) -> None:
+    assert deployment.roots() == roots
+
+
+@pytest.mark.parametrize(
+    ("argv", "roots", "general"),
+    [
+        ([], "any", True),
+        (["--lock-workspace"], None, False),
+        (["--host", "0.0.0.0"], None, False),
+        (["--host", "0.0.0.0", "--allow-workspace-switch"], "any", True),
+    ],
+)
+def test_main_wires_the_switch_roots_and_general_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_home: Path,
+    write_config: Callable[..., Path],
+    argv: list[str],
+    roots: str | None,
+    general: bool,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_config()
+    seen = _capture_serving(monkeypatch)
+    assert cli.main(argv) == 0
+    switch = seen["workspaces"]
+    assert switch.roots == roots  # type: ignore[attr-defined]
+    expected = (fake_home / ".lovia" / "workspace").resolve() if general else None
+    assert switch.general == expected  # type: ignore[attr-defined]
+    assert switch.agent_for is not None  # type: ignore[attr-defined]
+    # Listed, not made: only a chat there creates it.
+    assert not (fake_home / ".lovia" / "workspace").exists()
+
+
+@pytest.mark.parametrize("where", ["home", "dir"])
+def test_main_launched_from_home_works_in_the_general_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_home: Path,
+    write_config: Callable[..., Path],
+    where: str,
+) -> None:
+    monkeypatch.chdir(fake_home)
+    write_config()
+    seen = _capture_serving(monkeypatch)
+    # DIR given — even the home directory itself — is taken as it is.
+    assert cli.main([] if where == "home" else [str(fake_home)]) == 0
+    agent = seen["agent"]
+    root = Path(agent.workspace.root).resolve()  # type: ignore[attr-defined]
+    general = fake_home / ".lovia" / "workspace"
+    if where == "home":
+        assert root == general.resolve() and general.is_dir()
+    else:
+        assert root == fake_home.resolve() and not general.exists()
+
+
+def test_project_agent_reads_the_chat_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lovia import Skills
+
+    launch, proj = tmp_path / "launch", tmp_path / "proj"
+    launch.mkdir()
+    (launch / "AGENTS.md").write_text("launch rules", encoding="utf-8")
+    skill = proj / ".agents" / "skills" / "demo"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: a demo\n---\nbody\n", encoding="utf-8"
+    )
+    (proj / "AGENTS.md").write_text("proj rules", encoding="utf-8")
+    monkeypatch.chdir(launch)
+    config = _agent_config(memory=False, instructions="custom")
+    agent = builder.build_default_agent(
+        builder.Deployment(workspace=str(launch)),
+        ChatStore.in_memory(),
+        _provider(),
+        config=config,
+    )
+    assert "launch rules" in str(agent.instructions)
+    assert not any(isinstance(p, Skills) for p in agent.plugins)
+    moved = builder.project_agent(agent, proj, config)
+    assert moved.instructions == "custom\n\nproj rules"
+    (skills,) = [p for p in moved.plugins if isinstance(p, Skills)]
+    assert moved.plugins[0] is skills
+    # Back in a directory with no skills: none.
+    back = builder.project_agent(moved, launch, config)
+    assert not any(isinstance(p, Skills) for p in back.plugins)
+    assert back.instructions == "custom\n\nlaunch rules"
+
+
 # -------------------------------------------------------------- --app -
 
 
@@ -1294,9 +1403,10 @@ def test_main_rejects_bad_provider_timeout(
     assert "must be > 0" in capsys.readouterr().err
 
 
-def test_main_default_db_lands_under_dot_lovia(
+def test_main_default_db_lands_in_the_user_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    fake_home: Path,
     capsys: pytest.CaptureFixture[str],
     write_config: Callable[..., Path],
 ) -> None:
@@ -1305,8 +1415,27 @@ def test_main_default_db_lands_under_dot_lovia(
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     rc = cli.main([])
     assert rc == 0
-    assert (tmp_path / ".lovia" / "lovia.db").is_file()
+    db = fake_home / ".lovia" / "lovia.db"
+    assert db.is_file()
+    assert not (tmp_path / ".lovia" / "lovia.db").exists()
+    assert str(db) in capsys.readouterr().out
+
+
+def test_main_keeps_a_launch_dir_db_that_already_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_home: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_config()
+    local = tmp_path / ".lovia" / "lovia.db"
+    ChatStore.sqlite(local)  # a database from before 0.9.148
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    assert cli.main([]) == 0
     assert ".lovia/lovia.db" in capsys.readouterr().out.replace("\\", "/")
+    assert not (fake_home / ".lovia" / "lovia.db").exists()
 
 
 def test_main_wires_the_aux_role_into_titles_and_followups(

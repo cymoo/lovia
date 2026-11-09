@@ -32,6 +32,7 @@ from .run_deps import RunTrigger, build_run_deps
 from .sse import SessionCreatedData
 from .store import RunRow
 from .titles import provisional_title
+from .workspaces import ChatBinding
 
 if TYPE_CHECKING:
     from .api.deps import RouterDeps
@@ -268,19 +269,22 @@ class Scheduler:
                 if not alive or await self.store.get_schedule(sched.id) is None:
                     log.info("schedule %s: a delete is under way; skipped", sched.id)
                     return None
-                # A chat the fire creates takes the schedule's mode (that of
-                # the chat that made it); an existing one keeps its own.
-                root, mode = (
-                    self.deps.new_chat_binding(agent, sched.workspace_mode)
+                # A chat the fire creates takes the schedule's directory and
+                # mode (those of the chat that made it); an existing one keeps
+                # its own.
+                binding = (
+                    self.deps.new_chat_binding(
+                        agent, sched.workspace_mode, sched.workspace_root
+                    )
                     if is_new
-                    else (None, None)
+                    else ChatBinding(None, None)
                 )
                 await self.store.upsert(
                     target,
                     agent=agent_name,  # registry key — the identity pick() speaks
                     title=title,
-                    workspace_root=root,
-                    workspace_mode=mode,
+                    workspace_root=binding.root,
+                    workspace_mode=binding.mode,
                 )
                 await self.deps.supervisor.start(
                     session_id=target,
@@ -314,6 +318,13 @@ class Scheduler:
                 log.info("schedule %s: at concurrency cap; deferring", sched.id)
                 if is_new:
                     await self.store.delete(target, schedules=False)
+                return None
+            if exc.code in ("workspace_not_allowed", "workspace_missing"):
+                # The chat's directory is refused (raised before a fresh
+                # chat's row is written): a miss, so the schedule moves on.
+                why: dict[str, str] = exc.detail if isinstance(exc.detail, dict) else {}
+                detail = f"{why.get('message')} — {why.get('hint')}"
+                await self._miss(sched, now, agent_name, detail)
                 return None
             raise
         if is_new:

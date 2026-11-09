@@ -136,6 +136,48 @@ class WorkspaceModesInfo(BaseModel):
     default: str | None = None
 
 
+class WorkspaceItem(BaseModel):
+    """One directory new chats may work in (``GET /api/workspaces``)."""
+
+    # None for the entries always listed (they can't be removed).
+    id: str | None = None
+    root: str  # absolute, resolved
+    name: str
+    # "default": the agent's own directory, where a new tab starts;
+    # "general": the catch-all for chats of no project; "added": the rest.
+    kind: Literal["default", "general", "added"] = "added"
+    last_used_at: float | None = None
+
+
+class WorkspaceList(BaseModel):
+    """The workspace list, and what this server lets a chat open."""
+
+    workspaces: list[WorkspaceItem] = Field(default_factory=list)
+    # Where a new tab starts: the agent's own directory.
+    default: str | None = None
+    # Whether directories beyond the listed fixed ones may be added.
+    can_add: bool = False
+    # When only some trees are allowed: their roots; None when any is.
+    roots: list[str] | None = None
+
+
+class WorkspaceAdd(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class AssociateRequest(BaseModel):
+    """Bind chats from before chats had a directory to one."""
+
+    session_ids: list[str] = Field(min_length=1, max_length=1000)
+    root: str = Field(min_length=1, max_length=4096)
+
+
+class AssociateResponse(BaseModel):
+    # The chats now bound (those already bound, or gone, are left out).
+    associated: list[str] = Field(default_factory=list)
+    root: str
+
+
 class ServerInfo(BaseModel):
     """Server-level capabilities, for a custom UI to introspect on load."""
 
@@ -193,6 +235,10 @@ class ChatRequest(BaseModel):
     # like ``agent``, an existing chat keeps its own (PATCH the session to
     # change it).
     workspace_mode: Literal["readonly", "coding", "trusted"] | None = None
+    # A new chat's directory (an absolute path; ``~`` expands), on a server
+    # with create_app(workspaces=); None: the agent's own. Fixed for the
+    # chat's life — an existing chat ignores it.
+    workspace: str | None = Field(default=None, max_length=4096)
 
     _bounded = field_validator("context")(lambda value: _bounded_context(value))
 
@@ -336,6 +382,9 @@ class SessionDetail(BaseModel):
     # Bumped by each switch: of two reports of one chat's mode, the higher
     # revision is the newer, whatever order they arrive in.
     workspace_mode_rev: int = 0
+    # The directory the chat works in (resolved, absolute); None: the agent
+    # has no local workspace, or the chat predates directories (unassociated).
+    workspace_root: str | None = None
 
 
 class ChatSessionInfo(BaseModel):
@@ -354,9 +403,10 @@ class ChatSessionInfo(BaseModel):
     # Where the chat came from (see SessionDetail.origin). The sidebar marks
     # a "fork", since a branch starts with its source's title.
     origin_kind: Literal["fork", "spawn"] | None = None
-    # See SessionDetail.workspace_mode / workspace_mode_rev.
+    # See SessionDetail.workspace_mode / workspace_mode_rev / workspace_root.
     workspace_mode: str | None = None
     workspace_mode_rev: int = 0
+    workspace_root: str | None = None
 
 
 class RunInfo(BaseModel):
@@ -511,6 +561,9 @@ class SessionPatch(BaseModel):
     pinned: bool | None = None
     # Applies from the chat's next run; a live run keeps the mode it began in.
     workspace_mode: Literal["readonly", "coding", "trusted"] | None = None
+    # Only for a chat with no directory yet (from before chats had one):
+    # bind it, once — see POST /api/sessions/associate.
+    workspace_root: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 class TodoItemOut(BaseModel):

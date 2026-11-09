@@ -33,6 +33,9 @@ also discovers:
 - `AGENTS.md` as Agent instructions;
 - `./.agents/skills` and `~/.agents/skills` as the Skills directories
   (project scope first; manage the list in Settings → Skills);
+
+both read from the directory each chat works in, on every run, so a chat in
+another project follows that project's `AGENTS.md` and skills;
 - `./.lovia/memory` as the Memory directory.
 
 The legacy `./skills` directory is no longer discovered automatically. Move it
@@ -303,7 +306,7 @@ finishes with what it started with.
 | **Models** → a profile's advanced fields | `models[].max_tokens` | The provider's |
 | **Workspace** → Permission mode for new chats | `workspace.default_mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
 | **Workspace** → Commands that run without asking | `workspace.auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
-| **Agent** → Custom instructions | `agent.instructions` | Empty: the launch directory's `AGENTS.md`, else a generic prompt; set, `AGENTS.md` is appended |
+| **Agent** → Custom instructions | `agent.instructions` | Empty: the chat directory's `AGENTS.md`, else a generic prompt; set, `AGENTS.md` is appended |
 | **Agent** → Max turns / Retries | `run.max_turns` / `run.max_retries` | `50` / the Agent's own (`4`) |
 | **Agent** → Suggest follow-up questions | `run.followups` | On |
 | **Agent** → Background tasks | `agent.subagents` | On |
@@ -335,22 +338,24 @@ Each resolves as flag, environment variable, then default.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
-| `DIR` (positional) | `LOVIA_WORKSPACE` | `.`: the workspace root |
+| `DIR` (positional) | `LOVIA_WORKSPACE` | `.`: where new chats work — or `~/.lovia/workspace`, the general workspace, when launched from your home or the root directory |
 | `--readonly` | — | Off. On, every run is read-only and Settings can't change it |
 | `--no-workspace` | — | Off. On, no file or shell tools |
-| `--allow-workspace-switch` | — | Off. On a non-loopback `--host`, lets the browser change the workspace settings (`trusted` stays loopback-only) |
+| `--allow-workspace-switch` | — | Off. On a non-loopback `--host`, lets the browser open other directories and change the workspace settings (`trusted` stays loopback-only) |
+| `--lock-workspace` | — | Off. On, every chat works in `DIR`: the browser can't open another (wins over `--allow-workspace-switch`) |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--root-path` | `LOVIA_ROOT_PATH` | None; the prefix a proxy serves the app under ([details](web-server.md#serving-under-a-path-prefix)) |
 | `--token` | `LOVIA_WEB_TOKEN` | Not needed on loopback; generated otherwise |
-| `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
+| `--db` | `LOVIA_DB` | `~/.lovia/lovia.db`, one history for every directory — or `./.lovia/lovia.db` where one already exists (from before 0.9.148) |
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent (or: an Agent, mapping, or app of your own) |
 | `--title` | `LOVIA_TITLE` | `lovia` |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--check` | — | Check model configuration and exit |
 
-On a non-loopback `--host`, the browser can't widen permissions: the
-workspace settings are read-only there and `trusted` runs as `coding`. Edit
-`config.json` and restart instead, or pass `--allow-workspace-switch`.
+On a non-loopback `--host`, the browser can't widen permissions: every chat
+works in `DIR`, the workspace settings are read-only there and `trusted` runs
+as `coding`. Edit `config.json` and restart instead, or pass
+`--allow-workspace-switch`.
 
 The options that moved into Settings in 0.9.146 (`--trusted`,
 `--auto-allow`, `--max-turns`, `--max-retries`, `--max-tokens`,

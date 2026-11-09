@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast, get_args
+from typing import Any, Literal, cast, get_args
 
 from ..agent import Agent
 from ..exceptions import UserError
@@ -50,6 +50,10 @@ log = logging.getLogger("lovia.web.builder")
 WORKSPACE_MODES: tuple[str, ...] = get_args(WorkspaceMode)
 INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
 DEFAULT_AGENT_NAME = "lovia"
+# The general workspace: where chats that belong to no project work (and
+# where `lovia web` works when launched from the home or root directory, so
+# its files never land loose in either). Created on first use.
+GENERAL_WORKSPACE = Path("~/.lovia/workspace")
 # The command bundles a ``coding`` workspace runs without asking, by name
 # (Settings → Workspace; ``workspace.auto_allow`` in config.json). Core opts
 # into none; `lovia web` is a coding agent the person running it launched, so
@@ -82,14 +86,28 @@ class Deployment:
       browser (anyone holding the token) must not widen permissions, and
       ``trusted`` is never offered.
     * ``allow_workspace_edit`` — ``--allow-workspace-switch``: a non-loopback
-      deployment opts into editing the workspace settings from the browser
-      anyway (``trusted`` stays loopback-only).
+      deployment opts into editing the workspace settings, and opening other
+      directories, from the browser anyway (``trusted`` stays loopback-only).
+    * ``lock_workspace`` — ``--lock-workspace``: every chat works in
+      ``workspace``; it wins over ``allow_workspace_edit``.
     """
 
     workspace: str | None = "."
     readonly: bool = False
     loopback: bool = True
     allow_workspace_edit: bool = False
+    lock_workspace: bool = False
+
+    def roots(self) -> Literal["any"] | None:
+        """Which directories a chat may open: ``"any"`` (plus the general
+        workspace), or ``None`` — only ``workspace``. Off loopback, unless
+        ``--allow-workspace-switch``, a token holder must not reach beyond
+        the directory the deployer launched in."""
+        if self.workspace is None or self.lock_workspace:
+            return None
+        if not self.loopback and not self.allow_workspace_edit:
+            return None
+        return "any"
 
     def modes(self) -> tuple[str, ...]:
         """The workspace modes this deployment allows, narrowest first."""
@@ -261,26 +279,41 @@ def resolve_retry(run: RunSettings) -> RetryPolicy | None:
     return RetryPolicy(max_attempts=run.max_retries + 1)
 
 
-def resolve_instructions(custom: str = "") -> str:
-    """The default agent's system prompt.
+def resolve_instructions(custom: str = "", root: str | Path = ".") -> str:
+    """The default agent's system prompt for a chat working in ``root``.
 
-    ``custom`` (Settings → Agent) is the server-wide prompt; the launch
-    directory's ``AGENTS.md`` (the cross-agent convention) is appended to it.
-    Without one the file alone serves, and without either a generic prompt.
-    Read on every build, so an edited ``AGENTS.md`` applies on the next
-    Settings change as well as at boot.
+    ``custom`` (Settings → Agent) is the server-wide prompt; the directory's
+    ``AGENTS.md`` (the cross-agent convention) is appended to it. Without
+    one the file alone serves, and without either a generic prompt. Read on
+    every build — and, with chats in several directories, on every run — so
+    an edited ``AGENTS.md`` applies without a restart.
     """
     project = ""
     for name in INSTRUCTIONS_FILES:
-        path = Path(name)
+        path = Path(root) / name
         if path.is_file():
-            log.info("using instructions from %s", path)
+            log.debug("using instructions from %s", path)
             project = path.read_text(encoding="utf-8")
             break
     custom = custom.strip()
     if custom and project:
         return f"{custom}\n\n{project}"
     return custom or project or GENERIC_INSTRUCTIONS
+
+
+def project_agent(agent: Agent[Any], root: Path, config: WebConfig) -> Agent[Any]:
+    """``agent`` for a chat working in ``root`` — ``WorkspaceSwitch.agent_for``
+    for the CLI: that directory's ``AGENTS.md`` and skills (the configured
+    skill directories, relative ones resolved against ``root``) in place of
+    the launch directory's. Read on every run; nothing is cached."""
+    plugins: list[Plugin] = [p for p in agent.plugins if not isinstance(p, Skills)]
+    dirs = resolve_skills_dirs(config.skills, base=root, quiet=True)
+    if dirs:
+        plugins.insert(0, Skills(*dirs))
+    return agent.clone(
+        instructions=resolve_instructions(config.agent.instructions, root),
+        plugins=plugins,
+    )
 
 
 def resolve_workspace(
@@ -320,8 +353,9 @@ def build_default_agent(
     config = config or WebConfig()
     profile = config.default_profile()
     settings = ModelSettings(max_tokens=profile.max_tokens if profile else None)
-    instructions = resolve_instructions(config.agent.instructions)
-    skills_dirs = resolve_skills_dirs(config.skills)
+    root = Path(deployment.workspace or ".")
+    instructions = resolve_instructions(config.agent.instructions, root)
+    skills_dirs = resolve_skills_dirs(config.skills, base=root)
     plugins: list[Plugin] = []
     if skills_dirs:
         plugins.append(Skills(*skills_dirs))

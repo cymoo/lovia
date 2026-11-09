@@ -19,7 +19,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from lovia import Agent  # noqa: E402
 from lovia.exceptions import UserError  # noqa: E402
 from lovia.web import WorkspaceSwitch, create_app  # noqa: E402
-from lovia.web.store import ChatStore  # noqa: E402
+from lovia.web.store import ChatMeta, ChatStore  # noqa: E402
+from lovia.web.workspaces import ChatBinding  # noqa: E402
 from lovia.workspace import Workspace, WorkspaceLimits  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
@@ -76,7 +77,7 @@ def test_default_build_keeps_the_agent_workspace_settings(tmp_path: Path) -> Non
     base = Workspace.local(
         str(tmp_path), env={"A": "1"}, shell_timeout=9.0, limits=limits
     )
-    built = WorkspaceSwitch().workspace(base, "readonly")
+    built = WorkspaceSwitch().workspace(base, tmp_path, "readonly")
     assert built.policy.write == "deny"
     assert (built.root, built.env, built.shell_timeout, built.limits) == (
         str(tmp_path),
@@ -207,23 +208,34 @@ def test_a_live_run_passes_on_its_snapshot_none_included(tmp_path: Path) -> None
     deps.workspace_switch = WorkspaceSwitch()
 
     class _Ctrl:
-        workspace_mode: str | None = "readonly"
+        binding = ChatBinding("/run", "readonly")
 
     ctrl = _Ctrl()
+    stored = ChatMeta(
+        id="s",
+        title=None,
+        agent=None,
+        created_at=0,
+        updated_at=0,
+        workspace_root="/stored",
+        workspace_mode="coding",
+    )
     deps.supervisor._controllers["s"] = ctrl  # type: ignore[assignment]
-    assert deps.inherited_mode(deps.run_snapshot("s"), "coding") == "readonly"
-    # A run on the agent's own workspace passes that on — not the mode the
+    assert deps.inherited(deps.run_snapshot("s"), stored) == ctrl.binding
+    # A run on the agent's own policy passes that on — not the mode the
     # chat was switched to since it began.
-    ctrl.workspace_mode = None
-    assert deps.inherited_mode(deps.run_snapshot("s"), "coding") is None
-    # No live run: the chat's stored mode.
-    assert deps.inherited_mode(deps.run_snapshot("other"), "coding") == "coding"
-    # An inherited None stays None (the agent's own workspace), whatever
+    ctrl.binding = ChatBinding("/run", None)
+    assert deps.inherited(deps.run_snapshot("s"), stored).mode is None
+    # No live run: the chat's stored binding.
+    assert deps.inherited(deps.run_snapshot("other"), stored) == ChatBinding(
+        "/stored", "coding"
+    )
+    # An inherited None stays None (the agent's own policy), whatever
     # the switch's default for page-made chats.
     deps.workspace_switch = WorkspaceSwitch(default_mode="coding")
     agent = _agent(tmp_path, [])
-    assert deps.new_chat_binding(agent, None)[1] is None
-    assert deps.new_chat_binding(agent, "readonly")[1] == "readonly"
+    assert deps.new_chat_binding(agent, None).mode is None
+    assert deps.new_chat_binding(agent, "readonly").mode == "readonly"
 
 
 async def _until(predicate, timeout: float = 5.0) -> None:
@@ -349,7 +361,7 @@ def test_rebinding_handles_a_handoff_cycle(tmp_path: Path) -> None:
     a.handoffs.append(b)  # a ⇄ b
     deps = RouterDeps(agents={"a": a}, store=ChatStore.in_memory())
     deps.workspace_switch = WorkspaceSwitch()
-    bound = deps.bind_workspace(a, "readonly")
+    bound = deps.effective_agent(a, ChatBinding(str(tmp_path), "readonly"))
     (b2,) = bound.handoffs
     assert b2.workspace.policy.write == "deny"
     assert b2.handoffs[0].target is bound  # the cycle closes on the copies

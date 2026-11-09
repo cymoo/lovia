@@ -23,6 +23,7 @@ import asyncio
 import mimetypes
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -215,12 +216,32 @@ def _write_upload(uploads: Path, name: str, data: bytes) -> Path:
 def build_workspace_router(deps: RouterDeps) -> APIRouter:
     router = APIRouter()
 
-    def require_cfg(agent_name: str | None) -> LocalWorkspace:
-        agent = deps.pick(agent_name)
+    async def require_cfg(
+        agent_name: str | None, session: str | None = None, root: str | None = None
+    ) -> LocalWorkspace:
+        """The workspace config to serve: the chat's directory with
+        ``session``, ``root`` (a draft's, checked like a new chat's) with
+        that, else the agent's own."""
+        where: str | None = None
+        if session is not None:
+            meta = await deps.store.get(session)
+            if meta is None:
+                raise WebError(404, "session_not_found", "session not found")
+            agent = (
+                deps.agents[meta.agent]
+                if meta.agent in deps.agents
+                else deps.pick(agent_name)
+            )
+            if meta.workspace_root is not None and workspace_cfg(agent) is not None:
+                where = deps.admit_root(agent, meta.workspace_root).as_posix()
+        else:
+            agent = deps.pick(agent_name)
+            if root is not None and workspace_cfg(agent) is not None:
+                where = deps.admit_root(agent, root).as_posix()
         cfg = workspace_cfg(agent)
         if cfg is None:
             raise WebError(404, "feature_unavailable", "agent has no workspace")
-        return cfg
+        return replace(cfg, root=where) if where is not None else cfg
 
     def entry_out(e: Any) -> WorkspaceEntry:
         return WorkspaceEntry(
@@ -232,8 +253,12 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         )
 
     @router.get("/api/workspace", response_model=WorkspaceInfo)
-    async def workspace_info(agent: str | None = Query(None)) -> WorkspaceInfo:
-        cfg = require_cfg(agent)
+    async def workspace_info(
+        agent: str | None = Query(None),
+        chat: str | None = Query(None, alias="session"),
+        root: str | None = Query(None, max_length=4096),
+    ) -> WorkspaceInfo:
+        cfg = await require_cfg(agent, chat, root)
         return WorkspaceInfo(
             name=_root_of(cfg).name or "workspace", scratch_dir=SCRATCH_DIR
         )
@@ -241,10 +266,12 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     @router.get("/api/workspace/files", response_model=list[WorkspaceEntry])
     async def list_dir(
         agent: str | None = Query(None),
+        chat: str | None = Query(None, alias="session"),
+        root: str | None = Query(None, max_length=4096),
         path: str = Query(".", max_length=4096),
     ) -> list[WorkspaceEntry]:
         """One directory level (breadcrumb browsing), dirs first."""
-        cfg = require_cfg(agent)
+        cfg = await require_cfg(agent, chat, root)
         try:
             async with _view_session(cfg) as session:
                 entries = await session.list_files(path)
@@ -260,6 +287,8 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     @router.get("/api/workspace/recent", response_model=list[WorkspaceEntry])
     async def recent_files(
         agent: str | None = Query(None),
+        chat: str | None = Query(None, alias="session"),
+        root: str | None = Query(None, max_length=4096),
         limit: int = Query(100, ge=1, le=500),
     ) -> list[WorkspaceEntry]:
         """Files across the whole workspace, newest first.
@@ -268,7 +297,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         workspace's ``max_list_results`` (500 by default) before sorting —
         fine for the personal-assistant scale this UI targets.
         """
-        cfg = require_cfg(agent)
+        cfg = await require_cfg(agent, chat, root)
         try:
             async with _view_session(cfg, skip=_RECENT_SKIPS) as session:
                 entries = await session.list_files(".", pattern="**/*")
@@ -283,6 +312,8 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     @router.get("/api/workspace/file", response_model=WorkspaceFile)
     async def read_file(
         agent: str | None = Query(None),
+        chat: str | None = Query(None, alias="session"),
+        root: str | None = Query(None, max_length=4096),
         path: str = Query(..., max_length=4096),
         start: int = Query(1, ge=1),
     ) -> WorkspaceFile:
@@ -293,7 +324,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         explicit window keeps ``end``/``truncated`` an honest has-more signal
         for the viewer's Load-more.
         """
-        cfg = require_cfg(agent)
+        cfg = await require_cfg(agent, chat, root)
         try:
             async with _view_session(cfg) as session:
                 if session.decide_path(path).action != "allow":
@@ -327,13 +358,15 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     async def raw_file(
         request: Request,
         agent: str | None = Query(None),
+        chat: str | None = Query(None, alias="session"),
+        root: str | None = Query(None, max_length=4096),
         path: str = Query(..., max_length=4096),
         download: bool = Query(False),
     ) -> Response:
         """Raw bytes: inline for images and PDFs (viewer preview), attachment
         for any file when ``download=1`` — "take the file the assistant made"
         is a first-class action for an assistant UI."""
-        cfg = require_cfg(agent)
+        cfg = await require_cfg(agent, chat, root)
         try:
             async with _view_session(cfg) as session:
                 if session.decide_path(path).action != "allow":
@@ -454,6 +487,8 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     async def upload_file(
         file: UploadFile = File(...),
         agent: str | None = Query(None),
+        chat: str | None = Query(None, alias="session"),
+        root: str | None = Query(None, max_length=4096),
     ) -> UploadedFile:
         """Save a composer/Files-panel upload under the workspace ``uploads/``.
 
@@ -464,7 +499,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         memory. The bytes are then written to a collision-free name, immediately
         servable via ``/api/workspace/raw`` and referenced from chat by path.
         """
-        cfg = require_cfg(agent)
+        cfg = await require_cfg(agent, chat, root)
         name = _safe_upload_name(file.filename or "upload")
         uploads = _root_of(cfg) / _UPLOADS_SUBDIR
         allowed = _allowed_upload_ext()

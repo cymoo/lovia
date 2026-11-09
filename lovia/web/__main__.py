@@ -48,7 +48,8 @@ from fastapi import FastAPI  # after .app: its import names a missing [web] extr
 
 from .api import RouterDeps
 from .auth import is_loopback
-from .builder import Deployment, resolve_retry
+from .builder import GENERAL_WORKSPACE, Deployment, resolve_retry
+from .config.storage import _protect_config_dir
 from .store import ChatStore
 from .workspaces import WorkspaceSwitch
 
@@ -210,8 +211,9 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "dir",
         nargs="?",
         metavar="DIR",
-        help="the workspace root the agent reads, edits and runs in "
-        "(env LOVIA_WORKSPACE, default .)",
+        help="the directory new chats work in; the browser can open others "
+        "(env LOVIA_WORKSPACE, default: the current directory — or "
+        "~/.lovia/workspace when that is your home or the root directory)",
     )
     agent = p.add_argument_group(
         "agent", "the default agent; --app serves your own instead, ignoring the rest"
@@ -237,8 +239,15 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     agent.add_argument(
         "--allow-workspace-switch",
         action="store_true",
-        help="on a non-loopback --host, let the browser change the workspace "
-        "mode and auto-allowed commands (trusted stays loopback-only)",
+        help="on a non-loopback --host, let the browser open other directories "
+        "and change the workspace mode and auto-allowed commands (trusted stays "
+        "loopback-only)",
+    )
+    agent.add_argument(
+        "--lock-workspace",
+        action="store_true",
+        help="keep every chat in the launch directory: the browser can't open "
+        "another (wins over --allow-workspace-switch)",
     )
 
     server = p.add_argument_group("server")
@@ -265,7 +274,8 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     server.add_argument(
         "--db",
         metavar="FILE",
-        help="SQLite file for chat history (env LOVIA_DB, default ./.lovia/<agent>.db)",
+        help="SQLite file for chat history (env LOVIA_DB, default "
+        "~/.lovia/lovia.db, or ./.lovia/lovia.db where that already exists)",
     )
 
     advanced = p.add_argument_group("advanced")
@@ -343,10 +353,45 @@ def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
         ("--readonly", args.readonly),
         ("--no-workspace", args.no_workspace),
         ("--allow-workspace-switch", args.allow_workspace_switch),
+        ("--lock-workspace", args.lock_workspace),
     ]
     ignored = [name for name, given in flags if given]
     if ignored:
         log.warning("--app set; ignoring default-agent options: %s", ", ".join(ignored))
+
+
+def _launch_dir(args: argparse.Namespace) -> str:
+    """The effective launch directory: ``DIR`` as given (the home directory
+    too — that is the person's explicit choice), else the current one —
+    unless that is the home or root directory, where the general workspace
+    stands in (created now: it is in use) so files never land loose there."""
+    given = _workspace_arg(args)
+    if given:
+        return given
+    cwd = Path.cwd().resolve()
+    if cwd in (Path.home().resolve(), Path(cwd.anchor)):
+        general = GENERAL_WORKSPACE.expanduser()
+        general.mkdir(parents=True, exist_ok=True)
+        return str(general)
+    return "."
+
+
+def _default_db() -> Path:
+    """The chat history's default file: the user's (``~/.lovia/lovia.db``),
+    shared by every directory — unless the launch directory already has its
+    own ``./.lovia/lovia.db`` (from before 0.9.148), which stays in use."""
+    local = _default_db_path("lovia")
+    if local.is_file():
+        log.info(
+            "chat history: using %s found here (new installs keep it in "
+            "~/.lovia/lovia.db; pass --db to choose)",
+            local,
+        )
+        return local
+    home = Path("~/.lovia").expanduser()
+    # It holds chat history beside the saved secrets: owner-only.
+    _protect_config_dir(home)
+    return home / "lovia.db"
 
 
 def _warn_ignored_app_flags(args: argparse.Namespace) -> None:
@@ -415,7 +460,14 @@ def _workspace_desc(deployment: Deployment, config: webconfig.WebConfig) -> str:
         desc += f"; {settings.default_mode} in config.json, capped by {why}"
     elif deployment.readonly:
         desc += ", locked by --readonly"
-    return f"{Path(deployment.workspace).resolve()} ({desc})"
+    if deployment.lock_workspace:
+        desc += "; every chat here (--lock-workspace)"
+    elif deployment.roots() is None:
+        desc += "; every chat here (non-loopback host)"
+    root = Path(deployment.workspace).resolve()
+    if root == GENERAL_WORKSPACE.expanduser().resolve():
+        desc += "; the general workspace — pass DIR to work in a project"
+    return f"{root} ({desc})"
 
 
 def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
@@ -537,7 +589,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 version=__version__, app_target=app_target, db_desc=db_desc, url=url
             )
         else:
-            db_desc = db_path or str(_default_db_path("lovia"))
+            db_desc = db_path or str(_default_db())
             loaded = webconfig.load_active()
             profile = loaded.config.default_profile()
             conn = (
@@ -554,10 +606,11 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             unconfigured = bool(conn.missing())
             run = loaded.config.run
             deployment = Deployment(
-                workspace=None if args.no_workspace else _workspace_arg(args) or ".",
+                workspace=None if args.no_workspace else _launch_dir(args),
                 readonly=args.readonly,
                 loopback=is_loopback(host),
                 allow_workspace_edit=args.allow_workspace_switch,
+                lock_workspace=args.lock_workspace,
             )
             settings = loaded.config.workspace
             effective = deployment.effective_mode(settings.default_mode)
@@ -584,12 +637,16 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 question_channel=question_channel,
             )
             if deployment.workspace is not None:
+                roots = deployment.roots()
                 workspaces = WorkspaceSwitch(
+                    roots=roots,
                     modes=cast(
                         "tuple[WorkspaceMode, ...]",
                         deployment.chat_modes(settings.default_mode),
                     ),
                     build=config_runtime.workspace_for,
+                    agent_for=config_runtime.agent_for,
+                    general=GENERAL_WORKSPACE if roots == "any" else None,
                 )
             if unconfigured:
                 agent_or_agents = {}

@@ -143,6 +143,10 @@ normalizes all three.
 | `model_in_use` | 409 | the default chat model can't be deleted |
 | `config_read_only` | 409 | `config.json` is not writable (e.g. a read-only mount) |
 | `workspace_locked` | 403 | the workspace settings are fixed by how `lovia web` was started |
+| `workspace_not_allowed` | 409 | this server doesn't let a chat work in that directory (`hint` names the constraint); a chat is refused, never moved |
+| `workspace_missing` | 409 | the chat's directory no longer exists |
+| `workspace_fixed` | 409 | the chat already works in a directory, which never changes |
+| `workspace_not_found` | 404 | no such entry in the workspace list (the fixed ones can't be removed) |
 | `file_too_large` | 413 | over the workspace read or upload limit |
 | `unsupported_file_type` | 415 | not previewable inline, or an extension uploads don't allow |
 | `too_many_runs` | 429 | at the concurrent-run cap |
@@ -176,8 +180,12 @@ normalizes all three.
 | `GET /api/sessions/{id}/ui-data/{ref}` | a UI component's full props, stored by `put_ui_data` during a run of this chat ([details](web-server.md#bulk-data)) |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web-server.md#scheduling): list, create, retime/pause, delete, fire now |
 | `GET /api/schedules/{id}/runs` | a schedule's fire history (its run records, newest first) |
-| `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | read-only file panel over the agent's [workspace](workspace.md) |
-| `POST /api/workspace/upload?agent=` | save one file under the workspace's `uploads/`, within the extension allowlist and size limit |
+| `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | read-only file panel over the agent's [workspace](workspace.md) — the chat's directory with `?session=`, a not-yet-sent draft's with `?root=` (checked like a new chat's) |
+| `POST /api/workspace/upload?agent=` | save one file under the workspace's `uploads/`, within the extension allowlist and size limit; `?session=` / `?root=` as for the panel |
+| `GET /api/workspaces` | with `create_app(workspaces=)`: the directories a new chat may pick — `{workspaces: [{id, root, name, kind, last_used_at}], default, can_add, roots}`. `kind` is `"default"` (the agent's own directory, where a new tab starts), `"general"` (the switch's catch-all) or `"added"`; the first two have no `id` and stay listed. `can_add` says whether others may be added; `roots` lists the allowed trees when only some are |
+| `POST /api/workspaces` · `DELETE /api/workspaces/{id}` | `{path}` → the entry: add an existing, allowed directory (symlinks resolved) · drop one from the list (its files and chats stay; a new chat there lists it again) |
+| `GET /api/workspaces/dirs?path=` | completions for a directory being typed: subdirectory paths as typed (`~` kept), within what may be added |
+| `POST /api/sessions/associate` | `{session_ids, root}` → `{associated, root}`: bind chats from before chats had a directory (`workspace_root: null`) to one, for good — one at a time is `PATCH /api/sessions/{id}` with `workspace_root` |
 | `GET` / `PUT /api/memory?agent=` | read / replace the [Memory notes](memory.md#how-memories-get-written) (`{content, used, budget, dreamed_at}`) |
 | `POST /api/memory/dream?agent=` | [dream](memory.md#dreaming) the notes now → `{content, used, budget, dreamed_at, before, after}` |
 | `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `PUT /api/config/workspace` · `PUT /api/config/run` · `PUT /api/config/agent` · `POST /api/config/test` | **UI-internal**, serving the CLI's built-in settings UI and not part of the [stable API](stability.md): the CLI default agent's [model configuration](web-ui.md#models-and-switching) and [skill directories](web-ui.md#skills) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); writes validate the whole document, persist it, and hot-swap the served agent. `GET /api/config/skills` reports per-directory discovery |
@@ -189,10 +197,15 @@ context `create_app(run_deps=...)` receives as `trigger.client_context` (see
 [Run deps](web-server.md#run-deps)). A message that joins a live run
 doesn't change that run's context.
 
-On a server with `create_app(workspaces=)`, a new chat's request may carry
-`workspace_mode` (`"readonly"`, `"coding"` or `"trusted"`, one of
-`/api/info`'s `workspace_modes.modes`); an existing chat keeps its own, which
-`PATCH /api/sessions/{id}` changes from its next run. Sessions report
+On a server with `create_app(workspaces=)` (`features.workspace_switch`), a
+new chat's request may carry `workspace` — its directory, an absolute path
+(`~` expands), checked against the server's `roots` (else the agent's own) —
+and `workspace_mode` (`"readonly"`, `"coding"` or `"trusted"`, one of
+`/api/info`'s `workspace_modes.modes`). The directory is fixed for the chat's
+life and checked again on every run: one this server no longer allows is
+refused (409 `workspace_not_allowed`), never swapped. An existing chat keeps
+its mode too, which `PATCH /api/sessions/{id}` changes from its next run.
+Sessions report `workspace_root` (`null`: from before chats had one). Sessions report
 `workspace_mode` as stored, with `workspace_mode_rev`, which each switch
 bumps: of two reports of a chat's mode (a list, a detail, a `PATCH` answer,
 an event), the higher revision is the newer, in whatever order they arrive.
@@ -215,7 +228,7 @@ that starts meanwhile is still refused, with no injection and no new run.
 | `run_finished` | `{session_id, run_id, status, error, source}` |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
-| `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev}` |
+| `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev, workspace_root}` |
 | `config_changed` | `{configured, model, profile_id, name}` — refetch `/api/config` |
 
 It does not replay history. On every connection or reconnection, fetch current state from

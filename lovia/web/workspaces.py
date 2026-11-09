@@ -25,7 +25,7 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, cast, get_args
+from typing import Any, Literal, cast, get_args
 
 from ..agent import Agent
 from ..exceptions import UserError
@@ -35,40 +35,99 @@ from ..workspace.protocol import WorkspaceSession
 
 log = logging.getLogger(__name__)
 
-__all__ = ["WorkspaceSessions", "WorkspaceSwitch"]
+__all__ = ["ChatBinding", "WorkspaceSessions", "WorkspaceSwitch"]
 
 # Narrowest first: a mode may only ever be capped toward the front.
 MODE_ORDER: tuple[str, ...] = get_args(WorkspaceMode)
 
 
+def resolve_root(path: str | Path) -> Path:
+    """``path`` as a chat binding stores it: user-expanded, symlinks resolved."""
+    return Path(path).expanduser().resolve()
+
+
+def workspace_config(agent: Agent[Any]) -> LocalWorkspace | None:
+    """``agent``'s local-workspace config — through a session binding, whose
+    ``.workspace`` is the config — or None for no or a custom workspace."""
+    ws = agent.workspace
+    cfg = getattr(ws, "workspace", ws)
+    return cfg if isinstance(cfg, LocalWorkspace) else None
+
+
+def own_root(agent: Agent[Any]) -> Path | None:
+    """The resolved root of ``agent``'s own local workspace, if it has one."""
+    cfg = workspace_config(agent)
+    return resolve_root(cfg.root) if cfg is not None else None
+
+
+@dataclass(frozen=True)
+class ChatBinding:
+    """Where and how a chat's runs work, as stored on the chat.
+
+    ``root`` is the resolved directory (None: the agent has no local
+    workspace); ``mode`` the permission mode (None: the agent's own policy).
+    """
+
+    root: str | None
+    mode: str | None
+
+
 @dataclass(frozen=True)
 class WorkspaceSwitch:
-    """Let each chat pick its own permission mode: ``create_app(workspaces=)``.
+    """Let each chat pick its directory and permission mode:
+    ``create_app(workspaces=)``.
 
     Without it the served agent's workspace is what every chat gets. With it
-    a chat stores a mode — chosen in the composer, or with ``workspace_mode``
-    on its first message — and each of its runs gets the agent's workspace
-    rebuilt for that mode. The root stays the agent's.
+    a chat is bound to a directory when it is created (its first message's
+    ``workspace``, else the agent's own root) and stores a mode — chosen in
+    the composer, or with ``workspace_mode`` — and each of its runs gets the
+    agent's workspace rebuilt for that directory and mode.
 
+    * ``roots`` — which directories a chat may be bound to: ``"any"``, a
+      list (those directories and everything under them), or ``None`` (only
+      the agent's own root). The agent's own root and ``general`` are always
+      allowed. Checked on every run, so a chat whose directory a narrower
+      deployment no longer allows is refused, never moved.
     * ``modes`` — what a chat may pick; ``readonly`` is always among them.
       A stored mode this server doesn't offer (a deployment narrowed since)
       runs as the widest offered mode below it: only ever narrower.
     * ``default_mode`` — what the page preselects for a new chat; ``None``
-      runs new chats on the agent's own workspace until one is picked.
+      runs new chats on the agent's own policy until one is picked.
     * ``build`` — ``(root, mode) -> LocalWorkspace``. The default is the
       ``Workspace.local`` preset for the mode, keeping the agent workspace's
       env, limits, executor, ``inherit_env`` and shell timeout — but not a
       custom policy's rules. Pass ``build`` to carry those across modes.
+    * ``agent_for`` — ``(agent, root) -> agent``: the project-specific rest
+      (instructions, plugins — say, the directory's ``AGENTS.md`` and
+      skills). Called on every run, before the workspace is set; whatever
+      workspace it sets is replaced.
+    * ``general`` — a catch-all directory for chats that belong to no
+      project: always listed, created on first use.
 
-    A chat that never picked a mode stays on the agent's own workspace,
-    custom policy and all.
+    A chat that never picked a mode keeps the agent's own policy, custom
+    rules and all, moved to its directory.
     """
 
+    roots: Literal["any"] | Sequence[str | Path] | None = "any"
     modes: Sequence[WorkspaceMode] = ("readonly", "coding")
     default_mode: WorkspaceMode | None = None
     build: Callable[[Path, WorkspaceMode], LocalWorkspace] | None = None
+    agent_for: Callable[[Agent[Any], Path], Agent[Any]] | None = None
+    general: str | Path | None = None
 
     def __post_init__(self) -> None:
+        if self.roots is not None and self.roots != "any":
+            if isinstance(self.roots, (str, Path)):
+                raise UserError(
+                    f"WorkspaceSwitch.roots must be 'any', a list or None, "
+                    f"got {self.roots!r}",
+                    hint="wrap a single directory in a list: roots=[...]",
+                )
+            object.__setattr__(
+                self, "roots", tuple(resolve_root(r) for r in self.roots)
+            )
+        if self.general is not None:
+            object.__setattr__(self, "general", resolve_root(self.general))
         unknown = [m for m in self.modes if m not in MODE_ORDER]
         if unknown:
             raise UserError(
@@ -96,12 +155,32 @@ class WorkspaceSwitch:
         below = [m for m in self.modes if MODE_ORDER.index(m) <= rank]
         return below[-1]
 
-    def workspace(self, base: LocalWorkspace, mode: WorkspaceMode) -> LocalWorkspace:
-        """The agent's workspace ``base`` rebuilt for ``mode``."""
+    def refusal(self, root: Path, own: Path | None) -> str | None:
+        """Why a chat may not work in ``root`` (resolved), or ``None``.
+
+        ``own`` is the agent's own root, always allowed, as is ``general``.
+        """
+        if root == own or root == self.general or self.roots == "any":
+            return None
+        if self.roots is None:
+            return f"this server keeps every chat in {own}"
+        roots = cast("tuple[Path, ...]", self.roots)
+        if any(root.is_relative_to(r) for r in roots):
+            return None
+        listed = ", ".join(str(r) for r in roots) or "(none)"
+        return f"only directories under {listed} are allowed"
+
+    def workspace(
+        self, base: LocalWorkspace, root: Path, mode: WorkspaceMode | None
+    ) -> LocalWorkspace:
+        """The agent's workspace ``base`` rebuilt for a chat in ``root`` with
+        ``mode`` — ``None`` keeps ``base``'s own policy, moved to ``root``."""
+        if mode is None:
+            return replace(base, root=str(root))
         if self.build is not None:
-            return self.build(Path(base.root), mode)
+            return self.build(root, mode)
         return Workspace.local(
-            base.root,
+            str(root),
             mode=mode,
             env=base.env,
             shell_timeout=base.shell_timeout,

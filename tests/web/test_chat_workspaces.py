@@ -170,17 +170,20 @@ def test_a_server_without_a_switch_refuses_a_directory(
 
 
 def test_a_chat_in_a_directory_the_server_no_longer_allows_is_refused(
-    dirs: tuple[Path, Path],
+    tmp_path: Path, dirs: tuple[Path, Path]
 ) -> None:
     launch, other = dirs
-    store = ChatStore.in_memory()
-    with _client(_agent(launch, [text("one")]), WorkspaceSwitch(), store) as c:
+    db = tmp_path / "chat.db"
+    with _client(
+        _agent(launch, [text("one")]), WorkspaceSwitch(), ChatStore.sqlite(db)
+    ) as c:
         sid = c.post(
             "/api/chat", json={"message": "go", "workspace": str(other)}
         ).json()["session_id"]
-    # The same chats under a server locked to its own directory.
+    # The same chats (a restart: one store per server) under a server locked
+    # to its own directory.
     agent = _agent(launch, [_WRITE, text("never")])
-    with _client(agent, WorkspaceSwitch(roots=None), store) as c:
+    with _client(agent, WorkspaceSwitch(roots=None), ChatStore.sqlite(db)) as c:
         res = c.post("/api/chat", json={"message": "again", "session_id": sid})
         assert res.status_code == 409
         assert res.json()["detail"]["code"] == "workspace_not_allowed"

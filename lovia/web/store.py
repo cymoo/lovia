@@ -44,7 +44,8 @@ _T = TypeVar("_T")
 # Column order shared by every ``ChatMeta`` SELECT (and ``ChatMeta.from_row``).
 _META_COLS = (
     "id, title, agent, created_at, updated_at, pinned, parent_id, "
-    "origin_kind, origin_session_id, origin_ref, workspace_root, workspace_mode"
+    "origin_kind, origin_session_id, origin_ref, workspace_root, workspace_mode, "
+    "workspace_mode_rev"
 )
 
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
@@ -274,12 +275,24 @@ def _workspace_binding(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
 
 
+def _workspace_mode_rev(conn: sqlite3.Connection) -> None:
+    """A chat's mode revision (0.9.147): bumped by each switch, so a client
+    orders reports of the mode by it rather than by arrival."""
+    present = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
+    if "workspace_mode_rev" not in present:
+        conn.execute(
+            "ALTER TABLE chat_sessions "
+            "ADD COLUMN workspace_mode_rev INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     _reconcile_unversioned,
     _fork_origin,
     _active_record,
     _grants,
     _workspace_binding,
+    _workspace_mode_rev,
 )
 
 
@@ -311,6 +324,9 @@ class ChatMeta:
     workspace_mode: str | None = None
     """The chat's permission mode (``readonly`` / ``coding`` / ``trusted``),
     or None to run on the served agent's own workspace."""
+    workspace_mode_rev: int = 0
+    """Bumped by every :meth:`ChatStore.set_workspace_mode`: orders the
+    reports of a chat's mode a client gets from different sources."""
 
     @classmethod
     def from_row(cls, row: Any) -> "ChatMeta":
@@ -328,6 +344,7 @@ class ChatMeta:
             row[9],
             row[10],
             row[11],
+            row[12] or 0,
         )
 
     def to_dict(self) -> JsonObject:
@@ -344,6 +361,7 @@ class ChatMeta:
             "origin_ref": self.origin_ref,
             "workspace_root": self.workspace_root,
             "workspace_mode": self.workspace_mode,
+            "workspace_mode_rev": self.workspace_mode_rev,
         }
 
 
@@ -677,9 +695,11 @@ class ChatStore:
         )
 
     async def set_workspace_mode(self, session_id: str, mode: str | None) -> None:
-        """Change a chat's permission mode; its next run uses it."""
+        """Change a chat's permission mode; its next run uses it. Each change
+        bumps ``workspace_mode_rev`` in the same statement."""
         await self._write(
-            "UPDATE chat_sessions SET workspace_mode = ? WHERE id = ?",
+            "UPDATE chat_sessions SET workspace_mode = ?, "
+            "workspace_mode_rev = workspace_mode_rev + 1 WHERE id = ?",
             (mode, session_id),
         )
 

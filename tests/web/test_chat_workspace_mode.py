@@ -503,3 +503,22 @@ async def test_a_start_that_loses_a_race_never_touches_the_winners_policy(
     # The winner runs as it was bound; the loser switched nothing under it.
     session = deps.workspaces.get("s")
     assert session is not None and session.policy.write == "allow"
+
+
+def test_every_report_of_a_mode_carries_its_revision(tmp_path: Path) -> None:
+    with _client(_agent(tmp_path, [text("x")]), WorkspaceSwitch()) as c:
+        sid = c.post(
+            "/api/chat", json={"message": "a", "workspace_mode": "coding"}
+        ).json()["session_id"]
+        assert c.get(f"/api/sessions/{sid}").json()["workspace_mode_rev"] == 0
+        first = c.patch(f"/api/sessions/{sid}", json={"workspace_mode": "readonly"})
+        second = c.patch(f"/api/sessions/{sid}", json={"workspace_mode": "coding"})
+        # Each switch bumps it: the higher revision is the newer report.
+        assert first.json()["workspace_mode_rev"] == 1
+        assert second.json()["workspace_mode_rev"] == 2
+        assert c.get(f"/api/sessions/{sid}").json()["workspace_mode_rev"] == 2
+        (row,) = c.get("/api/sessions").json()
+        assert (row["workspace_mode"], row["workspace_mode_rev"]) == ("coding", 2)
+        # A rename doesn't count as a switch.
+        c.patch(f"/api/sessions/{sid}", json={"title": "t"})
+        assert c.get(f"/api/sessions/{sid}").json()["workspace_mode_rev"] == 2

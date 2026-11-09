@@ -8,6 +8,12 @@
 // applied from its next run — a reply already streaming finishes as it
 // began. A stored mode the server no longer offers runs capped down; the chip
 // shows what runs get and says why.
+//
+// The open chat's mode reaches the chip from several sources — a change
+// event, this page's own switch, the session list, the chat's detail — in no
+// guaranteed order. Each carries the chat's workspace_mode_rev, which the
+// server bumps on every switch: the chip takes a report only when its
+// revision is higher than the one it shows. That one rule orders them all.
 import { api } from './api.js';
 import { store } from './store.js';
 import { t } from './i18n.js';
@@ -25,13 +31,8 @@ let _draft = /** @type {string | null} */ (null);
 let _draftPicked = false;
 /** The open chat's stored mode, once known (undefined: not loaded yet). */
 let _current = /** @type {string | null | undefined} */ (undefined);
-/**
- * When the open chat's mode last came from a source that is current by
- * construction — a change event, this page's own switch, opening the chat.
- * A fetched answer (list snapshot, chat detail) requested before that is
- * stale and dropped: it could only put an older mode back.
- */
-let _changedAt = 0;
+/** The revision of `_current` (-1: none seen for the open chat yet). */
+let _rev = -1;
 /** The chat id the chip last showed (null: a new chat). */
 let _shownId = /** @type {string | null} */ (null);
 
@@ -65,14 +66,15 @@ function shown() {
 }
 
 /**
- * Show `mode` for the open chat as fetched at `requestedAt`, unless a newer
- * change already landed.
- * @param {string | null | undefined} mode
- * @param {number} requestedAt
+ * Take a report of the open chat's mode — any source — if it is newer than
+ * what the chip shows.
+ * @param {{ workspace_mode?: string | null, workspace_mode_rev?: number } | null | undefined} report
  */
-function applyFetched(mode, requestedAt) {
-  if (requestedAt < _changedAt) return;
-  _current = mode ?? null;
+function apply(report) {
+  const rev = report?.workspace_mode_rev ?? 0;
+  if (!report || rev <= _rev) return;
+  _rev = rev;
+  _current = report.workspace_mode ?? null;
   render();
 }
 
@@ -116,16 +118,15 @@ async function pick(mode) {
   }
   // No "unchanged" shortcut: the shown mode may be stale (another tab), and
   // the server's answer is what counts.
+  let answer;
   try {
-    await api.setSessionMode(id, mode);
+    answer = await api.setSessionMode(id, mode);
   } catch (err) {
     toast(String(/** @type {Error} */ (err).message || err), { type: 'error' });
     return;
   }
   if (store.sessionId !== id) return;
-  _current = mode;
-  _changedAt = store.stamp();
-  render();
+  apply(answer); // a later switch from another tab, if seen already, wins
   const live = store.activeRuns.has(id) || store.streaming;
   toast(t(live ? 'mode.nextRun' : 'mode.switched', { mode: label(mode) }));
 }
@@ -180,28 +181,23 @@ function resetDraft() {
   _draftPicked = false;
 }
 
-/**
- * @param {string | null} id
- * @param {boolean} [switched] False only at boot: the page's first fetches
- *   for the chat were requested before the chip existed and still count.
- */
-function onSessionId(id, switched = true) {
+/** @param {string | null} id */
+function onSessionId(id) {
   closeMenu();
   const wasNew = _shownId === null;
   _shownId = id;
-  if (switched) _changedAt = store.stamp(); // a fetch for the chat before is moot
+  _current = undefined; // a revision belongs to one chat: start over
+  _rev = -1;
   if (!id) {
-    _current = undefined;
     resetDraft();
   } else if (wasNew && store.streaming) {
     // The new chat just got its id from its first run: it was saved with
-    // the draft mode that message carried.
+    // the draft mode that message carried (revision 0, as reports will say).
     _current = _draft;
   } else {
     // The list knows top-level chats; a task chat's mode arrives with its
     // detail ('session-meta').
-    const row = store.sessions.find((s) => s.id === id);
-    _current = row ? (row.workspace_mode ?? null) : undefined;
+    apply(store.sessions.find((s) => s.id === id));
   }
   render();
 }
@@ -253,21 +249,19 @@ export function initWorkspaceMode() {
   store.on('events-open', () => {
     resync = true; // settled by the snapshot this connect fetches
   });
-  store.on('sessions-loaded', async (/** @type {any} */ loaded) => {
+  store.on('sessions-loaded', async () => {
     const id = store.sessionId;
     const row = id ? store.sessions.find((s) => s.id === id) : undefined;
     const pending = resync;
     resync = false;
     if (row) {
-      applyFetched(row.workspace_mode, loaded?.requestedAt ?? 0);
+      apply(row);
       return;
     }
     if (!id || !pending) return;
     try {
-      const requestedAt = store.stamp();
       const data = await api.getSession(id);
-      if (store.sessionId !== id) return; // moved on meanwhile
-      applyFetched(data.workspace_mode, requestedAt);
+      if (store.sessionId === id) apply(data); // unless we moved on meanwhile
     } catch {
       /* transient — the next switch or reconnect resyncs */
     }
@@ -281,18 +275,16 @@ export function initWorkspaceMode() {
   });
   // The open chat's detail (a switch, a refresh) carries its stored mode.
   store.on('session-meta', (/** @type {any} */ data) => {
-    if (data?.id !== store.sessionId) return;
-    applyFetched(data.workspace_mode, data.requestedAt ?? 0);
+    if (data?.id === store.sessionId) apply(data);
   });
   // Another tab (or this one) switched a chat's mode.
   store.on('session-workspace-changed', (/** @type {any} */ data) => {
     const row = store.sessions.find((s) => s.id === data?.session_id);
-    if (row) row.workspace_mode = data.workspace_mode;
-    if (data?.session_id === store.sessionId) {
-      _current = data.workspace_mode ?? null;
-      _changedAt = store.stamp();
-      render();
+    if (row && (data.workspace_mode_rev ?? 0) > (row.workspace_mode_rev ?? 0)) {
+      row.workspace_mode = data.workspace_mode;
+      row.workspace_mode_rev = data.workspace_mode_rev;
     }
+    if (data?.session_id === store.sessionId) apply(data);
   });
   // A Settings change of the default reaches a draft nobody picked yet.
   store.on('config-loaded', (/** @type {any} */ cfg) => {
@@ -303,5 +295,5 @@ export function initWorkspaceMode() {
     _draft = _default;
     render();
   });
-  onSessionId(store.sessionId, false);
+  onSessionId(store.sessionId);
 }

@@ -193,8 +193,10 @@ On a server with `create_app(workspaces=)`, a new chat's request may carry
 `workspace_mode` (`"readonly"`, `"coding"` or `"trusted"`, one of
 `/api/info`'s `workspace_modes.modes`); an existing chat keeps its own, which
 `PATCH /api/sessions/{id}` changes from its next run. Sessions report
-`workspace_mode` as stored; a mode the server no longer offers runs as the
-widest offered one below it.
+`workspace_mode` as stored, with `workspace_mode_rev`, which each switch
+bumps: of two reports of a chat's mode (a list, a detail, a `PATCH` answer,
+an event), the higher revision is the newer, in whatever order they arrive.
+A mode the server no longer offers runs as the widest offered one below it.
 
 `/api/chat/stream` also takes `busy`: what a message for a chat with a live
 run does. `"inject"` (the default) steers it into that run; `"reject"` answers
@@ -213,7 +215,7 @@ that starts meanwhile is still refused, with no injection and no new run.
 | `run_finished` | `{session_id, run_id, status, error, source}` |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
-| `session_workspace_changed` | `{session_id, workspace_mode}` |
+| `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev}` |
 | `config_changed` | `{configured, model, profile_id, name}` — refetch `/api/config` |
 
 It does not replay history. On every connection or reconnection, fetch current state from

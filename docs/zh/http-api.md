@@ -181,8 +181,9 @@ API 路由抛出的错误都使用同一种响应体：
 
 服务端启用了 `create_app(workspaces=)` 时，新对话的请求可以带 `workspace_mode`（`"readonly"`、
 `"coding"` 或 `"trusted"`，须在 `/api/info` 的 `workspace_modes.modes` 之中）；已有对话保持自己的模式，
-用 `PATCH /api/sessions/{id}` 修改，从下次运行起生效。会话里返回的是保存的 `workspace_mode`；服务端
-已不提供的模式，按它下方最宽的可用模式运行。
+用 `PATCH /api/sessions/{id}` 修改，从下次运行起生效。会话里返回的是保存的 `workspace_mode`，
+以及每次切换都会加 1 的 `workspace_mode_rev`：同一对话的模式有多份报告时（列表、详情、`PATCH` 的响应、事件），
+无论到达顺序如何，版本号更大的那份更新。服务端已不提供的模式，按它下方最宽的可用模式运行。
 
 `/api/chat/stream` 还接受 `busy`，决定对话已有 Run 在执行时如何处理这条消息：`"inject"`（默认）
 把它作为追加指令注入该 Run；`"reject"` 改为返回 409 `run_active`，绝不注入——用于必须单独
@@ -199,7 +200,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `run_finished` | `{session_id, run_id, status, error, source}` |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
-| `session_workspace_changed` | `{session_id, workspace_mode}` |
+| `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev}` |
 | `config_changed` | `{configured, model, profile_id, name}`：重新拉取 `/api/config` 即可同步 |
 
 事件流不重放历史；客户端每次连接或重连时，

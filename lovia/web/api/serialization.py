@@ -43,6 +43,7 @@ def session_info(
         last_run_status=last_run_status,
         origin_kind=origin_kind(meta.origin_kind),
         workspace_mode=meta.workspace_mode,
+        workspace_mode_rev=meta.workspace_mode_rev,
     )
 
 

@@ -333,6 +333,9 @@ class SessionDetail(BaseModel):
     # The chat's permission mode as stored (None: the agent's own workspace);
     # a server that offers fewer modes runs a wider one capped down.
     workspace_mode: str | None = None
+    # Bumped by each switch: of two reports of one chat's mode, the higher
+    # revision is the newer, whatever order they arrive in.
+    workspace_mode_rev: int = 0
 
 
 class ChatSessionInfo(BaseModel):
@@ -351,8 +354,9 @@ class ChatSessionInfo(BaseModel):
     # Where the chat came from (see SessionDetail.origin). The sidebar marks
     # a "fork", since a branch starts with its source's title.
     origin_kind: Literal["fork", "spawn"] | None = None
-    # See SessionDetail.workspace_mode.
+    # See SessionDetail.workspace_mode / workspace_mode_rev.
     workspace_mode: str | None = None
+    workspace_mode_rev: int = 0
 
 
 class RunInfo(BaseModel):

@@ -238,6 +238,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             parent_id=meta.parent_id if meta else None,
             origin=origin,
             workspace_mode=meta.workspace_mode if meta else None,
+            workspace_mode_rev=meta.workspace_mode_rev if meta else 0,
         )
 
     @router.get("/api/sessions/{session_id}/ui-data/{ref}")
@@ -362,7 +363,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             deps.emit(
                 "session_workspace_changed",
                 SessionWorkspaceChangedData(
-                    session_id=session_id, workspace_mode=meta.workspace_mode
+                    session_id=session_id,
+                    workspace_mode=meta.workspace_mode,
+                    workspace_mode_rev=meta.workspace_mode_rev,
                 ),
             )
         return session_info(meta)

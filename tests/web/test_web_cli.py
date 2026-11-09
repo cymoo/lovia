@@ -1394,3 +1394,47 @@ def test_main_passes_followups_to_serve(
     write_config(run={"followups": False})
     assert cli.main([]) == 0
     assert seen["followups"] is False
+
+
+# ------------------------------------------------- per-chat modes (CLI) -
+
+
+@pytest.mark.parametrize(
+    ("deployment", "default", "modes"),
+    [
+        (builder.Deployment(), "coding", ("readonly", "coding", "trusted")),
+        (builder.Deployment(readonly=True), "coding", ("readonly",)),
+        # Off loopback: nothing wider than what the server started with.
+        (builder.Deployment(loopback=False), "readonly", ("readonly",)),
+        (builder.Deployment(loopback=False), "trusted", ("readonly", "coding")),
+        (
+            builder.Deployment(loopback=False, allow_workspace_edit=True),
+            "readonly",
+            ("readonly", "coding"),
+        ),
+        (builder.Deployment(workspace=None), "coding", ()),
+    ],
+)
+def test_chat_modes_follow_the_deployment(
+    deployment: builder.Deployment, default: str, modes: tuple[str, ...]
+) -> None:
+    assert deployment.chat_modes(default) == modes
+
+
+def test_main_lets_chats_pick_a_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_config(workspace={"default_mode": "coding", "auto_allow": []})
+    captured = _capture_serving(monkeypatch)
+    assert cli.main([]) == 0
+    switch = captured["workspaces"]
+    assert switch.modes == ("readonly", "coding", "trusted")  # type: ignore[attr-defined]
+    # Built from the live configuration: coding with its auto-allow bundles.
+    ws = switch.build(tmp_path, "coding")  # type: ignore[attr-defined]
+    assert ws.policy.decide_command("ls").action == "ask"
+    assert switch.build(tmp_path, "readonly").policy.write == "deny"  # type: ignore[attr-defined]
+
+    captured.clear()
+    assert cli.main(["--no-workspace"]) == 0
+    assert captured["workspaces"] is None

@@ -43,6 +43,7 @@ try:
     from .subagents import subagent_deliver, wire_subagents
     from .tables import show_table
     from .ui import SURFACE_NOTE, ChatUI
+    from .workspaces import WorkspaceSwitch
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
 
@@ -60,6 +61,7 @@ __all__ = [
     "RunTrigger",
     "SURFACE_NOTE",
     "Scheduling",
+    "WorkspaceSwitch",
     "build_api_router",
     "create_app",
     "generate_followups",

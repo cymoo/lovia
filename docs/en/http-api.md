@@ -153,7 +153,7 @@ normalizes all three.
 | Method & path | Purpose |
 | --- | --- |
 | `GET /healthz` | liveness (served by `create_app`, not `build_api_router`) |
-| `GET /api/info` | title, agents, default agent, version, feature flags |
+| `GET /api/info` | title, agents, default agent, version, feature flags, and `workspace_modes: {modes, default}` when chats can pick a permission mode (`create_app(workspaces=)`; else `null`) |
 | `GET /api/agents` · `GET /api/agents/{name}` | agent introspection (instructions, tools, capabilities) |
 | `POST /api/chat` | one **blocking** turn → `{output, session_id, usage}`: a supervised Run, waited for ([details](#blocking-turns)) |
 | `POST /api/chat/stream` | **SSE**: start a run, or attach to the session's live run (injecting the new message) |
@@ -165,7 +165,7 @@ normalizes all three.
 | `GET /api/runs` | live supervised runs. A run's `run_id` is the one its lifecycle events and history record carry, kept across auto-chained legs and a resume |
 | `GET /api/runs/history?session_id=&source=&since=&run_id=&limit=&offset=` | persisted run records (outcome, error, duration, token usage); `since` filters to runs finished after that timestamp, `run_id` picks one run |
 | `GET /api/events` | **SSE**: subscribe to process-wide lifecycle events (no history replay) |
-| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete (with its subagent tasks and the schedules bound to it). Each user message carries a `ref` — `"<run_id>:<n>"`, stable across reloads and rewinds; `null` until its run has finished. The answer that ends a run carries its `duration` in seconds, and timestamps are real where the run recorded its timing. A chat that came from another carries `origin` — `kind` is `"fork"` (a branch) or `"spawn"` (started by that chat's agent with `start_session`) — and the list's `origin_kind` says the same |
+| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin/switch `workspace_mode` · delete (with its subagent tasks and the schedules bound to it). Each user message carries a `ref` — `"<run_id>:<n>"`, stable across reloads and rewinds; `null` until its run has finished. The answer that ends a run carries its `duration` in seconds, and timestamps are real where the run recorded its timing. A chat that came from another carries `origin` — `kind` is `"fork"` (a branch) or `"spawn"` (started by that chat's agent with `start_session`) — and the list's `origin_kind` says the same |
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
 | `POST /api/sessions/{id}/followups` | `{followups: [...]}` — questions the user might ask next; `[]` when the feature is off or nothing fits. POST because it spends model tokens |
 | `POST /api/sessions/{id}/rewind` | drop everything from a user message onward, named by its `ref` or by `user_turn`, its zero-based index among the user messages; 404 for a `ref` no longer in the chat, 409 while a run is live, 501 if the store lacks `rewind` |
@@ -180,7 +180,7 @@ normalizes all three.
 | `POST /api/workspace/upload?agent=` | save one file under the workspace's `uploads/`, within the extension allowlist and size limit |
 | `GET` / `PUT /api/memory?agent=` | read / replace the [Memory notes](memory.md#how-memories-get-written) (`{content, used, budget, dreamed_at}`) |
 | `POST /api/memory/dream?agent=` | [dream](memory.md#dreaming) the notes now → `{content, used, budget, dreamed_at, before, after}` |
-| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/test` | **UI-internal**, serving the CLI's built-in settings UI and not part of the [stable API](stability.md): the CLI default agent's [model configuration](web-ui.md#models-and-switching) and [skill directories](web-ui.md#skills) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); writes validate the whole document, persist it, and hot-swap the served agent. `GET /api/config/skills` reports per-directory discovery |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `PUT /api/config/workspace` · `PUT /api/config/run` · `PUT /api/config/agent` · `POST /api/config/test` | **UI-internal**, serving the CLI's built-in settings UI and not part of the [stable API](stability.md): the CLI default agent's [model configuration](web-ui.md#models-and-switching) and [skill directories](web-ui.md#skills) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); writes validate the whole document, persist it, and hot-swap the served agent. `GET /api/config/skills` reports per-directory discovery |
 
 `POST /api/chat` and `/api/chat/stream` take
 `{message, session_id?, agent?, attachments?, context?}`, and `POST /api/schedules`
@@ -188,6 +188,15 @@ takes a `context` too. `context` is a JSON object of at most 64 KB — the clien
 context `create_app(run_deps=...)` receives as `trigger.client_context` (see
 [Run deps](web-server.md#run-deps)). A message that joins a live run
 doesn't change that run's context.
+
+On a server with `create_app(workspaces=)`, a new chat's request may carry
+`workspace_mode` (`"readonly"`, `"coding"` or `"trusted"`, one of
+`/api/info`'s `workspace_modes.modes`); an existing chat keeps its own, which
+`PATCH /api/sessions/{id}` changes from its next run. Sessions report
+`workspace_mode` as stored, with `workspace_mode_rev`, which each switch
+bumps: of two reports of a chat's mode (a list, a detail, a `PATCH` answer,
+an event), the higher revision is the newer, in whatever order they arrive.
+A mode the server no longer offers runs as the widest offered one below it.
 
 `/api/chat/stream` also takes `busy`: what a message for a chat with a live
 run does. `"inject"` (the default) steers it into that run; `"reject"` answers
@@ -206,6 +215,7 @@ that starts meanwhile is still refused, with no injection and no new run.
 | `run_finished` | `{session_id, run_id, status, error, source}` |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
+| `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev}` |
 | `config_changed` | `{configured, model, profile_id, name}` — refetch `/api/config` |
 
 It does not replay history. On every connection or reconnection, fetch current state from

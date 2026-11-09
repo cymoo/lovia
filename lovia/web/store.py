@@ -44,14 +44,16 @@ _T = TypeVar("_T")
 # Column order shared by every ``ChatMeta`` SELECT (and ``ChatMeta.from_row``).
 _META_COLS = (
     "id, title, agent, created_at, updated_at, pinned, parent_id, "
-    "origin_kind, origin_session_id, origin_ref"
+    "origin_kind, origin_session_id, origin_ref, workspace_root, workspace_mode, "
+    "workspace_mode_rev"
 )
 
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
 _SCHED_COLS = (
     "id, agent, input, session_id, trigger_kind, trigger_expr, "
     "next_fire, active, last_session_id, created_at, updated_at, "
-    "until, max_fires, expires_at, fire_count, finished_reason, context_json"
+    "until, max_fires, expires_at, fire_count, finished_reason, context_json, "
+    "workspace_mode"
 )
 
 
@@ -258,11 +260,39 @@ def _grants(conn: sqlite3.Connection) -> None:
     conn.execute(_GRANTS_SCHEMA)
 
 
+def _workspace_binding(conn: sqlite3.Connection) -> None:
+    """Per-chat workspace binding (0.9.147): the root a chat was created in
+    and its permission mode, plus the mode a schedule's fires run with."""
+    for table, column in (
+        ("chat_sessions", "workspace_root"),
+        ("chat_sessions", "workspace_mode"),
+        ("chat_schedules", "workspace_mode"),
+    ):
+        # Add-if-missing, so a step re-run over a database that has them
+        # (a hand-rewound version) is harmless.
+        present = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in present:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+
+
+def _workspace_mode_rev(conn: sqlite3.Connection) -> None:
+    """A chat's mode revision (0.9.147): bumped by each switch, so a client
+    orders reports of the mode by it rather than by arrival."""
+    present = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
+    if "workspace_mode_rev" not in present:
+        conn.execute(
+            "ALTER TABLE chat_sessions "
+            "ADD COLUMN workspace_mode_rev INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     _reconcile_unversioned,
     _fork_origin,
     _active_record,
     _grants,
+    _workspace_binding,
+    _workspace_mode_rev,
 )
 
 
@@ -288,6 +318,15 @@ class ChatMeta:
     origin_ref: str | None = None
     """For a fork: the source's user message the fork was cut before (None
     for a whole-chat copy)."""
+    workspace_root: str | None = None
+    """The resolved workspace root the chat was created in; None for a chat
+    from before 0.9.147 (not associated yet) or an agent without one."""
+    workspace_mode: str | None = None
+    """The chat's permission mode (``readonly`` / ``coding`` / ``trusted``),
+    or None to run on the served agent's own workspace."""
+    workspace_mode_rev: int = 0
+    """Bumped by every :meth:`ChatStore.set_workspace_mode`: orders the
+    reports of a chat's mode a client gets from different sources."""
 
     @classmethod
     def from_row(cls, row: Any) -> "ChatMeta":
@@ -303,6 +342,9 @@ class ChatMeta:
             row[7],
             row[8],
             row[9],
+            row[10],
+            row[11],
+            row[12] or 0,
         )
 
     def to_dict(self) -> JsonObject:
@@ -317,6 +359,9 @@ class ChatMeta:
             "origin_kind": self.origin_kind,
             "origin_session_id": self.origin_session_id,
             "origin_ref": self.origin_ref,
+            "workspace_root": self.workspace_root,
+            "workspace_mode": self.workspace_mode,
+            "workspace_mode_rev": self.workspace_mode_rev,
         }
 
 
@@ -386,6 +431,9 @@ class ScheduleRow:
     # The client context its fires run with (create_app(run_deps=...)): the
     # page's, when the schedule was made — a schedule is a deferred message.
     context: JsonObject | None = None
+    # The permission mode its fires run with: the chat's that made it, so a
+    # schedule set up from a read-only chat can't run its fresh chats wider.
+    workspace_mode: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "ScheduleRow":
@@ -407,6 +455,7 @@ class ScheduleRow:
             fire_count=row[14],
             finished_reason=row[15],
             context=json.loads(row[16]) if row[16] else None,
+            workspace_mode=row[17],
         )
 
     def to_dict(self) -> JsonObject:
@@ -428,6 +477,7 @@ class ScheduleRow:
             "fire_count": self.fire_count,
             "finished_reason": self.finished_reason,
             "context": self.context,
+            "workspace_mode": self.workspace_mode,
         }
 
 
@@ -600,6 +650,8 @@ class ChatStore:
         title: str | None = None,
         parent_id: str | None = None,
         spawned_from: str | None = None,
+        workspace_root: str | None = None,
+        workspace_mode: str | None = None,
     ) -> None:
         """Insert a row if missing, otherwise bump ``updated_at``.
 
@@ -608,14 +660,16 @@ class ChatStore:
         background-generated title is never clobbered. ``parent_id`` likewise
         sticks from the insert — a session's task-ness never changes later —
         and so does ``spawned_from``, the chat whose agent started this one
-        (``origin_kind = "spawn"``).
+        (``origin_kind = "spawn"``). The workspace binding too is set on
+        insert only — :meth:`set_workspace_mode` is the one way to change it.
         """
         now = time.time()
         await self._write(
             """
             INSERT INTO chat_sessions (id, title, agent, created_at, updated_at,
-                                       parent_id, origin_kind, origin_session_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                       parent_id, origin_kind, origin_session_id,
+                                       workspace_root, workspace_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 updated_at = excluded.updated_at,
                 agent = COALESCE(chat_sessions.agent, excluded.agent)
@@ -629,6 +683,8 @@ class ChatStore:
                 parent_id,
                 "spawn" if spawned_from else None,
                 spawned_from,
+                workspace_root,
+                workspace_mode,
             ),
         )
 
@@ -636,6 +692,15 @@ class ChatStore:
         title = title.strip()[:120]
         await self._write(
             "UPDATE chat_sessions SET title = ? WHERE id = ?", (title, session_id)
+        )
+
+    async def set_workspace_mode(self, session_id: str, mode: str | None) -> None:
+        """Change a chat's permission mode; its next run uses it. Each change
+        bumps ``workspace_mode_rev`` in the same statement."""
+        await self._write(
+            "UPDATE chat_sessions SET workspace_mode = ?, "
+            "workspace_mode_rev = workspace_mode_rev + 1 WHERE id = ?",
+            (mode, session_id),
         )
 
     async def set_pinned(self, session_id: str, pinned: bool) -> None:
@@ -705,7 +770,9 @@ class ChatStore:
         def _publish() -> bool:
             with self._meta._tx() as conn:
                 source = conn.execute(
-                    "SELECT title, agent FROM chat_sessions WHERE id = ?", (source_id,)
+                    "SELECT title, agent, workspace_root, workspace_mode "
+                    "FROM chat_sessions WHERE id = ?",
+                    (source_id,),
                 ).fetchone()
                 if source is None:
                     return False
@@ -715,11 +782,24 @@ class ChatStore:
                     "WHERE session_id = ?",
                     (fork_id, source_id),
                 )
+                # A fork keeps its source's workspace binding: its history
+                # refers to that directory, under those permissions.
                 conn.execute(
                     "INSERT INTO chat_sessions (id, title, agent, created_at, "
-                    "updated_at, origin_kind, origin_session_id, origin_ref) "
-                    "VALUES (?, ?, ?, ?, ?, 'fork', ?, ?)",
-                    (fork_id, source[0], source[1], now, now, source_id, ref),
+                    "updated_at, origin_kind, origin_session_id, origin_ref, "
+                    "workspace_root, workspace_mode) "
+                    "VALUES (?, ?, ?, ?, ?, 'fork', ?, ?, ?, ?)",
+                    (
+                        fork_id,
+                        source[0],
+                        source[1],
+                        now,
+                        now,
+                        source_id,
+                        ref,
+                        source[2],
+                        source[3],
+                    ),
                 )
                 return True
 
@@ -1018,7 +1098,7 @@ class ChatStore:
     async def add_schedule(self, row: ScheduleRow) -> None:
         await self._write(
             f"INSERT INTO chat_schedules ({_SCHED_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row.id,
                 row.agent,
@@ -1037,6 +1117,7 @@ class ChatStore:
                 row.fire_count,
                 row.finished_reason,
                 _dumps_context(row.context),
+                row.workspace_mode,
             ),
         )
 

@@ -1,6 +1,7 @@
 // Chat streaming, SSE handling, message rendering.
 import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
+import { draftWorkspaceMode } from './workspace-mode.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
 import { copyToClipboard, openImageLightbox, showDialog } from './ui.js';
@@ -3355,6 +3356,7 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
         attachments: attachments?.length ? attachments : undefined,
         context: collectContext(),
         busy,
+        workspace_mode: draftWorkspaceMode(),
       },
       { signal: _streamAbortController.signal }
     );

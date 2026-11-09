@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
+from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...agent import Agent
@@ -24,6 +26,7 @@ from ...exceptions import UserError
 from ...providers import Provider, provider_from_string
 from ...providers._windows import clear_endpoint_cache
 from ...tools import HumanChannel
+from ...workspace import LocalWorkspace
 from ..sse import ConfigChangedData
 from .check import mask_key
 from .schema import Connection, WebConfig
@@ -148,6 +151,20 @@ class ConfigRuntime:
         )
         policy = Compaction(context_window=conn.context_window)
         return agent, provider, policy, resolve_aux_model(config.aux_profile())
+
+    def workspace_for(self, root: Path, mode: str) -> LocalWorkspace:
+        """A chat's workspace in ``mode`` — ``WorkspaceSwitch.build`` for the
+        CLI. Built from the current configuration each run, so a change to
+        the auto-allowed commands reaches every coding chat's next run."""
+        from ..builder import resolve_workspace
+
+        settings = self.config.workspace.model_copy(update={"default_mode": mode})
+        config = self.config.model_copy(update={"workspace": settings})
+        workspace = resolve_workspace(
+            replace(self.deployment, workspace=str(root)), config
+        )
+        assert workspace is not None  # a switch exists only with a workspace
+        return workspace
 
     # ---------------------------------------------------------- applying -
 

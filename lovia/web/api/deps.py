@@ -16,14 +16,17 @@ from collections import Counter
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...agent import Agent
+from ...handoff import Handoff
 from ...context import ContextPolicy
 from ...providers import Provider
 from ...reliability import RetryPolicy, RunBudget
 from ...session import Session
 from ...tracing import Tracer
+from ...workspace import LocalWorkspace
 from ..approvals import ApprovalRegistry
 from ..errors import WebError
 from ..followups import (
@@ -35,7 +38,7 @@ from ..followups import (
 from ..sse import SessionRetitledData, frame
 from ..store import ChatStore
 from ..titles import generate_title, provisional_title
-from ..workspaces import WorkspaceSessions
+from ..workspaces import WorkspaceSessions, WorkspaceSwitch
 
 if TYPE_CHECKING:
     from ..config import ConfigRuntime
@@ -99,6 +102,9 @@ class RouterDeps:
     # end. Bound by the supervisor at run start; closed on chat deletion and
     # at app shutdown. Per-process, like the supervisor.
     workspaces: WorkspaceSessions = field(default_factory=WorkspaceSessions)
+    # Per-chat permission modes (create_app(workspaces=)); None: every chat
+    # runs on its agent's own workspace.
+    workspace_switch: WorkspaceSwitch | None = None
     # The CLI's runtime-reconfiguration surface, set by ``create_app`` when it
     # received one. ``None`` — the embedder case — means no ``/api/config``
     # routes and no ``model_config`` feature flag.
@@ -254,6 +260,97 @@ class RouterDeps:
         wall-clock/tool-call state never bleeds between runs — the same reason
         :func:`~lovia.handoff.agent_as_tool` copies its budget per invocation."""
         return replace(self.budget) if self.budget is not None else None
+
+    # ------------------------------------------------- workspace binding -
+
+    def effective_mode(self, mode: str | None) -> str | None:
+        """The mode a chat storing ``mode`` runs in; None: the agent's own."""
+        switch = self.workspace_switch
+        if switch is None or mode is None:
+            return None
+        return switch.effective(mode)
+
+    def bind_workspace(self, agent: Agent[Any], mode: str | None) -> Agent[Any]:
+        """``agent`` with its workspace rebuilt for the chat's ``mode``.
+
+        Every agent the run can hand off to is rebuilt too: a handoff opens
+        its target's own workspace, so a read-only chat must not regain
+        writes by transferring to an agent whose workspace allows them.
+        Unchanged without a switch or a mode; an agent whose workspace isn't
+        a plain ``LocalWorkspace`` (a custom backend) keeps its own.
+        """
+        effective = self.effective_mode(mode)
+        if effective is None:
+            return agent
+        return self._rebind(agent, effective, {})
+
+    def _rebind(
+        self, agent: Agent[Any], mode: str, done: dict[int, Agent[Any]]
+    ) -> Agent[Any]:
+        if id(agent) in done:  # handoffs may form a cycle
+            return done[id(agent)]
+        assert self.workspace_switch is not None
+        base = agent.workspace
+        # A session binding (a self-cloned subagent's) → its config: the
+        # rebuilt workspace opens a session of its own.
+        base = getattr(base, "workspace", base)
+        workspace = (
+            self.workspace_switch.workspace(base, mode)  # type: ignore[arg-type]
+            if isinstance(base, LocalWorkspace)
+            else agent.workspace
+        )
+        # A fresh handoffs list, filled after registering the copy so a cycle
+        # resolves to it — the original agent is never touched.
+        copy = agent.clone(workspace=workspace, handoffs=[])
+        done[id(agent)] = copy
+        for h in agent.handoffs:
+            if isinstance(h, Handoff):
+                copy.handoffs.append(
+                    replace(h, target=self._rebind(h.target, mode, done))
+                )
+            else:
+                copy.handoffs.append(self._rebind(h, mode, done))
+        return copy
+
+    def new_chat_binding(
+        self, agent: Agent[Any], mode: str | None
+    ) -> tuple[str | None, str | None]:
+        """``(workspace_root, workspace_mode)`` to store on a new chat.
+
+        The root is the agent workspace's, resolved; the mode is ``mode`` as
+        given (an inherited None stays None: the agent's own workspace) —
+        None without a switch.
+        """
+        base = agent.workspace
+        base = getattr(base, "workspace", base)  # a session binding's config
+        root = (
+            Path(base.root).expanduser().resolve().as_posix()
+            if isinstance(base, LocalWorkspace)
+            else None
+        )
+        return root, mode if self.workspace_switch is not None else None
+
+    def run_snapshot(self, session_id: str | None) -> tuple[bool, str | None]:
+        """``(live, mode)`` of the run live in ``session_id``, read now.
+
+        Take it before the first ``await`` of whatever creates a chat from
+        that run: a stop meanwhile removes the run, and its mode with it.
+        """
+        if session_id is not None and self._supervisor is not None:
+            ctrl = self._supervisor.get(session_id)
+            if ctrl is not None:
+                return True, ctrl.workspace_mode
+        return False, None
+
+    @staticmethod
+    def inherited_mode(
+        snapshot: tuple[bool, str | None], stored: str | None
+    ) -> str | None:
+        """The mode a chat created from that run inherits: the run's own —
+        ``None`` (the agent's own workspace) included, never a mode the chat
+        was switched to since the run began — else the chat's ``stored``."""
+        live, mode = snapshot
+        return mode if live else stored
 
     @property
     def default_agent(self) -> str | None:

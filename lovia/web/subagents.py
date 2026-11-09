@@ -33,9 +33,12 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
+from ..agent import Agent
 from ..exceptions import RunCancelled
+from ..handoff import Handoff
 from ..plugins.subagents import (
     ChildSpec,
     DeliverFn,
@@ -44,6 +47,7 @@ from ..plugins.subagents import (
     Subagents,
 )
 from .errors import WebError
+from ..workspace.workspace import WorkspaceSessionBinding
 from .run_deps import RunTrigger, build_run_deps
 from .sse import SessionCreatedData
 
@@ -182,16 +186,26 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         from ..runtime.result import RunResult
         from .titles import provisional_title
 
+        # The spawning run's permissions, read before anything awaits: a stop
+        # in the meantime would take the run — and its snapshot — away.
+        spawned_by = deps.run_snapshot(spec.parent_session_id)
+
         child_sid = uuid.uuid4().hex
         # The registry key the task chat speaks afterwards. The child agent
         # itself is unregistered (often a clone), so record the parent chat's
         # agent — a follow-up message in the finished task then runs the
         # served agent closest to it.
         agent_key: str | None = None
+        # The task works under the permissions of the run that spawned it —
+        # its snapshot, not the chat's mode now, which may have been switched
+        # since that run began.
+        stored_mode: str | None = None
         if spec.parent_session_id is not None:
             row = await deps.store.get(spec.parent_session_id)
             if row is not None:
                 agent_key = row.agent
+                stored_mode = row.workspace_mode
+        parent_mode = deps.inherited_mode(spawned_by, stored_mode)
         # A task works for the chat that spawned it, so in its context. The
         # run_deps hook decides before the task chat exists: a refusal
         # fails the spawn and leaves nothing behind.
@@ -217,16 +231,28 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         async with gate as alive:
             if not alive:
                 raise RunCancelled("the chat that spawned this task was deleted")
+            child = spec.agent
+            if deps.workspace_switch is not None:
+                # A self-cloned child carries the parent chat's session
+                # binding. With per-chat modes that session's policy changes
+                # when the parent switches, so the task gets a session of its
+                # own, judged by the spawning run's permissions throughout.
+                ws = child.workspace
+                if isinstance(ws, WorkspaceSessionBinding):
+                    child = child.clone(workspace=ws.workspace)
+            root, mode = deps.new_chat_binding(child, parent_mode)
             await deps.store.upsert(
                 child_sid,
                 agent=agent_key,
                 title=f"[{spec.id}] {provisional_title(spec.prompt)}",
                 parent_id=parent,
+                workspace_root=root,
+                workspace_mode=mode,
             )
             try:
                 ctrl = await deps.supervisor.start(
                     session_id=child_sid,
-                    agent=spec.agent,
+                    agent=child,
                     input=spec.prompt,
                     is_new=False,  # no title generation for task sessions
                     title_message=None,
@@ -313,7 +339,7 @@ def _wire(deps: "RouterDeps") -> int:
     deliver = subagent_deliver(deps)
     run_child = subagent_runner(deps)
     wired: set[int] = set()
-    for agent in deps.agents.values():
+    for agent in _reachable(deps.agents.values()):
         for plugin in agent.plugins:
             if (
                 isinstance(plugin, Subagents)
@@ -325,6 +351,29 @@ def _wire(deps: "RouterDeps") -> int:
                 plugin.run_child = run_child
                 wired.add(id(plugin))
     return len(wired)
+
+
+def _reachable(roots: "Iterable[Agent[Any]]") -> list["Agent[Any]"]:
+    """Every agent a served agent's run can reach: itself, its handoff
+    targets, and its Subagents' children — transitively.
+
+    A Subagents plugin on any of them would otherwise spawn through the
+    core's in-process path, outside this app: its tasks would neither show
+    in the UI nor run under the chat's permission mode.
+    """
+    seen: dict[int, Agent[Any]] = {}
+    stack = list(roots)
+    while stack:
+        agent = stack.pop()
+        if id(agent) in seen:
+            continue
+        seen[id(agent)] = agent
+        for h in agent.handoffs:
+            stack.append(h.target if isinstance(h, Handoff) else h)
+        for plugin in agent.plugins:
+            if isinstance(plugin, Subagents):
+                stack.extend(plugin._catalog.values())
+    return list(seen.values())
 
 
 def wire_subagents(deps: "RouterDeps") -> int:

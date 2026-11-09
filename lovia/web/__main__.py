@@ -35,6 +35,7 @@ from ..http_config import DEFAULT_TIMEOUT
 from ..log_config import enable_logging
 from ..providers import Provider
 from ..tools import HumanChannel
+from ..workspace import WorkspaceMode
 from . import config as webconfig
 from .app import (
     _default_db_path,
@@ -49,6 +50,7 @@ from .api import RouterDeps
 from .auth import is_loopback
 from .builder import Deployment, resolve_retry
 from .store import ChatStore
+from .workspaces import WorkspaceSwitch
 
 log = logging.getLogger("lovia.web.cli")
 
@@ -500,6 +502,9 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # Settings live); a custom --app agent gets the CLI defaults —
         # anything else is create_app()'s job in its own code.
         run = webconfig.RunSettings()
+        # Per-chat permission modes — the default agent's, when it has a
+        # workspace; a custom --app opts in through create_app(workspaces=).
+        workspaces: WorkspaceSwitch | None = None
         app_target = _first(args.app, os.getenv("LOVIA_APP"))
         if app_target:
             if args.check:
@@ -578,6 +583,14 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 store=store,
                 question_channel=question_channel,
             )
+            if deployment.workspace is not None:
+                workspaces = WorkspaceSwitch(
+                    modes=cast(
+                        "tuple[WorkspaceMode, ...]",
+                        deployment.chat_modes(settings.default_mode),
+                    ),
+                    build=config_runtime.workspace_for,
+                )
             if unconfigured:
                 agent_or_agents = {}
                 summary = webconfig.format_unconfigured_summary(
@@ -636,6 +649,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 question_channel=question_channel,
                 question_timeout=600,
                 config_runtime=config_runtime,
+                workspaces=workspaces,
             )
         serve(
             built_app,

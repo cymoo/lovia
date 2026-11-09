@@ -23,7 +23,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
-from ..schemas import ServerInfo
+from ..schemas import ServerInfo, WorkspaceModesInfo
 from .agents import build_agents_router
 from .chat import build_chat_router
 from .deps import RouterDeps
@@ -41,6 +41,23 @@ def _lovia_version() -> str | None:
         return _pkg_version("lovia")
     except PackageNotFoundError:  # pragma: no cover - source checkout w/o metadata
         return None
+
+
+def _workspace_modes(deps: RouterDeps) -> WorkspaceModesInfo | None:
+    switch = deps.workspace_switch
+    if switch is None:
+        return None
+    default: str | None = switch.default_mode
+    runtime = deps.config_runtime
+    if runtime is not None:
+        # The CLI's default follows Settings → Workspace, as this server
+        # runs it.
+        default = runtime.deployment.effective_mode(
+            runtime.config.workspace.default_mode
+        )
+    if default is not None:
+        default = switch.effective(default)
+    return WorkspaceModesInfo(modes=list(switch.modes), default=default)
 
 
 def build_api_router(deps: RouterDeps) -> APIRouter:
@@ -79,6 +96,7 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 # the UI (the CLI's default agent only — never embedders).
                 "model_config": deps.config_runtime is not None,
             },
+            workspace_modes=_workspace_modes(deps),
         )
 
     if deps.config_runtime is not None:

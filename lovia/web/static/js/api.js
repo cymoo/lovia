@@ -196,6 +196,14 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify({ title }),
     }).then(_json),
+  // A chat's permission mode; applies from its next run.
+  /** @param {string} id @param {string} workspace_mode */
+  setSessionMode: (id, workspace_mode) =>
+    request(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ workspace_mode }),
+    }).then(_json),
   setPinned: (id, pinned) =>
     request(`/api/sessions/${encodeURIComponent(id)}`, {
       method: 'PATCH',

@@ -263,6 +263,12 @@ class SessionRetitledData(TypedDict):
     title: str | None
 
 
+class SessionWorkspaceChangedData(TypedDict):
+    session_id: str
+    workspace_mode: str | None
+    workspace_mode_rev: int
+
+
 class ConfigChangedData(TypedDict):
     configured: bool
     model: str
@@ -275,6 +281,7 @@ LIFECYCLE_EVENTS: dict[str, type] = {
     "run_finished": RunFinishedData,
     "session_created": SessionCreatedData,
     "session_retitled": SessionRetitledData,
+    "session_workspace_changed": SessionWorkspaceChangedData,
     "config_changed": ConfigChangedData,
 }
 

@@ -671,6 +671,30 @@ window.lovia.registerRenderer('trend', {
 拿到的是调用那一刻注册的渲染器，所以包装渲染器也可以替换它所包装的 kind（比如围绕内置的
 `chart` 重新注册 `chart`），而不会调用到自己。
 
+## 每个对话的权限模式
+
+传入 `WorkspaceSwitch` 后，每个对话可以给 Agent 的工作区选择自己的权限模式：页面在输入框里显示切换按钮，
+每次运行都按对话的模式重建工作区。
+
+```python
+from lovia.web import WorkspaceSwitch, create_app
+
+app = create_app(agent, workspaces=WorkspaceSwitch())  # readonly / coding
+app = create_app(
+    agent,
+    workspaces=WorkspaceSwitch(modes=("readonly", "coding", "trusted"), default_mode="coding"),
+)
+```
+
+- `modes` 是对话可选的模式，必须包含 `"readonly"`。对话保存的模式不在其中时，按它下方最宽的可用模式运行——
+  只收紧，不放宽。
+- `default_mode` 是页面给新对话预选的模式。从未选过模式的对话使用 Agent 自带的工作区，自定义 policy 原样保留。
+- `build(root, mode)` 返回某个模式的 `LocalWorkspace`。默认用 `Workspace.local` 的预设，沿用 Agent 工作区的
+  `env`、`limits`、`executor`、`inherit_env` 和 shell 超时，但不带自定义 policy 的规则；要在切换后保留它们，就传入 `build`。
+
+对话的模式从下次运行起生效；进行中的运行保持开始时的模式，它创建的子任务、派生对话和定时任务也一样。
+不传 `workspaces=`（默认）时，所有对话都使用各自 Agent 的工作区。请求和会话里的 `workspace_mode` 见 [HTTP API](http-api.md)。
+
 ## 追问建议
 
 内置建议器会在 Run 成功产出回答后单独调用一次模型；这次请求不会写入主对话的

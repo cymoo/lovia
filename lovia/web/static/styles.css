@@ -6502,6 +6502,28 @@ body.lv-files-splitting {
 [data-theme="dark"] .lv-model-chip-item:hover {
   background: var(--lv-surface-3);
 }
+/* The permission-mode menu: each mode with what it lets the agent do. */
+.lv-mode-menu {
+  min-width: 260px;
+  max-width: 320px;
+}
+.lv-mode-item {
+  align-items: flex-start;
+}
+.lv-mode-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+.lv-mode-item-hint {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--lv-muted-2);
+  white-space: normal;
+}
 .lv-model-chip-item-name {
   flex: 1;
   overflow: hidden;

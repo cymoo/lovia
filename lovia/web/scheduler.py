@@ -268,10 +268,19 @@ class Scheduler:
                 if not alive or await self.store.get_schedule(sched.id) is None:
                     log.info("schedule %s: a delete is under way; skipped", sched.id)
                     return None
+                # A chat the fire creates takes the schedule's mode (that of
+                # the chat that made it); an existing one keeps its own.
+                root, mode = (
+                    self.deps.new_chat_binding(agent, sched.workspace_mode)
+                    if is_new
+                    else (None, None)
+                )
                 await self.store.upsert(
                     target,
                     agent=agent_name,  # registry key — the identity pick() speaks
                     title=title,
+                    workspace_root=root,
+                    workspace_mode=mode,
                 )
                 await self.deps.supervisor.start(
                     session_id=target,

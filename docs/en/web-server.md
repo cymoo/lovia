@@ -755,6 +755,38 @@ The renderer you get is the one registered at the time of the call, so a
 wrapper may also replace the kind it wraps — re-register `chart` around the
 built-in one, say — without calling itself.
 
+## Per-chat permission modes
+
+Pass a `WorkspaceSwitch` and each chat picks its own permission mode for the
+agent's workspace — the page shows a picker in the composer, and every run
+rebuilds the workspace for its chat's mode:
+
+```python
+from lovia.web import WorkspaceSwitch, create_app
+
+app = create_app(agent, workspaces=WorkspaceSwitch())  # readonly / coding
+app = create_app(
+    agent,
+    workspaces=WorkspaceSwitch(modes=("readonly", "coding", "trusted"), default_mode="coding"),
+)
+```
+
+- `modes` is what a chat may pick, and must include `"readonly"`. A chat
+  stored with a mode the switch doesn't offer runs in the widest offered mode
+  below it — narrowed, never widened.
+- `default_mode` is what the page preselects for a new chat. A chat that
+  never picked one runs on the agent's own workspace, custom policy and all.
+- `build(root, mode)` returns the `LocalWorkspace` for a mode. The default is
+  the `Workspace.local` preset, keeping the agent workspace's `env`,
+  `limits`, `executor`, `inherit_env` and shell timeout — not a custom
+  policy's rules; pass `build` to carry those across modes.
+
+A chat's mode applies from its next run; a run in flight keeps the one it
+started with, and so do the subagent tasks, spawned chats and schedule fires
+it creates. Without `workspaces=` (the default), every chat runs on its
+agent's own workspace. See [HTTP API](http-api.md) for `workspace_mode` on
+requests and sessions.
+
 ## Follow-up suggestions
 
 After a Run produces an answer, the built-in suggester makes a separate small

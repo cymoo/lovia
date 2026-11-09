@@ -1,6 +1,6 @@
 # 运行时切换工作区和权限模式
 
-> 状态：v3 定稿，作为实现基线；剩余边界在各期 PR 的实现评审和测试中处理 · 2026-11-09 · 对应 [cymoo/lovia#355](https://github.com/cymoo/lovia/issues/355) · 范围：`lovia/web`（`__main__`、`builder`、`config/`、`api/`、`supervisor`、`subagents`、`scheduler`、`workspaces`、`store`、前端）、`lovia/workspace`（一个小改动）
+> 状态：v3 定稿，作为实现基线；剩余边界在各期 PR 的实现评审和测试中处理 · 2026-11-09 · 第一期已合入（0.9.146，#364）；第二期见 0.9.147，其中三处与原文不同：模式越界时降到允许的最宽模式而不是拒绝（§4）；旧对话的关联推迟到第三期（§8）；运行中切换用提示说明，不在输入框里显示两个状态（§4） · 对应 [cymoo/lovia#355](https://github.com/cymoo/lovia/issues/355) · 范围：`lovia/web`（`__main__`、`builder`、`config/`、`api/`、`supervisor`、`subagents`、`scheduler`、`workspaces`、`store`、前端）、`lovia/workspace`（一个小改动）
 >
 > 行号指向 `main`（`612d4d9`，v0.9.145）。
 
@@ -139,7 +139,7 @@ ALTER TABLE chat_sessions ADD COLUMN workspace_mode TEXT;  -- readonly / coding 
 
 **CLI 的 `build` 每次调用都读当前的 `auto_allow`。** 所以“默认 coding”和“手动选 coding”得到的规则完全一样；改了 auto-allow，所有 coding 对话都从下次运行起生效。
 
-**一个函数，所有入口都调用。** `deps.effective_agent(agent, binding)` 负责换出工作区，并按 §2 的**当前**约束校验绑定。不符合约束时返回 409 `workspace_not_allowed`，提示里写明是哪条约束；不会换目录，也不会降级。凡是要拿 Agent 处理这个对话的地方，都在读附件、建 `run_deps` 之前调用它：
+**一个函数，所有入口都调用。** `deps.effective_agent(agent, binding)` 负责换出工作区，并按 §2 的**当前**约束校验绑定。目录不符合约束时返回 409 `workspace_not_allowed`，提示里写明是哪条约束，不会换目录（第三期）；模式超出范围时降到允许的最宽模式，只收紧、不放宽（第二期起，与第一期 `--readonly`、非本机地址的处理一致）。第二期目录固定，绑定放在 `supervisor.start/start_resume` 里做（取完注册名之后）：只换 policy 不影响附件读取；第三期换目录时再前移到读附件之前。凡是要拿 Agent 处理这个对话的地方，都在读附件、建 `run_deps` 之前调用它：
 
 | 入口 | 位置 | 绑定从哪来 |
 | --- | --- | --- |
@@ -153,7 +153,7 @@ ALTER TABLE chat_sessions ADD COLUMN workspace_mode TEXT;  -- readonly / coding 
 
 子代理必须走这个函数：`build_default_agent()` 给子代理单独存了一份启动时的工作区（`builder.py:391`），父 Agent 换了工作区，它不会跟着换。
 
-**切模式的时机。** 只从下次运行开始生效。运行进行中切换时，输入框旁显示“当前：coding · 下次运行：readonly”，并说明已经启动的后台进程和子任务会按原来的模式继续跑，要立刻收紧就先停掉它们。这和模型热切换的语义一致。
+**切模式的时机。** 只从下次运行开始生效。运行进行中切换时，提示“正在进行的回复仍按原模式完成”；已经启动的后台进程和子任务按原来的模式继续跑，要立刻收紧就先停掉它们。这和模型热切换的语义一致。
 
 **切模式不杀后台进程。** `WorkspaceSessions.bind()` 发现配置不一致时会关掉会话重开（`workspaces.py:77`），而 `LocalWorkspaceSession` 在 `open()` 时把 policy 抄进了自己（`workspace.py:116`）。改法：给 `LocalWorkspaceSession` 加 `set_policy(policy)`，只在两次运行之间调用；`bind()` 发现只有 policy 变了时调用它、复用原会话，其他字段变了才重开。
 
@@ -247,7 +247,7 @@ class WorkspaceSwitch:
 
 **未关联的对话第一次继续之前，要选一次目录：**
 
-- 第二期只有一个固定目录，所以界面显示“这个对话创建于工作区记录之前，将在 `<目录>` 中继续”，用户确认后再写入绑定。侧栏的“未关联”分组提供“全部关联到 `<目录>`”。
+- 第二期只有一个固定目录，旧对话照旧在这个目录里运行，行为和升级前完全一样，所以第二期不写入、不确认；关联推迟到第三期能切换目录时再做。
 - 第三期可以从工作区列表里选目录，同样支持批量关联。
 - 只是查看未关联的对话，不需要关联。
 
@@ -281,5 +281,5 @@ class WorkspaceSwitch:
    - 部署限制在服务端执行，界面准确显示限制。
    - 删除的参数和环境变量明确报错并指出新位置。
    - 只读的配置文件能正常启动，设置页清楚说明为什么不能修改。
-2. **对话级模式。** 新增两列，新对话写入绝对路径和显式模式；旧对话一律标为未关联，继续前确认一次目录；`effective_agent` 接入 §4 表里的所有入口；子代理沿用父运行的快照；`set_policy()`；输入框的模式下拉，含“当前 / 下次运行”；`WorkspaceSwitch(roots=None, modes=..., build=...)`。
+2. **对话级模式。** 新增两列，新对话写入绝对路径和所选模式；旧对话的 `workspace_root` 留空，照旧运行；按对话模式绑定工作区（supervisor 里，见 §4），子代理、派生对话和定时任务沿用发起运行的模式；`set_policy()`；输入框的模式按钮；`WorkspaceSwitch(modes=..., default_mode=..., build=...)`（`roots` 留到第三期）。
 3. **多工作区。** `roots`；通用工作区；草稿绑定和带目录的上传；`chat_workspaces` 表和 `/api/workspaces*`；侧栏分组和批量关联；`agent_for` 按目录读 `AGENTS.md` 和技能；数据库默认位置改到用户目录。

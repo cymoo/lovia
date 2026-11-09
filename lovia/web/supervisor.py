@@ -20,6 +20,7 @@ import contextvars
 import logging
 import time
 import uuid
+import weakref
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -342,6 +343,10 @@ class RunController:
         self.started_at = time.time()
         # Where a snapshot's untimed (pre-timing) history starts from.
         self.chat_created_at = chat_created_at or self.started_at
+        # The permission mode this run's workspace was built for (None: the
+        # agent's own). A subagent it spawns runs in the same one, whatever
+        # the chat is switched to meanwhile.
+        self.workspace_mode: str | None = None
         # Cumulative usage across auto-chained legs, for the durable run record.
         self.usage = Usage()
         # Final model call's prompt size (context fill), from the last leg that
@@ -1105,6 +1110,11 @@ class RunSupervisor:
     def __init__(self, deps: RouterDeps) -> None:
         self.deps = deps
         self._controllers: dict[str, RunController] = {}
+        # Per-chat start locks (see start/start_resume); weak, so a chat's
+        # lock is gone once no start holds or waits on it.
+        self._starting: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         # Cancelled runs whose task is still winding down. Cancellation is
         # cooperative — the run only stops at its next safe point, which for a
         # mid-flight tool is after that tool returns — while ``cancel`` evicts
@@ -1177,51 +1187,59 @@ class RunSupervisor:
         """
         # A run stopped a moment ago must be in the history this one loads.
         await self.settle(session_id)
-        self._check_slot(session_id)
-        meta = await self.deps.store.get(session_id)
-        agent_name = self.deps.name_of(agent)  # before bind() copies the agent
-        # Every run of one web session shares that session's workspace session
-        # (lazily opened here), so background processes survive across runs —
-        # they die with the *chat* (deletion/shutdown), not with the turn.
-        agent = await self.deps.workspaces.bind(session_id, agent)
-        # That await may have let a concurrent start for this chat in. (Its
-        # workspace is this chat's too: nothing to undo.)
-        self._check_slot(session_id, cap=False)
-        client = dict(client or {})
-        # ``input`` seeds the transcript for immediate display and is what the
-        # runner consumes. A plain string is the text-only path; a list[Message]
-        # (one ``user([...parts])``) carries composer attachments as content
-        # parts, which input_to_entries preserves into the InputEntry.
-        if isinstance(input, str):
-            seed: list[TranscriptEntry] = (
-                [InputEntry(role="user", content=input)] if input else []
+        # One start at a time per chat: binding the workspace may switch
+        # the chat session's policy (set_policy), which a start about to
+        # lose to a concurrent one must never do under the winner's run.
+        async with self._start_lock(session_id):
+            self._check_slot(session_id)
+            meta = await self.deps.store.get(session_id)
+            agent_name = self.deps.name_of(agent)  # before bind() copies the agent
+            # The chat's permission mode, read now: a switch lands on the next run.
+            mode = self.deps.effective_mode(meta.workspace_mode if meta else None)
+            agent = self.deps.bind_workspace(agent, mode)
+            # Every run of one web session shares that session's workspace session
+            # (lazily opened here), so background processes survive across runs —
+            # they die with the *chat* (deletion/shutdown), not with the turn.
+            agent = await self.deps.workspaces.bind(session_id, agent)
+            # That await may have let a concurrent start for this chat in. (Its
+            # workspace is this chat's too: nothing to undo.)
+            self._check_slot(session_id, cap=False)
+            client = dict(client or {})
+            # ``input`` seeds the transcript for immediate display and is what the
+            # runner consumes. A plain string is the text-only path; a list[Message]
+            # (one ``user([...parts])``) carries composer attachments as content
+            # parts, which input_to_entries preserves into the InputEntry.
+            if isinstance(input, str):
+                seed: list[TranscriptEntry] = (
+                    [InputEntry(role="user", content=input)] if input else []
+                )
+            else:
+                seed = input_to_entries(input) if input else []
+            ctrl = RunController(
+                deps=self.deps,
+                supervisor=self,
+                session_id=session_id,
+                agent=agent,
+                agent_name=agent_name,
+                first_input=input,
+                first_checkpoint=None,
+                seed_entries=seed,
+                is_new=is_new,
+                title_message=title_message,
+                source=source,
+                mailbox=mailbox,
+                client=client,
+                run_deps=run_deps,
+                await_approvals=await_approvals,
+                chat_created_at=meta.created_at if meta else None,
             )
-        else:
-            seed = input_to_entries(input) if input else []
-        ctrl = RunController(
-            deps=self.deps,
-            supervisor=self,
-            session_id=session_id,
-            agent=agent,
-            agent_name=agent_name,
-            first_input=input,
-            first_checkpoint=None,
-            seed_entries=seed,
-            is_new=is_new,
-            title_message=title_message,
-            source=source,
-            mailbox=mailbox,
-            client=client,
-            run_deps=run_deps,
-            await_approvals=await_approvals,
-            chat_created_at=meta.created_at if meta else None,
-        )
-        # Reserve the session slot BEFORE the checkpoint await: two concurrent
-        # starts (e.g. two tabs submitting at once) would otherwise both pass the
-        # caller's live-check and the second would silently orphan the first's
-        # running task. The loser now gets the 409 above and attaches instead.
-        self._controllers[session_id] = ctrl
-        self.last_client[session_id] = client
+            ctrl.workspace_mode = mode
+            # Reserve the session slot BEFORE the checkpoint await: two concurrent
+            # starts (e.g. two tabs submitting at once) would otherwise both pass the
+            # caller's live-check and the second would silently orphan the first's
+            # running task. The loser now gets the 409 above and attaches instead.
+            self._controllers[session_id] = ctrl
+            self.last_client[session_id] = client
         # The first leg's checkpoint id is the run's id too.
         ctrl.record_id = uuid.uuid4().hex
         try:
@@ -1252,53 +1270,67 @@ class RunSupervisor:
         run_deps: Any = None,
     ) -> RunController:
         """Register a resume of ``snapshot``; ``run_deps`` as for :meth:`start`."""
-        self._check_slot(session_id, cap=False)
-        meta = await self.deps.store.get(session_id)
-        agent_name = self.deps.name_of(agent)  # before bind() copies the agent
-        # Same chat-scoped workspace binding as start(): the resumed leg's
-        # background processes are gone (they never survive a restart), but
-        # its shell/file tools must land on the chat's one live session.
-        agent = await self.deps.workspaces.bind(session_id, agent)
-        self._check_slot(session_id, cap=False)  # as in start()
-        client = dict(client or {})
-        ckpt = CheckpointOptions(
-            checkpointer=self.deps.store.checkpointer,
-            resume_from=snapshot,
-            delete_on_success=True,
-        )
-        seed = drop_system_entries(list(snapshot.entries))
-        # A leg past the first checkpoints under its own id; the pointer beside
-        # it names the run it continues.
-        record_id = await self.deps.store.get_active_record_id(
-            session_id, snapshot.run_id
-        )
-        records = await self.deps.store.list_runs(run_id=record_id, limit=1)
-        self._check_slot(session_id, cap=False)  # those awaits, as above
-        ctrl = RunController(
-            deps=self.deps,
-            supervisor=self,
-            session_id=session_id,
-            agent=agent,
-            agent_name=agent_name,
-            first_input=[],
-            first_checkpoint=ckpt,
-            seed_entries=seed,
-            is_new=False,
-            title_message=None,
-            # The resumer's identity; if the run already has a record (it
-            # normally does — same run_id), start_run keeps the original source.
-            source="user",
-            client=client,
-            run_deps=run_deps,
-            chat_created_at=meta.created_at if meta else None,
-        )
-        ctrl.record_id = record_id
-        ctrl.usage = _spent_before(
-            records[0].usage if records else None, snapshot.usage
-        )
-        self._controllers[session_id] = ctrl
-        self.last_client[session_id] = client
+        # One start at a time per chat: binding the workspace may switch
+        # the chat session's policy (set_policy), which a start about to
+        # lose to a concurrent one must never do under the winner's run.
+        async with self._start_lock(session_id):
+            self._check_slot(session_id, cap=False)
+            meta = await self.deps.store.get(session_id)
+            agent_name = self.deps.name_of(agent)  # before bind() copies the agent
+            # The chat's mode as it is now, like a fresh run's.
+            mode = self.deps.effective_mode(meta.workspace_mode if meta else None)
+            agent = self.deps.bind_workspace(agent, mode)
+            # Same chat-scoped workspace binding as start(): the resumed leg's
+            # background processes are gone (they never survive a restart), but
+            # its shell/file tools must land on the chat's one live session.
+            agent = await self.deps.workspaces.bind(session_id, agent)
+            self._check_slot(session_id, cap=False)  # as in start()
+            client = dict(client or {})
+            ckpt = CheckpointOptions(
+                checkpointer=self.deps.store.checkpointer,
+                resume_from=snapshot,
+                delete_on_success=True,
+            )
+            seed = drop_system_entries(list(snapshot.entries))
+            # A leg past the first checkpoints under its own id; the pointer beside
+            # it names the run it continues.
+            record_id = await self.deps.store.get_active_record_id(
+                session_id, snapshot.run_id
+            )
+            records = await self.deps.store.list_runs(run_id=record_id, limit=1)
+            self._check_slot(session_id, cap=False)  # those awaits, as above
+            ctrl = RunController(
+                deps=self.deps,
+                supervisor=self,
+                session_id=session_id,
+                agent=agent,
+                agent_name=agent_name,
+                first_input=[],
+                first_checkpoint=ckpt,
+                seed_entries=seed,
+                is_new=False,
+                title_message=None,
+                # The resumer's identity; if the run already has a record (it
+                # normally does — same run_id), start_run keeps the original source.
+                source="user",
+                client=client,
+                run_deps=run_deps,
+                chat_created_at=meta.created_at if meta else None,
+            )
+            ctrl.workspace_mode = mode
+            ctrl.record_id = record_id
+            ctrl.usage = _spent_before(
+                records[0].usage if records else None, snapshot.usage
+            )
+            self._controllers[session_id] = ctrl
+            self.last_client[session_id] = client
         return ctrl
+
+    def _start_lock(self, session_id: str) -> asyncio.Lock:
+        lock = self._starting.get(session_id)
+        if lock is None:
+            lock = self._starting[session_id] = asyncio.Lock()
+        return lock
 
     def _check_slot(self, session_id: str, *, cap: bool = True) -> None:
         """Refuse a second run for one session, and (``cap``) one over the limit."""

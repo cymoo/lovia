@@ -266,6 +266,16 @@ class LocalWorkspaceSession:
             )
         self._root = root
 
+    def set_policy(self, policy: WorkspacePolicy) -> None:
+        """Judge every later operation by ``policy``.
+
+        The session keeps its processes, locks and root: this is how a
+        serving layer changes a conversation's permissions without killing
+        the dev server it started. Call it between runs — an operation
+        already past its gate is not re-judged.
+        """
+        self.policy = policy
+
     async def __aenter__(self) -> "LocalWorkspaceSession":
         return self
 

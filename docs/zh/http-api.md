@@ -145,7 +145,7 @@ API 路由抛出的错误都使用同一种响应体：
 | 方法与路径 | 用途 |
 | --- | --- |
 | `GET /healthz` | 存活检查（由 `create_app` 提供，不属于 `build_api_router`） |
-| `GET /api/info` | 标题、Agent 列表、默认 Agent、版本和功能开关 |
+| `GET /api/info` | 标题、Agent 列表、默认 Agent、版本和功能开关；对话可以选择权限模式时（`create_app(workspaces=)`）还有 `workspace_modes: {modes, default}`，否则为 `null` |
 | `GET /api/agents` · `GET /api/agents/{name}` | 查看 Agent 的 instructions、工具和能力 |
 | `POST /api/chat` | 执行一次**阻塞式** Turn → `{output, session_id, usage}`：托管 Run，请求等待其结束（[详见](#阻塞式-turn)） |
 | `POST /api/chat/stream` | **SSE**：启动 Run，或连接到 Session 中正在执行的 Run（新消息会作为追加指令注入） |
@@ -157,7 +157,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/runs` | 正在运行的服务端托管任务。`run_id` 与该 Run 的生命周期事件和运行记录一致，自动续跑和恢复后都不变 |
 | `GET /api/runs/history?session_id=&source=&since=&run_id=&limit=&offset=` | 查询持久化的运行记录，包括结果、错误、时长和 token 用量；`since` 按结束时间过滤，`run_id` 查询单个 Run |
 | `GET /api/events` | **SSE**：订阅进程级生命周期事件（不重放历史事件） |
-| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名或置顶；删除（连同其后台任务和绑定它的定时任务）。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null`。每次 Run 的最后一条回答带 `duration`（秒）；记录了用时的 Run，其消息时间戳为真实时间。来自另一个对话的聊天带 `origin`：`kind` 为 `"fork"`（分支）或 `"spawn"`（由那个对话的 agent 用 `start_session` 启动）；列表中的 `origin_kind` 与之一致 |
+| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名、置顶或切换 `workspace_mode`；删除（连同其后台任务和绑定它的定时任务）。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null`。每次 Run 的最后一条回答带 `duration`（秒）；记录了用时的 Run，其消息时间戳为真实时间。来自另一个对话的聊天带 `origin`：`kind` 为 `"fork"`（分支）或 `"spawn"`（由那个对话的 agent 用 `start_session` 启动）；列表中的 `origin_kind` 与之一致 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
 | `POST /api/sessions/{id}/followups` | 生成追问建议，返回 `{followups: [...]}`；功能未启用或建议器未返回内容时为 `[]`。该操作可能消耗模型 token，因此使用 POST |
 | `POST /api/sessions/{id}/rewind` | 从某条用户消息起删除后续内容；用它的 `ref` 指定，或用 `user_turn`（它在用户消息中的索引，从 0 开始）；`ref` 已不在聊天中时返回 404，运行中返回 409，不支持 `rewind` 时返回 501 |
@@ -172,12 +172,18 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束 |
 | `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget, dreamed_at}`） |
 | `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
-| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 默认 Agent 的[模型配置](web-ui.md#模型配置与切换)与 [Skill 目录](web-ui.md#skills)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `PUT /api/config/workspace` · `PUT /api/config/run` · `PUT /api/config/agent` · `POST /api/config/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 默认 Agent 的[模型配置](web-ui.md#模型配置与切换)与 [Skill 目录](web-ui.md#skills)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
 
 `POST /api/chat` 和 `/api/chat/stream` 的请求体为 `{message, session_id?, agent?, attachments?, context?}`，
 `POST /api/schedules` 同样接受 `context`。`context` 是一个不超过 64 KB 的 JSON 对象，即
 `create_app(run_deps=...)` 以 `trigger.client_context` 收到的客户端上下文（见[运行依赖](web-server.md#运行依赖)）。
 加入一个进行中运行的消息不会改变那次运行的上下文。
+
+服务端启用了 `create_app(workspaces=)` 时，新对话的请求可以带 `workspace_mode`（`"readonly"`、
+`"coding"` 或 `"trusted"`，须在 `/api/info` 的 `workspace_modes.modes` 之中）；已有对话保持自己的模式，
+用 `PATCH /api/sessions/{id}` 修改，从下次运行起生效。会话里返回的是保存的 `workspace_mode`，
+以及每次切换都会加 1 的 `workspace_mode_rev`：同一对话的模式有多份报告时（列表、详情、`PATCH` 的响应、事件），
+无论到达顺序如何，版本号更大的那份更新。服务端已不提供的模式，按它下方最宽的可用模式运行。
 
 `/api/chat/stream` 还接受 `busy`，决定对话已有 Run 在执行时如何处理这条消息：`"inject"`（默认）
 把它作为追加指令注入该 Run；`"reject"` 改为返回 409 `run_active`，绝不注入——用于必须单独
@@ -194,6 +200,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `run_finished` | `{session_id, run_id, status, error, source}` |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
+| `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev}` |
 | `config_changed` | `{configured, model, profile_id, name}`：重新拉取 `/api/config` 即可同步 |
 
 事件流不重放历史；客户端每次连接或重连时，

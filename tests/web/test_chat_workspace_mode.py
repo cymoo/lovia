@@ -105,6 +105,8 @@ def test_info_reports_the_offered_modes(tmp_path: Path) -> None:
         assert c.get("/api/info").json()["workspace_modes"] == {
             "modes": ["readonly", "coding"],
             "default": "coding",
+            # An embedder's own workspace may be a custom policy: unnamed.
+            "own": None,
         }
     with _client(_agent(tmp_path, []), None) as c:
         assert c.get("/api/info").json()["workspace_modes"] is None

@@ -232,7 +232,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | --- | --- | --- |
 | **模型** → 档案的高级选项 | `models[].max_tokens` | 沿用 Provider 的默认值 |
 | **工作区** → 新对话的权限模式 | `workspace.default_mode` | `coding`，见[模式](workspace.md#模式)和[下文](#每个对话的权限模式) |
-| **工作区** → 不询问直接运行的命令 | `workspace.auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
+| **工作区** → 不询问直接运行的命令（选“工作区内修改”时显示） | `workspace.auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
 | **智能体** → 自定义指令 | `agent.instructions` | 空：使用对话所在目录的 `AGENTS.md`，没有就用通用提示；填写后 `AGENTS.md` 接在后面 |
 | **智能体** → 最大轮数 / 重试次数 | `run.max_turns` / `run.max_retries` | `50` / Agent 自己的设置（`4`） |
 | **智能体** → 生成追问建议 | `run.followups` | 开启 |
@@ -259,7 +259,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 
 ## 每个对话的权限模式
 
-每个对话有自己的权限模式——**只读**、**编码**或**信任**（见[模式](workspace.md#模式)），在输入框里目录按钮旁边切换。
+每个对话有自己的权限模式——**仅可查看**、**工作区内修改**或**完全权限**（`config.json` 和 API 里分别是 `readonly`、`coding`、`trusted`，见[模式](workspace.md#模式)），在输入框里目录按钮旁边切换。
 新对话默认使用设置页里的模式，发送前也可以先改。切换已有对话从下次运行起生效：正在进行的回复仍按开始时的
 模式完成，对话的后台进程（比如开发服务器）也不受影响。运行中创建的对话——后台子任务、用 `start_session`
 启动的对话、在这个对话里设置的定时任务新开的对话——沿用这次运行的模式。

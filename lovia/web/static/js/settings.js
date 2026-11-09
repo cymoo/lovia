@@ -277,11 +277,13 @@ export function openSettings(initialTab = 'general') {
   ];
   if (store.canConfigureModels) {
     tabs.push(
+      // Most visited first: models, then how the agent works, then the
+      // set-once integrations.
       { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
-      { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
-      { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
       { id: 'workspace', label: t('settings.tabWorkspace'), build: buildWorkspacePane },
       { id: 'agent', label: t('settings.tabAgent'), build: buildAgentPane },
+      { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
+      { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
     );
   }
   tabs.push({ id: 'about', label: t('settings.tabAbout'), build: buildAboutPane });

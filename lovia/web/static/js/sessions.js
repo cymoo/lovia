@@ -243,10 +243,11 @@ async function refreshTranscript() {
   const id = store.sessionId;
   if (!id || store.streaming) return;
   try {
+    const requestedAt = performance.now(); // for listeners to order against events
     const data = await api.getSession(id);
     if (store.sessionId !== id || store.streaming) return; // superseded
     store.currentParentId = data.parent_id || null;
-    store.emit('session-meta', data);
+    store.emit('session-meta', { ...data, requestedAt });
     renderTasksButton();
     renderOrigin(data.origin);
     if (chatTitleEl) chatTitleEl.textContent = data.title || t('session.newChat');
@@ -281,6 +282,7 @@ async function stopRun(sid) {
  * filter so refreshes (delete, stream end, polls) keep an active search.
  */
 export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
+  const requestedAt = performance.now(); // see 'sessions-loaded' below
   try {
     const [sessions, runs] = await Promise.all([
       // Fetch one row past the page: its presence answers "is there more?"
@@ -325,7 +327,9 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
     loadCurrentTasks();
     // Each snapshot (after a reconnect too) carries per-chat state that
     // events may have missed, such as a chat's permission mode.
-    store.emit('sessions-loaded', store.sessions);
+    // ``requestedAt`` lets a listener drop what an event newer than this
+    // request already superseded.
+    store.emit('sessions-loaded', { sessions: store.sessions, requestedAt });
   } catch (err) {
     console.error('loadSessions:', err);
   }
@@ -892,10 +896,11 @@ export async function switchSession(id) {
   renderSessions();
 
   try {
+    const requestedAt = performance.now(); // for listeners to order against events
     const data = await api.getSession(id);
     if (store.sessionId !== id) return; // a newer switch superseded this one
     store.currentParentId = data.parent_id || null;
-    store.emit('session-meta', data);
+    store.emit('session-meta', { ...data, requestedAt });
     renderTasksButton();
     renderOrigin(data.origin);
     // Align the switcher with the chat's own agent BEFORE the history replay:

@@ -25,6 +25,13 @@ let _draft = /** @type {string | null} */ (null);
 let _draftPicked = false;
 /** The open chat's stored mode, once known (undefined: not loaded yet). */
 let _current = /** @type {string | null | undefined} */ (undefined);
+/**
+ * When the open chat's mode last came from a source that is current by
+ * construction — a change event, this page's own switch, opening the chat.
+ * A fetched answer (list snapshot, chat detail) requested before that is
+ * stale and dropped: it could only put an older mode back.
+ */
+let _changedAt = 0;
 /** The chat id the chip last showed (null: a new chat). */
 let _shownId = /** @type {string | null} */ (null);
 
@@ -55,6 +62,18 @@ function effective(mode) {
 /** The mode the chip stands for: the open chat's, or the new chat's draft. */
 function shown() {
   return store.sessionId ? _current : _draft;
+}
+
+/**
+ * Show `mode` for the open chat as fetched at `requestedAt`, unless a newer
+ * change already landed.
+ * @param {string | null | undefined} mode
+ * @param {number} requestedAt
+ */
+function applyFetched(mode, requestedAt) {
+  if (requestedAt < _changedAt) return;
+  _current = mode ?? null;
+  render();
 }
 
 /**
@@ -105,6 +124,7 @@ async function pick(mode) {
   }
   if (store.sessionId !== id) return;
   _current = mode;
+  _changedAt = performance.now();
   render();
   const live = store.activeRuns.has(id) || store.streaming;
   toast(t(live ? 'mode.nextRun' : 'mode.switched', { mode: label(mode) }));
@@ -160,11 +180,16 @@ function resetDraft() {
   _draftPicked = false;
 }
 
-/** @param {string | null} id */
-function onSessionId(id) {
+/**
+ * @param {string | null} id
+ * @param {boolean} [switched] False only at boot: the page's first fetches
+ *   for the chat were requested before the chip existed and still count.
+ */
+function onSessionId(id, switched = true) {
   closeMenu();
   const wasNew = _shownId === null;
   _shownId = id;
+  if (switched) _changedAt = performance.now(); // a fetch for the chat before is moot
   if (!id) {
     _current = undefined;
     resetDraft();
@@ -218,7 +243,7 @@ export function initWorkspaceMode() {
     }
   });
 
-  store.on('session-id', onSessionId);
+  store.on('session-id', (/** @type {string | null} */ id) => onSessionId(id));
   // A list snapshot — the first load, or the one after an event-stream
   // reconnect — is the truth for the open chat's mode. After a (re)connect,
   // a chat the list doesn't show (past the first page, filtered out by a
@@ -228,23 +253,21 @@ export function initWorkspaceMode() {
   store.on('events-open', () => {
     resync = true; // settled by the snapshot this connect fetches
   });
-  store.on('sessions-loaded', async () => {
+  store.on('sessions-loaded', async (/** @type {any} */ loaded) => {
     const id = store.sessionId;
     const row = id ? store.sessions.find((s) => s.id === id) : undefined;
     const pending = resync;
     resync = false;
     if (row) {
-      if ((row.workspace_mode ?? null) === _current) return;
-      _current = row.workspace_mode ?? null;
-      render();
+      applyFetched(row.workspace_mode, loaded?.requestedAt ?? 0);
       return;
     }
     if (!id || !pending) return;
     try {
+      const requestedAt = performance.now();
       const data = await api.getSession(id);
       if (store.sessionId !== id) return; // moved on meanwhile
-      _current = data.workspace_mode ?? null;
-      render();
+      applyFetched(data.workspace_mode, requestedAt);
     } catch {
       /* transient — the next switch or reconnect resyncs */
     }
@@ -259,8 +282,7 @@ export function initWorkspaceMode() {
   // The open chat's detail (a switch, a refresh) carries its stored mode.
   store.on('session-meta', (/** @type {any} */ data) => {
     if (data?.id !== store.sessionId) return;
-    _current = data.workspace_mode ?? null;
-    render();
+    applyFetched(data.workspace_mode, data.requestedAt ?? 0);
   });
   // Another tab (or this one) switched a chat's mode.
   store.on('session-workspace-changed', (/** @type {any} */ data) => {
@@ -268,6 +290,7 @@ export function initWorkspaceMode() {
     if (row) row.workspace_mode = data.workspace_mode;
     if (data?.session_id === store.sessionId) {
       _current = data.workspace_mode ?? null;
+      _changedAt = performance.now();
       render();
     }
   });
@@ -280,5 +303,5 @@ export function initWorkspaceMode() {
     _draft = _default;
     render();
   });
-  onSessionId(store.sessionId);
+  onSessionId(store.sessionId, false);
 }

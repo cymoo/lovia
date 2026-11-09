@@ -238,12 +238,12 @@ def _make_tool(store: ChatStore) -> Tool:
         # Fires run under this chat's permissions: a schedule set up from a
         # read-only chat can't run its fresh chats wider.
         server = RUN_SERVER.get()
+        # The run's snapshot before any await (a stop would take it away).
+        made_by = server.run_snapshot(ctx.session_id) if server else (False, None)
         meta = await store.get(ctx.session_id) if ctx.session_id else None
         stored_mode = meta.workspace_mode if meta else None
         workspace_mode = (
-            server.inherited_mode(ctx.session_id, stored_mode)
-            if server
-            else stored_mode
+            server.inherited_mode(made_by, stored_mode) if server else stored_mode
         )
         now = time.time()
         row = ScheduleRow(
@@ -399,6 +399,7 @@ def _make_start_tool() -> Tool:
         deps, origin = RUN_SERVER.get(), ctx.session_id
         if deps is None or origin is None:
             raise ToolError("start_session only works in a chat of the web app.")
+        started_by = deps.run_snapshot(origin)  # before any await, as in run_child
         row = await deps.store.get(origin)
         try:
             # This chat's agent, as served now (a settings change may have
@@ -436,7 +437,9 @@ def _make_start_tool() -> Tool:
                 # read-only chat can't start a writer.
                 root, mode = deps.new_chat_binding(
                     agent,
-                    deps.inherited_mode(origin, row.workspace_mode if row else None),
+                    deps.inherited_mode(
+                        started_by, row.workspace_mode if row else None
+                    ),
                 )
                 await deps.store.upsert(
                     sid,

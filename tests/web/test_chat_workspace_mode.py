@@ -211,13 +211,13 @@ def test_a_live_run_passes_on_its_snapshot_none_included(tmp_path: Path) -> None
 
     ctrl = _Ctrl()
     deps.supervisor._controllers["s"] = ctrl  # type: ignore[assignment]
-    assert deps.inherited_mode("s", "coding") == "readonly"
+    assert deps.inherited_mode(deps.run_snapshot("s"), "coding") == "readonly"
     # A run on the agent's own workspace passes that on — not the mode the
     # chat was switched to since it began.
     ctrl.workspace_mode = None
-    assert deps.inherited_mode("s", "coding") is None
+    assert deps.inherited_mode(deps.run_snapshot("s"), "coding") is None
     # No live run: the chat's stored mode.
-    assert deps.inherited_mode("other", "coding") == "coding"
+    assert deps.inherited_mode(deps.run_snapshot("other"), "coding") == "coding"
     # An inherited None stays None (the agent's own workspace), whatever
     # the switch's default for page-made chats.
     deps.workspace_switch = WorkspaceSwitch(default_mode="coding")
@@ -446,3 +446,60 @@ async def test_a_handoff_targets_subagents_run_in_the_chat_mode(
     (task,) = await deps.store.list_children("p")
     assert task.workspace_mode == "readonly"
     assert not (tmp_path / "out.txt").exists()
+
+
+async def test_a_start_that_loses_a_race_never_touches_the_winners_policy(
+    tmp_path: Path,
+) -> None:
+    import asyncio
+
+    from lovia.web.errors import WebError
+
+    store = ChatStore.in_memory()
+    agent = _agent(tmp_path, [text("x")])
+    app = create_app(agent, store=store, titles=False, workspaces=WorkspaceSwitch())
+    deps = app.state.deps
+    await store.upsert("s", agent="bot", workspace_mode="coding")
+
+    # Force the interleaving that matters: the first start binds; the mode
+    # is switched; a second start then binds too, and only after that does
+    # the first register its run (so it wins and the second is refused).
+    real_bind = deps.workspaces.bind
+    second_bound = asyncio.Event()
+    calls = 0
+    second: asyncio.Task[object] | None = None
+
+    async def start() -> object:
+        return await deps.supervisor.start(
+            session_id="s", agent=agent, input="go", is_new=False, title_message=None
+        )
+
+    async def bind(session_id: str, agent_: Agent) -> Agent:
+        nonlocal calls, second
+        calls += 1
+        mine = calls
+        bound = await real_bind(session_id, agent_)
+        if mine == 1:
+            await store.set_workspace_mode("s", "readonly")
+            second = asyncio.create_task(start())
+            try:
+                await asyncio.wait_for(second_bound.wait(), 0.2)
+            except asyncio.TimeoutError:
+                pass  # serialized: the second start can't bind meanwhile
+        else:
+            second_bound.set()
+            for _ in range(100):  # let the first register before refusing
+                if deps.supervisor.get("s") is not None:
+                    break
+                await asyncio.sleep(0.005)
+        return bound
+
+    deps.workspaces.bind = bind  # type: ignore[method-assign]
+    first = await start()
+    assert second is not None
+    results = [first, *(await asyncio.gather(second, return_exceptions=True))]
+    refused = [r for r in results if isinstance(r, WebError)]
+    assert len(refused) == 1 and refused[0].code == "run_active"
+    # The winner runs as it was bound; the loser switched nothing under it.
+    session = deps.workspaces.get("s")
+    assert session is not None and session.policy.write == "allow"

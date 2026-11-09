@@ -330,19 +330,27 @@ class RouterDeps:
         )
         return root, mode if self.workspace_switch is not None else None
 
-    def inherited_mode(self, session_id: str | None, stored: str | None) -> str | None:
-        """The mode a chat that ``session_id``'s activity creates inherits.
+    def run_snapshot(self, session_id: str | None) -> tuple[bool, str | None]:
+        """``(live, mode)`` of the run live in ``session_id``, read now.
 
-        With a run live there, that run's snapshot — ``None`` included: a run
-        on the agent's own workspace passes that on, never a mode the chat
-        was switched to since it began. With none live, the chat's
-        ``stored`` mode.
+        Take it before the first ``await`` of whatever creates a chat from
+        that run: a stop meanwhile removes the run, and its mode with it.
         """
         if session_id is not None and self._supervisor is not None:
             ctrl = self._supervisor.get(session_id)
             if ctrl is not None:
-                return ctrl.workspace_mode
-        return stored
+                return True, ctrl.workspace_mode
+        return False, None
+
+    @staticmethod
+    def inherited_mode(
+        snapshot: tuple[bool, str | None], stored: str | None
+    ) -> str | None:
+        """The mode a chat created from that run inherits: the run's own —
+        ``None`` (the agent's own workspace) included, never a mode the chat
+        was switched to since the run began — else the chat's ``stored``."""
+        live, mode = snapshot
+        return mode if live else stored
 
     @property
     def default_agent(self) -> str | None:

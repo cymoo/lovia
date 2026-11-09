@@ -95,7 +95,8 @@ async function pick(mode) {
     render();
     return;
   }
-  if (mode === _current) return;
+  // No "unchanged" shortcut: the shown mode may be stale (another tab), and
+  // the server's answer is what counts.
   try {
     await api.setSessionMode(id, mode);
   } catch (err) {
@@ -218,6 +219,14 @@ export function initWorkspaceMode() {
   });
 
   store.on('session-id', onSessionId);
+  // A list snapshot — the first load, or the one after an event-stream
+  // reconnect — is the truth for the open chat's mode.
+  store.on('sessions-loaded', () => {
+    const row = store.sessions.find((s) => s.id === store.sessionId);
+    if (!row || (row.workspace_mode ?? null) === _current) return;
+    _current = row.workspace_mode ?? null;
+    render();
+  });
   // "New chat" on a new chat changes no id, but starts over all the same.
   store.on('new-chat', () => {
     if (store.sessionId) return; // the id change resets it

@@ -186,6 +186,10 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         from ..runtime.result import RunResult
         from .titles import provisional_title
 
+        # The spawning run's permissions, read before anything awaits: a stop
+        # in the meantime would take the run — and its snapshot — away.
+        spawned_by = deps.run_snapshot(spec.parent_session_id)
+
         child_sid = uuid.uuid4().hex
         # The registry key the task chat speaks afterwards. The child agent
         # itself is unregistered (often a clone), so record the parent chat's
@@ -201,7 +205,7 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             if row is not None:
                 agent_key = row.agent
                 stored_mode = row.workspace_mode
-        parent_mode = deps.inherited_mode(spec.parent_session_id, stored_mode)
+        parent_mode = deps.inherited_mode(spawned_by, stored_mode)
         # A task works for the chat that spawned it, so in its context. The
         # run_deps hook decides before the task chat exists: a refusal
         # fails the spawn and leaves nothing behind.

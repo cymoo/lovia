@@ -320,6 +320,9 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
     _runsPrimed = true;
     renderSessions();
     loadCurrentTasks();
+    // Each snapshot (after a reconnect too) carries per-chat state that
+    // events may have missed, such as a chat's permission mode.
+    store.emit('sessions-loaded', store.sessions);
   } catch (err) {
     console.error('loadSessions:', err);
   }

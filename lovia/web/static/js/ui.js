@@ -360,9 +360,12 @@ let _closeMenu = null;
  * A manual popover, so it sits in the top layer over a modal dialog.
  * @param {HTMLElement | { x: number, y: number }} at
  * @param {(MenuItem | null)[]} items
+ * @param {{ align?: 'end' | 'start' }} [opts] Which edge of the opener the
+ *   menu lines up with: its right (default) or its left — for an opener on
+ *   the left of what it sits in.
  * @returns {() => void} Closes the menu.
  */
-export function openMenu(at, items) {
+export function openMenu(at, items, { align = 'end' } = {}) {
   const opener = at instanceof HTMLElement ? at : null;
   const toggledShut = opener?.getAttribute('aria-expanded') === 'true';
   _closeMenu?.();
@@ -403,7 +406,7 @@ export function openMenu(at, items) {
   // the bottom. A pointer position opens down-right of the pointer.
   const { width, height } = menu.getBoundingClientRect();
   const r = opener?.getBoundingClientRect();
-  let x = r ? r.right - width : /** @type {{ x: number }} */ (at).x;
+  let x = r ? (align === 'start' ? r.left : r.right - width) : /** @type {{ x: number }} */ (at).x;
   let y = r ? r.bottom + 4 : /** @type {{ y: number }} */ (at).y;
   if (y + height > innerHeight - 8) y = r ? r.top - height - 4 : y - height;
   x = Math.max(8, Math.min(x, innerWidth - width - 8));

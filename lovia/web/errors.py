@@ -74,6 +74,7 @@ ErrorCode = Literal[
     "workspace_locked",
     "workspace_not_allowed",
     "workspace_missing",
+    "workspace_unassociated",
     "workspace_fixed",
     "workspace_not_found",
     "file_too_large",

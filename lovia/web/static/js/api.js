@@ -92,10 +92,21 @@ function qs(params) {
   return s ? `?${s}` : '';
 }
 
+// Which directory the workspace routes (Files panel, uploads, raw bytes)
+// serve: the open chat's (`session`) or a not-yet-sent draft's (`root`).
+// workspaces.js sets it where chats work in directories of their own; until
+// then every request serves the agent's own directory.
+/** @type {() => { session?: string | null, root?: string | null }} */
+let _scope = () => ({});
+/** @param {() => { session?: string | null, root?: string | null }} fn */
+export function setWorkspaceScope(fn) {
+  _scope = fn;
+}
+
 /** @typedef {{ agent?: string, path?: string, download?: boolean }} RawOpts */
 /** @param {RawOpts} [opts] */
 const rawPath = ({ agent, path, download } = {}) =>
-  `/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`;
+  `/api/workspace/raw${qs({ agent, path, download: download ? 1 : '', ..._scope() })}`;
 
 export const api = {
   // ---- agents / server info ----
@@ -204,6 +215,37 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify({ workspace_mode }),
     }).then(_json),
+  // Bind a chat from before chats had a directory to one, for good.
+  /** @param {string} id @param {string} workspace_root */
+  setSessionRoot: (id, workspace_root) =>
+    request(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ workspace_root }),
+    }).then(_json),
+  /** @param {string[]} session_ids @param {string} root */
+  associateSessions: (session_ids, root) =>
+    request('/api/sessions/associate', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ session_ids, root }),
+    }).then(_json),
+  // ---- workspaces: the directories a new chat may pick ----
+  listWorkspaces: () => request('/api/workspaces').then(_json),
+  /** @param {string} path */
+  addWorkspace: (path) =>
+    request('/api/workspaces', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ path }),
+    }).then(_json),
+  /** @param {string} id */
+  removeWorkspace: (id) =>
+    request(`/api/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(_json),
+  // Subdirectory paths completing `path` as typed.
+  /** @param {string} path @param {{ signal?: AbortSignal }} [opts] */
+  completeDir: (path, { signal } = {}) =>
+    request(`/api/workspaces/dirs${qs({ path })}`, { signal }).then(_json),
   setPinned: (id, pinned) =>
     request(`/api/sessions/${encodeURIComponent(id)}`, {
       method: 'PATCH',
@@ -293,19 +335,19 @@ export const api = {
   // ---- workspace (Files panel; read-only) ----
   /** @param {{ agent?: string }} [opts] */
   workspaceInfo: ({ agent } = {}) =>
-    request(`/api/workspace${qs({ agent })}`).then(_json),
+    request(`/api/workspace${qs({ agent, ..._scope() })}`).then(_json),
   // One directory level, dirs first. `path` is workspace-relative.
   /** @param {{ agent?: string, path?: string }} [opts] */
   workspaceFiles: ({ agent, path } = {}) =>
-    request(`/api/workspace/files${qs({ agent, path })}`).then(_json),
+    request(`/api/workspace/files${qs({ agent, path, ..._scope() })}`).then(_json),
   // Whole-workspace flat list, newest first.
   /** @param {{ agent?: string, limit?: number }} [opts] */
   workspaceRecent: ({ agent, limit } = {}) =>
-    request(`/api/workspace/recent${qs({ agent, limit })}`).then(_json),
+    request(`/api/workspace/recent${qs({ agent, limit, ..._scope() })}`).then(_json),
   // Paginated text content; `binary: true` means "don't render me".
   /** @param {{ agent?: string, path?: string, start?: number }} [opts] */
   workspaceFile: ({ agent, path, start } = {}) =>
-    request(`/api/workspace/file${qs({ agent, path, start })}`).then(_json),
+    request(`/api/workspace/file${qs({ agent, path, start, ..._scope() })}`).then(_json),
   // Raw bytes URL — inline image preview, or any file with download=true.
   /** @param {RawOpts} [opts] @returns {string} */
   workspaceRawUrl: (opts) => url(rawPath(opts)),
@@ -341,7 +383,7 @@ export const api = {
   uploadFile: (file, { agent, signal } = {}) => {
     const form = new FormData();
     form.append('file', file);
-    return request(`/api/workspace/upload${qs({ agent })}`, {
+    return request(`/api/workspace/upload${qs({ agent, ..._scope() })}`, {
       method: 'POST',
       body: form,
       signal,

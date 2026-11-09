@@ -145,6 +145,7 @@ normalizes all three.
 | `workspace_locked` | 403 | the workspace settings are fixed by how `lovia web` was started |
 | `workspace_not_allowed` | 409 | this server doesn't let a chat work in that directory (`hint` names the constraint); a chat is refused, never moved |
 | `workspace_missing` | 409 | the chat's directory no longer exists |
+| `workspace_unassociated` | 409 | a chat from before chats had a directory: bind it to one first (`POST /api/sessions/associate`) |
 | `workspace_fixed` | 409 | the chat already works in a directory, which never changes |
 | `workspace_not_found` | 404 | no such entry in the workspace list (the fixed ones can't be removed) |
 | `file_too_large` | 413 | over the workspace read or upload limit |

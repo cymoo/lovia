@@ -178,7 +178,7 @@ block、文案、新增语言），`examples/33_web_extensions.py` 通过 `windo
 | `sidebar_nav` | 侧栏导航末尾、"设置"下方：你自己的链接 |
 | `sidebar_footer` | 侧栏底部：用户菜单、退出登录链接 |
 | `topbar_actions` | 顶栏按钮组的最左侧 |
-| `composer_actions` | 输入框内、文本框之后：模式切换、选择器 |
+| `composer_actions` | 输入框下方的工具栏里、附件按钮旁：模式切换、选择器 |
 | `welcome` | 空白聊天页的内容；`{{ super() }}` 保留默认的标题、说明和示例问题。点"新对话"时页面会恢复它 |
 | `body_end` | 应用脚本之后：你自己的脚本 |
 
@@ -706,7 +706,9 @@ app = create_app(
 
 对话的模式从下次运行起生效；进行中的运行保持开始时的模式。运行创建的子任务、派生对话和定时任务，都在这次运行的目录里、
 按它的模式工作。不传 `workspaces=`（默认）时，所有对话都使用各自 Agent 的工作区。早于目录绑定的旧对话返回
-`workspace_root: null`，在用 `POST /api/sessions/associate` 关联之前，仍在 Agent 自己的目录里运行。请求和会话里的
+`workspace_root: null`。对话可以在其他目录工作时（`roots` 不为 `None`），在用 `POST /api/sessions/associate`
+关联之前，给它发消息会被拒绝（409 `workspace_unassociated`），页面会先让用户选目录；没有客户端的运行（定时任务、子任务报告）
+以及目录固定的服务端，仍在 Agent 自己的目录里运行它。请求和会话里的
 `workspace`、`workspace_mode` 以及 `/api/workspaces` 列表见 [HTTP API](http-api.md)。
 
 ## 追问建议

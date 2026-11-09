@@ -377,9 +377,19 @@ body.lv-sidebar-collapsed .lv-sidebar {
 
 .lv-sidebar-section-label {
   flex-shrink: 0;
-  padding: 12px 22px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  padding: 12px 16px 6px 22px;
   font-size: 12.5px;
   font-weight: 500;
+  color: var(--lv-muted);
+}
+.lv-section-label-add {
+  width: 26px;
+  height: 26px;
+  margin: -4px 0;
   color: var(--lv-muted);
 }
 
@@ -669,6 +679,252 @@ body.lv-sidebar-collapsed .lv-sidebar {
 }
 .lv-session-group:not(:first-child) {
   margin-top: 6px;
+}
+/* How long ago a chat was active, at the row's end (workspace groups have no
+   date headings). The row's "⋯" covers it on hover. */
+.lv-session-age {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--lv-muted-2);
+}
+.lv-session-pinmark {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--lv-muted-2);
+}
+
+/* ---- Workspace groups (the sidebar, where chats work in directories) ---- */
+.lv-ws-group {
+  margin-bottom: 4px;
+}
+.lv-ws-group-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--lv-radius-sm);
+}
+.lv-ws-group-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: var(--lv-radius-sm);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--lv-ink-2);
+  text-align: left;
+}
+.lv-ws-group-head:hover .lv-ws-group-toggle {
+  color: var(--lv-ink);
+}
+.lv-ws-group-head:hover {
+  background: var(--lv-surface-2);
+}
+.lv-ws-group-icon,
+.lv-ws-group-chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--lv-muted);
+}
+/* The folder turns into the fold chevron under the pointer. */
+.lv-ws-group-chevron {
+  display: none;
+  transition: transform var(--lv-t-fast) var(--lv-ease);
+}
+.lv-ws-group-toggle[aria-expanded="true"] .lv-ws-group-chevron {
+  transform: rotate(90deg);
+}
+.lv-ws-group-head:hover .lv-ws-group-icon,
+.lv-ws-group-toggle:focus-visible .lv-ws-group-icon {
+  display: none;
+}
+.lv-ws-group-head:hover .lv-ws-group-chevron,
+.lv-ws-group-toggle:focus-visible .lv-ws-group-chevron {
+  display: inline-flex;
+}
+.lv-ws-group-toggle[aria-expanded="false"] .lv-ws-group-icon {
+  opacity: 0.75;
+}
+.lv-ws-group-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lv-ws-group-head[data-kind="unlinked"] .lv-ws-group-icon {
+  color: var(--lv-warn, var(--lv-muted));
+}
+.lv-ws-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-right: 4px;
+  opacity: 0;
+  transition: opacity var(--lv-t-fast);
+}
+.lv-ws-group-head:hover .lv-ws-group-actions,
+.lv-ws-group-head:focus-within .lv-ws-group-actions,
+.lv-ws-group-head[data-kind="unlinked"] .lv-ws-group-actions {
+  opacity: 1;
+}
+.lv-ws-group-btn {
+  width: 26px;
+  height: 26px;
+  color: var(--lv-muted);
+}
+.lv-ws-group-link {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--lv-ink-2);
+  background: var(--lv-surface-2);
+}
+.lv-ws-group-link:hover {
+  color: var(--lv-ink);
+  background: var(--lv-surface-3);
+}
+.lv-ws-group-rows .lv-session-main {
+  padding-left: 32px;
+}
+.lv-ws-group-empty {
+  padding: 4px 12px 6px 32px;
+  font-size: 12.5px;
+  color: var(--lv-muted-2);
+}
+.lv-ws-group-head[aria-hidden="true"] {
+  display: none;
+}
+
+/* The composer's workspace chip: the folder a new chat starts in, or the
+   open chat's own (fixed: no caret). */
+.lv-ws-chip {
+  gap: 5px;
+  max-width: 200px;
+}
+.lv-ws-chip-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.lv-ws-chip.lv-fixed {
+  cursor: default;
+}
+.lv-ws-chip.lv-fixed::after {
+  display: none;
+}
+.lv-ws-chip.lv-unlinked {
+  color: var(--lv-warn, var(--lv-ink-2));
+}
+.lv-ws-chip[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Add-a-folder and link-chats dialogs. */
+dialog.lv-custom-dialog:has(.lv-ws-dialog) {
+  max-width: 480px;
+}
+.lv-ws-dialog {
+  min-width: 0;
+}
+.lv-ws-dialog h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+.lv-ws-dialog-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--lv-muted);
+}
+.lv-ws-dialog-error {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--lv-danger);
+}
+.lv-ws-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.lv-ws-path {
+  position: relative;
+}
+.lv-ws-path .lv-dialog-input {
+  font-family: var(--lv-mono);
+  font-size: 13px;
+}
+.lv-ws-path-suggestions {
+  margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--lv-border);
+  border-radius: var(--lv-radius-sm);
+  padding: 3px;
+}
+.lv-ws-path-option {
+  padding: 5px 8px;
+  border-radius: var(--lv-radius-xs);
+  font-family: var(--lv-mono);
+  font-size: 12.5px;
+  color: var(--lv-ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lv-ws-path-option:hover,
+.lv-ws-path-option.lv-active {
+  background: var(--lv-surface-2);
+  color: var(--lv-ink);
+}
+.lv-ws-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.lv-ws-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--lv-radius-sm);
+  cursor: pointer;
+}
+.lv-ws-choice:hover {
+  background: var(--lv-surface-2);
+}
+.lv-ws-choice input {
+  margin-top: 3px;
+  accent-color: var(--lv-accent);
+}
+.lv-ws-choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.lv-ws-choice-name {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+/* A path's tail is what tells two apart: one line, cut at its start. */
+.lv-ws-choice-sub {
+  font-size: 11.5px;
+  color: var(--lv-muted-2);
+  font-family: var(--lv-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+.lv-ws-choice-other {
+  padding: 4px 0 0 34px;
 }
 /* A row's "⋯" (both chat lists): revealed on hover / keyboard focus / while
    its menu is open. In the sidebar it overlays the title's end, fading the
@@ -2717,16 +2973,19 @@ button.lv-question-option:hover {
   pointer-events: none;
   background: linear-gradient(to bottom, transparent, var(--lv-bg));
 }
+/* Two rows: the message on top, a bar under it — what shapes the message on
+   the left, what sends it on the right — so the controls never squeeze the
+   text. */
 .lv-composer-inner {
   display: flex;
-  gap: 8px;
-  align-items: flex-end;
+  flex-direction: column;
+  gap: 4px;
   max-width: var(--lv-content-w);
   margin: 0 auto;
   background: var(--lv-surface);
   border: 1px solid var(--lv-border-strong);
-  border-radius: 28px;
-  padding: 10px 10px 10px 12px;
+  border-radius: 24px;
+  padding: 12px 10px 10px 10px;
   box-shadow: var(--lv-shadow-sm);
   transition:
     border-color var(--lv-t-med) var(--lv-ease),
@@ -2736,15 +2995,42 @@ button.lv-question-option:hover {
 .lv-composer-inner:focus-within {
   box-shadow: var(--lv-shadow-md);
 }
-/* No attach button: the text starts clear of the pill's round end. */
-.lv-composer-inner:has(> .lv-btn-attach[hidden]) {
-  padding-left: 20px;
+.lv-composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 38px;
+}
+.lv-composer-tools,
+.lv-composer-end {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+/* On a narrow bar the model name gives way (ellipsized) before anything
+   overlaps: the folder and mode say where and how this chat works, which
+   matters more; their own labels stop at a share of the width. */
+.lv-composer-tools {
+  flex: 0 1 auto;
+}
+.lv-composer-tools .lv-model-chip {
+  max-width: min(200px, 32vw);
+}
+.lv-composer-end {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.lv-composer-end .lv-model-chip {
+  flex-shrink: 1;
+  min-width: 0;
 }
 [data-theme="dark"] .lv-composer-inner {
   background: var(--lv-surface-2);
 }
 #prompt {
-  flex: 1;
   border: none;
   background: none;
   color: var(--lv-ink);
@@ -2752,8 +3038,8 @@ button.lv-question-option:hover {
   line-height: 1.6;
   resize: none;
   outline: none;
-  padding: 7px 0;
-  min-height: 38px;
+  padding: 2px 8px 6px;
+  min-height: 32px;
   max-height: 30vh;
   overflow-y: auto;
   scrollbar-width: none;
@@ -2804,8 +3090,8 @@ button.lv-question-option:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   color: var(--lv-muted);
   transition:
@@ -4761,7 +5047,7 @@ body.lv-files-splitting {
     padding: 6px 12px calc(14px + env(safe-area-inset-bottom, 0px));
   }
   .lv-composer-inner {
-    padding-left: 15px;
+    padding: 10px 8px 8px;
   }
   .lv-turn {
     margin-bottom: 26px;
@@ -6433,8 +6719,6 @@ body.lv-files-splitting {
   border-radius: 999px;
   cursor: pointer;
   flex-shrink: 0;
-  align-self: flex-end;
-  margin-bottom: 4px;
   max-width: 180px;
   transition: background var(--lv-t-fast) var(--lv-ease), color var(--lv-t-fast) var(--lv-ease);
 }

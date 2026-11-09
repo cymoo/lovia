@@ -170,7 +170,14 @@ def test_a_narrowed_server_caps_a_stored_wider_mode(tmp_path: Path) -> None:
     app = create_app(agent, store=store, titles=False, workspaces=switch)
     with TestClient(app) as c:
         # A chat stored as coding (made before the server was narrowed).
-        c.portal.call(lambda: store.upsert("s", agent="bot", workspace_mode="coding"))
+        c.portal.call(
+            lambda: store.upsert(
+                "s",
+                agent="bot",
+                workspace_root=tmp_path.resolve().as_posix(),
+                workspace_mode="coding",
+            )
+        )
         res = c.post("/api/chat", json={"message": "go", "session_id": "s"})
         assert res.status_code == 200, res.text
     assert not (tmp_path / "out.txt").exists()

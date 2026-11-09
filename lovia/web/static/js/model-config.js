@@ -1110,9 +1110,10 @@ async function openChipMenu() {
 }
 
 function initModelChip() {
-  const inner = document.querySelector('.lv-composer-inner');
+  // The composer bar's sending end, before the context ring and Send.
   const ring = document.getElementById('context-ring');
-  if (!inner || _chip) return;
+  const end = ring?.parentElement;
+  if (!ring || !end || _chip) return;
   const chip = el('button', 'lv-model-chip');
   chip.id = 'model-chip';
   chip.setAttribute('type', 'button');
@@ -1128,7 +1129,7 @@ function initModelChip() {
     }
     openChipMenu();
   });
-  inner.insertBefore(chip, ring);
+  end.insertBefore(chip, ring);
   _chip = chip;
   document.addEventListener('click', (e) => {
     if (_chipMenu && !_chipMenu.contains(/** @type {Node} */ (e.target))) closeChipMenu();

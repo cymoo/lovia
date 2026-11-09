@@ -189,7 +189,7 @@ only the blocks you need:
 | `sidebar_nav` | End of the sidebar's navigation, under Settings: links of your own |
 | `sidebar_footer` | Bottom of the sidebar: a user menu, a sign-out link |
 | `topbar_actions` | Start of the top bar's button group |
-| `composer_actions` | In the composer, after the message box: a mode switch, a picker |
+| `composer_actions` | In the composer's bar under the message, beside the attach button: a mode switch, a picker |
 | `welcome` | The blank chat state's content; `{{ super() }}` keeps the default title, description and examples. The page restores it on "New chat" |
 | `body_end` | After the app's script: scripts of your own |
 
@@ -806,8 +806,12 @@ A chat's mode applies from its next run; a run in flight keeps the one it
 started with. The chats a run creates — subagent tasks, spawned chats,
 schedule fires — work in that run's directory and mode. Without
 `workspaces=` (the default), every chat runs on its agent's own workspace.
-Chats from before chats had a directory report `workspace_root: null` and
-run in the agent's own until bound with `POST /api/sessions/associate`. See
+Chats from before chats had a directory report `workspace_root: null`. Where
+chats may work elsewhere (`roots` not `None`), a message to one is refused
+(409 `workspace_unassociated`) until it is bound with
+`POST /api/sessions/associate` — the page asks which directory; clientless
+runs (schedule fires, task reports) and a fixed-directory server keep running
+it in the agent's own. See
 [HTTP API](http-api.md) for `workspace` and `workspace_mode` on requests,
 and the `/api/workspaces` list.
 

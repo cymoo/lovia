@@ -496,6 +496,29 @@ async def test_associating_binds_only_unbound_chats_once(
     assert meta is not None and meta.workspace_root == launch.as_posix()
 
 
+@pytest.mark.parametrize("roots", ["any", None])
+async def test_a_message_to_an_unlinked_chat_waits_for_a_directory(
+    dirs: tuple[Path, Path], roots: str | None
+) -> None:
+    launch, other = dirs
+    store = ChatStore.in_memory()
+    await store.upsert("old", agent="bot")  # from before chats had a directory
+    agent = _agent(launch, [_WRITE, text("done")])
+    with _client(agent, WorkspaceSwitch(roots=roots), store) as c:
+        res = c.post("/api/chat", json={"message": "go", "session_id": "old"})
+        if roots is None:
+            # One fixed directory: nothing to ask — it runs where it always did.
+            assert res.status_code == 200, res.text
+            assert (launch / "out.txt").is_file()
+            return
+        assert res.json()["detail"]["code"] == "workspace_unassociated"
+        assert not (launch / "out.txt").exists()
+        c.patch("/api/sessions/old", json={"workspace_root": str(other)})
+        res = c.post("/api/chat", json={"message": "go", "session_id": "old"})
+        assert res.status_code == 200, res.text
+    assert (other / "out.txt").is_file()
+
+
 async def test_store_migrates_the_schedule_root_and_list(tmp_path: Path) -> None:
     store = ChatStore.sqlite(tmp_path / "chat.db")
     row = await store.touch_workspace("/a/b")

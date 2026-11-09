@@ -243,7 +243,7 @@ async function refreshTranscript() {
   const id = store.sessionId;
   if (!id || store.streaming) return;
   try {
-    const requestedAt = performance.now(); // for listeners to order against events
+    const requestedAt = store.stamp(); // for listeners to order against events
     const data = await api.getSession(id);
     if (store.sessionId !== id || store.streaming) return; // superseded
     store.currentParentId = data.parent_id || null;
@@ -282,7 +282,7 @@ async function stopRun(sid) {
  * filter so refreshes (delete, stream end, polls) keep an active search.
  */
 export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
-  const requestedAt = performance.now(); // see 'sessions-loaded' below
+  const requestedAt = store.stamp(); // see 'sessions-loaded' below
   try {
     const [sessions, runs] = await Promise.all([
       // Fetch one row past the page: its presence answers "is there more?"
@@ -896,7 +896,7 @@ export async function switchSession(id) {
   renderSessions();
 
   try {
-    const requestedAt = performance.now(); // for listeners to order against events
+    const requestedAt = store.stamp(); // for listeners to order against events
     const data = await api.getSession(id);
     if (store.sessionId !== id) return; // a newer switch superseded this one
     store.currentParentId = data.parent_id || null;

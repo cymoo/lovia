@@ -124,7 +124,7 @@ async function pick(mode) {
   }
   if (store.sessionId !== id) return;
   _current = mode;
-  _changedAt = performance.now();
+  _changedAt = store.stamp();
   render();
   const live = store.activeRuns.has(id) || store.streaming;
   toast(t(live ? 'mode.nextRun' : 'mode.switched', { mode: label(mode) }));
@@ -189,7 +189,7 @@ function onSessionId(id, switched = true) {
   closeMenu();
   const wasNew = _shownId === null;
   _shownId = id;
-  if (switched) _changedAt = performance.now(); // a fetch for the chat before is moot
+  if (switched) _changedAt = store.stamp(); // a fetch for the chat before is moot
   if (!id) {
     _current = undefined;
     resetDraft();
@@ -264,7 +264,7 @@ export function initWorkspaceMode() {
     }
     if (!id || !pending) return;
     try {
-      const requestedAt = performance.now();
+      const requestedAt = store.stamp();
       const data = await api.getSession(id);
       if (store.sessionId !== id) return; // moved on meanwhile
       applyFetched(data.workspace_mode, requestedAt);
@@ -290,7 +290,7 @@ export function initWorkspaceMode() {
     if (row) row.workspace_mode = data.workspace_mode;
     if (data?.session_id === store.sessionId) {
       _current = data.workspace_mode ?? null;
-      _changedAt = performance.now();
+      _changedAt = store.stamp();
       render();
     }
   });

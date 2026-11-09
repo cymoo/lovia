@@ -20,7 +20,13 @@ function fixture(t) {
   const history = new Map();
   const requests = [];
   const storage = new Map([['lovia-runs-seen', '10']]);
-  const store = { sessions: [], activeRuns: new Set(), runsBySession: new Map(), shownRuns: new Set() };
+  let stamps = 0;
+  const store = {
+    sessions: [], activeRuns: new Set(), runsBySession: new Map(), shownRuns: new Set(),
+    // The real store's ordering stamp and event hook (no listeners here).
+    stamp: () => ++stamps,
+    emit: () => {},
+  };
   const state = { runs: [] };
   const context = {
     document: { title: 'Lovia', hidden: false, getElementById: () => null },

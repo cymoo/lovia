@@ -2,8 +2,18 @@
 const _listeners = new Map();
 /** @type {string | null} */
 let _sessionId = null;
+let _stamp = 0;
 
 export const store = {
+  /**
+   * A strictly increasing number: stamps when something was requested or
+   * changed, so a late answer can be told apart from a newer change — no
+   * clock (and no ties) involved.
+   * @returns {number}
+   */
+  stamp() {
+    return ++_stamp;
+  },
   // The chat on screen (null: a new, unsaved one). Set from several places
   // (switching, a new chat, a run's `session` event); every change emits
   // 'session-id' so listeners don't have to track them all.

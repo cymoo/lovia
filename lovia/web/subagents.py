@@ -44,6 +44,7 @@ from ..plugins.subagents import (
     Subagents,
 )
 from .errors import WebError
+from ..workspace.workspace import WorkspaceSessionBinding
 from .run_deps import RunTrigger, build_run_deps
 from .sse import SessionCreatedData
 
@@ -223,7 +224,16 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         async with gate as alive:
             if not alive:
                 raise RunCancelled("the chat that spawned this task was deleted")
-            root, mode = deps.new_chat_binding(spec.agent, parent_mode)
+            child = spec.agent
+            if deps.workspace_switch is not None:
+                # A self-cloned child carries the parent chat's session
+                # binding. With per-chat modes that session's policy changes
+                # when the parent switches, so the task gets a session of its
+                # own, judged by the spawning run's permissions throughout.
+                ws = child.workspace
+                if isinstance(ws, WorkspaceSessionBinding):
+                    child = child.clone(workspace=ws.workspace)
+            root, mode = deps.new_chat_binding(child, parent_mode)
             await deps.store.upsert(
                 child_sid,
                 agent=agent_key,
@@ -235,7 +245,7 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             try:
                 ctrl = await deps.supervisor.start(
                     session_id=child_sid,
-                    agent=spec.agent,
+                    agent=child,
                     input=spec.prompt,
                     is_new=False,  # no title generation for task sessions
                     title_message=None,

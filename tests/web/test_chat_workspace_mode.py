@@ -314,3 +314,79 @@ async def test_a_schedule_fire_takes_the_schedule_mode(tmp_path: Path) -> None:
     meta = await store.get(target)
     assert meta is not None and meta.workspace_mode == "readonly"
     assert not (tmp_path / "out.txt").exists()
+
+
+# ------------------------------------------------ the permission boundary -
+
+
+def test_a_handoff_cannot_widen_a_read_only_chat(tmp_path: Path) -> None:
+    writer = _agent(tmp_path, [_WRITE, text("wrote")]).clone(name="writer")
+    front = Agent(
+        name="front",
+        model=ScriptedProvider([call("transfer_to_writer", {}), text("unused")]),
+        handoffs=[writer],
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+    )
+    with _client(front, WorkspaceSwitch()) as c:
+        res = c.post("/api/chat", json={"message": "go", "workspace_mode": "readonly"})
+        assert res.status_code == 200, res.text
+    # The writer's own workspace allows writes; the chat's mode does not.
+    assert not (tmp_path / "out.txt").exists()
+
+
+def test_rebinding_handles_a_handoff_cycle(tmp_path: Path) -> None:
+    from lovia.handoff import Handoff
+    from lovia.web.api.deps import RouterDeps
+
+    a = _agent(tmp_path, []).clone(name="a")
+    b = _agent(tmp_path, []).clone(name="b", handoffs=[Handoff(target=a)])
+    a.handoffs.append(b)  # a ⇄ b
+    deps = RouterDeps(agents={"a": a}, store=ChatStore.in_memory())
+    deps.workspace_switch = WorkspaceSwitch()
+    bound = deps.bind_workspace(a, "readonly")
+    (b2,) = bound.handoffs
+    assert b2.workspace.policy.write == "deny"
+    assert b2.handoffs[0].target is bound  # the cycle closes on the copies
+    assert a.workspace.policy.write == "allow" and a.handoffs[0] is b  # untouched
+
+
+async def test_a_self_cloned_task_gets_its_own_session(tmp_path: Path) -> None:
+    from lovia import Subagents
+
+    parent = Agent(
+        name="bot",
+        model=ScriptedProvider(
+            [call("spawn_subagent", {"prompt": "dig"}), text("ok"), text("dug")]
+        ),
+        plugins=[Subagents()],  # self-clone: the child is this agent, bound
+        workspace=Workspace.local(str(tmp_path)),
+    )
+    app = create_app(
+        parent,
+        store=ChatStore.in_memory(),
+        titles=False,
+        workspaces=WorkspaceSwitch(),
+    )
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="coding")
+    await deps.supervisor.start(
+        session_id="p",
+        agent=parent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+    )
+
+    async def registered() -> bool:
+        kids = await deps.store.list_children("p")
+        return len(kids) == 1 and deps.workspaces.get(kids[0].id) is not None
+
+    await _until(registered)
+    (task,) = await deps.store.list_children("p")
+    mine, theirs = deps.workspaces.get("p"), deps.workspaces.get(task.id)
+    # Separate sessions: switching the parent's mode (set_policy on its
+    # session) can't reach a task already running.
+    assert mine is not None and theirs is not None and mine is not theirs
+    mine.set_policy(Workspace.local(str(tmp_path), mode="readonly").policy)
+    assert theirs.policy.write == "allow"

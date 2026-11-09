@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...agent import Agent
+from ...handoff import Handoff
 from ...context import ContextPolicy
 from ...providers import Provider
 from ...reliability import RetryPolicy, RunBudget
@@ -272,17 +273,44 @@ class RouterDeps:
     def bind_workspace(self, agent: Agent[Any], mode: str | None) -> Agent[Any]:
         """``agent`` with its workspace rebuilt for the chat's ``mode``.
 
-        Unchanged without a switch, without a mode, or for an agent whose
-        workspace isn't a plain ``LocalWorkspace`` (a custom backend's
-        permissions are its own business).
+        Every agent the run can hand off to is rebuilt too: a handoff opens
+        its target's own workspace, so a read-only chat must not regain
+        writes by transferring to an agent whose workspace allows them.
+        Unchanged without a switch or a mode; an agent whose workspace isn't
+        a plain ``LocalWorkspace`` (a custom backend) keeps its own.
         """
         effective = self.effective_mode(mode)
-        base = agent.workspace
-        if effective is None or not isinstance(base, LocalWorkspace):
+        if effective is None:
             return agent
+        return self._rebind(agent, effective, {})
+
+    def _rebind(
+        self, agent: Agent[Any], mode: str, done: dict[int, Agent[Any]]
+    ) -> Agent[Any]:
+        if id(agent) in done:  # handoffs may form a cycle
+            return done[id(agent)]
         assert self.workspace_switch is not None
-        workspace = self.workspace_switch.workspace(base, effective)  # type: ignore[arg-type]
-        return agent.clone(workspace=workspace)
+        base = agent.workspace
+        # A session binding (a self-cloned subagent's) → its config: the
+        # rebuilt workspace opens a session of its own.
+        base = getattr(base, "workspace", base)
+        workspace = (
+            self.workspace_switch.workspace(base, mode)  # type: ignore[arg-type]
+            if isinstance(base, LocalWorkspace)
+            else agent.workspace
+        )
+        # A fresh handoffs list, filled after registering the copy so a cycle
+        # resolves to it — the original agent is never touched.
+        copy = agent.clone(workspace=workspace, handoffs=[])
+        done[id(agent)] = copy
+        for h in agent.handoffs:
+            if isinstance(h, Handoff):
+                copy.handoffs.append(
+                    replace(h, target=self._rebind(h.target, mode, done))
+                )
+            else:
+                copy.handoffs.append(self._rebind(h, mode, done))
+        return copy
 
     def new_chat_binding(
         self, agent: Agent[Any], mode: str | None

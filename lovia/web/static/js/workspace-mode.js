@@ -17,9 +17,11 @@ import { toast } from './toast.js';
 let _chip = null;
 /** @type {HTMLElement | null} */
 let _menu = null;
-/** The mode a new (unsaved) chat will start in. */
+/** The mode a new (unsaved) chat starts in unless one is picked: the server's default. */
+let _default = /** @type {string | null} */ (null);
+/** The mode the new (unsaved) chat on screen will start in. */
 let _draft = /** @type {string | null} */ (null);
-/** Whether the person picked the draft mode (a Settings default change then leaves it be). */
+/** Whether the person picked the draft (a Settings default change then leaves it be). */
 let _draftPicked = false;
 /** The open chat's stored mode, once known (undefined: not loaded yet). */
 let _current = /** @type {string | null | undefined} */ (undefined);
@@ -157,7 +159,11 @@ function onSessionId(id) {
   const wasNew = _shownId === null;
   _shownId = id;
   if (!id) {
+    // A new chat starts from the default again: a pick was for the chat it
+    // started, not for every chat after it.
     _current = undefined;
+    _draft = _default;
+    _draftPicked = false;
   } else if (wasNew && store.streaming) {
     // The new chat just got its id from its first run: it was saved with
     // the draft mode that message carried.
@@ -179,7 +185,7 @@ export function initWorkspaceMode() {
   const info = offer();
   const inner = document.querySelector('.lv-composer-inner');
   if (!info || !inner || _chip) return;
-  _draft = info.default ?? null;
+  _default = _draft = info.default ?? null;
   const chip = document.createElement('button');
   chip.type = 'button';
   chip.id = 'mode-chip';
@@ -227,8 +233,10 @@ export function initWorkspaceMode() {
   // A Settings change of the default reaches a draft nobody picked yet.
   store.on('config-loaded', (/** @type {any} */ cfg) => {
     const mode = cfg?.workspace?.effective_mode;
-    if (_draftPicked || !mode) return;
-    _draft = effective(mode);
+    if (!mode) return;
+    _default = effective(mode);
+    if (_draftPicked) return;
+    _draft = _default;
     render();
   });
   onSessionId(store.sessionId);

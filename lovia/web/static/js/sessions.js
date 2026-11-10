@@ -599,7 +599,8 @@ function renderSessions() {
       sessionsList.appendChild(head);
     }
     prevGroup = group;
-    sessionsList.appendChild(buildRow(s));
+    // A search over chats in several folders: say which each is in.
+    sessionsList.appendChild(buildRow(s, { folder: !!grouped }));
   }
   renderMore();
   syncHeader();
@@ -607,8 +608,8 @@ function renderSessions() {
 
 /**
  * One chat's sidebar row. `age` puts how long ago it was active at the end
- * (workspace groups have no date headings); `folder` names its folder in
- * the tooltip (the Pinned section spans them).
+ * (workspace groups have no date headings); `folder` names its folder
+ * there instead, where rows of several folders mix (Pinned, a search).
  * @param {any} s
  * @param {{ age?: boolean, folder?: boolean }} [opts]
  */
@@ -624,7 +625,6 @@ function buildRow(s, { age = false, folder = false } = {}) {
     main.type = 'button';
     main.className = 'lv-session-main';
     main.title = sidebarTooltip(s);
-    if (folder && s.workspace_root) main.title += ` · ${workspaceName(s.workspace_root)}`;
     // A branch starts with its source's title: mark it apart.
     if (s.origin_kind === 'fork') {
       const mark = document.createElement('span');
@@ -648,6 +648,12 @@ function buildRow(s, { age = false, folder = false } = {}) {
       const end = document.createElement('span');
       end.className = 'lv-session-age';
       end.textContent = shortAge(s.updated_at);
+      main.appendChild(end);
+    } else if (folder && s.workspace_root) {
+      const end = document.createElement('span');
+      end.className = 'lv-session-folder';
+      end.textContent = workspaceName(s.workspace_root);
+      end.title = s.workspace_root;
       main.appendChild(end);
     }
     main.addEventListener('click', () => switchSession(s.id));

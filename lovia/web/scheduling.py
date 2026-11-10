@@ -414,6 +414,14 @@ def _make_start_tool() -> Tool:
         except WebError as exc:
             raise ToolError(f"Couldn't start a chat: {exc}") from exc
         agent_key = deps.name_of(agent)
+        # The new chat works in this run's directory, under its permissions,
+        # so a read-only chat can't start a writer — checked before the hook
+        # sees where it works.
+        inherited = deps.inherited(started_by, row)
+        try:
+            binding = deps.new_chat_binding(agent, inherited.mode, inherited.root)
+        except WebError as exc:
+            raise ToolError(f"Couldn't start a chat: {exc}") from exc
 
         # The low-level path the scheduler's fire and a subagent's task share
         # — a chat row, then a clientless supervised run — minus the
@@ -426,7 +434,7 @@ def _make_start_tool() -> Tool:
                 deps.run_deps,
                 RunTrigger(
                     session_id=sid,
-                    agent=agent,
+                    agent=deps.at_root(agent, binding),
                     source=source,
                     client_context=client or {},
                 ),
@@ -439,10 +447,6 @@ def _make_start_tool() -> Tool:
             if not alive:
                 raise ToolError("Nothing started: chats are being deleted.")
             try:
-                # The new chat works in this run's directory, under its
-                # permissions, so a read-only chat can't start a writer.
-                inherited = deps.inherited(started_by, row)
-                binding = deps.new_chat_binding(agent, inherited.mode, inherited.root)
                 await deps.store.upsert(
                     sid,
                     agent=agent_key,

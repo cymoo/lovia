@@ -4408,7 +4408,14 @@ export function initComposer() {
   store.on('attach-workspace-file', ({ path, name, kind }) => {
     if (!attachEnabled()) return;
     if (!_pendingAttachments.some((a) => a.path === path)) {
-      _pendingAttachments.push({ path, name, kind, mime: 'application/octet-stream' });
+      // In the folder the panel shows: it can only go with a message there.
+      _pendingAttachments.push({
+        path,
+        name,
+        kind,
+        mime: 'application/octet-stream',
+        root: scopeRoot(),
+      });
       renderAttachTray();
       updateSendEnabled();
     }
@@ -4455,14 +4462,14 @@ export function initComposer() {
 
   composer?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const message = promptEl.value.trim();
+    let message = promptEl.value.trim();
 
     // An upload in flight holds the send (Send is disabled), whichever key.
     if (uploading()) {
       _steerOnce = false;
       return;
     }
-    const attachments = pendingReady();
+    let attachments = pendingReady();
 
     if (store.streaming) {
       const queue = !_steerOnce;
@@ -4490,6 +4497,11 @@ export function initComposer() {
     // A chat from before chats had a directory picks one first; backing out
     // leaves the draft as it was.
     if (!(await ensureLinked())) return;
+    // Linking may have put the chat in another folder, taking out of the tray
+    // what was saved elsewhere: send what the draft holds now.
+    message = promptEl.value.trim();
+    attachments = pendingReady();
+    if (uploading() || (!message && !attachments.length)) return;
     const payload = attachmentPayload(attachments);
     promptEl.value = '';
     autoresize();

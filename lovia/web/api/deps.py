@@ -14,7 +14,7 @@ import asyncio
 import logging
 from collections import Counter
 from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -338,10 +338,17 @@ class RouterDeps:
         (from before chats had one) runs in the agent's own. The mode is the
         one the run gets: capped to what this server offers."""
         own = own_root(agent)
-        if own is None or self.workspace_switch is None:
-            return ChatBinding(own.as_posix() if own else None, None)
-        mode = self.effective_mode(meta.workspace_mode if meta is not None else None)
+        if own is None:
+            return ChatBinding(None, None)
         stored = meta.workspace_root if meta is not None else None
+        if self.workspace_switch is None:
+            # Every chat works in the agent's own directory here; one stored
+            # elsewhere (by a server that had a switch, or an agent since
+            # moved) is refused like any other, never run in this one.
+            if stored is not None:
+                self.admit_root(agent, stored)
+            return ChatBinding(own.as_posix(), None)
+        mode = self.effective_mode(meta.workspace_mode if meta is not None else None)
         path = own if stored is None else self.admit_root(agent, stored)
         return ChatBinding(path.as_posix(), mode)
 
@@ -437,7 +444,13 @@ class RouterDeps:
         """Bind the chats of ``session_ids`` that have no directory yet to
         ``root`` — checked for each chat's agent first, so a refusal binds
         none. Returns the resolved root and the chats it bound; announces
-        each on the event stream."""
+        each on the event stream.
+
+        A chat with a live run (a schedule fire or task report, which run an
+        unbound chat in the agent's own directory) can't be bound elsewhere
+        under it: its tools would stay there while the Files panel and new
+        attachments moved. Checked under each chat's start lock, so no run
+        starts between the check and the write."""
         metas = [m for m in [await self.store.get(s) for s in session_ids] if m]
         if not metas:
             raise WebError(404, "session_not_found", "session not found")
@@ -445,7 +458,21 @@ class RouterDeps:
         for meta in metas:
             agent = self.agents.get(meta.agent or "") or self.pick(None)
             resolved = self.admit_root(agent, root).as_posix()
-        bound = await self.store.associate([m.id for m in metas], resolved)
+        async with AsyncExitStack() as locks:
+            # One order for every caller: two overlapping batches can't
+            # each hold a lock the other waits for.
+            for sid in sorted({m.id for m in metas}):
+                await locks.enter_async_context(self.supervisor._start_lock(sid))
+            for meta in metas:
+                ctrl = self.supervisor.get(meta.id)
+                if ctrl is not None and ctrl.binding.root != resolved:
+                    raise WebError(
+                        409,
+                        "run_active",
+                        "a run is active in this chat, in another directory",
+                        hint="stop it (or let it finish), then link the chat",
+                    )
+            bound = await self.store.associate([m.id for m in metas], resolved)
         if bound:
             await self.store.touch_workspace(resolved)
         for sid in bound:

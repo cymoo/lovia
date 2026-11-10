@@ -101,6 +101,18 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     row.agent,
                 )
                 return
+            # The chat's own directory, checked before the hook sees it.
+            try:
+                binding = deps.chat_binding(agent, row)
+            except WebError as exc:
+                log.warning(
+                    "subagent %s: session %s's directory is refused (%s); "
+                    "report dropped",
+                    report.id,
+                    sid,
+                    exc.detail,
+                )
+                return
             # The chat's own context: this run continues it.
             client = deps.supervisor.last_client.get(sid)
             source = f"subagent-report:{report.id}"
@@ -109,7 +121,7 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     deps.run_deps,
                     RunTrigger(
                         session_id=sid,
-                        agent=agent,
+                        agent=deps.at_root(agent, binding),
                         source=source,
                         client_context=client or {},
                     ),
@@ -207,6 +219,17 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         if row is not None:
             agent_key = row.agent
         inherited = deps.inherited(spawned_by, row)
+        child = spec.agent
+        if deps.workspace_switch is not None:
+            # A self-cloned child carries the parent chat's session
+            # binding. With per-chat modes that session's policy changes
+            # when the parent switches, so the task gets a session of its
+            # own, judged by the spawning run's permissions throughout.
+            ws = child.workspace
+            if isinstance(ws, WorkspaceSessionBinding):
+                child = child.clone(workspace=ws.workspace)
+        # Checked before the hook sees where the task works.
+        binding = deps.new_chat_binding(child, inherited.mode, inherited.root)
         # A task works for the chat that spawned it, so in its context. The
         # run_deps hook decides before the task chat exists: a refusal
         # fails the spawn and leaves nothing behind.
@@ -219,7 +242,7 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             deps.run_deps,
             RunTrigger(
                 session_id=child_sid,
-                agent=spec.agent,
+                agent=deps.at_root(child, binding),
                 source=f"subagent:{child_sid}",
                 client_context=client or {},
             ),
@@ -232,16 +255,6 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         async with gate as alive:
             if not alive:
                 raise RunCancelled("the chat that spawned this task was deleted")
-            child = spec.agent
-            if deps.workspace_switch is not None:
-                # A self-cloned child carries the parent chat's session
-                # binding. With per-chat modes that session's policy changes
-                # when the parent switches, so the task gets a session of its
-                # own, judged by the spawning run's permissions throughout.
-                ws = child.workspace
-                if isinstance(ws, WorkspaceSessionBinding):
-                    child = child.clone(workspace=ws.workspace)
-            binding = deps.new_chat_binding(child, inherited.mode, inherited.root)
             await deps.store.upsert(
                 child_sid,
                 agent=agent_key,

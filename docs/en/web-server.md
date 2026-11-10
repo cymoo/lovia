@@ -805,7 +805,9 @@ panel and uploads work in the chat's directory (a draft names its own with
 A chat's mode applies from its next run; a run in flight keeps the one it
 started with. The chats a run creates — subagent tasks, spawned chats,
 schedule fires — work in that run's directory and mode. Without
-`workspaces=` (the default), every chat runs on its agent's own workspace.
+`workspaces=` (the default), every chat runs on its agent's own workspace;
+a chat stored in another directory (by a server that had a switch, or before
+the agent's root moved) is refused with `workspace_not_allowed`, not run here.
 Chats from before chats had a directory report `workspace_root: null`. Where
 chats may work elsewhere (`roots` not `None`), a message to one is refused
 (409 `workspace_unassociated`) until it is bound with

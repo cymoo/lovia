@@ -178,7 +178,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/workspaces` | 启用 `create_app(workspaces=)` 时：新对话可选的目录，`{workspaces: [{id, root, name, kind, last_used_at}], default, can_add, roots}`。`kind` 为 `"default"`（Agent 自己的目录，新标签页从这里开始）、`"general"`（通用工作区）或 `"added"`；前两种没有 `id`，始终在列表里。`can_add` 表示能否添加其他目录；只允许部分目录时，`roots` 列出允许的目录树 |
 | `POST /api/workspaces` · `DELETE /api/workspaces/{id}` | `{path}` → 该项：添加一个存在且允许的目录（解析符号链接）· 从列表移除一项（文件和对话都保留；之后在那里新建对话会重新加入列表） |
 | `GET /api/workspaces/dirs?path=` | 输入目录时的补全：按输入的写法返回子目录路径（保留 `~`），只限可添加的范围 |
-| `POST /api/sessions/associate` | `{session_ids, root}` → `{associated, root}`：把还没有目录的旧对话（`workspace_root: null`）关联到一个目录，关联后不能再改；单个对话也可以用 `PATCH /api/sessions/{id}` 的 `workspace_root` |
+| `POST /api/sessions/associate` | `{session_ids, root}` → `{associated, root}`：把还没有目录的旧对话（`workspace_root: null`）关联到一个目录，关联后不能再改；单个对话也可以用 `PATCH /api/sessions/{id}` 的 `workspace_root`。对话里正有运行在另一个目录进行（比如定时任务在 Agent 自己的目录里跑）时，返回 `run_active`，等它结束后再关联 |
 | `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget, dreamed_at}`） |
 | `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
 | `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `PUT /api/config/workspace` · `PUT /api/config/run` · `PUT /api/config/agent` · `POST /api/config/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 默认 Agent 的[模型配置](web-ui.md#模型配置与切换)与 [Skill 目录](web-ui.md#skills)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |

@@ -675,7 +675,8 @@ body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not
   margin-right: -2px; /* the row's 8px gap is too loose for an inline mark */
   color: var(--lv-muted-2);
 }
-.lv-session-agent {
+.lv-session-agent,
+.lv-session-folder {
   flex-shrink: 0;
   max-width: 40%;
   overflow: hidden;
@@ -6099,6 +6100,10 @@ body.lv-files-splitting {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+/* A pane that opens straight on its form: the title needs its own gap. */
+.lv-cfg-pane > .lv-cfg-pane-title {
+  margin-bottom: 12px;
+}
 .lv-model-list {
   display: flex;
   flex-direction: column;
@@ -6506,29 +6511,12 @@ body.lv-files-splitting {
   font-weight: 570;
   color: var(--lv-ink-2);
 }
-.lv-cfg-checks {
+/* A field's own list of switch rows (the auto-allowed command bundles). */
+.lv-cfg-switches {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 6px;
-}
-.lv-cfg-check {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  cursor: pointer;
-}
-.lv-cfg-check input {
-  margin-top: 3px;
-}
-.lv-cfg-check-label {
-  display: block;
-  font-size: 13px;
-  color: var(--lv-ink);
-}
-.lv-cfg-check .lv-cfg-hint {
-  display: block;
-  margin-top: 1px;
+  gap: 10px;
+  margin-top: 8px;
 }
 .lv-cfg-off .lv-cfg-label {
   color: var(--lv-muted-2);

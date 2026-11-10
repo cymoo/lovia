@@ -161,20 +161,16 @@ export function buildWorkspacePane() {
         );
       }
 
-      const bundles = el('div', 'lv-cfg-checks');
-      /** @type {Map<string, HTMLInputElement>} */
+      // Switch rows, as every other on/off setting in the dialog.
+      const bundles = el('div', 'lv-cfg-switches');
+      /** @type {Map<string, () => boolean>} */
       const boxes = new Map();
       for (const name of ws.bundles) {
-        const row = el('label', 'lv-cfg-check');
-        const box = /** @type {HTMLInputElement} */ (el('input'));
-        box.type = 'checkbox';
-        box.checked = ws.auto_allow.includes(name);
-        boxes.set(name, box);
-        const text = el('span', '');
-        text.appendChild(el('span', 'lv-cfg-check-label', t(`cfg.bundle_${name}`)));
-        text.appendChild(el('span', 'lv-cfg-hint', t(`cfg.bundleHint_${name}`)));
-        row.append(box, text);
-        bundles.appendChild(row);
+        const sw = switchControl(ws.auto_allow.includes(name));
+        boxes.set(name, sw.value);
+        bundles.appendChild(
+          switchRow(t(`cfg.bundle_${name}`), sw.node, t(`cfg.bundleHint_${name}`)),
+        );
       }
       const bundleField = field(t('cfg.autoAllow'), bundles, t('cfg.autoAllowHint'));
       form.appendChild(bundleField);
@@ -192,7 +188,7 @@ export function buildWorkspacePane() {
       return {
         read: () => ({
           default_mode: mode,
-          auto_allow: [...boxes].filter(([, b]) => b.checked).map(([n]) => n),
+          auto_allow: [...boxes].filter(([, on]) => on()).map(([n]) => n),
         }),
         controls: [modeCtl, bundles],
         locked: !!ws.lock,

@@ -95,6 +95,9 @@
   --lv-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px -2px rgba(0, 0, 0, 0.06);
   --lv-shadow-md: 0 1px 3px rgba(0, 0, 0, 0.04), 0 8px 24px -8px rgba(0, 0, 0, 0.10);
   --lv-shadow-lg: 0 4px 12px -2px rgba(0, 0, 0, 0.06), 0 20px 56px -12px rgba(0, 0, 0, 0.16);
+  /* menus and popovers: frosted, so what they float over still reads through */
+  --lv-float-bg: color-mix(in srgb, var(--lv-surface) 84%, transparent);
+  --lv-float-border: color-mix(in srgb, var(--lv-border-strong) 70%, transparent);
 
   /* type — system stacks only: no webfont request, native CJK rendering */
   --lv-sans:
@@ -177,6 +180,8 @@
   --lv-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 8px -2px rgba(0, 0, 0, 0.35);
   --lv-shadow-md: 0 2px 4px rgba(0, 0, 0, 0.35), 0 10px 28px -8px rgba(0, 0, 0, 0.55);
   --lv-shadow-lg: 0 4px 12px -2px rgba(0, 0, 0, 0.45), 0 20px 56px -12px rgba(0, 0, 0, 0.65);
+  --lv-float-bg: color-mix(in srgb, var(--lv-surface-2) 86%, transparent);
+  --lv-float-border: var(--lv-border-strong);
 }
 
 /* ---- Reset & Base ------------------------------------------------------ */
@@ -555,11 +560,17 @@ body.lv-sidebar-resizing {
   max-width: min(360px, 90vw);
   padding: 6px;
   border-radius: var(--lv-radius);
-  background: color-mix(in srgb, var(--lv-surface) 88%, transparent);
-  border: 1px solid color-mix(in srgb, var(--lv-border) 80%, transparent);
-  box-shadow: var(--lv-shadow-md);
-  backdrop-filter: blur(16px) saturate(1.1);
-  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+}
+/* Every floating menu and popover: one frosted surface. */
+.lv-tasks-popover,
+.lv-popup-menu,
+.lv-model-chip-menu,
+.lv-context-popover {
+  background: var(--lv-float-bg);
+  border: 1px solid var(--lv-float-border);
+  box-shadow: var(--lv-shadow-lg);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  backdrop-filter: blur(20px) saturate(1.5);
 }
 .lv-tasks-popover-row {
   display: flex;
@@ -662,10 +673,19 @@ body.lv-sidebar-resizing {
 .lv-session-item:has(:focus-visible, [aria-expanded="true"]) {
   --lv-row-bg: var(--lv-surface-2);
 }
-/* Selection is a neutral fill, not the accent: the accent stays for meaning
-   (status, focus), and the topbar already names the open chat. */
+/* Selection is a raised neutral card, not the accent: the accent stays for
+   meaning (status, focus), and the topbar already names the open chat. */
 .lv-session-item.lv-active {
+  --lv-row-bg: var(--lv-surface);
+  box-shadow:
+    var(--lv-shadow-xs),
+    inset 0 0 0 1px var(--lv-border);
+}
+[data-theme="dark"] .lv-session-item.lv-active {
   --lv-row-bg: var(--lv-surface-3);
+  box-shadow:
+    var(--lv-shadow-xs),
+    inset 0 0 0 1px var(--lv-border-strong);
 }
 .lv-session-main {
   flex: 1;
@@ -944,10 +964,9 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 5px 8px;
+  padding: 6px 9px;
   border-radius: var(--lv-radius-xs);
-  font-family: var(--lv-mono);
-  font-size: 12.5px;
+  font-size: 13.5px;
   color: var(--lv-ink-2);
   cursor: pointer;
   white-space: nowrap;
@@ -1078,16 +1097,10 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   margin: 0;
   min-width: 168px;
   padding: 5px;
-  border: 1px solid var(--lv-border);
   border-radius: var(--lv-radius);
-  background: var(--lv-surface);
   color: var(--lv-ink);
-  box-shadow: var(--lv-shadow-md);
   overflow: visible;
   animation: lv-pop-in var(--lv-t-fast) var(--lv-ease);
-}
-[data-theme="dark"] .lv-popup-menu {
-  background: var(--lv-surface-2);
 }
 .lv-popup-menu-item {
   display: flex;
@@ -3011,17 +3024,18 @@ button.lv-question-option:hover {
   max-width: var(--lv-content-w);
   margin: 0 auto;
   background: var(--lv-surface);
-  border: 1px solid var(--lv-border-strong);
+  border: 1px solid var(--lv-border);
   border-radius: 24px;
   padding: 12px 10px 10px 10px;
-  box-shadow: var(--lv-shadow-sm);
+  box-shadow: var(--lv-shadow-md);
   transition:
     border-color var(--lv-t-med) var(--lv-ease),
     box-shadow var(--lv-t-med) var(--lv-ease);
 }
 /* Focus lifts the pill instead of ringing it in the accent. */
 .lv-composer-inner:focus-within {
-  box-shadow: var(--lv-shadow-md);
+  border-color: var(--lv-border-strong);
+  box-shadow: var(--lv-shadow-lg);
 }
 /* Positioned: the chips' menus open just over it, by the chip they belong to. */
 .lv-composer-bar {
@@ -5225,14 +5239,8 @@ body.lv-files-splitting {
   bottom: calc(100% + 6px);
   min-width: 220px;
   padding: 10px 12px;
-  background: var(--lv-surface);
-  border: 1px solid var(--lv-border);
-  border-radius: var(--lv-radius-sm);
-  box-shadow: var(--lv-shadow-md);
+  border-radius: var(--lv-radius);
   z-index: 30;
-}
-[data-theme="dark"] .lv-context-popover {
-  background: var(--lv-surface-2);
 }
 .lv-context-popover-rows {
   display: flex;
@@ -6676,15 +6684,9 @@ body.lv-files-splitting {
   right: 0; /* model-config.js lines it up with the chip's right edge */
   bottom: calc(100% + 6px);
   width: 240px;
-  background: var(--lv-surface);
-  border: 1px solid var(--lv-border);
   border-radius: var(--lv-radius);
-  box-shadow: var(--lv-shadow-lg);
   padding: 5px;
   z-index: 30;
-}
-[data-theme="dark"] .lv-model-chip-menu {
-  background: var(--lv-surface-2);
 }
 .lv-model-chip-menu-title {
   font-size: 11px;
@@ -6758,9 +6760,14 @@ body.lv-files-splitting {
   font-size: 10.5px;
   color: var(--lv-muted-2);
 }
-.lv-model-chip-item-check {
-  color: var(--lv-accent);
-  font-weight: 700;
+/* The choice in effect, in every menu: an accent check at the row's end. */
+.lv-popup-menu-label ~ svg,
+.lv-model-chip-item > svg {
+  flex-shrink: 0;
+  color: var(--lv-accent-text);
+}
+.lv-mode-item > svg {
+  margin-top: 2px;
 }
 .lv-model-chip-item.lv-manage {
   color: var(--lv-muted);

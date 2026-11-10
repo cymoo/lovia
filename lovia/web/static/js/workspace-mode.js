@@ -164,7 +164,8 @@ function openMenu() {
   title.className = 'lv-model-chip-menu-title';
   title.textContent = t(store.sessionId ? 'mode.menuTitle' : 'mode.newChatTitle');
   menu.appendChild(title);
-  const current = effective(shown());
+  // No stored mode runs in the server's own, which the chip names too.
+  const current = effective(shown()) || info.own;
   for (const mode of info.modes) {
     const item = document.createElement('button');
     item.type = 'button';
@@ -186,12 +187,7 @@ function openMenu() {
     hint.textContent = t(`cfg.modeHint_${mode}`);
     text.append(name, hint);
     item.append(mark, text);
-    if (mode === current) {
-      const check = document.createElement('span');
-      check.className = 'lv-model-chip-item-check';
-      check.textContent = '✓';
-      item.appendChild(check);
-    }
+    if (mode === current) item.insertAdjacentHTML('beforeend', icon('check', { size: 15 }));
     item.addEventListener('click', () => pick(mode));
     menu.appendChild(item);
   }

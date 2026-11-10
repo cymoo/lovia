@@ -424,7 +424,7 @@ function openChipMenu() {
     if (!root) return;
     openMenu(
       _chip,
-      [{ label: t('ws.newChatIn', { name: workspaceName(root) }), icon: icon('square-pen', { size: 15 }), onSelect: () => newChatIn(root) }],
+      [{ label: t('ws.newChat'), icon: icon('square-pen', { size: 15 }), onSelect: () => newChatIn(root) }],
       { align: 'start' },
     );
     return;
@@ -447,7 +447,8 @@ function openChipMenu() {
   /** @type {(import('./ui.js').MenuItem | null)[]} */
   const items = /** @type {Workspace[]} */ (ordered).map((w) => ({
     label: workspaceName(w.root),
-    icon: icon(w.root === current ? 'check' : 'folder', { size: 15 }),
+    icon: icon('folder', { size: 15 }),
+    checked: w.root === current,
     onSelect: () => pick(w.root),
   }));
   if (_list.can_add) {

@@ -436,6 +436,29 @@ def test_the_list_add_remove_and_complete(
         assert other.resolve().as_posix() not in roots
 
 
+def test_a_listed_directory_takes_a_display_name(dirs: tuple[Path, Path]) -> None:
+    launch, other = dirs
+    with _client(_agent(launch, []), WorkspaceSwitch()) as c:
+
+        def names() -> dict[str, str]:
+            listed = c.get("/api/workspaces").json()["workspaces"]
+            return {w["kind"]: w["name"] for w in listed}
+
+        def rename(root: Path | str, name: str) -> Any:
+            return c.patch("/api/workspaces", json={"root": str(root), "name": name})
+
+        added = c.post("/api/workspaces", json={"path": str(other)}).json()
+        renamed = rename(added["root"], "  API (staging) ").json()
+        assert renamed["name"] == "API (staging)" and renamed["id"] == added["id"]
+        # The agent's own takes one too, and stays the one always-listed entry.
+        assert rename(launch.resolve().as_posix(), "Home").json()["kind"] == "default"
+        assert names() == {"default": "Home", "added": "API (staging)"}
+        # Empty goes back to the folder's own name.
+        assert rename(added["root"], "").json()["name"] == "other"
+        # Only what the list holds.
+        assert rename(other / "nope", "x").status_code == 404
+
+
 def test_completion_stays_within_the_allowed_trees(tmp_path: Path) -> None:
     repos = tmp_path / "srv" / "repos"
     (repos / "app").mkdir(parents=True)

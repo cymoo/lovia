@@ -66,6 +66,18 @@ test('pinned chats lead in a group of their own, whatever their directory', () =
   assert.ok(!c.groups([chat('3', '/a')]).some((g) => g.kind === 'pinned'));
 });
 
+test('the way up from a typed path, with either separator', () => {
+  const c = load();
+  runInNewContext('globalThis.up = parentDir;', c);
+  const cases = {
+    '': null, '~/': null, '/': null, 'C:\\': null, // roots: nowhere to go
+    '~/co': null, // still typing a name in the home directory
+    '~/code/': '~/', '~/code/lov': '~/', '/srv/repos/': '/srv/',
+    'C:\\Users\\me\\': 'C:\\Users\\', 'C:/Users/me/pro': 'C:/Users/',
+  };
+  for (const [typed, parent] of Object.entries(cases)) assert.equal(c.up(typed), parent, typed);
+});
+
 test('folding is remembered per directory', () => {
   const c = load({ folded: ['/a'] });
   c.setList({ workspaces: [ws('/home', 'default'), ws('/a')], default: '/home', can_add: true });

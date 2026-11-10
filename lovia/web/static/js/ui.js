@@ -267,11 +267,9 @@ export function confirmDialog(message) {
  * to string, which would fold null and "null" together).
  * @param {string} message Prompt shown above the input.
  * @param {string} [defaultValue] Pre-filled input value.
- * @param {{ stack?: boolean }} [opts] `stack` layers the prompt over an
- *   already-open dialog (renaming from the all-chats list) instead of closing it.
  * @returns {Promise<string | null>} Entered text, or null if cancelled.
  */
-export function promptDialog(message, defaultValue = '', { stack = false } = {}) {
+export function promptDialog(message, defaultValue = '') {
   return new Promise((resolve) => {
     const body = document.createElement('div');
     const label = document.createElement('p');
@@ -314,7 +312,6 @@ export function promptDialog(message, defaultValue = '', { stack = false } = {})
     const dialog = showDialog({
       body,
       actions,
-      stack,
       onClose: (val) => resolve(val === 'ok' ? submitted : null),
     });
     setTimeout(() => input.focus(), 100);

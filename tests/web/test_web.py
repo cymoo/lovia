@@ -1154,6 +1154,9 @@ def test_list_sessions_paginates_with_limit_and_offset() -> None:
     assert page == ["s2", "s1"]
     # Past the end → empty, not an error.
     assert c.get("/api/sessions?limit=2&offset=10").json() == []
+    # Paged by directory (ChatStore.list covers the cut): these five have
+    # none, and such chats all come.
+    assert len(c.get("/api/sessions?per_workspace=2").json()) == 5
 
 
 def test_patch_session_rename_still_works() -> None:

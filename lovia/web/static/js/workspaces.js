@@ -168,21 +168,23 @@ function setCollapsed(key, fold) {
 
 /**
  * @typedef {{ key: string, root: string | null, label: string,
- *   kind: 'default' | 'general' | 'added' | 'unlinked', workspace?: Workspace,
+ *   kind: 'pinned' | 'default' | 'general' | 'added' | 'unlinked', workspace?: Workspace,
  *   chats: any[], collapsed: boolean }} SidebarGroup
  */
 
 /**
- * The sidebar's workspace groups for `chats` (top-level, in server order),
- * or null when grouping says nothing — one fixed directory. Every listed
- * directory gets a group (an empty one is where a new chat starts); a chat
- * whose directory was removed from the list is left out (search finds it);
- * chats with none yet gather under "Not linked", last.
- * @param {any[]} chats
+ * The sidebar's groups for `chats` (top-level, in server order), or null
+ * when grouping says nothing — one fixed directory. Pinned chats come first,
+ * in a group of their own, whatever directory they work in. Then every
+ * listed directory gets a group (an empty one is where a new chat starts); a
+ * chat whose directory was removed from the list is left out (search finds
+ * it); chats with none yet gather under "Not linked", last.
+ * @param {any[]} all
  * @returns {SidebarGroup[] | null}
  */
-export function sidebarGroups(chats) {
+export function sidebarGroups(all) {
   if (!_list) return null;
+  const chats = all.filter((s) => !s.pinned);
   // Where each chat runs: one with no directory yet, in the agent's own when
   // no other may be opened.
   const fallback = _list.can_add ? null : _list.default;
@@ -220,6 +222,17 @@ export function sidebarGroups(chats) {
       ? Infinity
       : Math.max(g.workspace?.last_used_at || 0, ...g.chats.map((s) => s.updated_at || 0));
   const ordered = [...groups.values()].sort((a, b) => activity(b) - activity(a));
+  const pinned = all.filter((s) => s.pinned);
+  if (pinned.length) {
+    ordered.unshift({
+      key: '\u0000pinned',
+      root: null,
+      label: t('nav.group.pinned'),
+      kind: 'pinned',
+      chats: pinned,
+      collapsed: folded.has('\u0000pinned'),
+    });
+  }
   if (unlinked.length) {
     ordered.push({
       key: '\u0000unlinked',
@@ -236,7 +249,7 @@ export function sidebarGroups(chats) {
 /**
  * A group's header: fold toggle, name (full path on hover), and its actions —
  * a new chat there, and a menu (remove from the list), or "Link…" for the
- * chats that have no directory yet.
+ * chats that have no directory yet. The Pinned group has the toggle only.
  * @param {SidebarGroup} group
  * @param {() => void} rerender
  */
@@ -254,7 +267,7 @@ export function groupHeader(group, rerender) {
       : group.kind === 'general'
         ? t('ws.generalTitle', { path: group.root || '' })
         : group.root || '';
-  const glyph = group.kind === 'unlinked' ? 'triangle-alert' : 'folder';
+  const glyph = { unlinked: 'triangle-alert', pinned: 'pin' }[group.kind] || 'folder';
   toggle.innerHTML =
     `<span class="lv-ws-group-icon" aria-hidden="true">${icon(glyph, { size: 15 })}</span>` +
     `<span class="lv-ws-group-chevron" aria-hidden="true">${icon('chevron-right', { size: 13 })}</span>`;
@@ -268,6 +281,7 @@ export function groupHeader(group, rerender) {
   });
   head.appendChild(toggle);
 
+  if (group.kind === 'pinned') return head; // not a folder: nothing to do there
   const actions = document.createElement('div');
   actions.className = 'lv-ws-group-actions';
   if (group.kind === 'unlinked') {
@@ -275,6 +289,8 @@ export function groupHeader(group, rerender) {
     link.type = 'button';
     link.className = 'lv-ws-group-link';
     link.textContent = t('ws.link');
+    // All of them, not just the rows the group shows (the list carries
+    // every chat that has no directory).
     link.addEventListener('click', () => linkChats(group.chats.map((s) => s.id)));
     actions.appendChild(link);
   } else {

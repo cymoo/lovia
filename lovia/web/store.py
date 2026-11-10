@@ -920,13 +920,34 @@ class ChatStore:
     # the ``list`` builtin inside the class body, so a later ``list[ChatMeta]``
     # annotation would resolve to the method and fail strict mypy. Matches the
     # schedule reads (``list_schedules``/``due_schedules``) anyway.
-    async def list(self, *, limit: int = 200, offset: int = 0) -> Sequence[ChatMeta]:
+    async def list(
+        self, *, limit: int = 200, offset: int = 0, per_workspace: int | None = None
+    ) -> Sequence[ChatMeta]:
         """Return chat metadata, pinned first, then most recent activity.
 
         Subagent task sessions (``parent_id`` set) are excluded — they belong
         to their parent chat (``list_children``), and letting them into the
         page would crowd real chats out of the sidebar's window.
+
+        ``per_workspace`` pages by directory instead: every pinned chat, and
+        of the rest the ``per_workspace`` most recent of each directory, so a
+        busy directory can't crowd the others out of the page. Chats with no
+        directory (from before chats had one) all come: they are linked to
+        one in bulk, which needs the whole set.
         """
+        if per_workspace is not None:
+            return await self._read_all(
+                f"SELECT {_META_COLS} FROM ("
+                f"SELECT {_META_COLS}, ROW_NUMBER() OVER ("
+                "PARTITION BY workspace_root ORDER BY updated_at DESC) AS rn "
+                "FROM chat_sessions WHERE parent_id IS NULL AND pinned = 0) "
+                "WHERE rn <= ? OR workspace_root IS NULL "
+                f"UNION ALL SELECT {_META_COLS} FROM chat_sessions "
+                "WHERE parent_id IS NULL AND pinned = 1 "
+                "ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",
+                (per_workspace, limit, offset),
+                ChatMeta.from_row,
+            )
         return await self._read_all(
             f"SELECT {_META_COLS} FROM chat_sessions WHERE parent_id IS NULL "
             "ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",

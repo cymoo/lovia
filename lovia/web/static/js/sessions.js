@@ -723,7 +723,14 @@ function renderGroups(groups) {
     const section = document.createElement('section');
     section.className = 'lv-ws-group';
     section.dataset.kind = g.kind;
-    section.appendChild(groupHeader(g, rerender));
+    const head = groupHeader(g, rerender);
+    if (g.collapsed) {
+      // Folded, its rows can't say it: the heading carries the open chat and
+      // any live run inside.
+      head.classList.toggle('lv-current', g.chats.some((s) => s.id === store.sessionId));
+      head.classList.toggle('lv-running', g.chats.some((s) => store.activeRuns?.has(s.id)));
+    }
+    section.appendChild(head);
     if (!g.collapsed) {
       const rows = document.createElement('div');
       rows.className = 'lv-ws-group-rows';

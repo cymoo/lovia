@@ -13,6 +13,7 @@ import { store } from './store.js';
 import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { confirmDialog, segmented } from './ui.js';
+import { icon } from './icons.js';
 
 /** Fetch (or refresh) the masked config document into store.modelConfig. */
 export async function loadConfig() {
@@ -1079,10 +1080,11 @@ async function openChipMenu() {
   for (const p of c.models) {
     const item = el('button', 'lv-model-chip-item');
     item.setAttribute('type', 'button');
-    item.setAttribute('role', 'menuitem');
+    item.setAttribute('role', 'menuitemradio');
+    item.setAttribute('aria-checked', String(p.id === c.roles.chat));
     item.appendChild(el('span', 'lv-model-chip-item-name', profileName(p)));
     if (p.vision === 'on') item.appendChild(el('span', 'lv-model-chip-item-sub', t('cfg.visionBadge')));
-    if (p.id === c.roles.chat) item.appendChild(el('span', 'lv-model-chip-item-check', '✓'));
+    if (p.id === c.roles.chat) item.insertAdjacentHTML('beforeend', icon('check', { size: 15 }));
     item.addEventListener('click', async () => {
       closeChipMenu();
       try {

@@ -319,8 +319,8 @@ starts and Settings shows these as view-only.
 
 Each chat works in a folder of its own. The sidebar groups chats by folder:
 the one `lovia web` was launched in first, then the rest by recent activity,
-with the general workspace (`~/.lovia/workspace`, for chats that belong to
-no project) always listed. A folder's **+** starts a new chat there; its
+with **No project** (`~/.lovia/workspace`, for chats that belong to no
+project) always listed. A folder's **+** starts a new chat there; its
 **⋯** removes it from the list — files and chats stay, and adding the folder
 again brings its chats back. The folder button beside **Chats** adds
 one, completing the path as you type; the view button next to it switches

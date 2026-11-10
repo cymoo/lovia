@@ -534,7 +534,7 @@ export function openMenu(at, items, { align = 'end' } = {}) {
   menu.style.top = `${y}px`;
 
   const buttons = /** @type {HTMLElement[]} */ ([...menu.querySelectorAll('.lv-popup-menu-item')]);
-  buttons[0]?.focus();
+  (buttons.find((b) => b.getAttribute('aria-checked') === 'true') ?? buttons[0])?.focus();
   opener?.setAttribute('aria-expanded', 'true');
 
   const onKey = (/** @type {KeyboardEvent} */ e) => {

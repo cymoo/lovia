@@ -517,6 +517,22 @@ body.lv-sidebar-resizing {
 .lv-search-input::placeholder {
   color: var(--lv-muted-2);
 }
+/* The clear "×" of a search field in the UI's grays, not the browser's blue:
+   an icon mask filled with a theme color. */
+.lv-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  background-color: var(--lv-muted-2);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E") center / contain no-repeat;
+  cursor: pointer;
+}
+.lv-search-input::-webkit-search-cancel-button:hover {
+  background-color: var(--lv-ink);
+}
 /* On the sidebar's own tone: a step darker, never a lighter patch. */
 .lv-sidebar .lv-search-input:not(:focus) {
   background: var(--lv-sidebar-hover);
@@ -799,11 +815,30 @@ body.lv-sidebar-resizing {
 .lv-ws-group + .lv-ws-group {
   margin-top: 8px;
 }
+/* Sticky within its group, so a long one keeps its folder's name in view while
+   its chats scroll; opaque (--lv-head-bg), so they slide under it. */
 .lv-ws-group-head {
+  --lv-head-bg: var(--lv-sidebar-surface);
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 2px;
   border-radius: var(--lv-radius-sm);
+  background: var(--lv-head-bg);
+}
+/* A short fade under it, so a row half-scrolled beneath doesn't show as a
+   cut line of glyph tails. */
+.lv-ws-group-head::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background: linear-gradient(var(--lv-sidebar-surface), transparent);
+  pointer-events: none;
 }
 .lv-ws-group-toggle {
   flex: 1;
@@ -823,8 +858,8 @@ body.lv-sidebar-resizing {
 .lv-ws-group-head:hover .lv-ws-group-toggle {
   color: var(--lv-ink);
 }
-.lv-ws-group-head:hover {
-  background: var(--lv-sidebar-hover);
+.lv-ws-group-head:is(:hover, :focus-within) {
+  --lv-head-bg: var(--lv-sidebar-hover);
 }
 .lv-ws-group-icon,
 .lv-ws-group-chevron {
@@ -851,6 +886,24 @@ body.lv-sidebar-resizing {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+/* Folded over the open chat: the heading reads as the selected row's. */
+.lv-ws-group-head.lv-current .lv-ws-group-toggle {
+  color: var(--lv-ink);
+}
+/* Folded over a live run: the rows' pulsing dot, between name and chevron. */
+.lv-ws-group-head.lv-running .lv-ws-group-toggle::after {
+  content: "";
+  order: 1;
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lv-ok);
+  animation: lv-run-pulse 1.6s var(--lv-ease) infinite;
+}
+.lv-ws-group-head.lv-running .lv-ws-group-chevron {
+  order: 2;
+}
 .lv-ws-group-head[data-kind="unlinked"] .lv-ws-group-icon {
   color: var(--lv-warn, var(--lv-muted));
 }
@@ -866,6 +919,34 @@ body.lv-sidebar-resizing {
 .lv-ws-group-head:focus-within .lv-ws-group-actions,
 .lv-ws-group-head[data-kind="unlinked"] .lv-ws-group-actions {
   opacity: 1;
+}
+/* Shown only on hover, the buttons float over the heading's end instead of
+   holding its width: the name gets the whole row until then, and fades out
+   under them (as a chat row's "⋯" does). Unlinked keeps its "Link…" in flow. */
+@media (hover: hover) {
+  .lv-ws-group-head:not([data-kind="unlinked"]) .lv-ws-group-actions {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: 0 var(--lv-radius-sm) var(--lv-radius-sm) 0;
+    background: var(--lv-head-bg);
+  }
+  .lv-ws-group-head:not([data-kind="unlinked"]) .lv-ws-group-actions::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 100%;
+    width: 20px;
+    background: linear-gradient(to right, transparent, var(--lv-head-bg));
+    pointer-events: none;
+  }
+}
+@media (hover: none) {
+  .lv-ws-group-actions {
+    opacity: 1; /* no hover on touch — the controls must be visible */
+  }
 }
 .lv-ws-group-btn {
   width: 26px;

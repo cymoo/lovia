@@ -324,8 +324,13 @@ no project) always listed. A folder's **+** starts a new chat there; its
 **⋯** removes it from the list — files and chats stay, and adding the folder
 again brings its chats back. The folder button beside **Chats** adds
 one, completing the path as you type; the view button next to it switches
-between a group per folder and one list by date. Drag the sidebar's right
-edge to resize it (double-click resets).
+between a group per folder and one list by date, and between the chats in
+use and the archived ones. Drag the sidebar's right edge to resize it
+(double-click resets).
+
+**Archive** in a chat's **⋯** menu puts it away without deleting anything:
+it leaves the list (a search still finds it) until you unarchive it, pin
+it, or send it a message.
 
 A new chat starts in the folder this tab last used — the folder chip in the
 composer shows which, with the full path on hover; pick another there before

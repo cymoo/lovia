@@ -382,6 +382,8 @@ class SessionDetail(BaseModel):
     entries: list[MessageOut] = Field(default_factory=list)
     active_run_id: str | None = None
     pinned: bool = False
+    # Put away by the user: left out of GET /api/sessions unless asked for.
+    archived: bool = False
     # Set on a subagent task session: the chat that spawned it — the UI's
     # "back to parent chat" affordance.
     parent_id: str | None = None
@@ -405,6 +407,7 @@ class ChatSessionInfo(BaseModel):
     created_at: float
     updated_at: float
     pinned: bool = False
+    archived: bool = False
     # Set on a subagent task session: the chat that spawned it. The UI groups
     # such sessions under a Tasks section instead of the chat list.
     parent_id: str | None = None
@@ -565,11 +568,13 @@ class RewindResponse(BaseModel):
 
 
 class SessionPatch(BaseModel):
-    """Partial update for a session — rename, (un)pin, switch its permission
-    mode; applies whichever fields are set."""
+    """Partial update for a session — rename, (un)pin, (un)archive, switch its
+    permission mode; applies whichever fields are set."""
 
     title: str | None = Field(default=None, min_length=1, max_length=120)
     pinned: bool | None = None
+    # Archiving unpins; pinning (or a message from the user) brings back.
+    archived: bool | None = None
     # Applies from the chat's next run; a live run keeps the mode it began in.
     workspace_mode: Literal["readonly", "coding", "trusted"] | None = None
     # Only for a chat with no directory yet (from before chats had one):

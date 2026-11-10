@@ -81,6 +81,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             title=title,
             workspace_root=binding.root if binding else None,
             workspace_mode=binding.mode if binding else None,
+            unarchive=True,  # the user is back in it
         )
         if binding is not None:
             if deps.workspace_switch is not None and binding.root is not None:

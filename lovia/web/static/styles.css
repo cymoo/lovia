@@ -419,6 +419,11 @@ body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not
   height: 26px;
   color: var(--lv-muted);
 }
+/* The view button while the list shows something other than its default. */
+.lv-section-label-btn.lv-active {
+  color: var(--lv-accent);
+  background: var(--lv-accent-soft);
+}
 
 /* Divider on the sidebar's right edge: drag to resize, arrow keys to nudge,
    double-click to reset — the Files panel's, mirrored. */

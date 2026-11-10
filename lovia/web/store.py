@@ -45,7 +45,7 @@ _T = TypeVar("_T")
 _META_COLS = (
     "id, title, agent, created_at, updated_at, pinned, parent_id, "
     "origin_kind, origin_session_id, origin_ref, workspace_root, workspace_mode, "
-    "workspace_mode_rev"
+    "workspace_mode_rev, archived"
 )
 
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
@@ -299,6 +299,15 @@ def _workspace_list(conn: sqlite3.Connection) -> None:
     )
 
 
+def _archived(conn: sqlite3.Connection) -> None:
+    """Archived chats (0.9.158): kept, out of the default list."""
+    present = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
+    if "archived" not in present:
+        conn.execute(
+            "ALTER TABLE chat_sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     _reconcile_unversioned,
     _fork_origin,
@@ -307,6 +316,7 @@ _MIGRATIONS: tuple[Migration, ...] = (
     _workspace_binding,
     _workspace_mode_rev,
     _workspace_list,
+    _archived,
 )
 
 
@@ -341,6 +351,9 @@ class ChatMeta:
     workspace_mode_rev: int = 0
     """Bumped by every :meth:`ChatStore.set_workspace_mode`: orders the
     reports of a chat's mode a client gets from different sources."""
+    archived: bool = False
+    """Put away by the user: kept whole, but left out of :meth:`ChatStore.list`
+    unless asked for. A search still finds it."""
 
     @classmethod
     def from_row(cls, row: Any) -> "ChatMeta":
@@ -359,6 +372,7 @@ class ChatMeta:
             row[10],
             row[11],
             row[12] or 0,
+            bool(row[13]),
         )
 
     def to_dict(self) -> JsonObject:
@@ -376,6 +390,7 @@ class ChatMeta:
             "workspace_root": self.workspace_root,
             "workspace_mode": self.workspace_mode,
             "workspace_mode_rev": self.workspace_mode_rev,
+            "archived": self.archived,
         }
 
 
@@ -683,8 +698,12 @@ class ChatStore:
         spawned_from: str | None = None,
         workspace_root: str | None = None,
         workspace_mode: str | None = None,
+        unarchive: bool = False,
     ) -> None:
         """Insert a row if missing, otherwise bump ``updated_at``.
+
+        ``unarchive`` brings an archived chat back to the list — for a
+        message the user sends it, not for a run nobody is watching.
 
         ``title`` is applied only on insert (a provisional title for a brand-new
         session); on conflict the existing title is left untouched so a
@@ -703,7 +722,8 @@ class ChatStore:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 updated_at = excluded.updated_at,
-                agent = COALESCE(chat_sessions.agent, excluded.agent)
+                agent = COALESCE(chat_sessions.agent, excluded.agent),
+                archived = CASE WHEN ? THEN 0 ELSE chat_sessions.archived END
             """,
             (
                 session_id,
@@ -716,6 +736,7 @@ class ChatStore:
                 spawned_from,
                 workspace_root,
                 workspace_mode,
+                unarchive,
             ),
         )
 
@@ -823,10 +844,21 @@ class ChatStore:
         return await self._meta._run(_impl)
 
     async def set_pinned(self, session_id: str, pinned: bool) -> None:
-        """Pin or unpin a session (pinned sessions sort to the top)."""
+        """Pin or unpin a session (pinned sessions sort to the top). Pinning
+        an archived one brings it back: a chat is never both."""
         await self._write(
-            "UPDATE chat_sessions SET pinned = ? WHERE id = ?",
-            (1 if pinned else 0, session_id),
+            "UPDATE chat_sessions SET pinned = ?, "
+            "archived = CASE WHEN ? THEN 0 ELSE archived END WHERE id = ?",
+            (1 if pinned else 0, pinned, session_id),
+        )
+
+    async def set_archived(self, session_id: str, archived: bool) -> None:
+        """Archive a chat (out of the default list, and unpinned — the Pinned
+        group is what the user keeps at hand) or bring it back."""
+        await self._write(
+            "UPDATE chat_sessions SET archived = ?, "
+            "pinned = CASE WHEN ? THEN 0 ELSE pinned END WHERE id = ?",
+            (1 if archived else 0, archived, session_id),
         )
 
     async def set_title_if_unchanged(
@@ -943,9 +975,15 @@ class ChatStore:
     # annotation would resolve to the method and fail strict mypy. Matches the
     # schedule reads (``list_schedules``/``due_schedules``) anyway.
     async def list(
-        self, *, limit: int = 200, offset: int = 0, per_workspace: int | None = None
+        self,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+        per_workspace: int | None = None,
+        archived: bool = False,
     ) -> Sequence[ChatMeta]:
-        """Return chat metadata, pinned first, then most recent activity.
+        """Return chat metadata, pinned first, then most recent activity —
+        the chats in use, or with ``archived`` the archived ones instead.
 
         Subagent task sessions (``parent_id`` set) are excluded — they belong
         to their parent chat (``list_children``), and letting them into the
@@ -962,18 +1000,20 @@ class ChatStore:
                 f"SELECT {_META_COLS} FROM ("
                 f"SELECT {_META_COLS}, ROW_NUMBER() OVER ("
                 "PARTITION BY workspace_root ORDER BY updated_at DESC) AS rn "
-                "FROM chat_sessions WHERE parent_id IS NULL AND pinned = 0) "
+                "FROM chat_sessions "
+                "WHERE parent_id IS NULL AND pinned = 0 AND archived = ?) "
                 "WHERE rn <= ? OR workspace_root IS NULL "
                 f"UNION ALL SELECT {_META_COLS} FROM chat_sessions "
-                "WHERE parent_id IS NULL AND pinned = 1 "
+                "WHERE parent_id IS NULL AND pinned = 1 AND archived = ? "
                 "ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",
-                (per_workspace, limit, offset),
+                (archived, per_workspace, archived, limit, offset),
                 ChatMeta.from_row,
             )
         return await self._read_all(
-            f"SELECT {_META_COLS} FROM chat_sessions WHERE parent_id IS NULL "
+            f"SELECT {_META_COLS} FROM chat_sessions "
+            "WHERE parent_id IS NULL AND archived = ? "
             "ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            (archived, limit, offset),
             ChatMeta.from_row,
         )
 

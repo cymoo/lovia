@@ -1138,6 +1138,25 @@ def test_patch_session_pins_and_reorders_list() -> None:
     assert ids == ["new", "old"]
 
 
+def test_session_archive_hides_it_until_the_user_returns() -> None:
+    c = TestClient(_app(_make_agent([text("a"), text("b"), text("c")])))
+    c.post("/api/chat", json={"message": "first", "session_id": "old"})
+    c.post("/api/chat", json={"message": "second", "session_id": "new"})
+
+    res = c.patch("/api/sessions/old", json={"archived": True}).json()
+    assert res["archived"] is True
+    assert [s["id"] for s in c.get("/api/sessions").json()] == ["new"]
+    assert [s["id"] for s in c.get("/api/sessions?archived=true").json()] == ["old"]
+    # Still there: opened by id, found by a search.
+    assert c.get("/api/sessions/old").json()["archived"] is True
+    assert [s["id"] for s in c.get("/api/sessions?q=first").json()] == ["old"]
+
+    # A message from the user brings it back.
+    c.post("/api/chat", json={"message": "again", "session_id": "old"})
+    assert [s["id"] for s in c.get("/api/sessions").json()] == ["old", "new"]
+    assert c.get("/api/sessions?archived=true").json() == []
+
+
 def test_list_sessions_paginates_with_limit_and_offset() -> None:
     c = TestClient(_app(_make_agent([text(str(i)) for i in range(5)])))
     for i in range(5):

@@ -297,6 +297,37 @@ async def test_set_pinned_roundtrip() -> None:
     assert meta is not None and meta.pinned is False
 
 
+async def test_archived_chats_leave_the_list_but_not_search() -> None:
+    store = ChatStore.in_memory()
+    await store.upsert("keep", title="keep me")
+    await store.upsert("away", title="put away", workspace_root="/w")
+    await store.set_pinned("away", True)
+    await store.set_archived("away", True)
+
+    meta = await store.get("away")
+    # Archiving unpins: the Pinned group is what the user keeps at hand.
+    assert meta is not None and meta.archived and not meta.pinned
+    assert [m.id for m in await store.list()] == ["keep"]
+    assert [m.id for m in await store.list(per_workspace=5)] == ["keep"]
+    assert [m.id for m in await store.list(archived=True)] == ["away"]
+    assert [m.id for m in await store.list(per_workspace=5, archived=True)] == ["away"]
+    assert [m.id for m in await store.search("put")] == ["away"]
+
+
+async def test_archived_chat_comes_back_on_a_pin_or_a_user_message() -> None:
+    store = ChatStore.in_memory()
+    for sid in ("a", "b", "c"):
+        await store.upsert(sid)
+        await store.set_archived(sid, True)
+
+    await store.set_pinned("a", True)
+    await store.upsert("b", unarchive=True)  # a message from the user
+    await store.upsert("c")  # a run nobody is watching: stays put away
+
+    archived = {m.id: m.archived for m in [await store.get(s) for s in "abc"] if m}
+    assert archived == {"a": False, "b": False, "c": True}
+
+
 async def test_list_orders_pinned_first() -> None:
     store = ChatStore.in_memory()
     await store.upsert("old")

@@ -134,6 +134,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         limit: int = Query(200, ge=1, le=1000),
         offset: int = Query(0, ge=0),
         parent: str | None = Query(None, max_length=64),
+        per_workspace: int | None = Query(None, ge=1, le=1000),
     ) -> list[ChatSessionInfo]:
         if parent:
             # A chat's own subagent tasks — the topbar tasks popover.
@@ -141,7 +142,11 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         elif q:
             metas = await store.search(q, limit=limit, offset=offset)
         else:
-            metas = await store.list(limit=limit, offset=offset)
+            # per_workspace: the sidebar's groups — each directory's most
+            # recent chats, plus every pinned one.
+            metas = await store.list(
+                limit=limit, offset=offset, per_workspace=per_workspace
+            )
         # Task sessions carry their latest run outcome so the topbar Tasks
         # popover can
         # badge finished tasks without per-task follow-up requests.

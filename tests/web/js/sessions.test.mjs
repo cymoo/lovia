@@ -34,6 +34,7 @@ function fixture(t) {
     store, createRunNotices, console, setTimeout, clearTimeout,
     icon: () => '',
     currentView: () => null,
+    canAddWorkspace: () => false,
     t: (key, params) => ({ key, params }),
     toast: (message) => shown.push(message),
     playCompletionSound: () => {},

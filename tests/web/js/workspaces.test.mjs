@@ -52,6 +52,20 @@ test('one fixed directory: no groups; unlinked chats run in the agent own', () =
   assert.deepEqual(groups.map((g) => [g.key, g.chats.map((s) => s.id)]), [['/home', ['1', '2']]]);
 });
 
+test('pinned chats lead in a group of their own, whatever their directory', () => {
+  const c = load();
+  c.setList({ workspaces: [ws('/home', 'default'), ws('/a')], default: '/home', can_add: true });
+  const pin = (id, root) => ({ ...chat(id, root), pinned: true });
+  const groups = c.groups([pin('1', '/a'), pin('2', '/gone'), chat('3', '/a'), chat('4', '/home')]);
+  assert.deepEqual(groups.map((g) => [g.kind, g.chats.map((s) => s.id)]), [
+    ['pinned', ['1', '2']], // even one whose directory left the list
+    ['default', ['4']],
+    ['added', ['3']],
+  ]);
+  // None pinned: no such group.
+  assert.ok(!c.groups([chat('3', '/a')]).some((g) => g.kind === 'pinned'));
+});
+
 test('folding is remembered per directory', () => {
   const c = load({ folded: ['/a'] });
   c.setList({ workspaces: [ws('/home', 'default'), ws('/a')], default: '/home', can_add: true });

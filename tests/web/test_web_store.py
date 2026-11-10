@@ -308,6 +308,28 @@ async def test_list_orders_pinned_first() -> None:
     assert ids == ["old", "new", "mid"]
 
 
+async def test_list_per_workspace_keeps_a_busy_directory_from_crowding() -> None:
+    store = ChatStore.in_memory()
+    await store.upsert("quiet", workspace_root="/quiet")
+    await store.upsert("old-pin", workspace_root="/busy")
+    for i in range(3):
+        await store.upsert(f"unlinked-{i}")
+    for i in range(5):
+        await store.upsert(f"busy-{i}", workspace_root="/busy")
+    await store.upsert("task", workspace_root="/busy", parent_id="busy-4")
+    await store.set_pinned("old-pin", True)
+
+    ids = [m.id for m in await store.list(per_workspace=2)]
+    # Every pinned chat first, whatever its directory's page holds; then two
+    # per directory, most recent first — and every chat that has none.
+    assert ids == [
+        "old-pin", "busy-4", "busy-3", "unlinked-2", "unlinked-1", "unlinked-0",
+        "quiet",
+    ]  # fmt: skip
+    # A plain page would have been all /busy.
+    assert [m.id for m in await store.list(limit=3)] == ["old-pin", "busy-4", "busy-3"]
+
+
 async def test_search_orders_pinned_first() -> None:
     store = ChatStore.in_memory()
     await store.upsert("a", title="alpha one")

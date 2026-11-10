@@ -581,8 +581,8 @@ body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not
     animation: none;
   }
 }
-/* Tail row shown when more chats exist than the sidebar page — opens the
-   "All chats" dialog. */
+/* The row that widens the list's window: "Load more" under a flat list,
+   "Show more" / "Show less" under a workspace group's chats. */
 .lv-sessions-more {
   display: block;
   width: 100%;
@@ -647,10 +647,8 @@ body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not
 .lv-session-item.lv-active .lv-session-title {
   color: var(--lv-ink);
 }
-/* A live background run for this session (detach/reconnect). The all-chats
-   dialog carries a stop button on those rows, so it needs the marker too. */
-.lv-session-item.lv-running .lv-session-title::after,
-.lv-all-chats-item.lv-running .lv-all-chats-title::after {
+/* A live background run for this session (detach/reconnect). */
+.lv-session-item.lv-running .lv-session-title::after {
   content: "";
   display: inline-block;
   width: 6px;
@@ -708,11 +706,6 @@ body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not
   flex-shrink: 0;
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
-  color: var(--lv-muted-2);
-}
-.lv-session-pinmark {
-  display: inline-flex;
-  flex-shrink: 0;
   color: var(--lv-muted-2);
 }
 
@@ -810,6 +803,17 @@ body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not
 }
 .lv-ws-group-rows .lv-session-main {
   padding-left: 32px;
+}
+.lv-ws-group-pager {
+  display: flex;
+  gap: 2px;
+  padding-left: 20px; /* its buttons' text lines up with the rows' titles */
+}
+.lv-ws-group-pager .lv-sessions-more {
+  width: auto;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  color: var(--lv-muted-2);
 }
 .lv-ws-group-empty {
   padding: 4px 12px 6px 32px;
@@ -977,24 +981,9 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
 }
 .lv-session-item:hover .lv-session-more,
 .lv-session-item:has(:focus-visible) .lv-session-more,
-.lv-all-chats-item:hover .lv-session-more,
-.lv-all-chats-item:has(:focus-visible) .lv-session-more,
 .lv-session-more[aria-expanded="true"] {
   opacity: 1;
   pointer-events: auto;
-}
-/* In the all-chats row's flow: no width until revealed, where the pin mark
-   gives way to it. */
-.lv-all-chats-item .lv-session-more {
-  width: 0;
-  margin-right: 0;
-  overflow: hidden;
-}
-.lv-all-chats-item:hover .lv-session-more,
-.lv-all-chats-item:has(:focus-visible) .lv-session-more,
-.lv-all-chats-item .lv-session-more[aria-expanded="true"] {
-  width: 26px;
-  margin-right: 4px;
 }
 .lv-session-item .lv-session-more {
   position: absolute;
@@ -1013,26 +1002,6 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   background: linear-gradient(to right, transparent, var(--lv-row-bg));
   pointer-events: none;
 }
-/* The all-chats list is flat (no Pinned group), so its rows mark a pin. */
-.lv-session-pin {
-  display: none;
-  align-items: center;
-  padding-right: 10px;
-  color: var(--lv-muted-2);
-  flex-shrink: 0;
-}
-.lv-session-pin svg {
-  width: 13px;
-  height: 13px;
-}
-.lv-all-chats-item.lv-pinned .lv-session-pin {
-  display: flex;
-}
-.lv-all-chats-item:hover .lv-session-pin,
-.lv-all-chats-item:has(:focus-visible) .lv-session-pin {
-  display: none;
-}
-
 /* ---- Popup menu (ui.js openMenu) ---------------------------------------- */
 .lv-popup-menu {
   position: fixed;
@@ -3445,7 +3414,6 @@ button.lv-question-option:hover {
 .lv-btn-icon svg,
 .lv-btn svg,
 .lv-session-more svg,
-.lv-session-pin svg,
 .lv-popup-menu-item svg,
 .lv-sched-item-actions button svg,
 .lv-mermaid-lightbox-btn svg,
@@ -3556,90 +3524,6 @@ dialog.lv-custom-dialog::backdrop {
   gap: 8px;
   justify-content: flex-end;
   margin-top: 20px;
-}
-
-/* ---- All chats dialog ------------------------------------------------------------------- */
-.lv-all-chats-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.lv-all-chats-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.lv-all-chats-head h3 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-.lv-all-chats-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-height: min(56vh, 480px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-/* Same three slots as a sidebar row — main button, at-rest pin marker, hover
-   action menu — so the actions don't disappear once a chat scrolls past the
-   sidebar's page. Only the main button's own layout differs (one line, with the
-   timestamp trailing, rather than title over meta). */
-.lv-all-chats-item {
-  display: flex;
-  align-items: stretch;
-  border-radius: var(--lv-radius-sm);
-  transition: background var(--lv-t-fast);
-}
-.lv-all-chats-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding: 8px 10px;
-  border-radius: var(--lv-radius-sm);
-  text-align: left;
-}
-.lv-all-chats-item:hover {
-  background: var(--lv-surface-2);
-}
-.lv-all-chats-item.lv-active {
-  background: var(--lv-accent-soft);
-}
-.lv-all-chats-item.lv-active .lv-all-chats-title {
-  color: var(--lv-accent-text);
-  font-weight: 600;
-}
-.lv-all-chats-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 13.5px;
-  color: var(--lv-ink-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.lv-all-chats-item:hover .lv-all-chats-title {
-  color: var(--lv-ink);
-}
-.lv-all-chats-time {
-  flex-shrink: 0;
-  font-size: 11.5px;
-  color: var(--lv-muted);
-  font-family: var(--lv-mono);
-  font-variant-numeric: tabular-nums;
-}
-.lv-all-chats-more {
-  align-self: center;
-}
-/* `.lv-btn` sets display:inline-flex (author origin), which beats the UA
-   `[hidden]{display:none}` — so the JS `moreBtn.hidden = true` wouldn't hide it
-   without this. Same override the export menu / attach controls already use. */
-.lv-all-chats-more[hidden] {
-  display: none;
 }
 
 /* ---- Schedules -------------------------------------------------------------------------- */
@@ -5174,10 +5058,6 @@ body.lv-files-splitting {
   .lv-session-more {
     opacity: 1;
     pointer-events: auto;
-  }
-  .lv-all-chats-item .lv-session-more {
-    width: 26px;
-    margin-right: 4px;
   }
   .lv-session-item .lv-session-more {
     position: static;

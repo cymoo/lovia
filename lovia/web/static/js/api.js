@@ -188,9 +188,11 @@ export const api = {
     }).then(_json),
 
   // ---- sessions ----
-  /** @param {{ q?: string, limit?: number, offset?: number, parent?: string }} [opts] */
-  listSessions: ({ q = '', limit, offset, parent } = {}) =>
-    request(`/api/sessions${qs({ q, limit, offset, parent })}`).then(_json),
+  // `per_workspace`: page by folder — that many chats of each, plus every
+  // pinned one (the sidebar's workspace groups).
+  /** @param {{ q?: string, limit?: number, parent?: string, per_workspace?: number }} [opts] */
+  listSessions: ({ q = '', limit, parent, per_workspace } = {}) =>
+    request(`/api/sessions${qs({ q, limit, parent, per_workspace })}`).then(_json),
   // Currently-live background runs: [{ session_id, run_id, agent, status, turns }].
   listRuns: () => request('/api/runs').then(_json),
   // Persisted run records, newest first. `since` keeps only runs finished

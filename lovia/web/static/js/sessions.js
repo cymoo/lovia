@@ -2,14 +2,14 @@
 import { t } from './i18n.js';
 import { store } from './store.js';
 import { api, apiError } from './api.js';
-import { closeSidebar, promptDialog, confirmDialog, showDialog, openMenu } from './ui.js';
+import { closeSidebar, promptDialog, confirmDialog, openMenu } from './ui.js';
 import { toast } from './toast.js';
 import { createRunNotices } from './run-notices.js';
 import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
 import { notificationsEnabled, playCompletionSound } from './settings.js';
-import { dateBucket, formatDateTime, formatTimeSmart, shortAge } from './util.js';
-import { addWorkspaceDialog, canAddWorkspace, groupHeader, sidebarGroups } from './workspaces.js';
+import { dateBucket, formatDateTime, shortAge } from './util.js';
+import { addWorkspaceDialog, canAddWorkspace, groupHeader, sidebarGroups, workspaceName } from './workspaces.js';
 import { closeView, currentView } from './views.js';
 import { OPEN_SESSION_EVENT } from './builtin-views.js';
 
@@ -26,14 +26,21 @@ const sessionSearch = /** @type {HTMLInputElement | null} */ (
 );
 const chatMenuBtn = document.getElementById('chat-menu-btn');
 
-// lucide `pin` — the all-chats rows' pinned marker and the pin/unpin menu item.
-const PIN_SVG = icon('pin', { size: 14 });
-
-// The sidebar renders at most one page of chats; anything beyond that lives in
-// the "View all" dialog, which loads further pages on demand.
-const PAGE_SIZE = 50;
-// Whether the last load hit the cap (⇒ show the "View all" row).
+// The sidebar holds a window of the chats and grows it on request — a bigger
+// limit on the next fetch, never an offset, so a refresh redraws the same
+// window. A flat list (no workspace groups, or a search) pages as a whole:
+const FLAT_PAGE = 50;
+let _flatLimit = FLAT_PAGE;
+// Whether the last flat load had more past the limit (⇒ the "Load more" row).
 let _hasMore = false;
+// Workspace groups page each on their own: a group shows GROUP_PAGE chats
+// until "Show more" adds GROUP_STEP (this map: group key → rows shown).
+const GROUP_PAGE = 5;
+const GROUP_STEP = 10;
+/** @type {Map<string, number>} */
+const _groupShown = new Map();
+// The newest load wins: an older one answering late must not redraw.
+let _loadSeq = 0;
 
 // ---- Background-run awareness --------------------------------------------
 // Preferred path: the server's /api/events lifecycle stream (initEventStream)
@@ -281,15 +288,24 @@ async function stopRun(sid) {
  * filter so refreshes (delete, stream end, polls) keep an active search.
  */
 export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
+  const seq = ++_loadSeq;
+  // Where chats work in folders of their own, each folder's most recent
+  // (and every pinned chat): one busy folder must not crowd the others out.
+  const grouped = !query && canAddWorkspace();
   try {
     const [sessions, runs] = await Promise.all([
       // Fetch one row past the page: its presence answers "is there more?"
       // without a count endpoint or a response-shape change.
-      api.listSessions({ q: query, limit: PAGE_SIZE + 1 }),
+      api.listSessions(
+        grouped
+          ? { per_workspace: Math.max(GROUP_PAGE, ..._groupShown.values()) + 1, limit: 1000 }
+          : { q: query, limit: _flatLimit + 1 },
+      ),
       api.listRuns().catch(() => []),
     ]);
-    _hasMore = sessions.length > PAGE_SIZE;
-    store.sessions = sessions.slice(0, PAGE_SIZE);
+    if (seq !== _loadSeq) return;
+    _hasMore = !grouped && sessions.length > _flatLimit;
+    store.sessions = grouped ? sessions : sessions.slice(0, _flatLimit);
     const prevRuns = store.activeRuns || new Set();
     store.activeRuns = new Set(runs.map((r) => r.session_id));
     // Full live-run rows (status, started_at) — the task rows' badge data.
@@ -343,6 +359,7 @@ function sessionsSignature() {
     new Date().toDateString(), // the date groups move at midnight
     store.sessionId,
     _hasMore,
+    [..._groupShown],
     !!sessionSearch?.value.trim(), // the empty state's wording depends on it
     store.agents.length > 1, // agent chips appear once agents finish loading
     [...(store.activeRuns || [])].sort(),
@@ -590,11 +607,12 @@ function renderSessions() {
 
 /**
  * One chat's sidebar row. `age` puts how long ago it was active at the end
- * (workspace groups have no date headings), or a pin mark if pinned.
+ * (workspace groups have no date headings); `folder` names its folder in
+ * the tooltip (the Pinned section spans them).
  * @param {any} s
- * @param {{ age?: boolean }} [opts]
+ * @param {{ age?: boolean, folder?: boolean }} [opts]
  */
-function buildRow(s, { age = false } = {}) {
+function buildRow(s, { age = false, folder = false } = {}) {
     const item = document.createElement('div');
     item.className = 'lv-session-item';
     if (s.id === store.sessionId) item.classList.add('lv-active');
@@ -606,6 +624,7 @@ function buildRow(s, { age = false } = {}) {
     main.type = 'button';
     main.className = 'lv-session-main';
     main.title = sidebarTooltip(s);
+    if (folder && s.workspace_root) main.title += ` · ${workspaceName(s.workspace_root)}`;
     // A branch starts with its source's title: mark it apart.
     if (s.origin_kind === 'fork') {
       const mark = document.createElement('span');
@@ -627,14 +646,8 @@ function buildRow(s, { age = false } = {}) {
     }
     if (age) {
       const end = document.createElement('span');
-      if (s.pinned) {
-        end.className = 'lv-session-pinmark';
-        end.innerHTML = icon('pin', { size: 12 });
-        end.title = t('nav.group.pinned');
-      } else {
-        end.className = 'lv-session-age';
-        end.textContent = shortAge(s.updated_at);
-      }
+      end.className = 'lv-session-age';
+      end.textContent = shortAge(s.updated_at);
       main.appendChild(end);
     }
     main.addEventListener('click', () => switchSession(s.id));
@@ -643,7 +656,11 @@ function buildRow(s, { age = false } = {}) {
     return item;
 }
 
-/** @param {import('./workspaces.js').SidebarGroup[]} groups */
+/**
+ * The grouped sidebar: the pinned chats (all of them), then each
+ * workspace's — its first GROUP_PAGE, more on request.
+ * @param {import('./workspaces.js').SidebarGroup[]} groups
+ */
 function renderGroups(groups) {
   if (!sessionsList) return;
   const rerender = () => {
@@ -658,12 +675,20 @@ function renderGroups(groups) {
     if (!g.collapsed) {
       const rows = document.createElement('div');
       rows.className = 'lv-ws-group-rows';
-      for (const s of g.chats) rows.appendChild(buildRow(s, { age: true }));
+      const pinned = g.kind === 'pinned';
+      const shown = pinned ? Infinity : _groupShown.get(g.key) ?? GROUP_PAGE;
+      for (const s of g.chats.slice(0, shown)) {
+        rows.appendChild(buildRow(s, pinned ? { folder: true } : { age: true }));
+      }
       if (!g.chats.length) {
         const empty = document.createElement('div');
         empty.className = 'lv-ws-group-empty';
         empty.textContent = t('ws.empty');
         rows.appendChild(empty);
+      }
+      const more = g.chats.length > shown;
+      if (!pinned && (more || shown > GROUP_PAGE)) {
+        rows.appendChild(groupPager(g.key, shown, more));
       }
       section.appendChild(rows);
     }
@@ -672,8 +697,40 @@ function renderGroups(groups) {
 }
 
 /**
- * The list's label: "Workspaces" over groups — with an add-a-folder button
- * where more may be opened — else "Chats".
+ * The row under a group's chats: "Show more" while it has more, "Show less"
+ * once it shows more than its first page.
+ * @param {string} key @param {number} shown @param {boolean} more
+ */
+function groupPager(key, shown, more) {
+  const row = document.createElement('div');
+  row.className = 'lv-ws-group-pager';
+  /** @param {string} label @param {() => void} onClick */
+  const button = (label, onClick) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'lv-sessions-more';
+    b.textContent = t(label);
+    b.addEventListener('click', onClick);
+    row.appendChild(b);
+  };
+  if (more) {
+    button('nav.showMore', () => {
+      _groupShown.set(key, shown + GROUP_STEP);
+      void loadSessions(); // fetches the wider window, then redraws
+    });
+  }
+  if (shown > GROUP_PAGE) {
+    button('nav.showLess', () => {
+      _groupShown.delete(key);
+      renderSessions();
+    });
+  }
+  return row;
+}
+
+/**
+ * The list's label, "Chats": over groups it carries an add-a-folder button,
+ * where more may be opened.
  * @param {boolean} grouped
  */
 function syncSectionLabel(grouped) {
@@ -685,7 +742,7 @@ function syncSectionLabel(grouped) {
     text.className = 'lv-section-label-text';
     label.replaceChildren(text);
   }
-  text.textContent = t(grouped ? 'ws.section' : 'nav.chats');
+  text.textContent = t('nav.chats');
   let add = /** @type {HTMLButtonElement | null} */ (label.querySelector('.lv-section-label-add'));
   const want = grouped && canAddWorkspace();
   if (want && !add) {
@@ -702,18 +759,17 @@ function syncSectionLabel(grouped) {
 }
 
 function renderMore() {
-  if (!sessionsList) return;
-  // More chats exist than the sidebar page shows — open the full, paged list.
-  if (_hasMore) {
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'lv-sessions-more';
-    more.textContent = t('nav.viewAll');
-    more.addEventListener('click', () =>
-      openAllSessionsDialog(sessionSearch?.value.trim() || ''),
-    );
-    sessionsList.appendChild(more);
-  }
+  if (!sessionsList || !_hasMore) return;
+  // A flat list (or a search) holding more than its window: widen it.
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'lv-sessions-more';
+  more.textContent = t('nav.loadMore');
+  more.addEventListener('click', () => {
+    _flatLimit += FLAT_PAGE;
+    void loadSessions();
+  });
+  sessionsList.appendChild(more);
 }
 
 function syncHeader() {
@@ -734,42 +790,28 @@ export function updateSessionTitle(sessionId, title) {
   if (_openMeta?.id === sessionId) _openMeta.title = title;
 
   const label = title || t('session.newChat');
-  // Update the DOM directly without full re-render. Both lists key rows by
-  // session id and can be on screen at once (the all-chats dialog sits over the
-  // sidebar), so a rename from either has to repaint both.
-  const rows = `.lv-session-item[data-id="${sessionId}"], .lv-all-chats-item[data-id="${sessionId}"]`;
-  document.querySelectorAll(rows).forEach((row) => {
-    const titleEl = row.querySelector('.lv-session-title, .lv-all-chats-title');
-    if (titleEl) titleEl.textContent = label;
-    const main = /** @type {HTMLElement | null} */ (row.querySelector('.lv-session-main, .lv-all-chats-main'));
-    if (main) {
-      // Same text the rows render with.
-      main.title = s && main.classList.contains('lv-session-main') ? sidebarTooltip(s) : title || sessionId;
-    }
-  });
+  // Update the row directly, without a full re-render.
+  const row = document.querySelector(`.lv-session-item[data-id="${sessionId}"]`);
+  const titleEl = row?.querySelector('.lv-session-title');
+  if (titleEl) titleEl.textContent = label;
+  const main = /** @type {HTMLElement | null | undefined} */ (row?.querySelector('.lv-session-main'));
+  if (main && s) main.title = sidebarTooltip(s);
 
   // Update header if this is the active session (fall back when cleared)
   if (sessionId === store.sessionId && chatTitleEl) chatTitleEl.textContent = label;
 }
 
 // ---- Actions -------------------------------------------------------------
-// Both chat lists share these. `s` is whatever row object the caller holds —
-// the all-chats dialog pages straight from the API, so its rows are NOT the
-// cached `store.sessions` objects. Each action therefore updates the row it was
-// handed as well as the cache, and reports back so the caller can repaint.
 
 /**
- * A chat's actions — one menu wherever it opens: a list row's "⋯" or
- * right-click, and the topbar's "⋯" for the open chat. `row`, when the menu
- * belongs to one, is restated in place; `stacked` and `onDeleted` as in
- * rowActions.
+ * A chat's actions — one menu wherever it opens: a sidebar row's "⋯" or
+ * right-click, and the topbar's "⋯" for the open chat. `s` is the chat as
+ * the caller holds it: usually its `store.sessions` row, but the open chat
+ * may be one the list doesn't carry — so each action updates `s` too.
  * @param {any} s
  * @returns {(import('./ui.js').MenuItem | null)[]}
  */
-function chatActions(
-  s,
-  { row = /** @type {HTMLElement | null} */ (null), onDeleted = () => {}, stacked = false } = {},
-) {
+function chatActions(s) {
   const exportItem = (/** @type {string} */ format, /** @type {string} */ glyph) => ({
     label: t(`session.export.${format}`),
     icon: icon(glyph, { size: 14 }),
@@ -782,9 +824,7 @@ function chatActions(
       ? [{
           label: t('session.stop'),
           icon: icon('square', { size: 14 }),
-          onSelect: async () => {
-            if (await stopRun(s.id)) row?.classList.remove('lv-running');
-          },
+          onSelect: () => void stopRun(s.id),
         }]
       : []),
     // A task chat lives under the chat that started it, never in the list:
@@ -793,17 +833,13 @@ function chatActions(
       ? []
       : [{
           label: t(s.pinned ? 'session.unpin' : 'session.pin'),
-          icon: PIN_SVG,
-          onSelect: async () => {
-            const pinned = await togglePin(s);
-            // Restate in place — neither list re-sorts a row out from under the pointer.
-            if (pinned !== null) row?.classList.toggle('lv-pinned', pinned);
-          },
+          icon: icon('pin', { size: 14 }),
+          onSelect: () => void togglePin(s),
         }]),
     {
       label: t('session.rename'),
       icon: icon('pencil', { size: 14 }),
-      onSelect: () => renameSession(s, { stack: stacked }),
+      onSelect: () => void renameSession(s),
     },
     ...(s.parent_id
       ? []
@@ -821,9 +857,7 @@ function chatActions(
       label: t('session.delete'),
       icon: icon('trash-2', { size: 14 }),
       danger: true,
-      onSelect: async () => {
-        if (await deleteSession(s.id, s.title)) onDeleted();
-      },
+      onSelect: () => void deleteSession(s.id, s.title),
     },
   ];
 }
@@ -842,22 +876,12 @@ function openChat() {
 }
 
 /**
- * The "⋯" button both chat lists append to a row: it opens the row's actions,
- * as does a right-click anywhere on the row. The items are built at open time,
- * so they follow the chat's current pinned / running state.
- *
- * Handlers restate `row` themselves instead of leaning on a re-render: the
- * all-chats dialog's rows are standalone and nothing repaints them. In the
- * sidebar the same lines land on a row `renderSessions` already replaced — a
- * no-op on a detached node.
- *
- * `stacked` layers the rename prompt over an open dialog instead of closing it;
- * `onDeleted` runs once a delete lands. Both options are typed by inference off
- * the defaults below — a `@param` tag naming a destructured parameter fails
- * `tsc --checkJs` (TS8024), and one without a default drops out of the type.
+ * The "⋯" button at a sidebar row's end: it opens the row's actions, as does
+ * a right-click anywhere on the row. The items are built at open time, so
+ * they follow the chat's current pinned / running state.
  */
-function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, stacked = false } = {}) {
-  const items = () => chatActions(s, { row, onDeleted, stacked });
+function rowActions(s, /** @type {HTMLElement} */ row) {
+  const items = () => chatActions(s);
 
   const more = document.createElement('button');
   more.type = 'button';
@@ -930,9 +954,8 @@ export async function forkChat(id, ref = null) {
   return created.session_id;
 }
 
-/** `stack` keeps an already-open dialog alive under the prompt. */
-async function renameSession(s, { stack = false } = {}) {
-  const title = await promptDialog(t('dialog.renameChat'), s.title || '', { stack });
+async function renameSession(s) {
+  const title = await promptDialog(t('dialog.renameChat'), s.title || '');
   if (title === null) return; // cancelled — empty string means "clear the title"
   try {
     await api.renameSession(s.id, title);
@@ -945,7 +968,6 @@ async function renameSession(s, { stack = false } = {}) {
   updateSessionTitle(s.id, title);
 }
 
-/** @returns {Promise<boolean | null>} The new pinned state, or null if it failed. */
 async function togglePin(s) {
   const next = !s.pinned;
   try {
@@ -953,31 +975,18 @@ async function togglePin(s) {
   } catch (err) {
     console.error(err);
     toast(t('toast.pinFailed'), { type: 'error' });
-    return null;
+    return;
   }
   s.pinned = next;
-  const target = store.sessions.find((x) => x.id === s.id);
-  if (!target) {
-    // An all-chats row from beyond the sidebar's page: pinning promotes it into
-    // that page, and the server emits no event for pins — so refetch, or the
-    // sidebar would keep the stale order until some unrelated poll.
-    await loadSessions();
-    return next;
-  }
-  // Update locally and re-sort to match the server's "pinned first, then most
-  // recent" order — cheaper than a reload, and it keeps the active search filter.
-  target.pinned = next;
-  store.sessions.sort(
-    (a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updated_at - a.updated_at,
-  );
-  _lastRenderSig = null; // order changed — force a redraw
-  renderSessions();
-  return next;
+  // A pin moves the chat between the Pinned section and its place in the
+  // list, and shifts what the window holds (the server emits no event for
+  // pins): refetch, under the active filter.
+  await loadSessions();
 }
 
 /**
- * @param {string} [title] Name for the confirm; all-chats rows pass their own
- *   because they can be past the sidebar's page, where the lookup finds nothing.
+ * @param {string} [title] Name for the confirm; the topbar menu passes the
+ *   open chat's own, which the list may not carry.
  * @returns {Promise<boolean>} True once the chat is gone.
  */
 export async function deleteSession(
@@ -1103,109 +1112,6 @@ export function startNewChat() {
   document.getElementById('prompt')?.focus();
 }
 
-// ---- All chats dialog ------------------------------------------------------
-// The full session list, loaded a page at a time ("Load more"), so a long
-// history never lands in the sidebar DOM at once. Carries the sidebar's
-// current filter and keeps paging it.
-function openAllSessionsDialog(query = '') {
-  const panel = document.createElement('div');
-  panel.className = 'lv-all-chats-panel';
-  panel.innerHTML = `
-    <div class="lv-all-chats-head">
-      <h3>${t('nav.allChats')}</h3>
-      <button type="button" class="lv-btn-icon lv-all-chats-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
-    </div>
-    <div class="lv-all-chats-list" role="list"></div>
-    <button type="button" class="lv-btn lv-btn-ghost lv-btn-sm lv-all-chats-more" hidden>${t('nav.loadMore')}</button>`;
-  const listEl = panel.querySelector('.lv-all-chats-list');
-  const moreBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.lv-all-chats-more'));
-  let offset = 0;
-  let loading = false;
-
-  // The sidebar's row (main button, "⋯" actions) plus a pin marker: this list
-  // is flat, with no Pinned group to say it.
-  function rowFor(s) {
-    const row = document.createElement('div');
-    row.className = 'lv-all-chats-item';
-    row.dataset.id = s.id;
-    if (s.id === store.sessionId) row.classList.add('lv-active');
-    if (store.activeRuns?.has(s.id)) row.classList.add('lv-running');
-    if (s.pinned) row.classList.add('lv-pinned');
-
-    const main = document.createElement('button');
-    main.type = 'button';
-    main.className = 'lv-all-chats-main';
-    main.title = s.title || s.id;
-    const title = document.createElement('span');
-    title.className = 'lv-all-chats-title';
-    title.textContent = s.title || t('session.newChat');
-    const time = document.createElement('span');
-    time.className = 'lv-all-chats-time';
-    time.textContent = formatTimeSmart(s.updated_at);
-    time.title = formatDateTime(s.updated_at);
-    main.append(title, time);
-    main.addEventListener('click', () => {
-      dialog.close();
-      switchSession(s.id).catch(() => {});
-    });
-
-    const pinMark = document.createElement('span');
-    pinMark.className = 'lv-session-pin';
-    pinMark.setAttribute('aria-hidden', 'true');
-    pinMark.innerHTML = PIN_SVG;
-    row.append(main, pinMark, rowActions(s, row, {
-      stacked: true, // a prompt must not close the list it was opened from
-      onDeleted: () => {
-        row.remove();
-        offset = Math.max(0, offset - 1); // or the next page skips a chat
-        syncEmpty();
-      },
-    }));
-    return row;
-  }
-
-  /** Show the empty notice only while the list really has no rows. */
-  function syncEmpty() {
-    const empty = listEl.querySelector('.lv-sessions-empty');
-    if (listEl.querySelector('.lv-all-chats-item')) {
-      empty?.remove();
-    } else if (!empty) {
-      const el = document.createElement('div');
-      el.className = 'lv-sessions-empty';
-      el.textContent = t('nav.none');
-      listEl.appendChild(el);
-    }
-  }
-
-  async function loadPage() {
-    if (loading) return;
-    loading = true;
-    moreBtn.disabled = true;
-    try {
-      // Same +1 sentinel as the sidebar. Offset paging can skip/repeat a row
-      // if chats churn between pages — fine for a picker.
-      const rows = await api.listSessions({ q: query, limit: PAGE_SIZE + 1, offset });
-      const page = rows.slice(0, PAGE_SIZE);
-      offset += page.length;
-      listEl.append(...page.map(rowFor));
-      moreBtn.hidden = rows.length <= PAGE_SIZE;
-      syncEmpty();
-    } catch (err) {
-      console.error('openAllSessionsDialog:', err);
-      toast(t('toast.loadChatsFailed'), { type: 'error' });
-    } finally {
-      loading = false;
-      moreBtn.disabled = false;
-    }
-  }
-
-  const dialog = showDialog({ body: panel });
-  dialog.classList.add('lv-dialog-wide');
-  panel.querySelector('.lv-all-chats-close').addEventListener('click', () => dialog.close());
-  moreBtn.addEventListener('click', loadPage);
-  loadPage();
-}
-
 // ---- Export --------------------------------------------------------------
 /**
  * Download a chat as a file: Markdown and JSON from the server, HTML built
@@ -1239,6 +1145,7 @@ let _searchTimer = null;
 export function initSearch() {
   if (!sessionSearch) return;
   sessionSearch.addEventListener('input', () => {
+    _flatLimit = FLAT_PAGE; // a new query starts from its first page
     clearTimeout(_searchTimer);
     _searchTimer = setTimeout(() => loadSessions(), 250);
   });
@@ -1280,9 +1187,11 @@ export function initSessions() {
   // A workspace group's "+" (and the composer chip's menu): its directory is
   // already this tab's pick.
   store.on('new-chat-request', startNewChat);
+  // The list decides how the sidebar pages (by folder, or as one), so a
+  // change to it refetches.
   store.on('workspaces-changed', () => {
     _workspacesRev++;
-    renderSessions();
+    void loadSessions();
   });
   // Agents usually land after the first session render — the signature covers
   // the flip, so this redraws exactly once to add the agent chips.

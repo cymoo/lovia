@@ -1105,6 +1105,9 @@ async function openChipMenu() {
   menu.appendChild(manage);
 
   _chip.insertAdjacentElement('afterend', menu);
+  // Over its chip: right edges in line (both measure from the composer bar).
+  const bar = menu.offsetParent;
+  if (bar) menu.style.right = `${bar.clientWidth - _chip.offsetLeft - _chip.offsetWidth}px`;
   _chipMenu = menu;
   _chip.setAttribute('aria-expanded', 'true');
 }

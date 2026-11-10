@@ -4449,39 +4449,34 @@ body.lv-files-resizing {
   -webkit-user-select: none;
 }
 
-/* Divider between the file list and the preview: drag to move the split
-   (arrow keys nudge, double-click resets). In flow between the two, but with
-   zero net footprint — the hit area straddles the viewer's border-top. */
-.lv-files-split {
-  position: relative;
-  flex-shrink: 0;
-  height: 9px;
-  margin: -4px 0 -5px;
-  cursor: row-resize;
-  z-index: 5;
-  touch-action: none;
+/* An open file takes the panel (files.js `lv-viewing`). Narrow, the list's
+   rows step aside and the preview's crumbs lead back. Wide (`lv-files-wide`,
+   ≥720px), the list keeps a column beside the preview, as a desktop file pane
+   does — a grid over the panel's own children, so no wrapper is needed. */
+.lv-files-panel.lv-viewing:not(.lv-files-wide)
+  > :is(.lv-files-crumbs, .lv-files-search, .lv-files-procs, .lv-files-list) {
+  display: none;
 }
-.lv-files-split::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 3px; /* sits over the viewer's border-top */
-  height: 3px;
-  border-radius: 2px;
-  background: var(--lv-accent);
-  opacity: 0;
-  transition: opacity var(--lv-t-fast);
+.lv-files-panel.lv-files-wide.lv-viewing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
 }
-.lv-files-split:hover::after,
-.lv-files-split:focus-visible::after,
-body.lv-files-splitting .lv-files-split::after {
-  opacity: 0.55;
+.lv-files-wide.lv-viewing > .lv-files-head {
+  grid-column: 1 / -1;
+  grid-row: 1;
 }
-body.lv-files-splitting {
-  cursor: row-resize;
-  user-select: none;
-  -webkit-user-select: none;
+.lv-files-wide.lv-viewing > .lv-files-viewer {
+  grid-column: 1;
+  grid-row: 2 / -1;
+  border-right: 1px solid var(--lv-border);
+}
+.lv-files-wide.lv-viewing > .lv-files-crumbs { grid-column: 2; grid-row: 2; }
+.lv-files-wide.lv-viewing > .lv-files-search { grid-column: 2; grid-row: 3; }
+.lv-files-wide.lv-viewing > .lv-files-procs { grid-column: 2; grid-row: 4; }
+.lv-files-wide.lv-viewing > .lv-files-list { grid-column: 2; grid-row: 5; }
+.lv-files-wide.lv-viewing > .lv-files-crumbs {
+  padding-top: 10px;
 }
 
 .lv-files-head {
@@ -4758,9 +4753,8 @@ body.lv-files-splitting {
 
 /* ---- Viewer ---- */
 .lv-files-viewer {
-  flex-shrink: 0;
-  height: var(--lv-files-viewer-h, 58%);
-  min-height: 240px;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--lv-border);
@@ -4777,18 +4771,56 @@ body.lv-files-splitting {
   flex-shrink: 0;
   border-bottom: 1px solid var(--lv-border);
 }
+/* The open file's crumbs. Short of room, the folders give way first and the
+   file's own name last; the workspace keeps its (capped) width. */
 .lv-files-viewer-name {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  overflow: hidden;
   font-size: 12.5px;
-  font-weight: 600;
   font-family: var(--lv-mono);
-  color: var(--lv-ink-2);
+  color: var(--lv-muted-2);
   white-space: nowrap;
+}
+.lv-files-viewer-name .lv-files-crumb {
+  flex: 0 1000 auto;
+  min-width: 2.2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block; /* text-overflow needs a block box */
+}
+.lv-files-viewer-name .lv-files-crumb-root {
+  flex-shrink: 0; /* which workspace is context worth keeping; capped instead */
+  max-width: 8em;
+  display: inline-flex;
+}
+.lv-files-crumb-root > svg {
+  flex-shrink: 0;
+}
+.lv-files-crumb-root > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lv-files-viewer-name .lv-files-crumb:last-child {
+  flex-shrink: 1;
+  min-width: 4em;
+  font-weight: 600;
+  color: var(--lv-ink-2);
+}
+.lv-files-viewer-name .lv-files-crumb-sep {
+  flex-shrink: 0;
+}
+.lv-files-viewer-abs {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   direction: rtl; /* ellipsis on the LEFT so the filename tail stays visible */
-  text-align: left;
+  font-weight: 600;
+  color: var(--lv-ink-2);
 }
 .lv-files-viewer-actions {
   display: inline-flex;
@@ -4976,14 +5008,6 @@ body.lv-files-splitting {
   }
   .lv-files-resizer {
     display: none;
-  }
-  /* The drawer overlays at a fixed split — dragging it would fight
-     touch-scrolling in the list. */
-  .lv-files-split {
-    display: none;
-  }
-  .lv-files-viewer {
-    height: 55%;
   }
 }
 

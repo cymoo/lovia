@@ -16,6 +16,7 @@ import {
   addCodeBlockControls,
   copyCodeBlock,
   copyToClipboard,
+  menuOpen,
   openMenu,
   setSidebarAutoCollapsed,
   widthDivider,
@@ -64,6 +65,7 @@ const state = {
   filter: '', // case-insensitive substring over listed paths
   wrap: localStorage.getItem('lovia-files-wrap') !== '0', // wrap long lines
   viewing: null, // { path, kind, raw, name, end, totalLines, truncated }
+  listScroll: 0, // the list's scroll when a file covered it (narrow panel)
 };
 
 const ext = (path) => (path.split('.').pop() || '').toLowerCase();
@@ -150,112 +152,18 @@ function initResizer() {
   });
 }
 
-// ---- List / preview split ---------------------------------------------------
-// The divider between the file list and the preview drags the split (arrow
-// keys nudge it, double-click resets) — mirrors initResizer. The viewer height
-// lives in a `--lv-files-viewer-h` CSS var as a *percentage* of the panel (px
-// would crush the list when the window shrinks) and persists per browser.
-const SPLIT_KEY = 'lovia-files-split';
-const MIN_VIEWER_H = 240; // matches .lv-files-viewer's min-height
-const MIN_LIST_H = 100; // keep some list visible above the preview
+// ---- List / preview layout --------------------------------------------------
+// An open file takes the panel (`lv-viewing`): on a narrow panel the list
+// steps aside and the preview's crumbs lead back; once the panel is dragged
+// wide enough (`lv-files-wide`), the list stays beside the preview instead.
+// Width is the panel's own, so a ResizeObserver decides — not the viewport.
+const WIDE_W = 720;
+const isWide = () => els.panel.classList.contains('lv-files-wide');
 
-const viewerHeight = () => els.viewer.getBoundingClientRect().height;
-
-function applySplit(pct) {
-  if (pct == null) document.documentElement.style.removeProperty('--lv-files-viewer-h');
-  else document.documentElement.style.setProperty('--lv-files-viewer-h', `${pct}%`);
-}
-
-// Clamp a proposed viewer height (px) so both halves stay usable, then apply
-// it as a percentage of the panel.
-function setViewerPx(px) {
-  const panel = els.panel.getBoundingClientRect();
-  if (!panel.height) return;
-  const listTop = els.list.getBoundingClientRect().top - panel.top;
-  const max = panel.height - listTop - MIN_LIST_H;
-  const clamped = Math.min(Math.max(px, MIN_VIEWER_H), Math.max(MIN_VIEWER_H, max));
-  applySplit((clamped / panel.height) * 100);
-}
-
-// Surface the split position to assistive tech (the separator is focusable
-// and keyboard-resizable): value = the preview's share of the panel, 0–100.
-function syncSplitAria() {
-  const total = els.panel.getBoundingClientRect().height;
-  if (!total) return;
-  els.split.setAttribute(
-    'aria-valuenow',
-    String(Math.round((viewerHeight() / total) * 100)),
-  );
-}
-
-// Re-clamp a restored split against the panel's current geometry: the saved
-// percentage was applied before the preview was ever visible, so it may
-// violate the px minimums at this panel size (a resize can do the same).
-// The stylesheet default is always in bounds — leave the var unset then.
-function clampSplit() {
-  if (els.viewer.classList.contains('lv-hidden')) return;
-  if (document.documentElement.style.getPropertyValue('--lv-files-viewer-h')) {
-    setViewerPx(viewerHeight());
-  }
-  syncSplitAria();
-}
-
-function initSplit() {
-  // Ignore garbage/extreme saved values — the stylesheet default is fine.
-  const saved = Number(localStorage.getItem(SPLIT_KEY));
-  if (saved >= 15 && saved <= 90) applySplit(saved);
-
-  const sp = els.split;
-  let startY = 0;
-  let startH = 0;
-
-  const persistSplit = () => {
-    const total = els.panel.getBoundingClientRect().height;
-    if (!total) return;
-    // Re-read the rendered height: CSS min-height may have clamped harder.
-    localStorage.setItem(SPLIT_KEY, ((viewerHeight() / total) * 100).toFixed(1));
-    syncSplitAria();
-  };
-
-  sp.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 && e.pointerType === 'mouse') return;
-    startY = e.clientY;
-    startH = viewerHeight();
-    sp.setPointerCapture(e.pointerId);
-    document.body.classList.add('lv-files-splitting');
-  });
-  sp.addEventListener('pointermove', (e) => {
-    if (!sp.hasPointerCapture(e.pointerId)) return;
-    setViewerPx(startH + (startY - e.clientY)); // viewer sits below: up = taller
-  });
-  const endDrag = (e) => {
-    if (!sp.hasPointerCapture(e.pointerId)) return;
-    sp.releasePointerCapture(e.pointerId);
-    document.body.classList.remove('lv-files-splitting');
-    persistSplit();
-  };
-  sp.addEventListener('pointerup', endDrag);
-  sp.addEventListener('pointercancel', endDrag);
-
-  sp.addEventListener('dblclick', () => {
-    applySplit(null);
-    localStorage.removeItem(SPLIT_KEY);
-    syncSplitAria();
-  });
-  sp.addEventListener('keydown', (e) => {
-    const step = e.key === 'ArrowUp' ? 24 : e.key === 'ArrowDown' ? -24 : 0;
-    if (!step) return;
-    e.preventDefault();
-    setViewerPx(viewerHeight() + step);
-    persistSplit();
-  });
-
-  // A window resize can push the restored percentage past the px minimums.
-  let splitTimer = null;
-  window.addEventListener('resize', () => {
-    clearTimeout(splitTimer);
-    splitTimer = setTimeout(clampSplit, 120);
-  });
+function initLayout() {
+  new ResizeObserver(() => {
+    els.panel.classList.toggle('lv-files-wide', els.panel.clientWidth >= WIDE_W);
+  }).observe(els.panel);
 }
 
 // ---- Panel open/close -----------------------------------------------------
@@ -497,6 +405,8 @@ function procRow(p) {
 }
 
 function setMode(mode) {
+  // A tab is also the way back to its list from a file covering the panel.
+  if (state.viewing && !isWide()) closeViewer();
   state.mode = mode;
   els.tabRecent.classList.toggle('lv-active', mode === 'recent');
   els.tabRecent.setAttribute('aria-selected', String(mode === 'recent'));
@@ -506,35 +416,76 @@ function setMode(mode) {
   refresh();
 }
 
-function renderCrumbs() {
-  if (state.mode !== 'browse' || !els.crumbs) return;
-  els.crumbs.replaceChildren();
-  const parts = state.browsePath ? state.browsePath.split('/') : [];
-  const crumb = (label, path, last) => {
+/**
+ * A crumb row: the workspace (folder glyph, its path on hover), then one crumb
+ * per segment of `path`. Every crumb but the last opens Browse at that
+ * directory; the last is where you are. Shared by the list's row (`path` = the
+ * directory shown) and the preview's header (`path` = the open file).
+ * `fold` keeps a deep path to `root / … / parent / last` (the preview header
+ * has one line): "…" opens the deepest folder it hides.
+ * @param {HTMLElement} into @param {string} path
+ * @param {(dir: string) => void} go
+ * @param {{ fold?: boolean }} [opts]
+ */
+function fillCrumbs(into, path, go, { fold = false } = {}) {
+  into.replaceChildren();
+  const parts = path ? path.split('/') : [];
+  // Folded, the middle folders share one crumb; `skip` is how many it hides.
+  const skip = fold && parts.length > 3 ? parts.length - 3 : 0;
+  const crumb = (label, dir, last) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'lv-files-crumb';
     b.textContent = label;
     if (last) b.disabled = true;
-    else b.addEventListener('click', () => { state.browsePath = path; refresh(); });
+    else b.addEventListener('click', () => go(dir));
     return b;
   };
   // The root names the folder the chat works in (its path on hover), not "~".
   const root = scopeRoot();
-  const home = crumb(root ? workspaceName(root) : _rootName || '~', '', parts.length === 0);
+  const home = crumb('', '', parts.length === 0);
   home.classList.add('lv-files-crumb-root');
   if (root) home.title = root;
-  home.insertAdjacentHTML('afterbegin', icon('folder', { size: 13 }));
-  els.crumbs.appendChild(home);
+  const homeName = document.createElement('span'); // ellipsizes; the glyph doesn't
+  homeName.textContent = root ? workspaceName(root) : _rootName || '~';
+  home.innerHTML = icon('folder', { size: 13 });
+  home.appendChild(homeName);
+  into.appendChild(home);
   parts.forEach((part, i) => {
+    if (i > 0 && i <= skip) return; // inside the fold
     const sep = document.createElement('span');
     sep.className = 'lv-files-crumb-sep';
     sep.textContent = '/';
-    els.crumbs.appendChild(sep);
-    els.crumbs.appendChild(
-      crumb(part, parts.slice(0, i + 1).join('/'), i === parts.length - 1),
-    );
+    into.appendChild(sep);
+    if (i === 0 && skip) {
+      const hidden = parts.slice(0, skip + 1).join('/');
+      const more = crumb('…', hidden, false);
+      more.title = hidden;
+      into.appendChild(more);
+      return;
+    }
+    into.appendChild(crumb(part, parts.slice(0, i + 1).join('/'), i === parts.length - 1));
   });
+}
+
+function renderCrumbs() {
+  if (state.mode !== 'browse' || !els.crumbs) return;
+  fillCrumbs(els.crumbs, state.browsePath, (dir) => {
+    state.browsePath = dir;
+    refresh();
+  });
+}
+
+/**
+ * A preview crumb: Browse at `dir`. Narrow, that means leaving the file for
+ * the list; wide, the list beside it moves and the file stays open.
+ */
+function browseTo(dir) {
+  state.browsePath = dir;
+  state.listScroll = 0; // a different list than the one left behind
+  if (!isWide()) closeViewer();
+  if (state.mode === 'browse') refresh();
+  else setMode('browse');
 }
 
 function rowIcon(entry) {
@@ -636,9 +587,12 @@ function renderList() {
 function closeViewer() {
   state.viewing = null;
   els.viewer.classList.add('lv-hidden');
-  els.split?.classList.add('lv-hidden');
+  els.panel.classList.remove('lv-viewing');
   els.viewerBody.replaceChildren();
   renderList(); // drop the active highlight
+  // A narrow panel hid the list behind the file: back where the user left it.
+  // (Wide, the list stayed in view and its scroll is the user's own.)
+  if (!isWide()) els.list.scrollTop = state.listScroll || 0;
 }
 
 // The panel reads through a session locked to the workspace root (see
@@ -750,19 +704,23 @@ function renderText(content, path) {
 // with a different base); true otherwise.
 async function openFile(path, { silent = false } = {}) {
   const name = basename(path);
-  const viewerWasHidden = els.viewer.classList.contains('lv-hidden');
+  if (!els.panel.classList.contains('lv-viewing')) state.listScroll = els.list.scrollTop;
   els.viewer.classList.remove('lv-hidden');
-  els.split?.classList.remove('lv-hidden');
-  // First show: the restored split was applied blind (panel geometry unknown
-  // until now) — re-clamp it, and give the separator its initial aria value.
-  if (viewerWasHidden && els.split) clampSplit();
-  // The name truncates from the left (direction: rtl) so the filename tail
-  // stays visible — which reorders a path's leading punctuation to the far end
-  // ("~/.agents/…/SKILL.md" read as "agents/…/SKILL.md./~"). A bidi isolate
-  // keeps the path itself in logical order inside the right-to-left box.
-  const label = document.createElement('bdi');
-  label.textContent = path;
-  els.viewerName.replaceChildren(label);
+  els.panel.classList.add('lv-viewing');
+  // The header is the file's crumbs: its folders lead back into Browse. An
+  // absolute path (outside the workspace) has no folders there to open, so
+  // it stays text, truncated from the left (rtl) to keep the filename; the
+  // bidi isolate keeps a leading "~/." from being reordered to the far end.
+  if (path.startsWith('/')) {
+    const abs = document.createElement('span');
+    abs.className = 'lv-files-viewer-abs';
+    const label = document.createElement('bdi');
+    label.textContent = path;
+    abs.appendChild(label);
+    els.viewerName.replaceChildren(abs);
+  } else {
+    fillCrumbs(els.viewerName, path, browseTo, { fold: true });
+  }
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
   // Off until renderViewerContent re-shows them for text: an image, PDF or
@@ -1084,7 +1042,6 @@ export function initFiles() {
   els.download = document.getElementById('files-download');
   els.viewerClose = document.getElementById('files-viewer-close');
   els.resizer = document.getElementById('files-resizer');
-  els.split = document.getElementById('files-split');
   els.upload = document.getElementById('files-upload');
 
   els.refresh.innerHTML = icon('refresh-cw', { size: 15 });
@@ -1127,7 +1084,7 @@ export function initFiles() {
   }
 
   if (els.resizer) initResizer();
-  if (els.split) initSplit();
+  initLayout();
   initUpload();
 
   els.btn.addEventListener('click', () => setOpen(!state.open));
@@ -1226,9 +1183,9 @@ export function initFiles() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !state.open) return;
-    // An open dialog (the reader, a lightbox) owns Escape — it closes itself —
-    // otherwise one keypress would close the viewer underneath it too.
-    if (document.querySelector('dialog[open]')) return;
+    // An open dialog (the reader, a lightbox) or menu ("⋯") owns Escape — it
+    // closes itself — otherwise one keypress would close the viewer under it too.
+    if (document.querySelector('dialog[open]') || menuOpen()) return;
     if (state.viewing) closeViewer();
     else if (window.matchMedia('(max-width: 720px)').matches) setOpen(false);
   });

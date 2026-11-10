@@ -5,7 +5,7 @@ import { draftWorkspaceMode } from './workspace-mode.js';
 import { draftWorkspaceRoot, ensureLinked, scopeRoot, workspaceName } from './workspaces.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
-import { copyToClipboard, openImageLightbox, showDialog } from './ui.js';
+import { addCodeBlockControls, copyToClipboard, openImageLightbox, showDialog } from './ui.js';
 import { forkChat, loadSessions, updateSessionTitle } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
@@ -71,66 +71,6 @@ export function highlightCode(container, opts = {}) {
 function emitWorkspaceTouch(name, path) {
   if (name !== 'write_file' && name !== 'edit_file') return;
   if (path) store.emit('workspace-file-touched', { path });
-}
-
-// ---- Code block copy buttons -------------------------------------------
-function addCodeBlockControls(container) {
-  container.querySelectorAll('pre').forEach((pre) => {
-    if (pre.querySelector('code.language-mermaid')) return; // diagram, not a code block
-    if (pre.querySelector('.lv-btn-copy-code')) return; // already added
-
-    // Detect language from highlight.js class
-    const code = pre.querySelector('code');
-    let lang = '';
-    if (code) {
-      const classes = code.className.split(' ');
-      for (const cls of classes) {
-        if (cls.startsWith('language-') && cls !== 'language-') {
-          lang = cls.replace('language-', '');
-          break;
-        }
-      }
-    }
-
-    // Language label
-    if (lang) {
-      const label = document.createElement('span');
-      label.className = 'lv-code-lang';
-      label.textContent = lang;
-      pre.appendChild(label);
-    }
-
-    // Copy button
-    const btn = document.createElement('button');
-    btn.className = 'lv-btn-copy-code';
-    btn.type = 'button';
-    btn.title = t('chat.copyCode');
-    btn.innerHTML = `${icon('copy', { size: 12 })} ${t('chat.copyCode')}`;
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      let codeText = code?.textContent;
-      if (!codeText) {
-        // Fallback for a bare <pre>: strip the UI chrome (copy button,
-        // language label) instead of pattern-matching on its label — which
-        // broke in non-English UIs and on snippets ending with "Copy".
-        const clone = pre.cloneNode(true);
-        clone
-          .querySelectorAll('.lv-btn-copy-code, .lv-code-lang')
-          .forEach((n) => n.remove());
-        codeText = clone.textContent || '';
-      }
-      const ok = await copyToClipboard(codeText.trimEnd());
-      if (ok) {
-        btn.innerHTML = `${icon('check', { size: 12 })} ${t('chat.copied')}`;
-        btn.classList.add('lv-copied');
-        setTimeout(() => {
-          btn.innerHTML = `${icon('copy', { size: 12 })} ${t('chat.copyCode')}`;
-          btn.classList.remove('lv-copied');
-        }, 2000);
-      }
-    });
-    pre.appendChild(btn);
-  });
 }
 
 // Throttled streaming render: the first delta in a window arms the timer and

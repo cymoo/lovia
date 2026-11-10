@@ -23,6 +23,10 @@
         t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
       }
       document.documentElement.setAttribute('data-theme', t);
+      // Likewise the dragged sidebar width (js/ui.js), so it doesn't slide
+      // from the default on every load.
+      var w = parseInt(localStorage.getItem('lovia-sidebar-w'), 10);
+      if (w > 0) document.documentElement.style.setProperty('--lv-sidebar-w', w + 'px');
     } catch (e) { /* no storage access: keep the light default */ }
   </script>
   <link rel="stylesheet" href="{{ url_for('static', path='styles.css').path }}" />
@@ -96,6 +100,7 @@
   </div>
   <nav id="sessions-list" class="lv-sessions-list" aria-label="Chat sessions" data-part="sessions"></nav>
   {% block sidebar_footer %}{% endblock %}
+  <div id="sidebar-resizer" class="lv-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar (arrow keys; double-click resets)" aria-controls="sidebar" tabindex="0" data-i18n-aria="nav.resize"></div>
 </aside>
 
 <!-- Main -->

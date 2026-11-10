@@ -604,6 +604,62 @@ export async function copyToClipboard(text) {
   }
 }
 
+// ---- Code block chrome -------------------------------------------------
+/**
+ * Give each rendered code block its language label and a Copy button — the
+ * chat's answers and the Files panel's Markdown preview alike (the `.lv-body`
+ * styles reserve the room for them). Mermaid sources are diagrams, not code.
+ * @param {ParentNode} container
+ */
+export function addCodeBlockControls(container) {
+  container.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('code.language-mermaid')) return;
+    if (pre.querySelector('.lv-btn-copy-code')) return; // already added
+    const lang = /(?:^|\s)language-(\S+)/.exec(pre.querySelector('code')?.className || '')?.[1];
+    if (lang) {
+      const label = document.createElement('span');
+      label.className = 'lv-code-lang';
+      label.textContent = lang;
+      pre.appendChild(label);
+    }
+    const btn = document.createElement('button');
+    btn.className = 'lv-btn-copy-code';
+    btn.type = 'button';
+    btn.title = t('chat.copyCode');
+    btn.innerHTML = `${icon('copy', { size: 12 })} ${t('chat.copyCode')}`;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void copyCodeBlock(btn);
+    });
+    pre.appendChild(btn);
+  });
+}
+
+/**
+ * Copy the code of the block `btn` sits in, and flash "Copied" on it. Takes
+ * the button, not a closure, so a cloned block (the Files reader) can call it.
+ * @param {Element} btn
+ */
+export async function copyCodeBlock(btn) {
+  const pre = btn.closest('pre');
+  if (!pre) return;
+  let text = pre.querySelector('code')?.textContent;
+  if (!text) {
+    // A bare <pre>: strip the UI chrome (copy button, language label) rather
+    // than pattern-match its label — which broke in non-English UIs.
+    const clone = /** @type {Element} */ (pre.cloneNode(true));
+    clone.querySelectorAll('.lv-btn-copy-code, .lv-code-lang').forEach((n) => n.remove());
+    text = clone.textContent || '';
+  }
+  if (!(await copyToClipboard(text.trimEnd()))) return;
+  btn.innerHTML = `${icon('check', { size: 12 })} ${t('chat.copied')}`;
+  btn.classList.add('lv-copied');
+  setTimeout(() => {
+    btn.innerHTML = `${icon('copy', { size: 12 })} ${t('chat.copyCode')}`;
+    btn.classList.remove('lv-copied');
+  }, 2000);
+}
+
 // ---- Image lightbox ----------------------------------------------------
 /**
  * A focused, in-app viewer for chat-attached images: click a thumbnail to see

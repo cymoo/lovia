@@ -4552,6 +4552,8 @@ body.lv-files-splitting {
   flex-shrink: 0;
 }
 .lv-files-crumb {
+  display: inline-flex; /* the root's glyph + sans name sit on the same line */
+  align-items: center;
   padding: 1px 5px;
   border-radius: var(--lv-radius-xs);
   color: var(--lv-muted);
@@ -4570,6 +4572,13 @@ body.lv-files-splitting {
 }
 .lv-files-crumb-sep {
   opacity: 0.55;
+}
+/* The root: the workspace's name behind a folder glyph, in the UI's face. */
+.lv-files-crumb-root {
+  gap: 5px;
+  max-width: 100%;
+  font-family: var(--lv-sans);
+  white-space: nowrap;
 }
 
 /* ---- Background processes strip ---- */
@@ -4691,11 +4700,13 @@ body.lv-files-splitting {
   cursor: pointer;
   transition: background var(--lv-t-fast);
 }
+/* Hover and selection are the sidebar's own neutral steps, so both lists
+   read alike; the accent stays for meaning (the "written here" dot below). */
 .lv-file-row:hover {
-  background: var(--lv-surface-2);
+  background: var(--lv-sidebar-hover);
 }
 .lv-file-row.lv-active {
-  background: var(--lv-accent-soft);
+  background: var(--lv-sidebar-active);
 }
 .lv-file-row-icon {
   flex-shrink: 0;
@@ -4703,7 +4714,7 @@ body.lv-files-splitting {
   display: flex;
 }
 .lv-file-row.lv-active .lv-file-row-icon {
-  color: var(--lv-accent-text);
+  color: var(--lv-ink-2);
 }
 .lv-file-row-main {
   flex: 1;
@@ -4721,7 +4732,7 @@ body.lv-files-splitting {
   color: var(--lv-ink);
 }
 .lv-file-row.lv-active .lv-file-row-name {
-  color: var(--lv-accent-text);
+  color: var(--lv-ink);
   font-weight: 600;
 }
 /* the assistant wrote this file in this chat */
@@ -4787,6 +4798,23 @@ body.lv-files-splitting {
   width: 28px;
   height: 28px;
 }
+/* Attach / line wrap / download live in the "⋯" menu until the panel has room
+   for them beside the file's name; then they come back inline and "⋯" goes.
+   Copy, used far more, always stays out. */
+.lv-files-viewer {
+  container-type: inline-size;
+}
+.lv-files-viewer-actions .lv-files-overflow {
+  display: none;
+}
+@container (min-width: 480px) {
+  .lv-files-viewer-actions .lv-files-overflow {
+    display: inline-flex;
+  }
+  #files-more {
+    display: none;
+  }
+}
 .lv-files-viewer-body {
   flex: 1;
   min-height: 0;
@@ -4805,12 +4833,48 @@ body.lv-files-splitting {
 .lv-files-viewer-body .lv-turn .lv-body {
   font-size: 13.5px;
 }
+/* A CSV is data to scan, not prose: tight rows, cells on one line, and a
+   header that stays put. A real table (not the chat's block-and-scroll one),
+   so the pane is what scrolls — both ways — and the header can stick to it.
+   Its `top` cancels the pane's top padding, so it pins at the visible edge. */
+.lv-files-viewer-body .lv-turn .lv-body table.lv-files-csv {
+  display: table;
+  overflow: visible;
+  margin: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+.lv-turn .lv-body .lv-files-csv :is(th, td) {
+  min-width: 0;
+  padding: 4px 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.lv-turn .lv-body .lv-files-csv thead th {
+  position: sticky;
+  top: -12px;
+  z-index: 1;
+  border-bottom: 1px solid var(--lv-border-strong);
+}
+.lv-file-modal-body .lv-files-csv thead th {
+  top: -18px;
+}
+.lv-files-csv thead th:first-child {
+  border-top-left-radius: var(--lv-radius);
+}
+.lv-files-csv thead th:last-child {
+  border-top-right-radius: var(--lv-radius);
+}
+/* Wraps by default; the wrap toggle's "off" (.lv-nowrap, below) keeps lines
+   whole and scrolls sideways. */
 .lv-files-viewer-body > pre {
   margin: 0;
   font-family: var(--lv-mono);
   font-size: 12px;
   line-height: 1.6;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .lv-files-viewer-body .lv-files-img {
   max-width: 100%;
@@ -6083,6 +6147,7 @@ body.lv-files-splitting {
 }
 .lv-files-viewer-body.lv-nowrap pre {
   white-space: pre;
+  overflow-wrap: normal;
   overflow-x: auto;
 }
 

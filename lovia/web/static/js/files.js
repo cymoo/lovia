@@ -12,9 +12,17 @@
 import { t } from './i18n.js';
 import { store } from './store.js';
 import { api, apiError } from './api.js';
-import { copyToClipboard, setSidebarAutoCollapsed, widthDivider } from './ui.js';
+import {
+  addCodeBlockControls,
+  copyCodeBlock,
+  copyToClipboard,
+  openMenu,
+  setSidebarAutoCollapsed,
+  widthDivider,
+} from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
+import { scopeRoot, workspaceName } from './workspaces.js';
 import { renderMermaid } from './diagrams.js';
 import { sandboxFrame } from './sandbox.js';
 import {
@@ -312,10 +320,16 @@ function isScratch(key, dir) {
 // this promise rather than reading a field, so a write that lands before the
 // answer does is still judged by it — a failed request settles to null.
 let _info = null; // { agent, promise: Promise<string | null> }
+let _rootName = /** @type {string | null} */ (null); // the workspace's display name
 function scratchDirFor(agent) {
   if (_info?.agent !== agent) {
+    _rootName = null;
     const promise = api.workspaceInfo({ agent }).then(
-      (info) => info.scratch_dir || null,
+      (info) => {
+        _rootName = info.name || null;
+        renderCrumbs(); // the root crumb waits for the name
+        return info.scratch_dir || null;
+      },
       () => null,
     );
     _info = { agent, promise };
@@ -493,7 +507,7 @@ function setMode(mode) {
 }
 
 function renderCrumbs() {
-  if (state.mode !== 'browse') return;
+  if (state.mode !== 'browse' || !els.crumbs) return;
   els.crumbs.replaceChildren();
   const parts = state.browsePath ? state.browsePath.split('/') : [];
   const crumb = (label, path, last) => {
@@ -505,7 +519,13 @@ function renderCrumbs() {
     else b.addEventListener('click', () => { state.browsePath = path; refresh(); });
     return b;
   };
-  els.crumbs.appendChild(crumb('~', '', parts.length === 0));
+  // The root names the folder the chat works in (its path on hover), not "~".
+  const root = scopeRoot();
+  const home = crumb(root ? workspaceName(root) : _rootName || '~', '', parts.length === 0);
+  home.classList.add('lv-files-crumb-root');
+  if (root) home.title = root;
+  home.insertAdjacentHTML('afterbegin', icon('folder', { size: 13 }));
+  els.crumbs.appendChild(home);
   parts.forEach((part, i) => {
     const sep = document.createElement('span');
     sep.className = 'lv-files-crumb-sep';
@@ -546,8 +566,8 @@ function rowFor(entry) {
   sub.className = 'lv-file-row-sub';
   const bits = [];
   if (state.mode === 'recent' && dirname(entry.path)) bits.push(dirname(entry.path));
-  if (entry.is_dir) bits.push(t('files.folder'));
-  else if (entry.size != null) bits.push(formatBytes(entry.size));
+  // A folder's icon already says what it is; its line keeps just the time.
+  if (!entry.is_dir && entry.size != null) bits.push(formatBytes(entry.size));
   if (entry.mtime) bits.push(formatTimeSmart(entry.mtime));
   if (entry.symlink_target) bits.push('→ ' + entry.symlink_target);
   sub.textContent = bits.join(' · ');
@@ -686,6 +706,7 @@ function renderCsv(content, delim) {
   const rows = parseDelimited(content, delim);
   if (rows.length < 2) return null; // not table-shaped — fall back to text
   const table = document.createElement('table');
+  table.className = 'lv-files-csv';
   const thead = document.createElement('thead');
   const headTr = document.createElement('tr');
   for (const cell of rows[0]) {
@@ -744,8 +765,11 @@ async function openFile(path, { silent = false } = {}) {
   els.viewerName.replaceChildren(label);
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
+  // Off until renderViewerContent re-shows them for text: an image, PDF or
+  // binary returns before it, and must not keep the last file's buttons.
   els.mdToggle.classList.add('lv-hidden');
-  els.wrapToggle?.classList.add('lv-hidden'); // renderViewerContent re-shows for text
+  els.wrapToggle?.classList.add('lv-hidden');
+  els.copyContent.classList.add('lv-hidden');
 
   const e = ext(path);
   const kind = IMAGE_EXT.has(e) || e === 'svg'
@@ -861,8 +885,8 @@ async function followViewerLink(href) {
  *
  * A clone, not a move: the panel keeps its own DOM (and listeners) intact, so
  * closing the reader can never leave it blank. Markdown, CSV, text, and
- * images all clone faithfully; the one interactive control inside — "load
- * more" — is delegated back to the panel above. A diagram still rendering
+ * images all clone faithfully; the interactive controls inside — "load
+ * more", a code block's Copy — are delegated back to the panel above. A diagram still rendering
  * when the panel was cloned renders into the copy too.
  */
 function syncModal() {
@@ -875,6 +899,7 @@ function syncModal() {
 function syncWrapButton() {
   els.wrapToggle.innerHTML = icon('wrap-text', { size: 15 });
   els.wrapToggle.title = state.wrap ? t('files.nowrap') : t('files.wrap');
+  els.wrapToggle.setAttribute('aria-label', els.wrapToggle.title);
   els.wrapToggle.classList.toggle('lv-active', state.wrap);
 }
 
@@ -909,6 +934,7 @@ function renderViewerContent() {
     els.mdToggle.classList.remove('lv-hidden');
     els.mdToggle.innerHTML = icon(v.raw ? 'file-text' : 'code', { size: 15 });
     els.mdToggle.title = v.raw ? t('files.rendered') : t('files.raw');
+    els.mdToggle.setAttribute('aria-label', els.mdToggle.title);
   }
   if (v.kind === 'md' && !v.raw) {
     const { turn, body } = bodyWrapper();
@@ -916,6 +942,7 @@ function renderViewerContent() {
     // directory first, then the workspace root.
     renderMarkdownInto(body, v.content, { agent: store.agent, base: dirname(v.path) });
     highlightIn(body);
+    addCodeBlockControls(body); // language + Copy, as in the chat
     els.viewerBody.appendChild(turn);
     renderMermaid(body); // attached first: a cached diagram swaps only into a live <pre>
     return;
@@ -931,6 +958,7 @@ function renderViewerContent() {
   if (v.kind === 'csv' && !v.truncated) {
     const table = renderCsv(v.content, ext(v.path) === 'tsv' ? '\t' : ',');
     if (table) {
+      els.wrapToggle.classList.add('lv-hidden'); // a table keeps its cells on one line
       els.viewerBody.appendChild(table);
       return;
     }
@@ -1069,7 +1097,34 @@ export function initFiles() {
   els.modalClose.innerHTML = icon('x', { size: 16 });
   els.download.innerHTML = icon('download', { size: 14 });
   els.viewerClose.innerHTML = icon('x', { size: 15 });
+  els.viewerClose.title = t('files.closeFile');
+  els.viewerClose.setAttribute('aria-label', els.viewerClose.title);
   if (els.upload) els.upload.innerHTML = icon('upload', { size: 15 });
+  // A narrow panel folds the less-used actions — attach, line wrap, download —
+  // into "⋯" (CSS decides when): each item clicks the real button, so its
+  // handler and its hidden state (no wrap for an image) are the button's own.
+  els.more = document.getElementById('files-more');
+  if (els.more) {
+    els.more.innerHTML = icon('ellipsis', { size: 15 });
+    els.more.addEventListener('click', () => {
+      const shown = (/** @type {HTMLElement} */ b) => !b.classList.contains('lv-hidden');
+      /** @type {import('./ui.js').MenuItem[]} */
+      const items = [];
+      if (shown(els.attach)) {
+        items.push({ label: t('files.attach'), icon: icon('paperclip', { size: 15 }), onSelect: () => els.attach.click() });
+      }
+      if (shown(els.wrapToggle)) {
+        items.push({
+          label: t('files.wrap'),
+          icon: icon('wrap-text', { size: 15 }),
+          checked: state.wrap,
+          onSelect: () => els.wrapToggle.click(),
+        });
+      }
+      items.push({ label: t('files.download'), icon: icon('download', { size: 15 }), onSelect: () => els.download.click() });
+      openMenu(els.more, items);
+    });
+  }
 
   if (els.resizer) initResizer();
   if (els.split) initSplit();
@@ -1114,12 +1169,18 @@ export function initFiles() {
     syncModal();
     els.modal.showModal();
   });
-  // The reader holds a clone, and clones carry no listeners — delegate its two
+  // The reader holds a clone, and clones carry no listeners — delegate its
   // live controls back to the panel, then re-mirror. "Load more" extends the
   // page; a workspace link keeps the reader reading, same as the viewer below
-  // (a modified click still follows the href into a tab of its own).
+  // (a modified click still follows the href into a tab of its own); a code
+  // block's Copy copies from the clone itself.
   els.modalBody.addEventListener('click', async (e) => {
     const target = e.target instanceof Element ? e.target : null;
+    const copyBtn = target?.closest('.lv-btn-copy-code');
+    if (copyBtn) {
+      void copyCodeBlock(copyBtn);
+      return;
+    }
     if (target?.closest('.lv-files-load-more')) {
       await loadMore();
       syncModal();

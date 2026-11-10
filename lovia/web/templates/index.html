@@ -242,11 +242,13 @@
       <span id="files-viewer-name" class="lv-files-viewer-name" title=""></span>
       <div class="lv-files-viewer-actions">
         <button id="files-md-toggle" class="lv-btn-icon lv-hidden" type="button" title="Toggle rendered / raw" aria-label="Toggle rendered or raw markdown"></button>
-        <button id="files-wrap-toggle" class="lv-btn-icon lv-hidden" type="button" title="Toggle line wrap" aria-label="Toggle line wrap"></button>
-        <button id="files-attach" class="lv-btn-icon" type="button" title="Attach to chat" aria-label="Attach this file to the chat" data-i18n-title="files.attach" data-i18n-aria="files.attach"></button>
+        <!-- lv-files-overflow: inline on a wide panel, else in the "⋯" menu (files.js) -->
+        <button id="files-wrap-toggle" class="lv-btn-icon lv-hidden lv-files-overflow" type="button" title="Toggle line wrap" aria-label="Toggle line wrap"></button>
+        <button id="files-attach" class="lv-btn-icon lv-files-overflow" type="button" title="Attach to chat" aria-label="Attach this file to the chat" data-i18n-title="files.attach" data-i18n-aria="files.attach"></button>
         <button id="files-copy" class="lv-btn-icon" type="button" title="Copy content" aria-label="Copy file content" data-i18n-title="files.copyContent" data-i18n-aria="files.copyContent"></button>
         <button id="files-fullscreen" class="lv-btn-icon" type="button" title="Expand view" aria-haspopup="dialog" aria-label="Open file in the reader" data-i18n-title="files.fullscreen" data-i18n-aria="files.fullscreen"></button>
-        <a id="files-download" class="lv-btn-icon" title="Download" aria-label="Download file" download data-i18n-title="files.download" data-i18n-aria="files.download"></a>
+        <a id="files-download" class="lv-btn-icon lv-files-overflow" title="Download" aria-label="Download file" download data-i18n-title="files.download" data-i18n-aria="files.download"></a>
+        <button id="files-more" class="lv-btn-icon" type="button" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" data-i18n-title="files.more" data-i18n-aria="files.more"></button>
         <button id="files-viewer-close" class="lv-btn-icon" type="button" title="Close file" aria-label="Close file preview"></button>
       </div>
     </div>

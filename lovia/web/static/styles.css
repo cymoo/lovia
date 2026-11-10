@@ -745,24 +745,18 @@ body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not
   flex-shrink: 0;
   color: var(--lv-muted);
 }
-/* The folder turns into the fold chevron under the pointer. */
+/* After the name: points right while folded, down once open. The folder
+   before the name never changes. */
 .lv-ws-group-chevron {
-  display: none;
+  margin-left: -3px;
+  color: var(--lv-muted-2);
   transition: transform var(--lv-t-fast) var(--lv-ease);
 }
 .lv-ws-group-toggle[aria-expanded="true"] .lv-ws-group-chevron {
   transform: rotate(90deg);
 }
-.lv-ws-group-head:hover .lv-ws-group-icon,
-.lv-ws-group-toggle:focus-visible .lv-ws-group-icon {
-  display: none;
-}
-.lv-ws-group-head:hover .lv-ws-group-chevron,
-.lv-ws-group-toggle:focus-visible .lv-ws-group-chevron {
-  display: inline-flex;
-}
-.lv-ws-group-toggle[aria-expanded="false"] .lv-ws-group-icon {
-  opacity: 0.75;
+.lv-ws-group-head:hover .lv-ws-group-chevron {
+  color: var(--lv-muted);
 }
 .lv-ws-group-name {
   min-width: 0;
@@ -2962,7 +2956,9 @@ button.lv-question-option:hover {
 .lv-composer-inner:focus-within {
   box-shadow: var(--lv-shadow-md);
 }
+/* Positioned: the chips' menus open just over it, by the chip they belong to. */
 .lv-composer-bar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5156,8 +5152,8 @@ body.lv-files-splitting {
 }
 .lv-context-popover {
   position: absolute;
-  right: 6px; /* anchored by the ring's end of the pill */
-  bottom: calc(100% + 10px);
+  right: 0; /* anchored by the ring's end of the bar */
+  bottom: calc(100% + 6px);
   min-width: 220px;
   padding: 10px 12px;
   background: var(--lv-surface);
@@ -6533,10 +6529,13 @@ body.lv-files-splitting {
 }
 .lv-cfg-form-actions {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
-  max-width: 460px;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+/* Beside Save: when what it saves takes effect. */
+.lv-cfg-form-actions .lv-cfg-footnote {
+  margin-top: 0;
 }
 .lv-cfg-about {
   display: flex;
@@ -6605,8 +6604,8 @@ body.lv-files-splitting {
 }
 .lv-model-chip-menu {
   position: absolute;
-  right: 76px;
-  bottom: calc(100% + 10px);
+  right: 0; /* model-config.js lines it up with the chip's right edge */
+  bottom: calc(100% + 6px);
   width: 240px;
   background: var(--lv-surface);
   border: 1px solid var(--lv-border);

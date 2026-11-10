@@ -248,7 +248,7 @@ export function sidebarGroups(all) {
 
 /**
  * A group's header: fold toggle, name (full path on hover), and its actions —
- * a new chat there, and a menu (remove from the list), or "Link…" for the
+ * a new chat there, and a menu (rename, copy path, remove), or "Link…" for the
  * chats that have no directory yet. The Pinned group has the toggle only.
  * @param {SidebarGroup} group
  * @param {() => void} rerender
@@ -268,13 +268,15 @@ export function groupHeader(group, rerender) {
         ? t('ws.generalTitle', { path: group.root || '' })
         : group.root || '';
   const glyph = { unlinked: 'triangle-alert', pinned: 'pin' }[group.kind] || 'folder';
-  toggle.innerHTML =
-    `<span class="lv-ws-group-icon" aria-hidden="true">${icon(glyph, { size: 15 })}</span>` +
-    `<span class="lv-ws-group-chevron" aria-hidden="true">${icon('chevron-right', { size: 13 })}</span>`;
+  toggle.innerHTML = `<span class="lv-ws-group-icon" aria-hidden="true">${icon(glyph, { size: 15 })}</span>`;
   const name = document.createElement('span');
   name.className = 'lv-ws-group-name';
   name.textContent = group.label;
   toggle.appendChild(name);
+  toggle.insertAdjacentHTML(
+    'beforeend',
+    `<span class="lv-ws-group-chevron" aria-hidden="true">${icon('chevron-right', { size: 13 })}</span>`,
+  );
   toggle.addEventListener('click', () => {
     setCollapsed(group.key, !group.collapsed);
     rerender();
@@ -302,8 +304,8 @@ export function groupHeader(group, rerender) {
     more.setAttribute('aria-haspopup', 'menu');
     more.setAttribute('aria-expanded', 'false');
     more.innerHTML = icon('ellipsis', { size: 15 });
+    // (A new chat there is the button beside this one.)
     const menu = () => [
-      { label: t('ws.newChatIn', { name: group.label }), icon: icon('square-pen', { size: 15 }), onSelect: () => newChatIn(root) },
       // "General" is the page's word for its folder, not a name to change.
       ...(group.kind === 'general'
         ? []

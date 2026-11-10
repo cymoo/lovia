@@ -196,8 +196,10 @@ function openMenu() {
     menu.appendChild(item);
   }
   _chip.insertAdjacentElement('afterend', menu);
-  // Opens over its chip, wherever the bar put it.
-  menu.style.left = `${_chip.offsetLeft}px`;
+  // Opens over its chip, wherever the bar put it — pulled back in where the
+  // bar is narrower than the menu reaches (a phone).
+  const room = (menu.offsetParent?.clientWidth ?? Infinity) - menu.offsetWidth;
+  menu.style.left = `${Math.max(0, Math.min(_chip.offsetLeft, room))}px`;
   menu.style.right = 'auto';
   _menu = menu;
   _chip.setAttribute('aria-expanded', 'true');

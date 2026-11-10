@@ -110,8 +110,8 @@ function settingsPane(title, build, send) {
       }
     });
     actions.appendChild(save);
+    if (!frozen) actions.appendChild(el('div', 'lv-cfg-footnote', t('cfg.appliesNextRun')));
     pane.append(form, errBox, actions);
-    if (!frozen) pane.appendChild(el('div', 'lv-cfg-footnote', t('cfg.appliesNextRun')));
   }
 
   render();

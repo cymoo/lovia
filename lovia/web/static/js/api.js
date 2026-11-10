@@ -241,6 +241,14 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify({ path }),
     }).then(_json),
+  // A listed directory's display name ('' restores the folder's own).
+  /** @param {string} root @param {string} name */
+  renameWorkspace: (root, name) =>
+    request('/api/workspaces', {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ root, name }),
+    }).then(_json),
   /** @param {string} id */
   removeWorkspace: (id) =>
     request(`/api/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(_json),
@@ -441,7 +449,7 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
-  // Settings → Workspace / Agent. Each sends only the fields to change;
+  // Settings → Permissions / Agent. Each sends only the fields to change;
   // all apply from the next run. resolve to { config }.
   /** @param {{ default_mode?: string, auto_allow?: string[] }} body */
   setWorkspaceSettings: (body) =>

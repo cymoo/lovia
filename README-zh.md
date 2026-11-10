@@ -388,7 +388,7 @@ agent = Agent(
 其余问一次、用户可以按对话记住（“本对话中总是允许 `ls`”，串起来的 `ls; git status` 两个一起记）；任何模式之下都有一条底线：拒绝危险命令
 （`git push --force`、`rm -rf /`），禁止触碰凭据库，写 `.git` 或 CI 配置前先问。想让检查命令和
 开发工具免问，显式启用：`lovia.workspace.rules` 里的 `command_rules=READ_ONLY + DEV_TOOLS`——`lovia web`
-默认就启用了（在设置 → 工作区里取消勾选，则每条命令都问）。
+默认就启用了（在设置 → 权限里取消勾选，则每条命令都问）。
 
 Shell 命令继承最小环境，包括 Windows 系统、命令解释器、临时目录和用户目录变量，
 确保默认配置下 socket 和用户主目录查找可以正常工作。API key 和代理配置不会自动继承；需要的变量通过

@@ -51,7 +51,7 @@ def _workspace_modes(deps: RouterDeps) -> WorkspaceModesInfo | None:
     default: str | None = switch.default_mode
     runtime = deps.config_runtime
     if runtime is not None:
-        # The CLI's default follows Settings → Workspace, as this server
+        # The CLI's default follows Settings → Permissions, as this server
         # runs it.
         default = runtime.deployment.effective_mode(
             runtime.config.workspace.default_mode

@@ -29,6 +29,7 @@ from ..schemas import (
     WorkspaceAdd,
     WorkspaceItem,
     WorkspaceList,
+    WorkspaceRename,
 )
 from ..workspaces import own_root
 from .deps import RouterDeps
@@ -148,10 +149,16 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
         agent = agent_of()
         own = own_root(agent)
         items = fixed(agent)
-        shown = {i.root for i in items}
+        shown = {i.root: i for i in items}
         for row in await store.list_workspaces():
+            if row.root in shown:
+                # Always listed; its row holds the name it was given, if any
+                # ("General" stays the page's word).
+                if shown[row.root].kind == "default":
+                    shown[row.root].name = row.name
+                continue
             # A directory a narrower deployment no longer allows isn't offered.
-            if row.root in shown or switch.refusal(Path(row.root), own) is not None:
+            if switch.refusal(Path(row.root), own) is not None:
                 continue
             items.append(item_of(agent, row.root, row=row))
         roots = switch.roots
@@ -185,6 +192,22 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
             raise
         row = await store.touch_workspace(path.as_posix())
         return item_of(agent, row.root, row=row)
+
+    @router.patch("/api/workspaces", response_model=WorkspaceItem)
+    async def rename_workspace(req: WorkspaceRename) -> WorkspaceItem:
+        """Give a listed directory a display name (two folders may share
+        one); empty restores the folder's own. Its path is not touched."""
+        listed = {i.root: i for i in (await list_workspaces()).workspaces}
+        item = listed.get(req.root)
+        if item is None or item.kind == "general":
+            raise WebError(
+                404,
+                "workspace_not_found",
+                "no such entry in the workspace list",
+                hint="only a listed directory can be renamed (not the general one)",
+            )
+        row = await store.rename_workspace(req.root, req.name)
+        return item.model_copy(update={"name": row.name})
 
     @router.delete("/api/workspaces/{workspace_id}")
     async def remove_workspace(workspace_id: str) -> dict[str, bool]:

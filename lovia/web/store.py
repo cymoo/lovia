@@ -779,6 +779,28 @@ class ChatStore:
 
         return await self._meta._run(_impl)
 
+    async def rename_workspace(self, root: str, name: str) -> WorkspaceRow:
+        """Set the display name ``root`` goes by in the workspace list (the
+        list gains it if it wasn't there); empty restores the folder's own."""
+        name = name.strip() or Path(root).name or root
+
+        def _impl() -> WorkspaceRow:
+            with self._meta._tx() as conn:
+                conn.execute(
+                    "INSERT INTO chat_workspaces (id, root, name, last_used_at) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT(root) DO UPDATE SET "
+                    "name = excluded.name",
+                    (uuid.uuid4().hex, root, name, time.time()),
+                )
+                row = conn.execute(
+                    "SELECT id, root, name, last_used_at FROM chat_workspaces "
+                    "WHERE root = ?",
+                    (root,),
+                ).fetchone()
+            return WorkspaceRow(*row)
+
+        return await self._meta._run(_impl)
+
     async def list_workspaces(self) -> Sequence[WorkspaceRow]:
         """The workspace list, most recently used first."""
         return await self._read_all(

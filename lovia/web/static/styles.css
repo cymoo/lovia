@@ -881,15 +881,22 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   font-family: var(--lv-mono);
   font-size: 13px;
 }
-.lv-ws-path-suggestions {
-  margin-top: 4px;
-  max-height: 200px;
+/* The folders of the directory being typed. A fixed height, always there:
+   a list that came and went with the input's focus resized the dialog, and
+   moved it under the pointer. */
+.lv-ws-path-list {
+  margin-top: 6px;
+  height: 196px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--lv-border);
   border-radius: var(--lv-radius-sm);
   padding: 3px;
 }
 .lv-ws-path-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   padding: 5px 8px;
   border-radius: var(--lv-radius-xs);
   font-family: var(--lv-mono);
@@ -899,6 +906,15 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.lv-ws-path-option svg {
+  flex-shrink: 0;
+  color: var(--lv-muted-2);
+}
+.lv-ws-path-empty {
+  padding: 6px 8px;
+  font-size: 12.5px;
+  color: var(--lv-muted-2);
 }
 .lv-ws-path-option:hover,
 .lv-ws-path-option.lv-active {

@@ -1,4 +1,4 @@
-// agent-config.js — the Settings "Workspace" and "Agent" panes: how the
+// agent-config.js — the Settings "Permissions" and "Agent" panes: how the
 // default agent works (workspace mode, auto-allowed commands, run limits,
 // memory, subagents, the system prompt). Like the Models pane they edit the
 // server's config.json and exist only with features.model_config.
@@ -6,7 +6,7 @@
 // Every save applies from the next run: a reply already streaming keeps the
 // settings it started with. Two things can make a pane read-only, and the
 // server enforces both — config.json isn't writable (every config pane says
-// so), or (Workspace only) the way lovia web was started fixes the
+// so), or (Permissions only) the way lovia web was started fixes the
 // workspace settings.
 import { api } from './api.js';
 import { t } from './i18n.js';
@@ -118,7 +118,10 @@ function settingsPane(title, build, send) {
   return pane;
 }
 
-// ---- Workspace pane -------------------------------------------------------
+// ---- Permissions pane -----------------------------------------------------
+// (Its tab id, and the config section it edits, are still `workspace`: the
+// mode and the auto-allowed commands are the workspace's policy. "Workspace"
+// in the page now means a chat's folder.)
 
 const MODE_LABELS = () => ({
   readonly: t('cfg.modeReadonly'),

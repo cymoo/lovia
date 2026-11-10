@@ -16,7 +16,7 @@ import { store } from './store.js';
 import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
-import { confirmDialog, openMenu, showDialog } from './ui.js';
+import { confirmDialog, copyToClipboard, openMenu, promptDialog, showDialog } from './ui.js';
 
 const PICK_KEY = 'lovia-workspace'; // sessionStorage: this tab's pick
 const COLLAPSED_KEY = 'lovia-workspace-collapsed'; // localStorage: folded groups
@@ -295,23 +295,31 @@ export function groupHeader(group, rerender) {
     actions.appendChild(link);
   } else {
     const root = /** @type {string} */ (group.root);
-    if (group.workspace?.id) {
-      const more = document.createElement('button');
-      more.type = 'button';
-      more.className = 'lv-btn-icon lv-ws-group-btn';
-      more.title = more.ariaLabel = t('session.actions');
-      more.setAttribute('aria-haspopup', 'menu');
-      more.setAttribute('aria-expanded', 'false');
-      more.innerHTML = icon('ellipsis', { size: 15 });
-      more.addEventListener('click', () =>
-        openMenu(more, [
-          { label: t('ws.newChatIn', { name: group.label }), icon: icon('square-pen', { size: 15 }), onSelect: () => newChatIn(root) },
-          null,
-          { label: t('ws.remove'), icon: icon('x', { size: 15 }), danger: true, onSelect: () => removeWorkspace(group) },
-        ]),
-      );
-      actions.appendChild(more);
-    }
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'lv-btn-icon lv-ws-group-btn';
+    more.title = more.ariaLabel = t('session.actions');
+    more.setAttribute('aria-haspopup', 'menu');
+    more.setAttribute('aria-expanded', 'false');
+    more.innerHTML = icon('ellipsis', { size: 15 });
+    const menu = () => [
+      { label: t('ws.newChatIn', { name: group.label }), icon: icon('square-pen', { size: 15 }), onSelect: () => newChatIn(root) },
+      // "General" is the page's word for its folder, not a name to change.
+      ...(group.kind === 'general'
+        ? []
+        : [{ label: t('session.rename'), icon: icon('pencil', { size: 15 }), onSelect: () => void renameWorkspace(group) }]),
+      { label: t('ws.copyPath'), icon: icon('copy', { size: 15 }), onSelect: () => void copyPath(root) },
+      // The folders always listed can't be removed (they have no entry id).
+      ...(group.workspace?.id
+        ? [null, { label: t('ws.remove'), icon: icon('x', { size: 15 }), danger: true, onSelect: () => void removeWorkspace(group) }]
+        : []),
+    ];
+    more.addEventListener('click', () => openMenu(more, menu()));
+    head.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openMenu({ x: e.clientX, y: e.clientY }, menu());
+    });
+    actions.appendChild(more);
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'lv-btn-icon lv-ws-group-btn';
@@ -328,6 +336,28 @@ export function groupHeader(group, rerender) {
 function newChatIn(root) {
   pick(root);
   store.emit('new-chat-request');
+}
+
+/**
+ * Give a folder a display name: the path stays, two folders of one name tell
+ * apart. Empty goes back to the folder's own name.
+ * @param {SidebarGroup} group
+ */
+async function renameWorkspace(group) {
+  const name = await promptDialog(t('ws.renamePrompt'), group.label);
+  if (name === null || name === group.label) return;
+  try {
+    await api.renameWorkspace(/** @type {string} */ (group.root), name);
+  } catch (err) {
+    toast(String(/** @type {Error} */ (err).message || err), { type: 'error' });
+    return;
+  }
+  await reloadList();
+}
+
+/** @param {string} root */
+async function copyPath(root) {
+  if (await copyToClipboard(root)) toast(t('ws.pathCopied'));
 }
 
 /** @param {SidebarGroup} group */
@@ -443,9 +473,26 @@ export async function ensureLinked() {
 
 // ---- dialogs ---------------------------------------------------------------
 
+/** Where a typed path's last segment starts — after either separator (Windows takes both). */
+const lastSegment = (/** @type {string} */ path) =>
+  Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1;
+
 /**
- * A path input that completes directories as you type (Tab or Enter takes
- * the highlighted one).
+ * The directory above the one a typed path is in, as typed; null at a root
+ * ("/", "~/", "C:\") or with nothing typed.
+ * @param {string} value
+ */
+export function parentDir(value) {
+  const dir = value.slice(0, lastSegment(value)).slice(0, -1); // "~/code/x" → "~/code"
+  const cut = lastSegment(dir);
+  return cut > 0 && cut < dir.length ? dir.slice(0, cut) : null;
+}
+
+/**
+ * A path input over the folders of the directory being typed — a small folder
+ * browser: a click (or Tab / Enter on the highlighted row) steps into a
+ * folder, ".." steps out. The list keeps its place and height whatever it
+ * holds, so the dialog never moves under the pointer.
  * @param {(path: string) => void} onSubmit
  */
 function pathInput(onSubmit) {
@@ -454,45 +501,66 @@ function pathInput(onSubmit) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'lv-dialog-input';
-  input.placeholder = t('ws.pathPlaceholder');
+  // Paths in the list are posix-style, so a drive letter says Windows.
+  const windows = /^[A-Za-z]:\//.test(_list?.default || '');
+  input.placeholder = t(windows ? 'ws.pathPlaceholderWin' : 'ws.pathPlaceholder');
   input.spellcheck = false;
   input.autocomplete = 'off';
   input.setAttribute('autocapitalize', 'off');
   input.setAttribute('role', 'combobox');
   input.setAttribute('aria-autocomplete', 'list');
-  input.setAttribute('aria-expanded', 'false');
+  input.setAttribute('aria-expanded', 'true');
   const list = document.createElement('div');
-  list.className = 'lv-ws-path-suggestions';
+  list.className = 'lv-ws-path-list';
   list.setAttribute('role', 'listbox');
-  list.hidden = true;
   wrap.append(input, list);
 
   /** @type {string[]} */
   let options = [];
+  let loaded = false;
   let active = -1;
   /** @type {AbortController | null} */
   let inflight = null;
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
 
+  /** The rows: the way up first, then the folders found. */
+  const rows = () => {
+    const up = parentDir(input.value);
+    return [
+      ...(up ? [{ name: '..', path: up, glyph: 'chevron-left' }] : []),
+      ...options.map((path) => ({
+        // The folder's own name: the rest is what's already typed.
+        name: path.slice(lastSegment(path)) || path,
+        path,
+        glyph: 'folder',
+      })),
+    ];
+  };
   const draw = () => {
     list.replaceChildren();
-    list.hidden = !options.length;
-    input.setAttribute('aria-expanded', String(!list.hidden));
-    options.forEach((path, i) => {
+    const all = rows();
+    all.forEach((row, i) => {
       const opt = document.createElement('div');
       opt.className = 'lv-ws-path-option' + (i === active ? ' lv-active' : '');
       opt.setAttribute('role', 'option');
       opt.setAttribute('aria-selected', String(i === active));
-      // The folder's own name: the rest is what's already typed.
-      opt.textContent = `${path.split('/').filter(Boolean).pop() || path}/`;
-      opt.title = path;
+      opt.innerHTML = icon(row.glyph, { size: 14 });
+      opt.append(row.name);
+      opt.title = row.path;
       opt.addEventListener('pointerdown', (e) => {
         e.preventDefault(); // keep focus in the input
-        take(path);
+        take(row.path);
       });
       list.appendChild(opt);
+      if (i === active) opt.scrollIntoView?.({ block: 'nearest' });
     });
+    if (loaded && !options.length) {
+      const empty = document.createElement('div');
+      empty.className = 'lv-ws-path-empty';
+      empty.textContent = t('ws.noFolders');
+      list.appendChild(empty);
+    }
   };
   const fetchNow = async () => {
     inflight?.abort();
@@ -502,6 +570,7 @@ function pathInput(onSubmit) {
       const found = await api.completeDir(input.value || '~/', { signal: ctrl.signal });
       if (ctrl.signal.aborted) return;
       options = Array.isArray(found) ? found : [];
+      loaded = true;
       active = -1;
       draw();
     } catch {
@@ -512,43 +581,33 @@ function pathInput(onSubmit) {
     clearTimeout(timer);
     timer = setTimeout(fetchNow, 120);
   };
-  /** @param {string} path */
-  const take = (path) => {
-    input.value = path.endsWith('/') ? path : `${path}/`;
-    options = [];
-    draw();
+  /** Step into `path`: it becomes what's typed, and the list shows its folders. */
+  const take = (/** @type {string} */ path) => {
+    const sep = path.includes('\\') && !path.includes('/') ? '\\' : '/';
+    input.value = /[\\/]$/.test(path) ? path : path + sep;
     input.focus();
-    schedule(); // straight on to its children
+    void fetchNow();
   };
   input.addEventListener('input', schedule);
   input.addEventListener('focus', () => {
-    if (!input.value) schedule();
-  });
-  input.addEventListener('blur', () => {
-    setTimeout(() => {
-      options = [];
-      draw();
-    }, 100);
+    if (!loaded) void fetchNow();
   });
   input.addEventListener('keydown', (e) => {
+    const all = rows();
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      if (!options.length) return;
+      if (!all.length) return;
       e.preventDefault();
-      const n = options.length;
-      active = (active + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+      const n = all.length;
+      active = (active + (e.key === 'ArrowDown' ? 1 : n - 1) + n) % n;
       draw();
-    } else if (e.key === 'Tab' && options.length) {
+    } else if (e.key === 'Tab' && !e.shiftKey && (active >= 0 || options.length)) {
+      // The highlighted row, else the first folder: shell-style completion.
       e.preventDefault();
-      take(options[Math.max(active, 0)]);
+      take(active >= 0 ? all[active].path : options[0]);
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (active >= 0 && options[active]) take(options[active]);
+      if (active >= 0 && all[active]) take(all[active].path);
       else onSubmit(input.value.trim());
-    } else if (e.key === 'Escape' && options.length) {
-      e.preventDefault();
-      e.stopPropagation(); // the suggestions, not the dialog
-      options = [];
-      draw();
     }
   });
   return { wrap, input };

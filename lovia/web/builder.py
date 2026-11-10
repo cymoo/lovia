@@ -55,7 +55,7 @@ DEFAULT_AGENT_NAME = "lovia"
 # its files never land loose in either). Created on first use.
 GENERAL_WORKSPACE = Path("~/.lovia/workspace")
 # The command bundles a ``coding`` workspace runs without asking, by name
-# (Settings → Workspace; ``workspace.auto_allow`` in config.json). Core opts
+# (Settings → Permissions; ``workspace.auto_allow`` in config.json). Core opts
 # into none; `lovia web` is a coding agent the person running it launched, so
 # inspection that prints no file contents and the project's own
 # test/lint/build tools need no card — a prompt for `ls` or `pytest` is noise

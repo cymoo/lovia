@@ -168,6 +168,13 @@ class WorkspaceAdd(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
 
 
+class WorkspaceRename(BaseModel):
+    """A listed directory's display name; empty goes back to the folder's own."""
+
+    root: str = Field(min_length=1, max_length=4096)
+    name: str = Field(max_length=80)
+
+
 class AssociateRequest(BaseModel):
     """Bind chats from before chats had a directory to one."""
 

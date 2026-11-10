@@ -32,7 +32,6 @@ from .run_deps import RunTrigger, build_run_deps
 from .sse import SessionCreatedData
 from .store import RunRow
 from .titles import provisional_title
-from .workspaces import ChatBinding
 
 if TYPE_CHECKING:
     from .api.deps import RouterDeps
@@ -109,6 +108,12 @@ def advance_next_fire(kind: str, expr: str, *, now: float) -> float | None:
     if kind == "cron":
         return _croniter_next(expr, now)
     raise ValueError(f"unknown trigger kind {kind!r}")
+
+
+def _refusal(exc: WebError) -> str:
+    """A refused directory, as a schedule's miss records it."""
+    why: dict[str, str] = exc.detail if isinstance(exc.detail, dict) else {}
+    return f"{why.get('message')} — {why.get('hint')}"
 
 
 def fire_input(sched: ScheduleRow) -> str:
@@ -228,7 +233,8 @@ class Scheduler:
                 # Delivered into a live run — that run's outcome is its own
                 # (and recorded under the run's own source), so no record here.
                 return target
-            is_new = (await self.store.get(target)) is None
+            meta = await self.store.get(target)
+            is_new = meta is None
         else:
             # Fresh session per fire — but skip if the previous fire's run is
             # still going (don't pile up).
@@ -238,7 +244,24 @@ class Scheduler:
                 await self._advance(sched, now, last_session_id=prev)
                 return None
             target = uuid.uuid4().hex
+            meta = None
             is_new = True
+
+        # Where the fire works, checked before the hook sees it: a chat the
+        # fire creates takes the schedule's directory and mode (those of the
+        # chat that made it), an existing one its own. A refused directory
+        # is a miss.
+        try:
+            binding = (
+                self.deps.new_chat_binding(
+                    agent, sched.workspace_mode, sched.workspace_root
+                )
+                if is_new
+                else self.deps.chat_binding(agent, meta)
+            )
+        except WebError as exc:
+            await self._miss(sched, now, agent_name, _refusal(exc))
+            return None
 
         # The run_deps hook decides first, before anything is written. A
         # refusal is a miss, like an unserved agent: recorded, and the schedule
@@ -248,7 +271,7 @@ class Scheduler:
                 self.deps.run_deps,
                 RunTrigger(
                     session_id=target,
-                    agent=agent,
+                    agent=self.deps.at_root(agent, binding),
                     source=f"schedule:{sched.id}",
                     client_context=sched.context or {},
                 ),
@@ -269,22 +292,14 @@ class Scheduler:
                 if not alive or await self.store.get_schedule(sched.id) is None:
                     log.info("schedule %s: a delete is under way; skipped", sched.id)
                     return None
-                # A chat the fire creates takes the schedule's directory and
-                # mode (those of the chat that made it); an existing one keeps
-                # its own.
-                binding = (
-                    self.deps.new_chat_binding(
-                        agent, sched.workspace_mode, sched.workspace_root
-                    )
-                    if is_new
-                    else ChatBinding(None, None)
-                )
+                # Stored on a chat the fire creates; an existing one keeps
+                # its own (the upsert only touches it).
                 await self.store.upsert(
                     target,
                     agent=agent_name,  # registry key — the identity pick() speaks
                     title=title,
-                    workspace_root=binding.root,
-                    workspace_mode=binding.mode,
+                    workspace_root=binding.root if is_new else None,
+                    workspace_mode=binding.mode if is_new else None,
                 )
                 await self.deps.supervisor.start(
                     session_id=target,
@@ -320,11 +335,11 @@ class Scheduler:
                     await self.store.delete(target, schedules=False)
                 return None
             if exc.code in ("workspace_not_allowed", "workspace_missing"):
-                # The chat's directory is refused (raised before a fresh
-                # chat's row is written): a miss, so the schedule moves on.
-                why: dict[str, str] = exc.detail if isinstance(exc.detail, dict) else {}
-                detail = f"{why.get('message')} — {why.get('hint')}"
-                await self._miss(sched, now, agent_name, detail)
+                # Refused at the start's own check (the directory went away
+                # since the one above): a miss, so the schedule moves on.
+                if is_new:
+                    await self.store.delete(target, schedules=False)
+                await self._miss(sched, now, agent_name, _refusal(exc))
                 return None
             raise
         if is_new:

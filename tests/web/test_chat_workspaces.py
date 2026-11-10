@@ -519,6 +519,117 @@ async def test_a_message_to_an_unlinked_chat_waits_for_a_directory(
     assert (other / "out.txt").is_file()
 
 
+def test_without_a_switch_a_chat_stored_elsewhere_is_refused_not_moved(
+    tmp_path: Path, dirs: tuple[Path, Path]
+) -> None:
+    launch, other = dirs
+    db = tmp_path / "chat.db"
+    with _client(
+        _agent(launch, [text("one"), text("two")]),
+        WorkspaceSwitch(),
+        ChatStore.sqlite(db),
+    ) as c:
+        sid = c.post(
+            "/api/chat", json={"message": "go", "workspace": str(other)}
+        ).json()["session_id"]
+        here = c.post("/api/chat", json={"message": "go"}).json()["session_id"]
+    # The same chats on a server that dropped workspaces=.
+    agent = _agent(launch, [_WRITE, text("done")])
+    with _client(agent, None, ChatStore.sqlite(db)) as c:
+        res = c.post("/api/chat", json={"message": "again", "session_id": sid})
+        assert res.json()["detail"]["code"] == "workspace_not_allowed"
+        assert not (launch / "out.txt").exists()
+        # One stored in the agent's own directory carries on.
+        res = c.post("/api/chat", json={"message": "again", "session_id": here})
+        assert res.status_code == 200, res.text
+    assert (launch / "out.txt").is_file()
+
+
+async def test_hooks_see_the_directory_the_run_works_in(
+    dirs: tuple[Path, Path],
+) -> None:
+    from lovia import Subagents
+    from lovia.web.scheduler import Scheduler
+
+    launch, other = dirs
+    seen: dict[str, str] = {}
+
+    def hook(trigger: Any) -> None:
+        seen[trigger.source.split(":")[0]] = trigger.agent.workspace.root
+
+    child = _agent(launch, [text("dug")]).clone(name="digger")
+    parent = Agent(
+        name="bot",
+        model=ScriptedProvider([call("spawn_subagent", {"prompt": "dig"}), text("ok")]),
+        plugins=[Subagents(child)],
+        workspace=Workspace.local(str(launch)),
+    )
+    store = ChatStore.in_memory()
+    app = create_app(
+        parent,
+        store=store,
+        titles=False,
+        workspaces=WorkspaceSwitch(),
+        run_deps=hook,
+    )
+    deps = app.state.deps
+    root = other.resolve().as_posix()
+    now = time.time()
+    await store.add_schedule(
+        ScheduleRow(
+            id="sch",
+            agent="bot",
+            input="tick",
+            session_id=None,
+            trigger_kind="every",
+            trigger_expr="3600",
+            next_fire=now + 3600,
+            active=True,
+            last_session_id=None,
+            created_at=now,
+            updated_at=now,
+            workspace_root=root,
+        )
+    )
+    row = await store.get_schedule("sch")
+    assert row is not None
+    target = await Scheduler(deps).fire_now(row)
+    assert target is not None
+
+    async def spawned() -> bool:
+        return "subagent" in seen
+
+    await _until(spawned)  # the fire's run spawned a task: its hook too
+    assert seen["schedule"] == root
+    assert seen["subagent"] == root
+
+
+async def test_linking_a_chat_under_a_live_run_elsewhere_is_refused(
+    dirs: tuple[Path, Path],
+) -> None:
+    from lovia.web.api.deps import RouterDeps
+
+    launch, other = dirs
+    store = ChatStore.in_memory()
+    await store.upsert("old", agent="bot")  # no directory yet
+    deps = RouterDeps(agents={"bot": _agent(launch, [])}, store=store)
+    deps.workspace_switch = WorkspaceSwitch()
+
+    class _Ctrl:  # a schedule fire running the chat in the agent's own
+        binding = ChatBinding(launch.resolve().as_posix(), None)
+
+    deps.supervisor._controllers["old"] = _Ctrl()  # type: ignore[assignment]
+    from lovia.web.errors import WebError
+
+    with pytest.raises(WebError) as refused:
+        await deps.associate(["old"], str(other))
+    assert refused.value.code == "run_active"
+    assert (await store.get("old")).workspace_root is None  # type: ignore[union-attr]
+    # Linking it to the directory the run already works in is fine.
+    _, bound = await deps.associate(["old"], str(launch))
+    assert list(bound) == ["old"]
+
+
 async def test_store_migrates_the_schedule_root_and_list(tmp_path: Path) -> None:
     store = ChatStore.sqlite(tmp_path / "chat.db")
     row = await store.touch_workspace("/a/b")

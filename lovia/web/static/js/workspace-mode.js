@@ -232,6 +232,22 @@ function onSessionId(id) {
 }
 
 /**
+ * A Settings change of the default mode. It reaches a new chat's draft
+ * nobody picked yet — and, where the server names it (`own`), the mode of
+ * every chat with none of its own: the agent they run on was rebuilt in it.
+ * @param {any} cfg
+ */
+function onConfig(cfg) {
+  const mode = cfg?.workspace?.effective_mode;
+  if (!mode) return;
+  const info = offer();
+  if (info?.own) info.own = effective(mode);
+  _default = effective(mode);
+  if (!_draftPicked) _draft = _default;
+  render();
+}
+
+/**
  * Boot the chip. Called from main.js once /api/info resolved; a no-op on a
  * server whose chats can't pick a mode.
  */
@@ -318,14 +334,6 @@ export function initWorkspaceMode() {
     }
     if (data?.session_id === store.sessionId) apply(data);
   });
-  // A Settings change of the default reaches a draft nobody picked yet.
-  store.on('config-loaded', (/** @type {any} */ cfg) => {
-    const mode = cfg?.workspace?.effective_mode;
-    if (!mode) return;
-    _default = effective(mode);
-    if (_draftPicked) return;
-    _draft = _default;
-    render();
-  });
+  store.on('config-loaded', onConfig);
   onSessionId(store.sessionId);
 }

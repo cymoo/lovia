@@ -4892,6 +4892,33 @@ body.lv-files-resizing {
 .lv-file-modal-body .lv-files-csv thead th {
   top: -18px;
 }
+/* Header cells sort (files.js renderCsv): a plain label until hovered. */
+.lv-files-csv-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+.lv-files-csv-sort:hover {
+  color: var(--lv-ink);
+}
+.lv-files-csv-sort .lv-sort-arrow {
+  min-width: 0.7em;
+  color: var(--lv-ink);
+}
+.lv-turn .lv-body .lv-files-csv .lv-num {
+  text-align: right;
+}
+.lv-files-csv th.lv-num .lv-files-csv-sort {
+  justify-content: flex-end;
+}
 .lv-files-csv thead th:first-child {
   border-top-left-radius: var(--lv-radius);
 }
@@ -4913,6 +4940,10 @@ body.lv-files-resizing {
   border-radius: var(--lv-radius-sm);
   border: 1px solid var(--lv-border);
   background: var(--lv-diagram-paper);
+}
+/* A click opens an image large (files.js zoomImage); a linked one follows its link. */
+.lv-files-viewer-body img:not(a img) {
+  cursor: zoom-in;
 }
 /* Sandboxed HTML preview and the browser's PDF viewer fill the pane. A white
    backdrop regardless of theme: generated documents assume paper. */

@@ -17,6 +17,7 @@ import {
   copyCodeBlock,
   copyToClipboard,
   menuOpen,
+  openImageLightbox,
   openMenu,
   setSidebarAutoCollapsed,
   widthDivider,
@@ -24,6 +25,7 @@ import {
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { scopeRoot, workspaceName } from './workspaces.js';
+import { sortRows } from './tables.js';
 import { renderMermaid } from './diagrams.js';
 import { sandboxFrame } from './sandbox.js';
 import {
@@ -669,6 +671,23 @@ function viewerErrorText(err) {
   return err?.message || t('files.readFailed');
 }
 
+/**
+ * A click on an image in the preview (the file itself, or one inside a
+ * Markdown document) opens it large in the lightbox the chat's attachments
+ * use. A linked image keeps its link. True when it handled the click.
+ * @param {EventTarget | null} target
+ */
+function zoomImage(target) {
+  const img = target instanceof Element ? target.closest('img') : null;
+  if (!img || img.closest('a[href]')) return false;
+  openImageLightbox(img.currentSrc || img.src, {
+    alt: img.alt,
+    // The file's own image downloads the file; an embedded one, itself.
+    downloadHref: img.classList.contains('lv-files-img') ? els.download.href : img.src,
+  });
+  return true;
+}
+
 function viewerNote(text, action) {
   const note = document.createElement('div');
   note.className = 'lv-files-note';
@@ -726,24 +745,78 @@ function renderCsv(content, delim) {
   if (rows.length < 2) return null; // not table-shaped — fall back to text
   const table = document.createElement('table');
   table.className = 'lv-files-csv';
-  const thead = document.createElement('thead');
-  const headTr = document.createElement('tr');
-  for (const cell of rows[0]) {
-    const th = document.createElement('th');
-    th.textContent = cell;
-    headTr.appendChild(th);
-  }
-  thead.appendChild(headTr);
-  const tbody = document.createElement('tbody');
-  for (const r of rows.slice(1, CSV_MAX_ROWS + 1)) {
+  const data = rows.slice(1, CSV_MAX_ROWS + 1);
+  const width = rows[0].length;
+  // A column is numeric when every filled cell parses as a number: those sort
+  // by value (string collation gets "1.5" vs "1.25" and negatives wrong) and
+  // align right. An empty cell sorts last either way (sortRows' nulls).
+  const isNum = (/** @type {string} */ c) => c.trim() !== '' && Number.isFinite(Number(c));
+  const numeric = Array.from({ length: width }, (_, i) => {
+    const filled = data.map((r) => r[i] ?? '').filter((c) => c.trim() !== '');
+    return filled.length > 0 && filled.every(isNum);
+  });
+  const keys = data.map((r, n) => [
+    ...Array.from({ length: width }, (_, i) => {
+      const c = r[i] ?? '';
+      if (c.trim() === '') return null;
+      return numeric[i] ? Number(c) : c;
+    }),
+    n, // the row's own index, to put its <tr> back in sorted order
+  ]);
+  const trs = data.map((r) => {
     const tr = document.createElement('tr');
-    for (const cell of r) {
+    r.forEach((cell, i) => {
       const td = document.createElement('td');
       td.textContent = cell;
+      if (numeric[i]) td.className = 'lv-num';
       tr.appendChild(td);
-    }
-    tbody.appendChild(tr);
-  }
+    });
+    return tr;
+  });
+  const tbody = document.createElement('tbody');
+  tbody.append(...trs);
+
+  // Header cells sort: ascending → descending → the file's own order, as the
+  // chat's data tables do (tables.js, whose sortRows this reuses).
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  let sortCol = -1;
+  /** @type {1 | -1} */
+  let sortDir = 1;
+  const thead = document.createElement('thead');
+  const headTr = document.createElement('tr');
+  const ths = rows[0].map((name, i) => {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    if (numeric[i]) th.className = 'lv-num';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'lv-files-csv-sort';
+    btn.title = t('files.sortBy', { col: name });
+    const label = document.createElement('span');
+    label.textContent = name;
+    const arrow = document.createElement('span');
+    arrow.className = 'lv-sort-arrow';
+    arrow.setAttribute('aria-hidden', 'true');
+    btn.append(label, arrow);
+    btn.addEventListener('click', () => {
+      if (sortCol !== i) [sortCol, sortDir] = [i, 1];
+      else if (sortDir === 1) sortDir = -1;
+      else sortCol = -1;
+      const order = sortCol < 0 ? keys : sortRows(keys, sortCol, sortDir, collator);
+      tbody.replaceChildren(...order.map((k) => trs[/** @type {number} */ (k[width])]));
+      ths.forEach((h, j) => {
+        const dir = j === sortCol ? sortDir : 0;
+        if (dir) h.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
+        else h.removeAttribute('aria-sort');
+        /** @type {HTMLElement} */ (h.querySelector('.lv-sort-arrow')).textContent =
+          dir === 1 ? '↑' : dir === -1 ? '↓' : '';
+      });
+    });
+    th.append(btn);
+    headTr.appendChild(th);
+    return th;
+  });
+  thead.appendChild(headTr);
   table.append(thead, tbody);
   body.appendChild(table);
   return turn;
@@ -909,8 +982,9 @@ async function followViewerLink(href) {
  * A clone, not a move: the panel keeps its own DOM (and listeners) intact, so
  * closing the reader can never leave it blank. Markdown, CSV, text, and
  * images all clone faithfully; the interactive controls inside — "load
- * more", a code block's Copy — are delegated back to the panel above. A diagram still rendering
- * when the panel was cloned renders into the copy too.
+ * more", a code block's Copy, a CSV header's sort, an image's zoom — are
+ * delegated back to the panel above. A diagram still rendering when the panel
+ * was cloned renders into the copy too.
  */
 function syncModal() {
   const copy = /** @type {HTMLElement} */ (els.viewerBody.cloneNode(true));
@@ -1198,6 +1272,17 @@ export function initFiles() {
   // block's Copy copies from the clone itself.
   els.modalBody.addEventListener('click', async (e) => {
     const target = e.target instanceof Element ? e.target : null;
+    if (zoomImage(target)) return;
+    // A CSV header in the clone sorts the panel's table (the one with the
+    // listeners), then the reader re-mirrors it.
+    const sortBtn = target?.closest('.lv-files-csv-sort');
+    if (sortBtn) {
+      const col = [...(sortBtn.closest('tr')?.children || [])].indexOf(sortBtn.parentElement);
+      /** @type {HTMLElement | undefined} */
+      ([...els.viewerBody.querySelectorAll('.lv-files-csv-sort')][col])?.click();
+      syncModal();
+      return;
+    }
     const copyBtn = target?.closest('.lv-btn-copy-code');
     if (copyBtn) {
       void copyCodeBlock(copyBtn);
@@ -1231,6 +1316,7 @@ export function initFiles() {
     });
   });
   els.viewerBody.addEventListener('click', (e) => {
+    if (zoomImage(e.target)) return;
     const a = e.target.closest('a[href]');
     if (!a || !els.viewerBody.contains(a)) return;
     // `wsPath` is the reference as authored: the renderer points the href at

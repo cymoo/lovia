@@ -488,13 +488,77 @@ function browseTo(dir) {
   else setMode('browse');
 }
 
+// What a row's icon says the file is — by extension, as file managers do.
+const CODE_EXT = new Set([
+  'py', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'go', 'rs', 'java', 'kt', 'c', 'h', 'cc',
+  'cpp', 'hpp', 'cs', 'rb', 'php', 'swift', 'sh', 'bash', 'zsh', 'sql', 'lua', 'r',
+  'scala', 'vue', 'svelte', 'css', 'scss', 'less',
+]);
+const DATA_EXT = new Set(['json', 'jsonl', 'yaml', 'yml', 'toml', 'ini', 'xml']);
+
 function rowIcon(entry) {
   if (entry.is_dir) return icon('folder', { size: 15 });
   const e = ext(entry.path);
-  if (IMAGE_EXT.has(e) || e === 'svg') return icon('image', { size: 15 });
-  if (HTML_EXT.has(e)) return icon('code', { size: 15 });
-  if (MD_EXT.has(e) || e === 'txt' || e === 'pdf') return icon('file-text', { size: 15 });
-  return icon('file', { size: 15 });
+  const name =
+    IMAGE_EXT.has(e) || e === 'svg'
+      ? 'file-image'
+      : HTML_EXT.has(e) || CODE_EXT.has(e)
+        ? 'file-code'
+        : DATA_EXT.has(e)
+          ? 'file-json'
+          : CSV_EXT.has(e)
+            ? 'file-spreadsheet'
+            : MD_EXT.has(e) || e === 'txt' || e === 'pdf'
+              ? 'file-text'
+              : 'file';
+  return icon(name, { size: 15 });
+}
+
+/**
+ * A row's right-click menu — what you'd otherwise open the file to reach:
+ * attach it to the chat, copy its path, download it. A folder offers its path.
+ * @param {{ path: string, is_dir: boolean }} entry
+ * @param {MouseEvent} e
+ * @param {HTMLElement} row
+ */
+function rowMenu(entry, e, row) {
+  e.preventDefault();
+  // From the keyboard (Shift+F10, the menu key) there's no pointer: anchor on the row.
+  const at = e.clientX || e.clientY ? { x: e.clientX, y: e.clientY } : row;
+  const copy = {
+    label: t('files.copyPath'),
+    icon: icon('copy', { size: 15 }),
+    onSelect: async () => {
+      if (await copyToClipboard(entry.path)) toast(t('ws.pathCopied'));
+    },
+  };
+  if (entry.is_dir) {
+    openMenu(at, [copy]);
+    return;
+  }
+  openMenu(at, [
+    {
+      label: t('files.attach'),
+      icon: icon('paperclip', { size: 15 }),
+      onSelect: () =>
+        store.emit('attach-workspace-file', {
+          path: entry.path,
+          name: basename(entry.path),
+          kind: IMAGE_EXT.has(ext(entry.path)) ? 'image' : 'file',
+        }),
+    },
+    copy,
+    {
+      label: t('files.download'),
+      icon: icon('download', { size: 15 }),
+      onSelect: () => {
+        const a = document.createElement('a');
+        a.href = api.workspaceRawUrl({ agent: store.agent, path: entry.path, download: true });
+        a.download = '';
+        a.click();
+      },
+    },
+  ]);
 }
 
 function rowFor(entry) {
@@ -526,6 +590,7 @@ function rowFor(entry) {
 
   row.append(ic, main);
   row.title = entry.path;
+  row.addEventListener('contextmenu', (e) => rowMenu(entry, e, row));
   row.addEventListener('click', () => {
     if (entry.is_dir) {
       state.mode === 'browse' || setMode('browse');

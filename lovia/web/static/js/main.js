@@ -2,7 +2,7 @@
 import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { api, configureApi } from './api.js';
-import { closeSidebar, initTheme, initSidebarToggle, menuOpen, promptDialog, showDialog } from './ui.js';
+import { closeSidebar, initTheme, initSidebarToggle, menuOpen, promptDialog, showDialog, toggleSidebar } from './ui.js';
 import {
   cancelStream,
   detachStream,
@@ -202,6 +202,7 @@ function openShortcutHelp() {
     ['Shift + Enter', t('keys.newline')],
     [`${mod} + K`, t('keys.filter')],
     [`${mod} + Shift + O`, t('keys.newChat')],
+    [`${mod} + B`, t('keys.sidebar')],
     ['Esc', t('keys.esc')],
     ['?', t('keys.help')],
   ];
@@ -240,7 +241,7 @@ function isTyping(target) {
 function initKeyboardShortcuts() {
   // Esc stops the current run. Registered in the CAPTURE phase so anything an
   // existing bubble-phase Esc handler is about to close (context popover,
-  // export menu, a popup menu, mobile sidebar, files preview) is still visibly open here and
+  // a popup menu, mobile sidebar, files preview) is still visibly open here and
   // wins the keypress — the run stops on the next, unclaimed Esc.
   document.addEventListener(
     'keydown',
@@ -249,7 +250,6 @@ function initKeyboardShortcuts() {
       if (currentView()) return; // the run isn't on screen; Esc belongs to the view
       if (document.querySelector('dialog[open]')) return;
       if (document.getElementById('context-popover')?.hidden === false) return;
-      if (document.getElementById('export-menu')?.hidden === false) return;
       if (menuOpen()) return;
       if (document.getElementById('sidebar')?.classList.contains('lv-open')) return;
       const filesOpen = document
@@ -287,6 +287,9 @@ function initKeyboardShortcuts() {
     } else if (key === 'o' && e.shiftKey) {
       e.preventDefault();
       startNewChat();
+    } else if (key === 'b' && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      toggleSidebar();
     }
   });
 }

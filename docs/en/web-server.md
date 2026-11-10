@@ -194,7 +194,10 @@ only the blocks you need:
 | `body_end` | After the app's script: scripts of your own |
 
 Links in `sidebar_nav` draw like the bundled items, and the one to the open
-[view](#views) shows as current. To reference another file from `assets` in a template, use
+[view](#views) shows as current. Collapsed, the sidebar is a rail of icons:
+a link with an `<svg>` in it stays there as its icon (give it a `title` for
+the tooltip), one without waits for the full sidebar, as `sidebar_header`
+and `sidebar_footer` do. To reference another file from `assets` in a template, use
 `{{ url_for('ui-assets', path='banner.png').path }}` — it carries the path
 prefix.
 
@@ -233,7 +236,7 @@ only when it needs to differ:
 To target a region, select its `data-part`:
 
 ```css
-[data-part="export"] { display: none; }                                   /* no Export menu */
+[data-part="chat-menu"] { display: none; }                                /* no "⋯" chat menu in the top bar */
 [data-part="tool"][data-tool="read_process_output"] { display: none; }   /* hide one tool's cards */
 [data-part="turn"][data-role="user"] .lv-bubble { border-radius: 4px; }
 ```
@@ -245,8 +248,8 @@ internal; select regions by `data-part`.
 
 | Region | `data-part` |
 | --- | --- |
-| Sidebar | `sidebar`, `sidebar-header`, `agent-switcher`, `sidebar-nav`, `new-chat`, `memory`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
-| Top bar | `topbar`, `chat-title`, `topbar-actions`, `tasks`, `export`, `files-toggle` |
+| Sidebar | `sidebar`, `sidebar-header`, `sidebar-toggle`, `agent-switcher`, `sidebar-nav`, `new-chat`, `memory`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
+| Top bar | `topbar`, `chat-title`, `topbar-actions`, `tasks`, `chat-menu` (the open chat's pin / rename / branch / export / delete), `files-toggle` |
 | Views | `view` (the container an open [view](#views) draws in) |
 | Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"` and `data-status`: `running`, `awaiting` the user — a question — then `done` or `error`), `activity` (two or more consecutive reasoning / tool steps folded under one summary line; it closes once the reply's text starts), `message-actions` (a message's [actions](#message-actions); each button has `data-action="<id>"`) |
 | Composer | `composer`, `attach`, `context-ring` |

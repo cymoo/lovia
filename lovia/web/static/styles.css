@@ -118,6 +118,7 @@
 
   /* layout */
   --lv-sidebar-w: 272px;
+  --lv-rail-w: 52px; /* the sidebar, collapsed to its icons */
   --lv-topbar-h: 58px;
   --lv-content-w: 800px;
 }
@@ -211,7 +212,7 @@ body {
   transition: grid-template-columns var(--lv-t-med) var(--lv-ease);
 }
 body.lv-sidebar-collapsed {
-  grid-template-columns: 0 1fr;
+  grid-template-columns: var(--lv-rail-w) 1fr;
 }
 
 button {
@@ -288,15 +289,36 @@ html {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
-  transition:
-    background var(--lv-t-fast),
-    opacity var(--lv-t-med) var(--lv-ease),
-    transform var(--lv-t-med) var(--lv-ease);
+  transition: background var(--lv-t-fast);
 }
-body.lv-sidebar-collapsed .lv-sidebar {
-  opacity: 0;
-  transform: translateX(-12px);
-  pointer-events: none;
+
+/* Collapsed, the sidebar is a rail of its icons: the toggle and the nav's
+   destinations. Everything that needs the width — the header, the chats, a
+   deployer's sidebar_footer — waits for it. */
+body.lv-sidebar-collapsed .lv-sidebar > :not(.lv-sidebar-head, .lv-sidebar-nav),
+body.lv-sidebar-collapsed .lv-sidebar-head > :not(.lv-sidebar-head-actions) {
+  display: none;
+}
+body.lv-sidebar-collapsed .lv-sidebar-head {
+  justify-content: center;
+  padding-inline: 0;
+}
+body.lv-sidebar-collapsed .lv-sidebar-nav {
+  align-items: center;
+  padding: 0 0 8px;
+}
+/* font-size: 0 folds the label away, bare text in a deployer's link included.
+   An item with no icon has nothing to show here. */
+body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]) {
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  gap: 0;
+  font-size: 0;
+}
+body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not(:has(svg)) {
+  display: none;
 }
 
 .lv-sidebar-head {
@@ -1132,7 +1154,7 @@ body.lv-view-open #composer {
 body.lv-view-open #files-panel,
 body.lv-view-open #chat-title,
 body.lv-view-open #tasks-wrap,
-body.lv-view-open #export-wrap,
+body.lv-view-open #chat-menu-btn,
 body.lv-view-open #files-btn {
   display: none !important;
 }
@@ -1159,15 +1181,6 @@ body.lv-view-open #files-btn {
   -webkit-backdrop-filter: blur(14px) saturate(1.1);
   backdrop-filter: blur(14px) saturate(1.1);
 }
-.lv-topbar :is(.lv-sidebar-expand-btn, .lv-topbar-new-chat) {
-  display: none;
-}
-body.lv-sidebar-collapsed .lv-topbar :is(.lv-sidebar-expand-btn, .lv-topbar-new-chat) {
-  display: inline-flex;
-}
-body.lv-sidebar-collapsed .lv-topbar-new-chat {
-  margin: 0 4px 0 -6px; /* pairs with the expand button, apart from the title */
-}
 .lv-chat-title {
   flex: 1;
   margin: 0;
@@ -1187,42 +1200,10 @@ body.lv-sidebar-collapsed .lv-topbar-new-chat {
   flex-shrink: 0;
 }
 
-/* Export format dropdown (Markdown / HTML). */
-.lv-export-wrap {
+/* Anchors the tasks popover to its button. */
+.lv-tasks-wrap {
   position: relative;
   display: inline-flex;
-}
-.lv-export-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 60;
-  min-width: 150px;
-  padding: 5px;
-  background: var(--lv-surface);
-  border: 1px solid var(--lv-border);
-  border-radius: var(--lv-radius);
-  box-shadow: var(--lv-shadow-md);
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  animation: lv-pop-in var(--lv-t-fast) var(--lv-ease);
-}
-.lv-export-menu[hidden] {
-  display: none;
-}
-.lv-export-menu-item {
-  text-align: left;
-  padding: 7px 12px;
-  border-radius: var(--lv-radius-xs);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--lv-ink-2);
-  transition: background var(--lv-t-fast);
-}
-.lv-export-menu-item:hover {
-  background: var(--lv-surface-2);
-  color: var(--lv-ink);
 }
 @keyframes lv-pop-in {
   from {
@@ -4978,9 +4959,6 @@ body.lv-files-splitting {
   .lv-hamburger-btn {
     display: inline-flex;
   }
-  .lv-sidebar-expand-btn {
-    display: none !important;
-  }
   .lv-sidebar-collapse-btn {
     display: none;
   }
@@ -5032,13 +5010,6 @@ body.lv-files-splitting {
   }
   .lv-topbar-actions {
     gap: 2px;
-  }
-  /* Export collapses to its icon — the text label would overflow the bar and
-     push the whole page into horizontal scroll on narrow screens. */
-  #export-btn {
-    font-size: 0;
-    gap: 0;
-    padding: 7px;
   }
   .lv-transcript {
     padding: calc(var(--lv-topbar-h) + 20px) 16px 16px;

@@ -24,8 +24,7 @@ const chatTitleEl = document.getElementById('chat-title');
 const sessionSearch = /** @type {HTMLInputElement | null} */ (
   document.getElementById('session-search')
 );
-const exportBtn = document.getElementById('export-btn');
-const exportWrap = document.getElementById('export-wrap');
+const chatMenuBtn = document.getElementById('chat-menu-btn');
 
 // lucide `pin` — the all-chats rows' pinned marker and the pin/unpin menu item.
 const PIN_SVG = icon('pin', { size: 14 });
@@ -718,15 +717,8 @@ function renderMore() {
 }
 
 function syncHeader() {
-  if (store.sessionId) {
-    const active = store.sessions.find(s => s.id === store.sessionId);
-    if (active?.title) {
-      if (chatTitleEl) chatTitleEl.textContent = active.title;
-    }
-    if (exportWrap) exportWrap.style.display = '';
-  } else {
-    if (exportWrap) exportWrap.style.display = 'none';
-  }
+  const active = store.sessions.find((s) => s.id === store.sessionId);
+  if (active?.title && chatTitleEl) chatTitleEl.textContent = active.title;
 }
 
 /** A sidebar row's tooltip: its group says roughly when, this says exactly. */
@@ -739,6 +731,7 @@ export function updateSessionTitle(sessionId, title) {
   // Update the cached sessions list
   const s = store.sessions.find(s => s.id === sessionId);
   if (s) s.title = title;
+  if (_openMeta?.id === sessionId) _openMeta.title = title;
 
   const label = title || t('session.newChat');
   // Update the DOM directly without full re-render. Both lists key rows by
@@ -766,6 +759,89 @@ export function updateSessionTitle(sessionId, title) {
 // handed as well as the cache, and reports back so the caller can repaint.
 
 /**
+ * A chat's actions — one menu wherever it opens: a list row's "⋯" or
+ * right-click, and the topbar's "⋯" for the open chat. `row`, when the menu
+ * belongs to one, is restated in place; `stacked` and `onDeleted` as in
+ * rowActions.
+ * @param {any} s
+ * @returns {(import('./ui.js').MenuItem | null)[]}
+ */
+function chatActions(
+  s,
+  { row = /** @type {HTMLElement | null} */ (null), onDeleted = () => {}, stacked = false } = {},
+) {
+  const exportItem = (/** @type {string} */ format, /** @type {string} */ glyph) => ({
+    label: t(`session.export.${format}`),
+    icon: icon(glyph, { size: 14 }),
+    onSelect: () => exportSession(format, s.id, s.title),
+  });
+  return [
+    // A running chat can be stopped from the list — no need to open it just
+    // to end its background run.
+    ...(store.activeRuns?.has(s.id)
+      ? [{
+          label: t('session.stop'),
+          icon: icon('square', { size: 14 }),
+          onSelect: async () => {
+            if (await stopRun(s.id)) row?.classList.remove('lv-running');
+          },
+        }]
+      : []),
+    // A task chat lives under the chat that started it, never in the list:
+    // nothing to pin, and a branch of it would be an orphan.
+    ...(s.parent_id
+      ? []
+      : [{
+          label: t(s.pinned ? 'session.unpin' : 'session.pin'),
+          icon: PIN_SVG,
+          onSelect: async () => {
+            const pinned = await togglePin(s);
+            // Restate in place — neither list re-sorts a row out from under the pointer.
+            if (pinned !== null) row?.classList.toggle('lv-pinned', pinned);
+          },
+        }]),
+    {
+      label: t('session.rename'),
+      icon: icon('pencil', { size: 14 }),
+      onSelect: () => renameSession(s, { stack: stacked }),
+    },
+    ...(s.parent_id
+      ? []
+      : [{
+          label: t('session.branch'),
+          icon: icon('git-branch', { size: 14 }),
+          onSelect: () => void forkChat(s.id),
+        }]),
+    null,
+    exportItem('md', 'file-text'),
+    exportItem('html', 'code'),
+    exportItem('json', 'braces'),
+    null,
+    {
+      label: t('session.delete'),
+      icon: icon('trash-2', { size: 14 }),
+      danger: true,
+      onSelect: async () => {
+        if (await deleteSession(s.id, s.title)) onDeleted();
+      },
+    },
+  ];
+}
+
+/** What's known of the open chat when the list doesn't carry it (a task chat, one past the list's page). */
+let _openMeta = /** @type {any} */ (null);
+
+/** The open chat as the actions want it: its list row, else its detail. */
+function openChat() {
+  const id = store.sessionId;
+  if (!id) return null;
+  return (
+    store.sessions.find((s) => s.id === id) ||
+    (_openMeta?.id === id ? _openMeta : { id, title: '' })
+  );
+}
+
+/**
  * The "⋯" button both chat lists append to a row: it opens the row's actions,
  * as does a right-click anywhere on the row. The items are built at open time,
  * so they follow the chat's current pinned / running state.
@@ -781,42 +857,7 @@ export function updateSessionTitle(sessionId, title) {
  * `tsc --checkJs` (TS8024), and one without a default drops out of the type.
  */
 function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, stacked = false } = {}) {
-  const items = () => [
-    // A running chat can be stopped from the list — no need to open it just
-    // to end its background run.
-    ...(store.activeRuns?.has(s.id)
-      ? [{
-          label: t('session.stop'),
-          icon: icon('square', { size: 14 }),
-          onSelect: async () => {
-            if (await stopRun(s.id)) row.classList.remove('lv-running');
-          },
-        }]
-      : []),
-    {
-      label: t(s.pinned ? 'session.unpin' : 'session.pin'),
-      icon: PIN_SVG,
-      onSelect: async () => {
-        const pinned = await togglePin(s);
-        // Restate in place — neither list re-sorts a row out from under the pointer.
-        if (pinned !== null) row.classList.toggle('lv-pinned', pinned);
-      },
-    },
-    {
-      label: t('session.rename'),
-      icon: icon('pencil', { size: 14 }),
-      onSelect: () => renameSession(s, { stack: stacked }),
-    },
-    null,
-    {
-      label: t('session.delete'),
-      icon: icon('trash-2', { size: 14 }),
-      danger: true,
-      onSelect: async () => {
-        if (await deleteSession(s.id, s.title)) onDeleted();
-      },
-    },
-  ];
+  const items = () => chatActions(s, { row, onDeleted, stacked });
 
   const more = document.createElement('button');
   more.type = 'button';
@@ -1043,7 +1084,6 @@ export function clearChat() {
   store.lastMessage = null;
   renderOrigin(null);
   if (chatTitleEl) chatTitleEl.textContent = t('session.newChat');
-  if (exportWrap) exportWrap.style.display = 'none';
   store.emit('reset-chat-view');
   renderSessions();
 }
@@ -1167,13 +1207,17 @@ function openAllSessionsDialog(query = '') {
 }
 
 // ---- Export --------------------------------------------------------------
-/** @param {'md' | 'html' | string} [format] */
-export async function exportSession(format = 'md') {
-  if (!store.sessionId) return;
-  const title = store.sessions.find((s) => s.id === store.sessionId)?.title || '';
-  if (format === 'html') return exportSessionHtml(store.sessionId, title);
+/**
+ * Download a chat as a file: Markdown and JSON from the server, HTML built
+ * here (export.js).
+ * @param {'md' | 'html' | 'json' | string} format
+ * @param {string} id
+ * @param {string} [title] Names the file.
+ */
+async function exportSession(format, id, title = '') {
+  if (format === 'html') return exportSessionHtml(id, title);
   try {
-    const res = await api.exportChat(store.sessionId, format);
+    const res = await api.exportChat(id, format);
     if (!res.ok) throw await apiError(res);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -1187,37 +1231,6 @@ export async function exportSession(format = 'md') {
     console.error('export:', err);
     toast(t('toast.exportFailed'), { type: 'error' });
   }
-}
-
-// Dropdown letting the Export button pick a format (Markdown / HTML).
-function initExportMenu() {
-  const wrap = document.getElementById('export-wrap');
-  const menu = document.getElementById('export-menu');
-  if (!exportBtn || !menu || !wrap) return;
-  const close = () => {
-    menu.hidden = true;
-    exportBtn.setAttribute('aria-expanded', 'false');
-  };
-  const open = () => {
-    menu.hidden = false;
-    exportBtn.setAttribute('aria-expanded', 'true');
-  };
-  exportBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    menu.hidden ? open() : close();
-  });
-  menu.querySelectorAll('.lv-export-menu-item').forEach((/** @type {HTMLElement} */ it) => {
-    it.addEventListener('click', () => {
-      close();
-      exportSession(it.dataset.format);
-    });
-  });
-  document.addEventListener('click', (e) => {
-    if (!menu.hidden && !wrap.contains(/** @type {Node} */ (e.target))) close();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !menu.hidden) close();
-  });
 }
 
 // ---- Search --------------------------------------------------------------
@@ -1248,9 +1261,21 @@ export function initSessions() {
   initSearch();
 
   document.getElementById('new-chat')?.addEventListener('click', startNewChat);
-  document.getElementById('topbar-new-chat')?.addEventListener('click', startNewChat);
 
-  initExportMenu();
+  // The topbar's "⋯": the open chat's actions. A new chat has none yet.
+  if (chatMenuBtn) {
+    const sync = () => chatMenuBtn.classList.toggle('lv-hidden', !store.sessionId);
+    store.on('session-id', sync);
+    sync();
+    chatMenuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const chat = openChat();
+      if (chat) openMenu(chatMenuBtn, chatActions(chat));
+    });
+  }
+  store.on('session-meta', (data) => {
+    if (data?.id) _openMeta = { id: data.id, title: data.title, pinned: data.pinned, parent_id: data.parent_id };
+  });
   store.on('clear-chat', clearChat);
   // A workspace group's "+" (and the composer chip's menu): its directory is
   // already this tab's pick.

@@ -2519,6 +2519,12 @@ scrollBtn?.addEventListener('click', () => {
   _resumeAutoScroll();
   scrollDown();
 });
+// Swapping the transcript's content (a new chat, another chat's history)
+// fires no scroll event: without this the button outlives the scrolled-up
+// chat it was shown for.
+if (transcriptEl) {
+  new MutationObserver(updateScrollButton).observe(transcriptEl, { childList: true });
+}
 
 /** The first-run setup hero: shown instead of the welcome view until the
  * server has a model to chat with (CLI default agent only). */

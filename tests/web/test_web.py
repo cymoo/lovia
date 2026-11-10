@@ -265,9 +265,10 @@ def test_index_at_the_root_has_no_base_path() -> None:
 # The public styling contract: deployer CSS may target these (docs list them
 # in web-server.md); renaming one is a breaking change.
 _PUBLIC_PARTS = (
-    "sidebar", "sidebar-header", "agent-switcher", "sidebar-nav", "new-chat",
-    "memory", "schedules", "settings", "sessions-label", "sessions-search",
-    "sessions", "topbar", "chat-title", "topbar-actions", "tasks", "export",
+    "sidebar", "sidebar-header", "sidebar-toggle", "agent-switcher",
+    "sidebar-nav", "new-chat", "memory", "schedules", "settings",
+    "sessions-label", "sessions-search", "sessions", "topbar", "chat-title",
+    "topbar-actions", "tasks", "chat-menu",
     "files-toggle", "view", "transcript", "welcome", "todo-panel", "composer",
     "attach", "context-ring", "files-panel", "turn", "tool",
 )  # fmt: skip

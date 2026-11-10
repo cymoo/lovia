@@ -235,6 +235,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             updated_at=updated,
             entries=entries,
             active_run_id=active_run_id,
+            pinned=meta.pinned if meta else False,
             parent_id=meta.parent_id if meta else None,
             origin=origin,
             workspace_mode=meta.workspace_mode if meta else None,

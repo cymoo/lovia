@@ -61,7 +61,7 @@
   <div class="lv-sidebar-head" data-part="sidebar-header">
     {% block sidebar_header %}{% if logo %}<img class="lv-sidebar-logo" src="{{ logo }}" alt="{{ title }}" />{% else %}<span class="lv-sidebar-title">{{ title }}</span>{% endif %}{% endblock %}
     <div class="lv-sidebar-head-actions">
-      <button id="sidebar-collapse" class="lv-btn-icon lv-sidebar-collapse-btn" type="button" title="Collapse sidebar" aria-label="Collapse sidebar" data-i18n-title="nav.collapse" data-i18n-aria="nav.collapse"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg></button>
+      <button id="sidebar-collapse" class="lv-btn-icon lv-sidebar-collapse-btn" type="button" title="Collapse sidebar" aria-label="Collapse sidebar" aria-controls="sessions-list" aria-expanded="true" data-part="sidebar-toggle" data-i18n-title="nav.collapse" data-i18n-aria="nav.collapse"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg></button>
     </div>
   </div>
   <div class="lv-agent-switcher" id="agent-switcher" data-part="agent-switcher">
@@ -102,9 +102,6 @@
 <main class="lv-page">
 <div class="lv-chat-main">
   <header class="lv-topbar" data-part="topbar">
-    <button id="sidebar-expand" class="lv-btn-icon lv-sidebar-expand-btn" type="button" title="Show sidebar" aria-label="Show sidebar" data-i18n-title="nav.expand" data-i18n-aria="nav.expand"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg></button>
-    <!-- New chat while the sidebar is collapsed (its own button is out of reach then). -->
-    <button id="topbar-new-chat" class="lv-btn-icon lv-topbar-new-chat" type="button" title="New chat" aria-label="New chat" data-part="new-chat" data-i18n-title="nav.newChat" data-i18n-aria="nav.newChat"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg></button>
     <button id="sidebar-toggle" class="lv-btn-icon lv-hamburger-btn" type="button" aria-label="Toggle sidebar">
       <span class="lv-hamburger"></span>
     </button>
@@ -116,19 +113,13 @@
       <!-- The chat this one was branched from; shown only on a branch. -->
       <button id="origin-btn" class="lv-btn lv-btn-ghost lv-btn-sm lv-origin-link" type="button" hidden data-part="origin"></button>
       <!-- This chat's background subagent tasks; shown only when it has any. -->
-      <div class="lv-export-wrap" id="tasks-wrap" style="display:none" data-part="tasks">
+      <div class="lv-tasks-wrap" id="tasks-wrap" style="display:none" data-part="tasks">
         <button id="tasks-btn" class="lv-btn lv-btn-ghost lv-btn-sm" type="button" aria-haspopup="menu" aria-controls="tasks-popover" aria-expanded="false"></button>
         <div class="lv-tasks-popover" id="tasks-popover" role="menu" hidden aria-label="Background tasks"></div>
       </div>
-      <div class="lv-export-wrap" id="export-wrap" style="display:none" data-part="export">
-        <button id="export-btn" class="lv-btn lv-btn-ghost lv-btn-sm" type="button" title="Export chat" aria-haspopup="menu" aria-expanded="false" data-i18n-title="topbar.export"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg><span data-i18n="topbar.export">Export</span></button>
-        <div class="lv-export-menu" id="export-menu" role="menu" hidden>
-          <button type="button" class="lv-export-menu-item" role="menuitem" data-format="md">Markdown</button>
-          <button type="button" class="lv-export-menu-item" role="menuitem" data-format="html">HTML</button>
-          <button type="button" class="lv-export-menu-item" role="menuitem" data-format="json">JSON</button>
-          <button type="button" class="lv-export-menu-item" role="menuitem" data-format="txt" data-i18n="topbar.exportText">Text</button>
-        </div>
-      </div>
+      <!-- The open chat's actions (pin, rename, branch, export, delete):
+           the menu its sidebar row opens. Hidden on a new chat. -->
+      <button id="chat-menu-btn" class="lv-btn-icon lv-hidden" type="button" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" data-part="chat-menu" data-i18n-title="session.actions" data-i18n-aria="session.actions"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></button>
       <!-- Rightmost: the toggle sits next to the panel it opens. (Theme
            lives in Settings — an app-level concern; the topbar stays
            chat-scoped.) -->

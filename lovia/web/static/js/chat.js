@@ -13,6 +13,7 @@ import { enterToSend, followupsEnabled, openSettings } from './settings.js';
 import { readFollowups, writeFollowups, dropFollowups } from './followup-cache.js';
 import {
   cloneTemplate,
+  formatBytes,
   formatDateTime,
   formatTimeSmart,
   highlightIn,
@@ -540,14 +541,14 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
   const node = makeTurn('user');
   if (queued) node.classList.add('lv-queued');
   const bubble = node.querySelector('.lv-bubble');
+  if (attachments && attachments.length) {
+    appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
+  }
   if (text) {
     const body = document.createElement('div');
     body.className = 'lv-body';
     body.textContent = text;
     appendBubbleContent(bubble, body);
-  }
-  if (attachments && attachments.length) {
-    appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
   }
   ensureFooter(bubble);
   if (!queued) {
@@ -1860,6 +1861,8 @@ function addMessageActions(bubble) {
 function addCopyButton(footer, markdown) {
   if (!markdown) return;
   const btn = cloneTemplate('tmpl-copy-btn');
+  btn.title = t('chat.copy');
+  btn.setAttribute('aria-label', t('chat.copy'));
   btn.addEventListener('click', async () => {
     const ok = await copyToClipboard(markdown);
     if (ok) {
@@ -2335,13 +2338,13 @@ function renderHistoryWindow({ stickBottom }) {
       // server appends to the text (attachments.py `_attachment_note`); recover
       // the previews from it and show the clean message — matching live send.
       const { text: bodyText, attachments } = splitAttachmentNote(contentText(it.content));
+      if (attachments.length) appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
       if (bodyText) {
         const body = document.createElement('div');
         body.className = 'lv-body';
         body.textContent = bodyText;
         appendBubbleContent(bubble, body);
       }
-      if (attachments.length) appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
       ensureFooter(bubble);
       transcriptEl.appendChild(turn); // first: its actions look for the user turn above
       addMessageActions(bubble);
@@ -3863,26 +3866,73 @@ function renderAttachTray() {
   });
 }
 
+/**
+ * Open an uploaded attachment where it reads best: an image in the lightbox,
+ * any other file in the Files panel.
+ * @param {{ path?: string, name?: string }} att
+ * @param {boolean} image
+ */
+function previewAttachment(att, image) {
+  if (!att.path) return;
+  if (!image) return store.emit('open-workspace-file', { path: att.path });
+  openImageLightbox(api.workspaceRawUrl({ agent: store.agent, path: att.path }), {
+    alt: att.name || '',
+    downloadHref: api.workspaceRawUrl({ agent: store.agent, path: att.path, download: true }),
+  });
+}
+
+// A file card's insides — icon, name, "EXT · size" — shared by the composer
+// tray and the sent message, so a file looks the same before and after send.
+function fileCardParts(att) {
+  const label = att.name || att.path || '';
+  const ic = document.createElement('span');
+  ic.className = 'lv-attach-ic';
+  ic.innerHTML = icon(att.kind === 'image' ? 'image' : 'file-text', { size: 18 });
+  const info = document.createElement('span');
+  info.className = 'lv-attach-info';
+  const name = document.createElement('span');
+  name.className = 'lv-attach-name';
+  name.textContent = label;
+  const meta = document.createElement('span');
+  meta.className = 'lv-attach-meta';
+  const ext = /\.([a-z0-9]{1,5})$/i.exec(label)?.[1].toUpperCase();
+  meta.textContent = [ext, formatBytes(att.size)].filter(Boolean).join(' · ');
+  info.append(name, meta);
+  return [ic, info];
+}
+
+// A tray item: an image is a thumbnail tile that opens the lightbox, any other
+// file a card (name, type, size) that opens in the Files panel — the same
+// targets as the sent message's attachments. Remove floats on the corner.
 function makeAttachChip(att, onRemove) {
+  const label = att.name || att.path || '';
+  let image = att.kind === 'image' && !!att.path;
   const chip = document.createElement('div');
-  chip.className = 'lv-attach-chip' + (att.uploading ? ' lv-uploading' : '');
-  if (att.kind === 'image' && att.path) {
+  chip.className =
+    'lv-attach-chip' + (image ? ' lv-attach-image' : '') + (att.uploading ? ' lv-uploading' : '');
+  chip.title = label;
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'lv-attach-open';
+  open.disabled = !att.path;
+  open.setAttribute('aria-label', t('composer.openAttachment', { name: label }));
+  if (image) {
     const img = document.createElement('img');
     img.className = 'lv-attach-thumb';
     img.src = api.workspaceRawUrl({ agent: store.agent, path: att.path });
-    img.alt = att.name || '';
-    chip.appendChild(img);
+    img.alt = '';
+    // A format the browser can't draw (HEIC, …) falls back to the file card.
+    img.addEventListener('error', () => {
+      image = false;
+      chip.classList.remove('lv-attach-image');
+      img.replaceWith(...fileCardParts(att));
+    });
+    open.appendChild(img);
   } else {
-    const ic = document.createElement('span');
-    ic.className = 'lv-attach-ic';
-    ic.innerHTML = icon(att.kind === 'image' ? 'image' : 'file-text', { size: 16 });
-    chip.appendChild(ic);
+    open.append(...fileCardParts(att));
   }
-  const name = document.createElement('span');
-  name.className = 'lv-attach-name';
-  name.textContent = att.name || att.path || '';
-  name.title = name.textContent;
-  chip.appendChild(name);
+  open.addEventListener('click', () => previewAttachment(att, image));
+  chip.appendChild(open);
   const rm = document.createElement('button');
   rm.type = 'button';
   rm.className = 'lv-attach-remove';
@@ -3923,11 +3973,20 @@ async function uploadFiles(files) {
   updateSendEnabled();
 }
 
-// Attachment views inside a user bubble (live send + history replay).
+// Attachment views at the top of a user bubble (live send + history replay):
+// the images on one row, the file cards on the next.
 function makeAttachmentsBlock(attachments) {
   const wrap = document.createElement('div');
   wrap.className = 'lv-msg-attachments';
-  for (const att of attachments) wrap.appendChild(makeAttachmentView(att));
+  const images = document.createElement('div');
+  images.className = 'lv-msg-attach-images';
+  const files = document.createElement('div');
+  files.className = 'lv-msg-attach-files';
+  for (const att of attachments) {
+    const view = makeAttachmentView(att);
+    (view.classList.contains('lv-msg-attach-image') ? images : files).appendChild(view);
+  }
+  for (const row of [images, files]) if (row.childElementCount) wrap.appendChild(row);
   return wrap;
 }
 
@@ -3971,10 +4030,8 @@ function makeAttachmentView(att) {
       store.emit('open-workspace-file', { path: att.path });
     });
   }
-  a.innerHTML = icon('file-text', { size: 15 });
-  const name = document.createElement('span');
-  name.textContent = att.name || att.path || 'file';
-  a.appendChild(name);
+  a.title = att.name || att.path || '';
+  a.append(...fileCardParts(att));
   return a;
 }
 
@@ -4270,15 +4327,22 @@ function queuedAttachments(atts, names) {
   const wrap = document.createElement('span');
   wrap.className = 'lv-send-queue-atts';
   wrap.title = names;
-  wrap.setAttribute('role', 'img');
+  wrap.setAttribute('role', 'group');
   wrap.setAttribute('aria-label', t('queue.attachments', { n: atts.length, names }));
   const thumbs = atts.filter((a) => a.kind === 'image' && a.path).slice(0, 3);
   for (const att of thumbs) {
+    // Each thumbnail opens its image, as in the tray and the sent message.
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'lv-send-queue-thumb';
+    btn.title = att.name || '';
+    btn.setAttribute('aria-label', t('composer.openAttachment', { name: att.name || att.path }));
     const img = document.createElement('img');
-    img.className = 'lv-send-queue-thumb';
     img.src = api.workspaceRawUrl({ agent: store.agent, path: att.path });
     img.alt = '';
-    wrap.append(img);
+    btn.append(img);
+    btn.addEventListener('click', () => previewAttachment(att, true));
+    wrap.append(btn);
   }
   const rest = atts.length - thumbs.length;
   if (rest) {

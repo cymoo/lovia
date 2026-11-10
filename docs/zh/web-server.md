@@ -207,7 +207,7 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 | 变量 | 作用 |
 | --- | --- |
 | `--lv-bg`、`--lv-surface`、`--lv-surface-2`、`--lv-surface-3`、`--lv-border`、`--lv-border-strong` | 画布、面板、卡片、悬停态及其边框 |
-| `--lv-sidebar-surface` | 侧栏背景 |
+| `--lv-sidebar-surface`、`--lv-sidebar-edge`、`--lv-sidebar-hover`、`--lv-sidebar-active` | 侧栏背景、分隔线，及其列表行悬停、选中时的底色 |
 | `--lv-ink`、`--lv-ink-2`、`--lv-muted`、`--lv-muted-2` | 文字，由深到浅 |
 | `--lv-accent`、`--lv-accent-hover`、`--lv-accent-soft`、`--lv-accent-text` | 品牌色及其衍生色（后三个默认由 `--lv-accent` 推导） |
 | `--lv-user-surface`、`--lv-user-border` | 用户消息气泡 |

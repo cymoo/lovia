@@ -223,7 +223,7 @@ only when it needs to differ:
 | Tokens | What they set |
 | --- | --- |
 | `--lv-bg`, `--lv-surface`, `--lv-surface-2`, `--lv-surface-3`, `--lv-border`, `--lv-border-strong` | Canvas, panels, cards, hover, and their borders |
-| `--lv-sidebar-surface` | The sidebar's background |
+| `--lv-sidebar-surface`, `--lv-sidebar-edge`, `--lv-sidebar-hover`, `--lv-sidebar-active` | The sidebar's background, its dividing edge, and its rows on hover and when selected |
 | `--lv-ink`, `--lv-ink-2`, `--lv-muted`, `--lv-muted-2` | Text, from primary to faint |
 | `--lv-accent`, `--lv-accent-hover`, `--lv-accent-soft`, `--lv-accent-text` | The brand color and its tints (the last three derive from `--lv-accent`) |
 | `--lv-user-surface`, `--lv-user-border` | The user's message bubble |

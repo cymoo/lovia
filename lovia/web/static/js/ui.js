@@ -78,8 +78,9 @@ export function initTheme() {
 const overlay = document.getElementById('sidebar-overlay');
 let sidebarOpen = false;
 let sidebarAutoCollapsed = false;
-const sidebarCollapseBtn = document.getElementById('sidebar-collapse');
-const sidebarExpandBtn = document.getElementById('sidebar-expand');
+// One button for both ways: collapsed, the sidebar stays as a rail of icons
+// (styles.css) with this toggle at its top.
+const sidebarToggleBtn = document.getElementById('sidebar-collapse');
 
 const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
 
@@ -96,11 +97,22 @@ export function closeSidebar() {
   overlay?.classList.remove('lv-open');
 }
 
+const sidebarCollapsed = () => !isPhone() && (store.sidebarCollapsed || sidebarAutoCollapsed);
+
 function syncSidebar() {
-  document.body.classList.toggle(
-    'lv-sidebar-collapsed',
-    !isPhone() && (store.sidebarCollapsed || sidebarAutoCollapsed),
-  );
+  const collapsed = sidebarCollapsed();
+  document.body.classList.toggle('lv-sidebar-collapsed', collapsed);
+  if (!sidebarToggleBtn) return;
+  // The keys too: a later applyStaticI18n must not put the other label back.
+  const key = collapsed ? 'nav.expand' : 'nav.collapse';
+  sidebarToggleBtn.dataset.i18nTitle = sidebarToggleBtn.dataset.i18nAria = key;
+  sidebarToggleBtn.title = sidebarToggleBtn.ariaLabel = t(key);
+  sidebarToggleBtn.setAttribute('aria-expanded', String(!collapsed));
+}
+
+/** Collapse the desktop sidebar to its rail, or bring it back. */
+export function toggleSidebar() {
+  if (!isPhone()) setSidebarCollapsed(!sidebarCollapsed());
 }
 
 // A user gesture: persisted, and expanding overrides any auto claim.
@@ -124,8 +136,7 @@ export function setSidebarAutoCollapsed(claimed) {
 export function initSidebarToggle() {
   syncSidebar();
   document.getElementById('sidebar-toggle')?.addEventListener('click', openSidebar);
-  sidebarCollapseBtn?.addEventListener('click', () => setSidebarCollapsed(true));
-  sidebarExpandBtn?.addEventListener('click', () => setSidebarCollapsed(false));
+  sidebarToggleBtn?.addEventListener('click', toggleSidebar);
   overlay?.addEventListener('click', closeSidebar);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && sidebarOpen) closeSidebar();

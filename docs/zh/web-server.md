@@ -183,6 +183,8 @@ block、文案、新增语言），`examples/33_web_extensions.py` 通过 `windo
 | `body_end` | 应用脚本之后：你自己的脚本 |
 
 `sidebar_nav` 里的链接按内置导航项的样式绘制，指向当前[视图](#视图)的那一个显示为选中。
+侧栏折叠后是一列图标：链接里带 `<svg>` 的会作为图标留在那里（加上 `title` 就有悬停提示），
+不带的和 `sidebar_header`、`sidebar_footer` 一样，等侧栏展开后再显示。
 在模板里引用 `assets` 中的其他文件，用
 `{{ url_for('ui-assets', path='banner.png').path }}`，它会带上路径前缀。
 
@@ -218,7 +220,7 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 要定位某个区域，就选它的 `data-part`：
 
 ```css
-[data-part="export"] { display: none; }                                   /* 去掉导出菜单 */
+[data-part="chat-menu"] { display: none; }                                /* 去掉顶栏的"⋯"对话菜单 */
 [data-part="tool"][data-tool="read_process_output"] { display: none; }   /* 隐藏某个工具的卡片 */
 [data-part="turn"][data-role="user"] .lv-bubble { border-radius: 4px; }
 ```
@@ -228,8 +230,8 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 
 | 区域 | `data-part` |
 | --- | --- |
-| 侧栏 | `sidebar`、`sidebar-header`、`agent-switcher`、`sidebar-nav`、`new-chat`、`memory`、`schedules`、`settings`、`sessions-label`、`sessions-search`、`sessions` |
-| 顶栏 | `topbar`、`chat-title`、`topbar-actions`、`tasks`、`export`、`files-toggle` |
+| 侧栏 | `sidebar`、`sidebar-header`、`sidebar-toggle`、`agent-switcher`、`sidebar-nav`、`new-chat`、`memory`、`schedules`、`settings`、`sessions-label`、`sessions-search`、`sessions` |
+| 顶栏 | `topbar`、`chat-title`、`topbar-actions`、`tasks`、`chat-menu`（当前对话的置顶 / 重命名 / 分支 / 导出 / 删除）、`files-toggle` |
 | 视图 | `view`（打开的[视图](#视图)画在这个容器里） |
 | 对话区 | `transcript`、`welcome`、`todo-panel`、`turn`（带 `data-role="user"` 或 `"assistant"`）、`tool`（带 `data-tool="<工具名>"` 和 `data-status`：`running`、`awaiting`（等待用户，比如在提问），之后是 `done` 或 `error`）、`activity`（连续两个及以上的思考 / 工具步骤折叠成的一行摘要；回复正文开始后自动收起）、`message-actions`（一条消息的[操作](#消息操作)；每个按钮带 `data-action="<id>"`） |
 | 输入框 | `composer`、`attach`、`context-ring` |

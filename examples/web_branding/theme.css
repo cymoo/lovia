@@ -14,9 +14,10 @@
   --lv-radius-lg: 14px;
 }
 
-/* This deployment has no use for exporting chats. A tool's cards hide the
-   same way: [data-part="tool"][data-tool="order_status"] { display: none; } */
-[data-part="export"] {
+/* No "⋯" chat menu in the top bar here: the same actions are on each chat's
+   row in the sidebar. A tool's cards hide the same way:
+   [data-part="tool"][data-tool="order_status"] { display: none; } */
+[data-part="chat-menu"] {
   display: none;
 }
 

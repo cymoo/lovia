@@ -284,6 +284,7 @@ async function refresh() {
   }
   renderCrumbs();
   renderList();
+  void restoreViewing();
 }
 
 function emptyNode(text) {
@@ -619,15 +620,20 @@ function renderList() {
     ? state.entries.filter((e) => e.path.toLowerCase().includes(needle))
     : state.entries;
   if (!entries.length) {
-    frag.appendChild(
-      emptyNode(
-        needle
-          ? t('files.noMatch')
-          : state.mode === 'recent'
-            ? t('files.noFiles')
-            : t('files.emptyDir'),
-      ),
+    const empty = emptyNode(
+      needle ? t('files.noMatch') : state.mode === 'recent' ? t('files.noFiles') : t('files.emptyDir'),
     );
+    // An empty workspace says how files get here, and offers the first way.
+    if (!needle && state.mode === 'recent' && els.upload) {
+      const up = document.createElement('button');
+      up.type = 'button';
+      up.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-files-empty-upload';
+      up.innerHTML = icon('upload', { size: 14 });
+      up.append(t('files.uploadAction'));
+      up.addEventListener('click', () => els.upload?.click());
+      empty.append(up);
+    }
+    frag.appendChild(empty);
   }
   // Recent leads with what THIS chat produced — the panel's whole reason to
   // exist for most visits. The split disappears when it wouldn't inform
@@ -651,7 +657,48 @@ function renderList() {
 }
 
 // ---- Viewer -------------------------------------------------------------------
-function closeViewer() {
+// ---- The open file, across a reload --------------------------------------------
+// Each tab remembers the file it had open, per agent and folder
+// (sessionStorage), and reopens it once the folder is known — if it still
+// exists. Only the user's own close forgets it: a switch of agent or folder
+// closes the viewer too, but the file belongs to the scope it was opened in.
+const VIEWING_KEY = 'lovia-files-viewing';
+const viewingScope = () => `${store.agent}|${scopeRoot() ?? ''}`;
+let _restoredScope = /** @type {string | null} */ (null);
+
+/** @param {string | null} path */
+function rememberViewing(path) {
+  try {
+    if (path) sessionStorage.setItem(VIEWING_KEY, JSON.stringify({ scope: viewingScope(), path }));
+    else sessionStorage.removeItem(VIEWING_KEY);
+  } catch {
+    /* storage off: this tab just won't remember */
+  }
+}
+
+async function restoreViewing() {
+  const scope = viewingScope();
+  if (state.viewing || _restoredScope === scope) return;
+  let saved = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(VIEWING_KEY) || 'null');
+  } catch {
+    /* unreadable: nothing to restore */
+  }
+  if (saved?.scope !== scope || typeof saved.path !== 'string') return;
+  _restoredScope = scope; // once per scope: a later refresh mustn't reopen it
+  try {
+    await api.workspaceFile({ agent: store.agent, path: saved.path }); // still there?
+  } catch {
+    rememberViewing(null);
+    return;
+  }
+  if (!state.viewing && viewingScope() === scope) openFile(saved.path);
+}
+
+/** @param {{ forget?: boolean }} [opts] `forget: false` for a close the user didn't ask for. */
+function closeViewer({ forget = true } = {}) {
+  if (forget) rememberViewing(null);
   state.viewing = null;
   els.viewer.classList.add('lv-hidden');
   els.panel.classList.remove('lv-viewing');
@@ -842,6 +889,7 @@ function renderText(content, path) {
 // with a different base); true otherwise.
 async function openFile(path, { silent = false } = {}) {
   const name = basename(path);
+  rememberViewing(path);
   if (!els.panel.classList.contains('lv-viewing')) state.listScroll = els.list.scrollTop;
   els.viewer.classList.remove('lv-hidden');
   els.panel.classList.add('lv-viewing');
@@ -1234,7 +1282,7 @@ export function initFiles() {
   });
   els.tabRecent.addEventListener('click', () => setMode('recent'));
   els.tabBrowse.addEventListener('click', () => setMode('browse'));
-  els.viewerClose.addEventListener('click', closeViewer);
+  els.viewerClose.addEventListener('click', () => closeViewer());
   els.filter?.addEventListener('input', () => {
     state.filter = els.filter.value.trim();
     renderList();
@@ -1349,7 +1397,7 @@ export function initFiles() {
     state.filter = '';
     if (els.filter) els.filter.value = '';
     clearUnseen();
-    closeViewer();
+    closeViewer({ forget: false });
     updateVisibility();
     if (state.open) {
       refresh();
@@ -1362,7 +1410,7 @@ export function initFiles() {
     state.browsePath = '';
     state.filter = '';
     if (els.filter) els.filter.value = '';
-    closeViewer();
+    closeViewer({ forget: false });
     if (state.open) refresh();
   });
   // "touched" (and the edit revisions) are scoped to the chat on screen —

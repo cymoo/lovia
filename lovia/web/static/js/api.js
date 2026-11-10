@@ -189,10 +189,13 @@ export const api = {
 
   // ---- sessions ----
   // `per_workspace`: page by folder — that many chats of each, plus every
-  // pinned one (the sidebar's workspace groups).
-  /** @param {{ q?: string, limit?: number, parent?: string, per_workspace?: number }} [opts] */
-  listSessions: ({ q = '', limit, parent, per_workspace } = {}) =>
-    request(`/api/sessions${qs({ q, limit, parent, per_workspace })}`).then(_json),
+  // pinned one (the sidebar's workspace groups). `archived`: the chats put
+  // away, instead of those in use (a search covers both).
+  /** @param {{ q?: string, limit?: number, parent?: string, per_workspace?: number, archived?: boolean }} [opts] */
+  listSessions: ({ q = '', limit, parent, per_workspace, archived } = {}) =>
+    request(
+      `/api/sessions${qs({ q, limit, parent, per_workspace, archived: archived || undefined })}`,
+    ).then(_json),
   // Currently-live background runs: [{ session_id, run_id, agent, status, turns }].
   listRuns: () => request('/api/runs').then(_json),
   // Persisted run records, newest first. `since` keeps only runs finished
@@ -261,6 +264,13 @@ export const api = {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({ pinned }),
+    }).then(_json),
+  /** @param {string} id @param {boolean} archived */
+  setArchived: (id, archived) =>
+    request(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ archived }),
     }).then(_json),
   deleteSession: (id) =>
     request(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),

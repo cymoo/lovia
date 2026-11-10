@@ -135,6 +135,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         offset: int = Query(0, ge=0),
         parent: str | None = Query(None, max_length=64),
         per_workspace: int | None = Query(None, ge=1, le=1000),
+        archived: bool = Query(False),
     ) -> list[ChatSessionInfo]:
         if parent:
             # A chat's own subagent tasks — the topbar tasks popover.
@@ -143,9 +144,13 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             metas = await store.search(q, limit=limit, offset=offset)
         else:
             # per_workspace: the sidebar's groups — each directory's most
-            # recent chats, plus every pinned one.
+            # recent chats, plus every pinned one. archived: the chats put
+            # away instead of those in use (a search covers both).
             metas = await store.list(
-                limit=limit, offset=offset, per_workspace=per_workspace
+                limit=limit,
+                offset=offset,
+                per_workspace=per_workspace,
+                archived=archived,
             )
         # Task sessions carry their latest run outcome so the topbar Tasks
         # popover can
@@ -241,6 +246,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             entries=entries,
             active_run_id=active_run_id,
             pinned=meta.pinned if meta else False,
+            archived=meta.archived if meta else False,
             parent_id=meta.parent_id if meta else None,
             origin=origin,
             workspace_mode=meta.workspace_mode if meta else None,
@@ -372,6 +378,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             await deps.associate([session_id], root)
         if req.title is not None:
             await store.set_title(session_id, req.title)
+        # Archived before pinned: sent together, the pin is what stays.
+        if req.archived is not None:
+            await store.set_archived(session_id, req.archived)
         if req.pinned is not None:
             await store.set_pinned(session_id, req.pinned)
         if mode is not None:

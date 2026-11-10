@@ -158,11 +158,11 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision, remember?, scopes?, reason?}` → `{ok, remembered}`。`remember`（仅允许时）同时为这条请求自己的每个 `scopes` 在本对话各记一条“总是允许”——传了 `scopes` 时只记其中列出的，只能缩小、不能扩大（列出请求没有的范围 → `400 invalid_request`，本次不做任何决定）；`reason`（仅拒绝时）会传给模型。授权先落库再唤醒运行，同范围的下一条调用不会在此期间再问；一个都没选、请求没有 scopes 或保存失败时 `remembered` 为 false（本次允许照常生效） |
 | `POST /api/chat/cancel?session_id=` | 取消正在执行的 Run（保留已完成的 Turn） |
 | `POST /api/chat/inject` / `uninject` | 为正在执行的 Run 排队或撤回[追加指令](cancellation.md#在运行中追加指令) |
-| `GET /api/sessions?q=&limit=&offset=&per_workspace=` | 列出或搜索对话（置顶优先，支持分页）。`per_workspace=N` 改为按目录分页：全部置顶对话，加上每个目录最近的 `N` 个，对话多的目录不会把别的目录挤出去（没有目录的对话全部返回）。`DELETE` 清空全部对话 |
+| `GET /api/sessions?q=&limit=&offset=&per_workspace=&archived=` | 列出或搜索对话（置顶优先，支持分页）。`per_workspace=N` 改为按目录分页：全部置顶对话，加上每个目录最近的 `N` 个，对话多的目录不会把别的目录挤出去（没有目录的对话全部返回）。默认不含已归档的对话；`archived=true` 改为只列已归档的，搜索（`q`）两者都包含，每行的 `archived` 标明是哪一种。`DELETE` 清空全部对话 |
 | `GET /api/runs` | 正在运行的服务端托管任务。`run_id` 与该 Run 的生命周期事件和运行记录一致，自动续跑和恢复后都不变 |
 | `GET /api/runs/history?session_id=&source=&since=&run_id=&limit=&offset=` | 查询持久化的运行记录，包括结果、错误、时长和 token 用量；`since` 按结束时间过滤，`run_id` 查询单个 Run |
 | `GET /api/events` | **SSE**：订阅进程级生命周期事件（不重放历史事件） |
-| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名、置顶或切换 `workspace_mode`；删除（连同其后台任务和绑定它的定时任务）。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null`。每次 Run 的最后一条回答带 `duration`（秒）；记录了用时的 Run，其消息时间戳为真实时间。来自另一个对话的聊天带 `origin`：`kind` 为 `"fork"`（分支）或 `"spawn"`（由那个对话的 agent 用 `start_session` 启动）；列表中的 `origin_kind` 与之一致 |
+| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名、置顶、归档或切换 `workspace_mode`；删除（连同其后台任务和绑定它的定时任务）。`{"archived": true}` 把对话收起来而不删除任何内容（同时取消置顶）；置顶它，或用户再发一条消息，就会恢复。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null`。每次 Run 的最后一条回答带 `duration`（秒）；记录了用时的 Run，其消息时间戳为真实时间。来自另一个对话的聊天带 `origin`：`kind` 为 `"fork"`（分支）或 `"spawn"`（由那个对话的 agent 用 `start_session` 启动）；列表中的 `origin_kind` 与之一致 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
 | `POST /api/sessions/{id}/followups` | 生成追问建议，返回 `{followups: [...]}`；功能未启用或建议器未返回内容时为 `[]`。该操作可能消耗模型 token，因此使用 POST |
 | `POST /api/sessions/{id}/rewind` | 从某条用户消息起删除后续内容；用它的 `ref` 指定，或用 `user_turn`（它在用户消息中的索引，从 0 开始）；`ref` 已不在聊天中时返回 404，运行中返回 409，不支持 `rewind` 时返回 501 |

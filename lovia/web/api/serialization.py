@@ -39,6 +39,7 @@ def session_info(
         created_at=meta.created_at,
         updated_at=meta.updated_at,
         pinned=meta.pinned,
+        archived=meta.archived,
         parent_id=meta.parent_id,
         last_run_status=last_run_status,
         origin_kind=origin_kind(meta.origin_kind),

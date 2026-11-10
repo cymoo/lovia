@@ -65,6 +65,17 @@ function setSidebarView(view) {
   void loadSessions(); // the two views page differently
 }
 
+// The list shows the chats in use, or (the view menu) the archived ones — one
+// list by date. Not kept: a reload is back on the chats in use.
+let _showArchived = false;
+/** @param {boolean} archived */
+function setShowArchived(archived) {
+  if (archived === _showArchived) return;
+  _showArchived = archived;
+  _flatLimit = FLAT_PAGE;
+  void loadSessions();
+}
+
 // ---- Background-run awareness --------------------------------------------
 // Preferred path: the server's /api/events lifecycle stream (initEventStream)
 // pushes run/session changes; each (re)connect does one snapshot fetch and the
@@ -314,7 +325,8 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
   const seq = ++_loadSeq;
   // Where chats work in folders of their own, each folder's most recent
   // (and every pinned chat): one busy folder must not crowd the others out.
-  const grouped = !query && canAddWorkspace() && sidebarView() === 'groups';
+  const archived = _showArchived && !query; // a search covers both
+  const grouped = !query && !archived && canAddWorkspace() && sidebarView() === 'groups';
   try {
     const [sessions, runs] = await Promise.all([
       // Fetch one row past the page: its presence answers "is there more?"
@@ -322,7 +334,7 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
       api.listSessions(
         grouped
           ? { per_workspace: Math.max(GROUP_PAGE, ..._groupShown.values()) + 1, limit: 1000 }
-          : { q: query, limit: _flatLimit + 1 },
+          : { q: query, limit: _flatLimit + 1, archived },
       ),
       api.listRuns().catch(() => []),
     ]);
@@ -385,12 +397,13 @@ function sessionsSignature() {
     [..._groupShown],
     !!sessionSearch?.value.trim(), // the empty state's wording depends on it
     sidebarView(),
+    _showArchived,
     store.agents.length > 1, // agent chips appear once agents finish loading
     [...(store.activeRuns || [])].sort(),
     store.sessions.map((s) => [
       s.id, s.title ?? '', s.updated_at, s.pinned ? 1 : 0, s.agent ?? '',
       s.parent_id ?? '', s.last_run_status ?? '', s.origin_kind ?? '',
-      s.workspace_root ?? '',
+      s.workspace_root ?? '', s.archived ? 1 : 0,
     ]),
     // The workspace list and which groups are folded (sidebarGroups reads both).
     _workspacesRev,
@@ -594,7 +607,7 @@ function renderSessions() {
   const searching = !!sessionSearch?.value.trim();
   const grouped = sidebarGroups(chats);
   syncSectionLabel(!!grouped);
-  const groups = searching || sidebarView() === 'flat' ? null : grouped;
+  const groups = searching || _showArchived || sidebarView() === 'flat' ? null : grouped;
   if (groups) {
     renderGroups(groups);
     renderMore();
@@ -604,7 +617,9 @@ function renderSessions() {
   if (!chats.length) {
     const empty = document.createElement('div');
     empty.className = 'lv-sessions-empty';
-    empty.textContent = t(sessionSearch?.value.trim() ? 'nav.noMatches' : 'nav.noChats');
+    empty.textContent = t(
+      searching ? 'nav.noMatches' : _showArchived ? 'nav.noArchived' : 'nav.noChats',
+    );
     sessionsList.appendChild(empty);
     return;
   }
@@ -673,6 +688,12 @@ function buildRow(s, { age = false, folder = false } = {}) {
       const end = document.createElement('span');
       end.className = 'lv-session-age';
       end.textContent = shortAge(s.updated_at);
+      main.appendChild(end);
+    } else if (s.archived && !_showArchived) {
+      // A search reaches the archived chats too: say which those are.
+      const end = document.createElement('span');
+      end.className = 'lv-session-folder';
+      end.textContent = t('nav.archivedTag');
       main.appendChild(end);
     } else if (folder && s.workspace_root) {
       const end = document.createElement('span');
@@ -773,20 +794,30 @@ function syncSectionLabel(grouped) {
     text.className = 'lv-section-label-text';
     label.replaceChildren(text);
   }
-  text.textContent = t('nav.chats');
+  text.textContent = t(_showArchived ? 'nav.view.archived' : 'nav.chats');
   let tools = /** @type {HTMLElement | null} */ (label.querySelector('.lv-section-label-tools'));
-  if (!grouped) {
-    tools?.remove();
-    return;
-  }
   // Built once (a redraw must not pull an open menu's button from under it),
   // again only when what it offers changes.
-  const canAdd = String(canAddWorkspace());
-  if (tools?.dataset.add === canAdd) return;
-  tools?.remove();
-  tools = document.createElement('span');
+  const canAdd = String(grouped && canAddWorkspace());
+  if (tools?.dataset.add !== canAdd) {
+    tools?.remove();
+    tools = buildLabelTools(canAdd === 'true');
+    tools.dataset.add = canAdd;
+    label.appendChild(tools);
+  }
+  const view = /** @type {HTMLElement} */ (tools.querySelector('[aria-haspopup]'));
+  view.dataset.grouped = String(grouped);
+  view.classList.toggle('lv-active', _showArchived); // a filter is on
+}
+
+/**
+ * The buttons at the label's end: the view menu, and add-a-folder where
+ * more may be opened.
+ * @param {boolean} canAdd
+ */
+function buildLabelTools(canAdd) {
+  const tools = document.createElement('span');
   tools.className = 'lv-section-label-tools';
-  tools.dataset.add = canAdd;
   /** @param {string} title @param {string} glyph */
   const button = (title, glyph) => {
     const b = document.createElement('button');
@@ -794,38 +825,60 @@ function syncSectionLabel(grouped) {
     b.className = 'lv-btn-icon lv-section-label-btn';
     b.title = b.ariaLabel = t(title);
     b.innerHTML = icon(glyph, { size: 15 });
-    tools?.appendChild(b);
+    tools.appendChild(b);
     return b;
   };
   const view = button('nav.view', 'sliders-horizontal');
   view.setAttribute('aria-haspopup', 'menu');
   view.setAttribute('aria-expanded', 'false');
-  view.addEventListener('click', () => openMenu(view, viewMenu()));
-  if (canAdd === 'true') {
+  view.addEventListener('click', () =>
+    openMenu(view, viewMenu(view.dataset.grouped === 'true')),
+  );
+  if (canAdd) {
     button('ws.add', 'folder-plus').addEventListener('click', () => void addWorkspaceDialog());
   }
-  label.appendChild(tools);
+  return tools;
 }
 
 /**
- * The list's view menu: a group per folder, or one list by date.
- * @returns {import('./ui.js').MenuItem[]}
+ * The list's view menu: where chats work in folders (`grouped`), a group per
+ * folder or one list by date; and which chats — those in use, or the archived.
+ * @param {boolean} grouped
+ * @returns {(import('./ui.js').MenuItem | null)[]}
  */
-function viewMenu() {
+function viewMenu(grouped) {
   const view = sidebarView();
   return [
-    { heading: t('nav.view.groupBy') },
+    ...(grouped
+      ? [
+          { heading: t('nav.view.groupBy') },
+          {
+            label: t('nav.view.groups'),
+            icon: icon('folder', { size: 15 }),
+            checked: view === 'groups',
+            onSelect: () => setSidebarView('groups'),
+          },
+          {
+            label: t('nav.view.flat'),
+            icon: icon('list', { size: 15 }),
+            checked: view === 'flat',
+            onSelect: () => setSidebarView('flat'),
+          },
+          null,
+        ]
+      : []),
+    { heading: t('nav.view.show') },
     {
-      label: t('nav.view.groups'),
-      icon: icon('folder', { size: 15 }),
-      checked: view === 'groups',
-      onSelect: () => setSidebarView('groups'),
+      label: t('nav.view.current'),
+      icon: icon('square-pen', { size: 15 }),
+      checked: !_showArchived,
+      onSelect: () => setShowArchived(false),
     },
     {
-      label: t('nav.view.flat'),
-      icon: icon('list', { size: 15 }),
-      checked: view === 'flat',
-      onSelect: () => setSidebarView('flat'),
+      label: t('nav.view.archived'),
+      icon: icon('archive', { size: 15 }),
+      checked: _showArchived,
+      onSelect: () => setShowArchived(true),
     },
   ];
 }
@@ -919,6 +972,14 @@ function chatActions(s) {
           label: t('session.branch'),
           icon: icon('git-branch', { size: 14 }),
           onSelect: () => void forkChat(s.id),
+        }]),
+    // Out of the list without deleting it (the view menu shows the archive).
+    ...(s.parent_id
+      ? []
+      : [{
+          label: t(s.archived ? 'session.unarchive' : 'session.archive'),
+          icon: icon(s.archived ? 'archive-restore' : 'archive', { size: 14 }),
+          onSelect: () => void toggleArchive(s),
         }]),
     null,
     exportItem('md', 'file-text'),
@@ -1053,6 +1114,23 @@ async function togglePin(s) {
   // A pin moves the chat between the Pinned section and its place in the
   // list, and shifts what the window holds (the server emits no event for
   // pins): refetch, under the active filter.
+  await loadSessions();
+}
+
+async function toggleArchive(s) {
+  const next = !s.archived;
+  try {
+    await api.setArchived(s.id, next);
+  } catch (err) {
+    console.error(err);
+    toast(t('toast.archiveFailed'), { type: 'error' });
+    return;
+  }
+  s.archived = next;
+  if (next) s.pinned = false; // archiving unpins (the server did the same)
+  // The open chat leaves the list with this: its menu reads what's kept here.
+  if (_openMeta?.id === s.id) Object.assign(_openMeta, { archived: s.archived, pinned: s.pinned });
+  toast(t(next ? 'toast.archived' : 'toast.unarchived', { title: s.title || t('session.newChat') }));
   await loadSessions();
 }
 
@@ -1253,7 +1331,12 @@ export function initSessions() {
     });
   }
   store.on('session-meta', (data) => {
-    if (data?.id) _openMeta = { id: data.id, title: data.title, pinned: data.pinned, parent_id: data.parent_id };
+    if (data?.id) {
+      _openMeta = {
+        id: data.id, title: data.title, pinned: data.pinned,
+        archived: data.archived, parent_id: data.parent_id,
+      };
+    }
   });
   store.on('clear-chat', clearChat);
   // A workspace group's "+" (and the composer chip's menu): its directory is

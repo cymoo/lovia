@@ -282,6 +282,7 @@ html {
 /* ---- Sidebar ------------------------------------------------------------ */
 .lv-sidebar {
   grid-area: sidebar;
+  position: relative; /* its resizer sits on its right edge */
   background: var(--lv-sidebar-surface);
   display: flex;
   flex-direction: column;
@@ -408,11 +409,52 @@ body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not
   font-weight: 500;
   color: var(--lv-muted);
 }
-.lv-section-label-add {
+.lv-section-label-tools {
+  display: flex;
+  gap: 1px;
+  margin: -4px 0;
+}
+.lv-section-label-btn {
   width: 26px;
   height: 26px;
-  margin: -4px 0;
   color: var(--lv-muted);
+}
+
+/* Divider on the sidebar's right edge: drag to resize, arrow keys to nudge,
+   double-click to reset — the Files panel's, mirrored. */
+.lv-sidebar-resizer {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+}
+.lv-sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--lv-accent);
+  opacity: 0;
+  transition: opacity var(--lv-t-fast);
+}
+.lv-sidebar-resizer:hover::after,
+.lv-sidebar-resizer:focus-visible::after,
+body.lv-sidebar-resizing .lv-sidebar-resizer::after {
+  opacity: 0.55;
+}
+/* The columns follow the pointer, not an easing behind it. */
+body.lv-sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: none;
 }
 
 .lv-sidebar-search {
@@ -1063,6 +1105,15 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
 .lv-popup-menu-item.lv-danger:hover,
 .lv-popup-menu-item.lv-danger:focus-visible {
   background: var(--lv-danger-soft);
+}
+.lv-popup-menu-label {
+  flex: 1;
+  min-width: 0;
+}
+.lv-popup-menu-heading {
+  padding: 6px 10px 3px;
+  font-size: 11.5px;
+  color: var(--lv-muted-2);
 }
 .lv-popup-menu-sep {
   height: 1px;
@@ -4856,7 +4907,8 @@ body.lv-files-splitting {
   .lv-hamburger-btn {
     display: inline-flex;
   }
-  .lv-sidebar-collapse-btn {
+  .lv-sidebar-collapse-btn,
+  .lv-sidebar-resizer {
     display: none;
   }
 
@@ -4864,7 +4916,8 @@ body.lv-files-splitting {
     position: fixed;
     top: 0;
     left: 0;
-    width: var(--lv-sidebar-w);
+    /* A width dragged on a desktop must not cover a phone's screen. */
+    width: min(var(--lv-sidebar-w), 86vw);
     height: 100vh;
     height: 100dvh;
     z-index: 50;

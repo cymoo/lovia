@@ -322,8 +322,10 @@ the one `lovia web` was launched in first, then the rest by recent activity,
 with the general workspace (`~/.lovia/workspace`, for chats that belong to
 no project) always listed. A folder's **+** starts a new chat there; its
 **⋯** removes it from the list — files and chats stay, and adding the folder
-again brings its chats back. The folder button beside **Workspaces** adds
-one, completing the path as you type.
+again brings its chats back. The folder button beside **Chats** adds
+one, completing the path as you type; the view button next to it switches
+between a group per folder and one list by date. Drag the sidebar's right
+edge to resize it (double-click resets).
 
 A new chat starts in the folder this tab last used — the folder chip in the
 composer shows which, with the full path on hover; pick another there before

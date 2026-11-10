@@ -12,7 +12,7 @@
 import { t } from './i18n.js';
 import { store } from './store.js';
 import { api, apiError } from './api.js';
-import { copyToClipboard, setSidebarAutoCollapsed } from './ui.js';
+import { copyToClipboard, setSidebarAutoCollapsed, widthDivider } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { renderMermaid } from './diagrams.js';
@@ -121,47 +121,18 @@ function initResizer() {
   const saved = Number(localStorage.getItem(WIDTH_KEY));
   if (saved) applyWidth(saved);
 
-  const rz = els.resizer;
-  let startX = 0;
-  let startW = 0;
-
-  const persistWidth = () => {
-    localStorage.setItem(WIDTH_KEY, String(Math.round(panelWidth())));
-    claimSpace();
-  };
-
-  rz.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 && e.pointerType === 'mouse') return;
-    startX = e.clientX;
-    startW = panelWidth();
-    rz.setPointerCapture(e.pointerId);
-    document.body.classList.add('lv-files-resizing');
+  widthDivider(els.resizer, {
+    width: panelWidth,
+    apply: applyWidth,
+    grow: -1, // the panel sits right: dragging left widens it
+    busyClass: 'lv-files-resizing',
+    done: (reset) => {
+      if (reset) localStorage.removeItem(WIDTH_KEY);
+      else localStorage.setItem(WIDTH_KEY, String(Math.round(panelWidth())));
+      claimSpace();
+    },
   });
-  rz.addEventListener('pointermove', (e) => {
-    if (!rz.hasPointerCapture(e.pointerId)) return;
-    applyWidth(startW + (startX - e.clientX)); // panel sits right: left = wider
-  });
-  const endDrag = (e) => {
-    if (!rz.hasPointerCapture(e.pointerId)) return;
-    rz.releasePointerCapture(e.pointerId);
-    document.body.classList.remove('lv-files-resizing');
-    persistWidth();
-  };
-  rz.addEventListener('pointerup', endDrag);
-  rz.addEventListener('pointercancel', endDrag);
-
-  rz.addEventListener('dblclick', () => {
-    applyWidth(null);
-    localStorage.removeItem(WIDTH_KEY);
-    claimSpace();
-  });
-  rz.addEventListener('keydown', (e) => {
-    const step = e.key === 'ArrowLeft' ? 24 : e.key === 'ArrowRight' ? -24 : 0;
-    if (!step) return;
-    e.preventDefault();
-    applyWidth(panelWidth() + step);
-    persistWidth();
-  });
+  store.on('sidebar-resized', claimSpace);
 
   // A window resize can re-tighten (or free) the space the open panel needs.
   let resizeTimer = null;

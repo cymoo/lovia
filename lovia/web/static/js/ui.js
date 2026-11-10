@@ -133,8 +133,99 @@ export function setSidebarAutoCollapsed(claimed) {
   syncSidebar();
 }
 
+/**
+ * Make `handle` a divider that sets a column's width: a drag, the arrow keys
+ * (24px a press), a double-click to go back to the stylesheet's own width.
+ * Shared by the sidebar's right edge and the Files panel's left one.
+ * @param {HTMLElement} handle
+ * @param {object} o
+ * @param {() => number} o.width The column's width now, in px.
+ * @param {(px: number | null) => void} o.apply Set it (clamping); null resets.
+ * @param {(reset: boolean) => void} o.done A change ended: persist it.
+ * @param {1 | -1} o.grow Which way widens: 1 when dragging right does.
+ * @param {string} o.busyClass On <body> while a drag is on.
+ */
+export function widthDivider(handle, { width, apply, done, grow, busyClass }) {
+  let startX = 0;
+  let startW = 0;
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    startX = e.clientX;
+    startW = width();
+    handle.setPointerCapture(e.pointerId);
+    document.body.classList.add(busyClass);
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (handle.hasPointerCapture(e.pointerId)) apply(startW + (e.clientX - startX) * grow);
+  });
+  const end = (/** @type {PointerEvent} */ e) => {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+    handle.releasePointerCapture(e.pointerId);
+    document.body.classList.remove(busyClass);
+    done(false);
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+  handle.addEventListener('dblclick', () => {
+    apply(null);
+    done(true);
+  });
+  handle.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' ? 24 : e.key === 'ArrowLeft' ? -24 : 0;
+    if (!step) return;
+    e.preventDefault();
+    apply(width() + step * grow);
+    done(false);
+  });
+}
+
+// The sidebar's width: dragged at its right edge, kept per browser in
+// `--lv-sidebar-w` (unset: the stylesheet's). The chat column keeps its room.
+const SIDEBAR_W_KEY = 'lovia-sidebar-w';
+const SIDEBAR_MIN_W = 220;
+const SIDEBAR_MAX_W = 480;
+
+/** @param {number | null} px */
+function applySidebarWidth(px) {
+  const root = document.documentElement.style;
+  if (px == null) return void root.removeProperty('--lv-sidebar-w');
+  const max = Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, window.innerWidth - 520));
+  root.setProperty('--lv-sidebar-w', `${Math.min(Math.max(Math.round(px), SIDEBAR_MIN_W), max)}px`);
+}
+
+function initSidebarResizer() {
+  const sidebar = document.getElementById('sidebar');
+  const handle = document.getElementById('sidebar-resizer');
+  if (!sidebar || !handle) return;
+  let saved = 0;
+  try {
+    saved = Number(localStorage.getItem(SIDEBAR_W_KEY));
+  } catch {
+    /* storage off: the width lasts for this page */
+  }
+  if (saved) applySidebarWidth(saved);
+  const width = () => sidebar.getBoundingClientRect().width;
+  widthDivider(handle, {
+    width,
+    apply: applySidebarWidth,
+    grow: 1,
+    busyClass: 'lv-sidebar-resizing',
+    done: (reset) => {
+      try {
+        if (reset) localStorage.removeItem(SIDEBAR_W_KEY);
+        else localStorage.setItem(SIDEBAR_W_KEY, String(Math.round(width())));
+      } catch {
+        /* storage off */
+      }
+      // The Files panel weighs the sidebar's width when it claims room.
+      store.emit('sidebar-resized');
+    },
+  });
+}
+
 export function initSidebarToggle() {
   syncSidebar();
+  initSidebarResizer();
   document.getElementById('sidebar-toggle')?.addEventListener('click', openSidebar);
   sidebarToggleBtn?.addEventListener('click', toggleSidebar);
   overlay?.addEventListener('click', closeSidebar);
@@ -352,8 +443,11 @@ export function segmented(options, value, onChange) {
 
 // ---- Popup menu --------------------------------------------------------
 /**
- * @typedef {{ label: string, icon?: string, danger?: boolean, onSelect: () => void }} MenuItem
- * `null` in an item list draws a separator.
+ * @typedef {{ label: string, icon?: string, danger?: boolean, checked?: boolean,
+ *   onSelect: () => void }} MenuAction `checked` (either way) makes it one of
+ *   a set of choices; the one in effect shows a check.
+ * @typedef {MenuAction | { heading: string }} MenuItem A `heading` names the
+ *   items under it. `null` in an item list draws a separator.
  */
 
 /** @type {(() => void) | null} */
@@ -391,13 +485,30 @@ export function openMenu(at, items, { align = 'end' } = {}) {
       menu.append(sep);
       continue;
     }
+    if ('heading' in item) {
+      const head = document.createElement('div');
+      head.className = 'lv-popup-menu-heading';
+      head.textContent = item.heading;
+      menu.append(head);
+      continue;
+    }
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'lv-popup-menu-item' + (item.danger ? ' lv-danger' : '');
-    b.setAttribute('role', 'menuitem');
     b.tabIndex = -1;
     b.innerHTML = item.icon || '';
-    b.append(item.label);
+    const label = document.createElement('span');
+    label.className = 'lv-popup-menu-label';
+    label.textContent = item.label;
+    b.append(label);
+    // A choice among several: the one in effect carries the check.
+    if (item.checked === undefined) {
+      b.setAttribute('role', 'menuitem');
+    } else {
+      b.setAttribute('role', 'menuitemradio');
+      b.setAttribute('aria-checked', String(item.checked));
+      if (item.checked) b.insertAdjacentHTML('beforeend', icon('check', { size: 15 }));
+    }
     b.addEventListener('click', () => {
       close();
       item.onSelect();
@@ -422,7 +533,7 @@ export function openMenu(at, items, { align = 'end' } = {}) {
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
 
-  const buttons = /** @type {HTMLElement[]} */ ([...menu.querySelectorAll('[role="menuitem"]')]);
+  const buttons = /** @type {HTMLElement[]} */ ([...menu.querySelectorAll('.lv-popup-menu-item')]);
   buttons[0]?.focus();
   opener?.setAttribute('aria-expanded', 'true');
 

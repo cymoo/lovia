@@ -42,6 +42,29 @@ const _groupShown = new Map();
 // The newest load wins: an older one answering late must not redraw.
 let _loadSeq = 0;
 
+// How the list is laid out where chats work in folders: a group per folder,
+// or one list by date (the label's view menu; kept per browser).
+const VIEW_KEY = 'lovia-sidebar-view';
+/** @returns {'groups' | 'flat'} */
+function sidebarView() {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'flat' ? 'flat' : 'groups';
+  } catch {
+    return 'groups';
+  }
+}
+/** @param {'groups' | 'flat'} view */
+function setSidebarView(view) {
+  if (view === sidebarView()) return;
+  try {
+    localStorage.setItem(VIEW_KEY, view);
+  } catch {
+    return; // storage off: nowhere to keep the choice
+  }
+  _flatLimit = FLAT_PAGE;
+  void loadSessions(); // the two views page differently
+}
+
 // ---- Background-run awareness --------------------------------------------
 // Preferred path: the server's /api/events lifecycle stream (initEventStream)
 // pushes run/session changes; each (re)connect does one snapshot fetch and the
@@ -291,7 +314,7 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
   const seq = ++_loadSeq;
   // Where chats work in folders of their own, each folder's most recent
   // (and every pinned chat): one busy folder must not crowd the others out.
-  const grouped = !query && canAddWorkspace();
+  const grouped = !query && canAddWorkspace() && sidebarView() === 'groups';
   try {
     const [sessions, runs] = await Promise.all([
       // Fetch one row past the page: its presence answers "is there more?"
@@ -361,6 +384,7 @@ function sessionsSignature() {
     _hasMore,
     [..._groupShown],
     !!sessionSearch?.value.trim(), // the empty state's wording depends on it
+    sidebarView(),
     store.agents.length > 1, // agent chips appear once agents finish loading
     [...(store.activeRuns || [])].sort(),
     store.sessions.map((s) => [
@@ -565,11 +589,12 @@ function renderSessions() {
   // chat's topbar Tasks popover, not the global list.
   const chats = store.sessions.filter((s) => !s.parent_id);
   // Chats grouped by the directory they work in, where chats have one — a
-  // search shows its matches flat (a chat whose directory left the list too).
+  // search shows its matches flat (a chat whose directory left the list too),
+  // as does the "one list" view.
   const searching = !!sessionSearch?.value.trim();
   const grouped = sidebarGroups(chats);
   syncSectionLabel(!!grouped);
-  const groups = searching ? null : grouped;
+  const groups = searching || sidebarView() === 'flat' ? null : grouped;
   if (groups) {
     renderGroups(groups);
     renderMore();
@@ -749,19 +774,60 @@ function syncSectionLabel(grouped) {
     label.replaceChildren(text);
   }
   text.textContent = t('nav.chats');
-  let add = /** @type {HTMLButtonElement | null} */ (label.querySelector('.lv-section-label-add'));
-  const want = grouped && canAddWorkspace();
-  if (want && !add) {
-    add = document.createElement('button');
-    add.type = 'button';
-    add.className = 'lv-btn-icon lv-section-label-add';
-    add.title = add.ariaLabel = t('ws.add');
-    add.innerHTML = icon('folder-plus', { size: 15 });
-    add.addEventListener('click', () => void addWorkspaceDialog());
-    label.appendChild(add);
-  } else if (!want && add) {
-    add.remove();
+  let tools = /** @type {HTMLElement | null} */ (label.querySelector('.lv-section-label-tools'));
+  if (!grouped) {
+    tools?.remove();
+    return;
   }
+  // Built once (a redraw must not pull an open menu's button from under it),
+  // again only when what it offers changes.
+  const canAdd = String(canAddWorkspace());
+  if (tools?.dataset.add === canAdd) return;
+  tools?.remove();
+  tools = document.createElement('span');
+  tools.className = 'lv-section-label-tools';
+  tools.dataset.add = canAdd;
+  /** @param {string} title @param {string} glyph */
+  const button = (title, glyph) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'lv-btn-icon lv-section-label-btn';
+    b.title = b.ariaLabel = t(title);
+    b.innerHTML = icon(glyph, { size: 15 });
+    tools?.appendChild(b);
+    return b;
+  };
+  const view = button('nav.view', 'sliders-horizontal');
+  view.setAttribute('aria-haspopup', 'menu');
+  view.setAttribute('aria-expanded', 'false');
+  view.addEventListener('click', () => openMenu(view, viewMenu()));
+  if (canAdd === 'true') {
+    button('ws.add', 'folder-plus').addEventListener('click', () => void addWorkspaceDialog());
+  }
+  label.appendChild(tools);
+}
+
+/**
+ * The list's view menu: a group per folder, or one list by date.
+ * @returns {import('./ui.js').MenuItem[]}
+ */
+function viewMenu() {
+  const view = sidebarView();
+  return [
+    { heading: t('nav.view.groupBy') },
+    {
+      label: t('nav.view.groups'),
+      icon: icon('folder', { size: 15 }),
+      checked: view === 'groups',
+      onSelect: () => setSidebarView('groups'),
+    },
+    {
+      label: t('nav.view.flat'),
+      icon: icon('list', { size: 15 }),
+      checked: view === 'flat',
+      onSelect: () => setSidebarView('flat'),
+    },
+  ];
 }
 
 function renderMore() {

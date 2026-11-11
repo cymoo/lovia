@@ -58,8 +58,8 @@ from .types import (
 )
 
 # ``WorkspaceSessionBinding`` is the return type of ``LocalWorkspace.bind`` /
-# ``.session()`` — importable for typing, but out of ``__all__`` like the
-# protocols above (callers construct it via those methods, never directly).
+# ``.session()`` — importable for typing, and for binding a custom backend's
+# session directly, but out of ``__all__`` like the protocols above.
 from .workspace import (  # noqa: F401
     SCRATCH_DIR,
     LocalWorkspace,

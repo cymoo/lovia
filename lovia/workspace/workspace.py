@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Mapping, NoReturn
 from ..exceptions import UserError
 from .local import LocalWorkspaceSession
 from .policy import CommandRule, Decision, PathRule, WorkspacePolicy
-from .protocol import ShellExecutor, WorkspaceSession
+from .protocol import ShellExecutor, WorkspaceLike, WorkspaceSession
 from .types import WorkspaceLimits, WorkspaceMode
 
 if TYPE_CHECKING:
@@ -541,12 +541,14 @@ def _combine_rules(
 class WorkspaceSessionBinding:
     """A caller-owned live session accepted by ``Agent.workspace``.
 
-    Built by :meth:`LocalWorkspace.bind` / :meth:`LocalWorkspace.session`;
-    delegates tools/instructions/injectors to the underlying config and hands
-    the held session to every run without ever closing it.
+    Built by :meth:`LocalWorkspace.bind` / :meth:`LocalWorkspace.session`,
+    or directly — ``WorkspaceSessionBinding(config, session)`` — around any
+    other backend's config and a session it opened. Delegates
+    tools/instructions/injectors to the underlying config and hands the held
+    session to every run without ever closing it.
     """
 
-    workspace: LocalWorkspace
+    workspace: WorkspaceLike
     _session: WorkspaceSession
     close_after_run: bool = False
 

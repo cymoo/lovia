@@ -275,6 +275,27 @@ async def test_write_create_only_and_nested_dirs(tmp_path) -> None:
     assert blocked.ok is False and blocked.action == "unchanged"
 
 
+async def test_write_bytes_roundtrip_create_only_and_gate(tmp_path) -> None:
+    raw = bytes(range(256))  # not valid UTF-8: must land untouched
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    created = await session.write_bytes("out/blob.bin", raw, create_only=True)
+    assert created.action == "created" and created.bytes_written == 256
+    assert (tmp_path / "out" / "blob.bin").read_bytes() == raw
+
+    blocked = await session.write_bytes("out/blob.bin", b"other", create_only=True)
+    assert blocked.ok is False and blocked.action == "unchanged"
+    assert (tmp_path / "out" / "blob.bin").read_bytes() == raw
+
+    updated = await session.write_bytes("out/blob.bin", b"\x00\x01")
+    assert updated.action == "updated"
+    assert (tmp_path / "out" / "blob.bin").read_bytes() == b"\x00\x01"
+
+    # Same gate as write_text.
+    readonly = await _session(tmp_path, policy=WorkspacePolicy.readonly())
+    with pytest.raises(PermissionDeniedError):
+        await readonly.write_bytes("out/blob.bin", b"x")
+
+
 async def test_edit_exact_replace_and_failures(tmp_path) -> None:
     (tmp_path / "code.py").write_text("x = 1\ny = 1\n", encoding="utf-8")
     session = await _session(tmp_path)

@@ -38,6 +38,16 @@ class WorkspaceSession(Protocol):
 
     policy: WorkspacePolicy
 
+    def set_policy(self, policy: WorkspacePolicy) -> None:
+        """Judge every later operation by ``policy``.
+
+        The session keeps its processes and root, so a serving layer can
+        change a conversation's permissions without killing what it started.
+        Call it between runs: an operation already past its gate is not
+        re-judged.
+        """
+        ...
+
     def decide_path(self, path: str, *, write: bool = False) -> Verdict:
         """Policy verdict for one path (for the tools' permission predicates)."""
         ...
@@ -65,6 +75,19 @@ class WorkspaceSession(Protocol):
         self, path: str, content: str, *, create_only: bool = False
     ) -> FileChange:
         """Write UTF-8 text to ``path``, creating parent directories."""
+        ...
+
+    async def write_bytes(
+        self, path: str, data: bytes, *, create_only: bool = False
+    ) -> FileChange:
+        """Write raw bytes to ``path`` — :meth:`write_text` without the
+        encoding (binary payloads, e.g. an upload or a generated image).
+
+        With ``create_only`` an existing file is left alone and the result
+        says so (``ok=False``, ``action="unchanged"``); the check and the
+        creation are one atomic step, so concurrent writers can't clobber
+        each other.
+        """
         ...
 
     async def edit_text(

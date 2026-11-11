@@ -255,7 +255,11 @@ caller-owned one via `LocalWorkspace.bind(session)` (or the
 `.session()` context manager): `lovia web` binds one session per **chat**,
 so a dev server started in one turn is still up when the next message
 arrives, and dies when the chat is deleted or the server shuts down
-(Ctrl+C; a hard `kill -9` skips teardown and orphans processes).
+(Ctrl+C; a hard `kill -9` skips teardown and orphans processes). A custom
+backend's session binds the same way:
+`WorkspaceSessionBinding(config, session)`. Between runs,
+`session.set_policy(policy)` changes what a held session allows without
+closing it.
 
 A virtualenv at the workspace root (`.venv` preferred, `venv` accepted) is
 **auto-activated** for every command: its bin dir is prepended to `PATH`
@@ -314,7 +318,8 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 ```
 
 Custom tools reach the active run's session as `ctx.workspace` and get the
-same gate: `read_text` / `write_text` / `edit_text` / `list_files` /
+same gate: `read_text` / `read_bytes` / `write_text` / `write_bytes` /
+`edit_text` / `list_files` /
 `grep` / `run` / `spawn` / `read_process_output` / `kill_process`, plus
 `decide_path(path, write=...)` and
 `decide_command(command)` for tools that want to *check* before acting.

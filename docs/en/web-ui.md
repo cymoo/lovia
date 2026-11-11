@@ -340,8 +340,8 @@ the draft holds some. The Files panel shows the open chat's folder, and the
 agent reads that folder's `AGENTS.md` and skills.
 
 **A folder on another machine.** When the page is served on this computer
-only (the default, `127.0.0.1`), the add dialog has a **Where** choice:
-**This computer**, **SSH host** or **Container**. Name the host — an alias
+only (the default, `127.0.0.1`), the add dialog has three tabs: **Local**,
+**SSH** and **Container**. On the last two, name the host — an alias
 from `~/.ssh/config` or `user@host`; a running container, or
 `user@container` to be someone other than its default user — and the list
 shows *its* folders. Chats in that folder run there: the agent's file and

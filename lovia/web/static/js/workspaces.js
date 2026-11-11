@@ -697,22 +697,19 @@ function whereRow(onChange) {
   if (!remotes) return { row: null, front: () => /** @type {string | undefined} */ (undefined) };
   const row = document.createElement('div');
   row.className = 'lv-ws-where';
-  const kind = document.createElement('select');
-  kind.className = 'lv-dialog-input';
-  kind.setAttribute('aria-label', t('ws.where'));
-  const add = (/** @type {string} */ value, /** @type {string} */ label) => {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = label;
-    kind.appendChild(option);
-  };
-  add('', t('ws.whereLocal'));
+  // Tabs, in the Files panel's look: a handful of choices, all in view.
+  const tabs = document.createElement('div');
+  tabs.className = 'lv-files-tabs';
+  tabs.setAttribute('role', 'tablist');
+  tabs.setAttribute('aria-label', t('ws.where'));
+  /** @type {[string, string][]} */
+  const choices = [['', t('ws.whereLocal')]];
   if (remotes === 'any') {
-    add('ssh', t('ws.whereSsh'));
-    add('docker', t('ws.whereDocker'));
+    choices.push(['ssh', t('ws.whereSsh')], ['docker', t('ws.whereDocker')]);
   } else {
-    for (const name of remotes) add(`remote://${name}`, name);
+    for (const name of remotes) choices.push([`remote://${name}`, name]);
   }
+  let kind = '';
   const host = document.createElement('input');
   host.type = 'text';
   host.className = 'lv-dialog-input lv-ws-where-host';
@@ -720,26 +717,57 @@ function whereRow(onChange) {
   host.autocomplete = 'off';
   host.setAttribute('autocapitalize', 'off');
   host.hidden = true;
-  const named = () => kind.value === 'ssh' || kind.value === 'docker';
-  kind.addEventListener('change', () => {
+  const named = () => kind === 'ssh' || kind === 'docker';
+  const buttons = choices.map(([value, label]) => {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'lv-files-tab';
+    tab.setAttribute('role', 'tab');
+    tab.textContent = label;
+    tab.addEventListener('click', () => choose(value, false));
+    tabs.appendChild(tab);
+    return tab;
+  });
+  const paint = () =>
+    buttons.forEach((tab, i) => {
+      const on = choices[i][0] === kind;
+      tab.classList.toggle('lv-active', on);
+      tab.setAttribute('aria-selected', String(on));
+      tab.tabIndex = on ? 0 : -1; // one tab stop; arrows move within
+    });
+  /** @param {string} value @param {boolean} byKey — keep the focus on the tabs */
+  const choose = (value, byKey) => {
+    if (value === kind) return;
+    kind = value;
+    paint();
     host.hidden = !named();
     host.value = '';
     if (named()) {
-      host.placeholder = t(kind.value === 'ssh' ? 'ws.hostSsh' : 'ws.hostDocker');
+      host.placeholder = t(kind === 'ssh' ? 'ws.hostSsh' : 'ws.hostDocker');
       host.setAttribute('aria-label', host.placeholder);
-      host.focus();
+      if (!byKey) host.focus();
     }
     onChange();
+  };
+  tabs.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const n = choices.length;
+    const at = choices.findIndex(([value]) => value === kind);
+    const next = (at + (e.key === 'ArrowRight' ? 1 : n - 1)) % n;
+    choose(choices[next][0], true);
+    buttons[next].focus();
   });
   host.addEventListener('change', onChange);
-  row.append(kind, host);
+  paint();
+  row.append(tabs, host);
   return {
     row,
     front: () => {
-      if (!kind.value) return undefined;
-      if (!named()) return kind.value; // a declared host: "remote://name"
+      if (!kind) return undefined;
+      if (!named()) return kind; // a declared host: "remote://name"
       const name = host.value.trim();
-      return name ? `${kind.value}://${name}` : '';
+      return name ? `${kind}://${name}` : '';
     },
   };
 }
@@ -793,7 +821,12 @@ export function addWorkspaceDialog() {
     const placeholder = () =>
       where.front() === undefined ? localPlaceholder : t('ws.pathPlaceholder');
     input.addEventListener('input', () => (error.hidden = true));
-    const hint = para(t('ws.addHint'), 'lv-ws-dialog-hint');
+    // With tabs above it the hint changes per tab: hold its two lines, so
+    // the dialog keeps its height and the tabs stay under the pointer.
+    const hint = para(
+      t('ws.addHint'),
+      'lv-ws-dialog-hint' + (where.row ? ' lv-ws-dialog-hint-held' : ''),
+    );
     body.append(title, hint, ...(where.row ? [where.row] : []), wrap, error);
 
     const actions = document.createElement('div');

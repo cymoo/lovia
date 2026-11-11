@@ -10,45 +10,33 @@ mirror issue #107's two stages:
 * Images additionally go **inline** as :class:`~lovia.ImagePart` only when the
   model can see them (:func:`~lovia.providers.supports_vision`).
 
-The client's ``path`` is never trusted: each is re-resolved against the
-workspace root and dropped if it escapes or doesn't exist.
+The client's ``path`` is never trusted: each is looked up through a readonly
+session on the chat's workspace (:func:`~lovia.web.workspaces.open_view`) —
+on its host, for a remote one — and dropped if it escapes the root or
+doesn't exist.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
-from pathlib import Path
 from typing import Any
 
 from ..agent import Agent
+from ..exceptions import UserError
 from ..messages import Message, user
 from ..parts import ContentPart, ImagePart, TextPart
 from ..providers import supports_vision
-from ..workspace import LocalWorkspace, RemoteWorkspace
-from ..workspace.paths import resolve_path
+from ..workspace import WorkspaceDisconnectedError, WorkspaceError
 from .errors import WebError
 from .media import model_image_mime
 from .schemas import Attachment, ChatRequest
+from .workspaces import files_config, open_view
 
 log = logging.getLogger(__name__)
 
 
-def _workspace_config(agent: Agent[Any]) -> Any:
-    """The agent's workspace config — through a session binding, whose
-    ``.workspace`` is the config."""
-    ws = agent.workspace
-    return getattr(ws, "workspace", ws)
-
-
-def _workspace_root(agent: Agent[Any]) -> Path | None:
-    """The agent's local-workspace root, or None (mirrors ``workspace_cfg``)."""
-    cfg = _workspace_config(agent)
-    if isinstance(cfg, LocalWorkspace):
-        return Path(cfg.root).expanduser().resolve()
-    return None
-
-
-def user_content(
+async def user_content(
     message: str, attachments: list[Attachment] | None, agent: Agent[Any]
 ) -> str | list[ContentPart]:
     """One user message's content: plain text, or multimodal parts.
@@ -56,22 +44,13 @@ def user_content(
     Returns ``message`` unchanged when there are no usable attachments, so
     the common text-only path is untouched. Otherwise returns the text, any
     inlined images, and a note pointing at every attachment's workspace path.
+
+    A workspace that can't be reached at all (a remote host that is down) is
+    a 502, not a message sent without what it was shown.
     """
     attachments = attachments or []
-    if attachments and isinstance(_workspace_config(agent), RemoteWorkspace):
-        # Attachments are files under this machine's copy of the chat's
-        # directory, and a remote chat has none. Refused here — the one place
-        # every way in (send, stream, inject) folds them in — because
-        # dropping them and answering the text alone would read as the
-        # assistant ignoring what it was shown.
-        raise WebError(
-            404,
-            "feature_unavailable",
-            "attachments don't reach a remote workspace yet",
-            hint="put the file on the host and name its path in the message",
-        )
-    root = _workspace_root(agent)
-    if not attachments or root is None:
+    cfg = files_config(agent)
+    if not attachments or cfg is None:
         return message
 
     can_see = supports_vision(getattr(agent, "model", None))
@@ -79,23 +58,54 @@ def user_content(
     if message.strip():
         parts.append(TextPart(message))
 
+    try:
+        session = await open_view(cfg)
+    except UserError:  # the root is gone: nothing in it to attach
+        return message
+    except WorkspaceError as exc:
+        raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
     rels: list[str] = []
-    for att in attachments:
-        resolved = resolve_path(root, att.path)
-        if not resolved.inside or not resolved.abs.is_file():
-            log.warning(
-                "dropping attachment outside workspace or missing: %r", att.path
-            )
-            continue
-        rels.append(resolved.rel or att.path)
-        # Whether to inline is decided from the saved file's extension, not the
-        # client-supplied kind/mime — the file on disk is the source of truth.
-        image_mime = model_image_mime(resolved.abs) if can_see else None
-        if image_mime:
+    try:
+        for att in attachments:
             try:
-                parts.append(ImagePart.from_path(resolved.abs, mime_type=image_mime))
-            except (OSError, ValueError) as exc:  # pragma: no cover - defensive
-                log.warning("could not inline image %s: %s", resolved.rel, exc)
+                # Outside the root is a deny under the view's policy, so
+                # what gets past this is inside it.
+                entry = await session.stat(att.path)
+            except WorkspaceDisconnectedError:
+                raise
+            except (OSError, UserError, WorkspaceError) as exc:
+                log.warning("dropping attachment %r: %s", att.path, exc)
+                continue
+            if entry.is_dir:
+                log.warning("dropping attachment %r: a directory", att.path)
+                continue
+            rels.append(entry.path)
+            # Whether to inline is decided from the saved file's extension,
+            # not the client-supplied kind/mime — the file on disk is the
+            # source of truth.
+            image_mime = model_image_mime(entry.path) if can_see else None
+            if image_mime is None:
+                continue
+            try:
+                image = await session.read_bytes(
+                    att.path, max_bytes=cfg.limits.max_file_read_bytes
+                )
+            except WorkspaceDisconnectedError:
+                raise
+            except (OSError, UserError, WorkspaceError) as exc:
+                # Still attached by path: the note below names it.
+                log.warning("could not inline image %s: %s", entry.path, exc)
+                continue
+            parts.append(
+                ImagePart(
+                    data=base64.b64encode(image.data).decode("ascii"),
+                    mime_type=image_mime,
+                )
+            )
+    except WorkspaceDisconnectedError as exc:
+        raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
+    finally:
+        await session.close()
 
     if not rels:
         return message  # every attachment was dropped → plain text
@@ -108,9 +118,9 @@ def user_content(
     return parts
 
 
-def build_user_input(req: ChatRequest, agent: Agent[Any]) -> str | list[Message]:
+async def build_user_input(req: ChatRequest, agent: Agent[Any]) -> str | list[Message]:
     """The runner input for one turn: a plain string, or one multimodal message."""
-    content = user_content(req.message, req.attachments, agent)
+    content = await user_content(req.message, req.attachments, agent)
     return content if isinstance(content, str) else [user(content)]
 
 

@@ -24,7 +24,7 @@ import {
 } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
-import { scopeRoot, workspaceName } from './workspaces.js';
+import { isRemote, scopeRoot, workspaceName } from './workspaces.js';
 import { sortRows } from './tables.js';
 import { renderMermaid } from './diagrams.js';
 import { sandboxFrame } from './sandbox.js';
@@ -522,7 +522,8 @@ function fillCrumbs(into, path, go, { fold = false } = {}) {
   if (root) home.title = root;
   const homeName = document.createElement('span'); // ellipsizes; the glyph doesn't
   homeName.textContent = root ? workspaceName(root) : _rootName || '~';
-  home.innerHTML = icon('folder', { size: 13 });
+  // … behind the glyph the sidebar gives it: a server for one on another machine.
+  home.innerHTML = icon(root && isRemote(root) ? 'server' : 'folder', { size: 13 });
   home.appendChild(homeName);
   into.appendChild(home);
   parts.forEach((part, i) => {

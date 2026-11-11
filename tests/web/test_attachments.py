@@ -8,6 +8,7 @@ trusted — a traversal or a missing file is dropped.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from pathlib import Path
 
@@ -47,38 +48,43 @@ def _texts(parts: list) -> str:
     return " ".join(p.text for p in parts if isinstance(p, TextPart))
 
 
-def test_no_attachments_returns_plain_string(tmp_path: Path) -> None:
+async def test_no_attachments_returns_plain_string(tmp_path: Path) -> None:
     agent = _agent(tmp_path, vision=True)
-    assert build_user_input(ChatRequest(message="hello"), agent) == "hello"
+    assert await build_user_input(ChatRequest(message="hello"), agent) == "hello"
 
 
-def test_vision_inlines_image_and_notes_its_path(tmp_path: Path) -> None:
+async def test_vision_inlines_image_and_notes_its_path(tmp_path: Path) -> None:
     rel = _seed_image(tmp_path)
     agent = _agent(tmp_path, vision=True)
     req = ChatRequest(
         message="what is this", attachments=[_att(rel, "image/png", "image")]
     )
-    out = build_user_input(req, agent)
+    out = await build_user_input(req, agent)
     assert isinstance(out, list) and len(out) == 1
     parts = out[0].content
-    assert sum(isinstance(p, ImagePart) for p in parts) == 1  # inlined once
+    images = [p for p in parts if isinstance(p, ImagePart)]
+    assert len(images) == 1  # inlined once
+    assert base64.b64decode(images[0].data) == PNG
+    assert images[0].mime_type == "image/png"
     assert "what is this" in _texts(parts)
     assert rel in _texts(parts)  # path still noted so tools can reach it
 
 
-def test_non_vision_references_path_without_inlining(tmp_path: Path) -> None:
+async def test_non_vision_references_path_without_inlining(tmp_path: Path) -> None:
     rel = _seed_image(tmp_path)
     agent = _agent(tmp_path, vision=False)
     req = ChatRequest(
         message="what is this", attachments=[_att(rel, "image/png", "image")]
     )
-    out = build_user_input(req, agent)
+    out = await build_user_input(req, agent)
     parts = out[0].content
     assert not any(isinstance(p, ImagePart) for p in parts)  # NOT inlined
     assert rel in _texts(parts)
 
 
-def test_file_attachment_is_reference_only_even_with_vision(tmp_path: Path) -> None:
+async def test_file_attachment_is_reference_only_even_with_vision(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "uploads").mkdir()
     (tmp_path / "uploads" / "report.pdf").write_bytes(b"%PDF-1.4 test")
     agent = _agent(tmp_path, vision=True)
@@ -86,35 +92,80 @@ def test_file_attachment_is_reference_only_even_with_vision(tmp_path: Path) -> N
         message="summarize",
         attachments=[_att("uploads/report.pdf", "application/pdf", "file")],
     )
-    parts = build_user_input(req, agent)[0].content
+    parts = (await build_user_input(req, agent))[0].content
     assert not any(isinstance(p, ImagePart) for p in parts)
     assert "uploads/report.pdf" in _texts(parts)
 
 
-def test_path_traversal_is_dropped(tmp_path: Path) -> None:
+async def test_path_traversal_is_dropped(tmp_path: Path) -> None:
     agent = _agent(tmp_path, vision=True)
     req = ChatRequest(
         message="", attachments=[_att("../../etc/passwd", "image/png", "image")]
     )
     # Nothing usable was attached → falls back to the (empty) text turn.
-    assert build_user_input(req, agent) == ""
+    assert await build_user_input(req, agent) == ""
 
 
-def test_missing_file_is_dropped_but_message_survives(tmp_path: Path) -> None:
+async def test_what_the_agent_is_denied_cannot_be_attached(tmp_path: Path) -> None:
+    # Attachments are looked up with the Files panel's eyes: a path the
+    # agent's policy hides, a directory, a link out of the root — none goes
+    # into the message, by path or inline.
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(PNG)
+    root = tmp_path / "root"
+    (root / "uploads").mkdir(parents=True)
+    (root / "secret.png").write_bytes(PNG)
+    (root / "escape.png").symlink_to(outside)
+    prov = ScriptedProvider([text("ok")])
+    prov.supports_vision = True  # type: ignore[attr-defined]
+    agent = Agent(
+        name="bot",
+        model=prov,
+        workspace=Workspace.local(str(root), denied_paths=("secret.png",)),
+    )
+    req = ChatRequest(
+        message="see",
+        attachments=[
+            _att(p, "image/png", "image")
+            for p in ("secret.png", "uploads", "escape.png", str(outside))
+        ],
+    )
+    assert await build_user_input(req, agent) == "see"
+
+
+async def test_an_image_too_large_to_inline_is_still_attached_by_path(
+    tmp_path: Path,
+) -> None:
+    from lovia.workspace import WorkspaceLimits
+
+    rel = _seed_image(tmp_path)
+    prov = ScriptedProvider([text("ok")])
+    prov.supports_vision = True  # type: ignore[attr-defined]
+    workspace = Workspace.local(
+        str(tmp_path), limits=WorkspaceLimits(max_file_read_bytes=8)
+    )
+    agent = Agent(name="bot", model=prov, workspace=workspace)
+    req = ChatRequest(message="see", attachments=[_att(rel, "image/png", "image")])
+    parts = (await build_user_input(req, agent))[0].content
+    assert not any(isinstance(p, ImagePart) for p in parts)
+    assert rel in _texts(parts)
+
+
+async def test_missing_file_is_dropped_but_message_survives(tmp_path: Path) -> None:
     (tmp_path / "uploads").mkdir()
     agent = _agent(tmp_path, vision=True)
     req = ChatRequest(
         message="hi", attachments=[_att("uploads/ghost.png", "image/png", "image")]
     )
-    assert build_user_input(req, agent) == "hi"
+    assert await build_user_input(req, agent) == "hi"
 
 
-def test_no_workspace_agent_ignores_attachments(tmp_path: Path) -> None:
+async def test_no_workspace_agent_ignores_attachments(tmp_path: Path) -> None:
     agent = Agent(name="plain", model=ScriptedProvider([text("ok")]))
     req = ChatRequest(
         message="hi", attachments=[_att("uploads/x.png", "image/png", "image")]
     )
-    assert build_user_input(req, agent) == "hi"
+    assert await build_user_input(req, agent) == "hi"
 
 
 def test_history_serialization_preserves_image_parts() -> None:

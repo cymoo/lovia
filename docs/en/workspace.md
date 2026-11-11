@@ -319,8 +319,9 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 ```
 
 Custom tools reach the active run's session as `ctx.workspace` and get the
-same gate: `read_text` / `read_bytes` / `write_text` / `write_bytes` /
-`edit_text` / `list_files` /
+same gate: `read_text` / `read_bytes` (whole, or a piece with `offset=` /
+`length=`) / `stat` / `write_text` / `write_bytes` / `edit_text` /
+`list_files` /
 `grep` / `run` / `spawn` / `read_process_output` / `kill_process`, plus
 `decide_path(path, write=...)` and
 `decide_command(command)` for tools that want to *check* before acting.
@@ -397,7 +398,8 @@ the result when `inspect.isawaitable` says so.
 
 `lovia web` keeps a remote workspace's session for the whole chat, like a
 local one, and lists its background processes. The Files panel, uploads and
-attachments still need a local workspace.
+attachments work there too: the page reads and writes the host's files
+through a read-only session of its own on the same connection.
 
 ## Sharp edges
 

@@ -231,7 +231,8 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 ```
 
 自定义工具可以通过 `ctx.workspace` 访问当前运行的工作区 Session，所有操作仍会经过同一套权限检查：
-`read_text` / `read_bytes` / `write_text` / `write_bytes` / `edit_text` / `list_files` /
+`read_text` / `read_bytes`（整个文件，或用 `offset=` / `length=` 读其中一段）/ `stat` /
+`write_text` / `write_bytes` / `edit_text` / `list_files` /
 `grep` / `run` / `spawn` /
 `read_process_output` / `kill_process`，以及
 `decide_path(path, write=...)` 和 `decide_command(command)`，供工具在行动前检查。两者都返回
@@ -291,7 +292,8 @@ await box.aclose()
 `decide_command(...)` 或 `background_processes()` 时，远程 session 返回的是 awaitable：
 `inspect.isawaitable` 为真时 `await` 它。
 
-`lovia web` 对远程工作区同样按对话持有 session，也能列出它的后台进程。Files 面板、上传和附件目前仍需要本地工作区。
+`lovia web` 对远程工作区同样按对话持有 session，也能列出它的后台进程。Files 面板、上传和附件在远程工作区同样可用：
+页面通过同一条连接上自己的只读 session 读写主机上的文件。
 
 ## 使用建议
 

@@ -148,7 +148,7 @@ normalizes all three.
 | `workspace_unassociated` | 409 | a chat from before chats had a directory: bind it to one first (`POST /api/sessions/associate`) |
 | `workspace_fixed` | 409 | the chat already works in a directory, which never changes |
 | `workspace_not_found` | 404 | no such entry in the workspace list (the fixed ones can't be removed) |
-| `workspace_unreachable` | 502 | a remote location's host could not be reached to look the directory up (`hint` carries what it said) |
+| `workspace_unreachable` | 502 | a remote location's host could not be reached — to look the directory up, or to read or write its files (`hint` carries what it said) |
 | `file_too_large` | 413 | over the workspace read or upload limit |
 | `unsupported_file_type` | 415 | not previewable inline, or an extension uploads don't allow |
 | `too_many_runs` | 429 | at the concurrent-run cap |

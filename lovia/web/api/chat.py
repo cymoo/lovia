@@ -170,7 +170,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 hint="use /api/chat/stream to attach or inject",
             )
         scoped = deps.at_root(agent, binding)
-        user_input = build_user_input(req, scoped)
+        user_input = await build_user_input(req, scoped)
         if isinstance(user_input, str) and not user_input.strip():
             # Attachments were given but all invalid (missing / outside the
             # workspace) and there's no text — nothing to run.
@@ -242,7 +242,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # that are missing or escape the chat's directory), so an
         # attachments-only request whose attachments are all invalid reads as
         # empty here. It starts a run, or steers the live one.
-        content = user_content(req.message, req.attachments, scoped)
+        content = await user_content(req.message, req.attachments, scoped)
         empty = isinstance(content, str) and not content.strip()
         # An empty turn is only meaningful as a pure attach to a live run;
         # rejecting it otherwise before the upsert avoids littering empty rows.
@@ -338,9 +338,13 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         ctrl = deps.supervisor.get(req.session_id)
         if ctrl is None:
             return {"accepted": False}
-        content = user_content(message, req.attachments, ctrl.agent)
+        content = await user_content(message, req.attachments, ctrl.agent)
         if not content:  # attachments only, and none of them usable
             raise WebError(422, "invalid_request", "empty message")
+        if deps.supervisor.get(req.session_id) is not ctrl:
+            # The run ended while its attachments were being looked up (on
+            # another machine, for a remote chat): nothing left to steer.
+            return {"accepted": False}
         return {"accepted": True, "id": ctrl.inject(content)}
 
     @router.post("/api/chat/uninject")

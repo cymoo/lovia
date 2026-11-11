@@ -5,48 +5,59 @@ thing the assistant just made" — a recency-sorted flat list — with breadcrum
 browsing, text content, and raw bytes (image preview / download) behind it.
 
 Every read runs through a session forced to a **readonly** policy built from
-the agent's workspace config. The agent's own mode may answer ``ask`` for
-approval-gated operations, but a web GET has no approval flow — under the
-readonly preset everything outside the root (and everything the agent's
-``denied_paths`` hide, e.g. ``.env*``) is a plain ``deny``, which the session
-raises as :class:`PermissionDeniedError`. The panel can never see more than
-the agent itself could read without asking. That is the only access rule:
-what Recent *lists* is a separate, presentation-only filter
-(:data:`_RECENT_SKIPS`), so a path the panel doesn't surface — an inline
-image the assistant wrote under ``tmp/``, a tool card's "open in Files" —
-still opens when asked for by name.
+the agent's workspace config (:func:`~lovia.web.workspaces.open_view`). The
+agent's own mode may answer ``ask`` for approval-gated operations, but a web
+GET has no approval flow — under the readonly preset everything outside the
+root (and everything the agent's ``denied_paths`` hide, e.g. ``.env*``) is a
+plain ``deny``, which the session raises as :class:`PermissionDeniedError`.
+The panel can never see more than the agent itself could read without
+asking. That is the only access rule: what Recent *lists* is a separate,
+presentation-only filter (:data:`_RECENT_SKIPS`), so a path the panel
+doesn't surface — an inline image the assistant wrote under ``tmp/``, a tool
+card's "open in Files" — still opens when asked for by name.
+
+The session is opened where the files are, so a chat working on a remote
+host is served by the same routes: nothing here touches this machine's disk
+except ``raw`` for a local file, which keeps ``FileResponse`` (ranges,
+``sendfile``) instead of carrying bytes through the session.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import mimetypes
 import os
 import re
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 try:
     from fastapi import APIRouter, File, Query, Request, UploadFile
-    from fastapi.responses import FileResponse, Response
+    from fastapi.responses import FileResponse, Response, StreamingResponse
+    from starlette.background import BackgroundTask
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
 
     raise_missing_web_extra(exc)
 
-from ...agent import Agent
 from ...exceptions import UserError
 from ...workspace import (
     SCRATCH_DIR,
+    FileTooLargeError,
     LocalWorkspace,
-    LocalWorkspaceSession,
     PermissionDeniedError,
+    RemoteWorkspace,
+    WorkspaceDisconnectedError,
     WorkspaceError,
-    WorkspacePolicy,
 )
 from ...workspace.paths import resolve_path
+from ...workspace.protocol import WorkspaceSession
 from ..errors import WebError
 from ..media import is_preview_image, preview_image_mime
 from ..schemas import (
@@ -56,20 +67,10 @@ from ..schemas import (
     WorkspaceFile,
     WorkspaceInfo,
 )
-from ..workspaces import WorkspaceRef
+from ..workspaces import ChatBinding, WorkspaceRef, files_config, open_view
 from .deps import RouterDeps
 
-
-def workspace_cfg(agent: Agent[Any]) -> LocalWorkspace | None:
-    """The agent's local-workspace config, or None when the panel can't serve.
-
-    ``Agent.workspace`` may be a ``LocalWorkspace`` or a session binding whose
-    ``.workspace`` points back at one; any other ``WorkspaceLike`` has no
-    root/policy semantics we can browse.
-    """
-    ws = agent.workspace
-    cfg = getattr(ws, "workspace", ws)
-    return cfg if isinstance(cfg, LocalWorkspace) else None
+FilesConfig = LocalWorkspace | RemoteWorkspace
 
 
 # What the Recent list leaves out — a presentation rule, not an access one:
@@ -95,46 +96,103 @@ _RECENT_SKIPS: tuple[str, ...] = (
 )
 
 
-def _view_session(
-    cfg: LocalWorkspace, *, skip: tuple[str, ...] = ()
-) -> LocalWorkspaceSession:
-    """A per-request session locked to readonly.
+@asynccontextmanager
+async def _view(
+    cfg: FilesConfig, *, skip: tuple[str, ...] = (), write: bool = False
+) -> AsyncIterator[WorkspaceSession]:
+    """A per-request :func:`~lovia.web.workspaces.open_view` session, with
+    what goes wrong in it said as an HTTP error.
 
-    Carries over only ``denied_paths`` from the agent's policy — never its
-    ``path_rules``, which could *widen* access (e.g. allow reads outside the
-    root that plain readonly denies). ``skip`` adds paths for a listing to
-    leave out: the readonly policy's deny is the one pre-cap filter the walk
-    has, and for a listing "skipped" and "denied" look the same — so only
-    the Recent walk passes it, never a read.
+    Only the Recent walk passes ``skip`` and only an upload ``write`` —
+    never a read.
     """
-    return LocalWorkspaceSession(
-        root=cfg.root,
-        policy=WorkspacePolicy.readonly(denied_paths=cfg.policy.denied_paths + skip),
-        limits=cfg.limits,
-    )
+    try:
+        session = await open_view(cfg, skip=skip, write=write)
+    except UserError as exc:  # the root is gone (moved, deleted)
+        raise WebError.from_exc(404, "file_not_found", exc) from exc
+    except WorkspaceError as exc:  # no way through to the host
+        raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
+    try:
+        yield session
+    except PermissionDeniedError as exc:
+        raise WebError.from_exc(403, "path_denied", exc) from exc
+    except FileTooLargeError as exc:
+        raise WebError.from_exc(413, "file_too_large", exc) from exc
+    except WorkspaceDisconnectedError as exc:
+        raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
+    except asyncio.TimeoutError as exc:
+        raise WebError(
+            502, "workspace_unreachable", "the workspace's host stopped answering"
+        ) from exc
+    # "Not a file: …", "Not a directory: …", a path that isn't there.
+    except (
+        FileNotFoundError,
+        NotADirectoryError,
+        IsADirectoryError,
+        WorkspaceError,
+        UserError,
+    ) as exc:
+        raise WebError.from_exc(404, "file_not_found", exc) from exc
+    finally:
+        await session.close()
 
 
-def _root_of(cfg: LocalWorkspace) -> Path:
+async def _must_read(session: WorkspaceSession, path: str) -> None:
+    """403 unless ``path`` reads without asking — stricter than the session
+    itself, which lets an ``ask`` through for the tool layer to settle."""
+    verdict = session.decide_path(path)
+    if inspect.isawaitable(verdict):  # a remote session asks its host
+        verdict = await verdict
+    if verdict.action != "allow":
+        raise WebError(403, "path_denied", "path not readable")
+
+
+def _root_name(cfg: FilesConfig) -> str:
+    if isinstance(cfg, RemoteWorkspace):
+        return PurePosixPath(cfg.root).name or cfg.host.name
     # Same normalization LocalWorkspaceSession applies to its root.
-    return Path(cfg.root).expanduser().resolve()
+    return Path(cfg.root).expanduser().resolve().name or "workspace"
 
 
 # Lines per /api/workspace/file page — small enough that the session's char
 # cap (50k) rarely clips within one page, so `truncated` ≈ "more lines exist".
 _PAGE_LINES = 500
 
+# How much of a file tells text from binary (the heuristic grep uses).
+_SNIFF_BYTES = 1024
 
-async def _sniff_binary(abs_path: Path) -> bool:
-    """True when the first KB smells binary (same heuristic grep uses)."""
+# One piece of a file read from a session for ``raw``. Each is a message of
+# its own over a remote connection: small enough that a slow link shows
+# progress (and keeps answering other requests in between), large enough that
+# the round trip per piece doesn't matter.
+_RAW_CHUNK = 256 * 1024
 
-    def _impl() -> bool:
-        try:
-            with abs_path.open("rb") as fh:
-                return b"\0" in fh.read(1024)
-        except OSError:
-            return False
 
-    return await asyncio.to_thread(_impl)
+def _etag(size: int, mtime: float | None) -> str:
+    """A validator for a file known only by its size and mtime — what
+    ``FileResponse`` derives its own from."""
+    return f'"{hashlib.md5(f"{mtime}-{size}".encode(), usedforsecurity=False).hexdigest()}"'
+
+
+def _not_modified(request: Request, etag: str | None) -> bool:
+    if_none_match = request.headers.get("if-none-match")
+    if not etag or not if_none_match:
+        return False
+    candidates = {
+        stripped.removeprefix("W/")
+        for t in if_none_match.split(",")
+        if (stripped := t.strip())
+    }
+    # "*" matches any current representation (RFC 9110 §13.1.2).
+    return "*" in candidates or etag.removeprefix("W/") in candidates
+
+
+def _attachment(name: str) -> str:
+    """A ``Content-Disposition`` that downloads as ``name`` (RFC 6266)."""
+    quoted = quote(name)
+    if quoted == name:
+        return f'attachment; filename="{name}"'
+    return f"attachment; filename*=utf-8''{quoted}"
 
 
 # Composer/Files-panel uploads land here, under the workspace root, so they
@@ -193,26 +251,29 @@ def _safe_upload_name(raw: str) -> str:
     return (base or "upload")[:120]
 
 
-def _write_upload(uploads: Path, name: str, data: bytes) -> Path:
-    """Create ``uploads/`` and write ``data`` to a collision-free target.
+async def _write_upload(
+    session: WorkspaceSession, name: str, data: bytes
+) -> tuple[str, str]:
+    """Write ``data`` under ``uploads/`` at a collision-free name; returns
+    the path written and its basename.
 
-    Uses exclusive creation (``O_EXCL``) so two concurrent uploads that pick the
-    same name can't clobber each other — the loser just advances to the next
-    suffix instead of overwriting (no check-then-write TOCTOU window).
+    A name is probed before it is written to: over a remote connection each
+    write attempt carries the whole file. The write itself still creates
+    exclusively, so two concurrent uploads that settle on one name can't
+    clobber each other — the loser moves on to the next suffix.
     """
-    uploads.mkdir(parents=True, exist_ok=True)
     stem, suffix = Path(name).stem, Path(name).suffix
     i = 0
     while True:
-        target = uploads / (name if i == 0 else f"{stem}-{i}{suffix}")
+        candidate = name if i == 0 else f"{stem}-{i}{suffix}"
+        rel = f"{_UPLOADS_SUBDIR}/{candidate}"
+        i += 1
         try:
-            fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            i += 1
-            continue
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        return target
+            await session.stat(rel)
+        except FileNotFoundError:
+            written = await session.write_bytes(rel, data, create_only=True)
+            if written.ok:
+                return rel, candidate
 
 
 def build_workspace_router(deps: RouterDeps) -> APIRouter:
@@ -220,11 +281,10 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
 
     async def require_cfg(
         agent_name: str | None, session: str | None = None, root: str | None = None
-    ) -> LocalWorkspace:
+    ) -> FilesConfig:
         """The workspace config to serve: the chat's directory with
         ``session``, ``root`` (a draft's, checked like a new chat's) with
         that, else the agent's own."""
-        where: str | None = None
         if session is not None:
             meta = await deps.store.get(session)
             if meta is None:
@@ -237,21 +297,21 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             root = meta.workspace_root
         else:
             agent = deps.pick(agent_name)
-        if root is not None and workspace_cfg(agent) is not None:
-            if WorkspaceRef.parse(root).remote:
-                # These routes read this machine's disk; a remote chat's
-                # files are on its host.
-                raise WebError(
-                    404,
-                    "feature_unavailable",
-                    "the Files panel and uploads don't reach a remote workspace yet",
-                    hint="ask the assistant to read or list files there instead",
-                )
-            where = deps.admit_root(agent, root).as_posix()
-        cfg = workspace_cfg(agent)
+        cfg = files_config(agent)
         if cfg is None:
             raise WebError(404, "feature_unavailable", "agent has no workspace")
-        return replace(cfg, root=where) if where is not None else cfg
+        # A chat only has a place of its own under an agent whose workspace
+        # is local (see RouterDeps.chat_binding).
+        if root is None or not isinstance(cfg, LocalWorkspace):
+            return cfg
+        if not WorkspaceRef.parse(root).remote:
+            return replace(cfg, root=deps.admit_root(agent, root).as_posix())
+        # Checked as a run there is, then built as one's workspace is: the
+        # host its chats are connected to, the agent's limits and denials.
+        there = ChatBinding(deps.admit(agent, root), None)
+        remote = files_config(deps.at_root(agent, there))
+        assert remote is not None
+        return remote
 
     def entry_out(e: Any) -> WorkspaceEntry:
         return WorkspaceEntry(
@@ -269,9 +329,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         root: str | None = Query(None, max_length=4096),
     ) -> WorkspaceInfo:
         cfg = await require_cfg(agent, chat, root)
-        return WorkspaceInfo(
-            name=_root_of(cfg).name or "workspace", scratch_dir=SCRATCH_DIR
-        )
+        return WorkspaceInfo(name=_root_name(cfg), scratch_dir=SCRATCH_DIR)
 
     @router.get("/api/workspace/files", response_model=list[WorkspaceEntry])
     async def list_dir(
@@ -282,16 +340,8 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     ) -> list[WorkspaceEntry]:
         """One directory level (breadcrumb browsing), dirs first."""
         cfg = await require_cfg(agent, chat, root)
-        try:
-            async with _view_session(cfg) as session:
-                entries = await session.list_files(path)
-        except PermissionDeniedError as exc:
-            raise WebError.from_exc(403, "path_denied", exc) from exc
-        except (FileNotFoundError, NotADirectoryError) as exc:
-            raise WebError.from_exc(404, "file_not_found", exc) from exc
-        # "Not a directory: …" / a vanished workspace root both land here.
-        except (WorkspaceError, UserError) as exc:
-            raise WebError.from_exc(404, "file_not_found", exc) from exc
+        async with _view(cfg) as session:
+            entries = await session.list_files(path)
         return [entry_out(e) for e in entries]
 
     @router.get("/api/workspace/recent", response_model=list[WorkspaceEntry])
@@ -308,13 +358,8 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         fine for the personal-assistant scale this UI targets.
         """
         cfg = await require_cfg(agent, chat, root)
-        try:
-            async with _view_session(cfg, skip=_RECENT_SKIPS) as session:
-                entries = await session.list_files(".", pattern="**/*")
-        except PermissionDeniedError as exc:
-            raise WebError.from_exc(403, "path_denied", exc) from exc
-        except (WorkspaceError, UserError) as exc:
-            raise WebError.from_exc(404, "file_not_found", exc) from exc
+        async with _view(cfg, skip=_RECENT_SKIPS) as session:
+            entries = await session.list_files(".", pattern="**/*")
         files = [e for e in entries if not e.is_dir]
         files.sort(key=lambda e: e.mtime or 0.0, reverse=True)
         return [entry_out(e) for e in files[:limit]]
@@ -335,26 +380,14 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         for the viewer's Load-more.
         """
         cfg = await require_cfg(agent, chat, root)
-        try:
-            async with _view_session(cfg) as session:
-                if session.decide_path(path).action != "allow":
-                    raise WebError(403, "path_denied", "path not readable")
-                resolved = resolve_path(_root_of(cfg), path)
-                if not resolved.abs.is_file():
-                    raise WebError(404, "file_not_found", "no such file")
-                if await _sniff_binary(resolved.abs):
-                    return WorkspaceFile(
-                        path=resolved.display(), content="", binary=True
-                    )
-                content = await session.read_text(
-                    path, start=start, end=start + _PAGE_LINES - 1
-                )
-        except PermissionDeniedError as exc:
-            raise WebError.from_exc(403, "path_denied", exc) from exc
-        except FileNotFoundError as exc:
-            raise WebError.from_exc(404, "file_not_found", exc) from exc
-        except (IsADirectoryError, WorkspaceError, UserError) as exc:
-            raise WebError.from_exc(404, "file_not_found", exc) from exc
+        async with _view(cfg) as session:
+            await _must_read(session, path)
+            head = await session.read_bytes(path, length=_SNIFF_BYTES)
+            if b"\0" in head.data:
+                return WorkspaceFile(path=head.path, content="", binary=True)
+            content = await session.read_text(
+                path, start=start, end=start + _PAGE_LINES - 1
+            )
         return WorkspaceFile(
             path=content.path,
             content=content.content,
@@ -377,74 +410,108 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         for any file when ``download=1`` — "take the file the assistant made"
         is a first-class action for an assistant UI."""
         cfg = await require_cfg(agent, chat, root)
-        try:
-            async with _view_session(cfg) as session:
-                if session.decide_path(path).action != "allow":
-                    raise WebError(403, "path_denied", "path not readable")
-        except UserError as exc:
-            raise WebError.from_exc(404, "file_not_found", exc) from exc
-        resolved = resolve_path(_root_of(cfg), path)
-        if not resolved.abs.is_file():
-            raise WebError(404, "file_not_found", "no such file")
-        try:
-            stat_result = resolved.abs.stat()
-        except OSError as exc:  # vanished between the is_file check and here
-            raise WebError(404, "file_not_found", "no such file") from exc
-        if stat_result.st_size > cfg.limits.max_file_read_bytes:
+        async with AsyncExitStack() as stack:
+            session = await stack.enter_async_context(_view(cfg))
+            await _must_read(session, path)
+            if isinstance(cfg, LocalWorkspace):
+                return _raw_local(cfg, path, request, download)
+            entry = await session.stat(path)
+            if entry.is_dir or entry.size is None:
+                raise WebError(404, "file_not_found", "no such file")
+            name, size = PurePosixPath(entry.path).name, entry.size
+            media_type, headers = _raw_head(cfg, name, size, download)
+            headers["etag"] = _etag(size, entry.mtime)
+            if _not_modified(request, headers["etag"]):
+                return Response(status_code=304, headers=headers)
+            headers["content-length"] = str(size)
+            if download:
+                headers["content-disposition"] = _attachment(name)
+            # The session outlives this function: the body is read through it
+            # a piece at a time, as the client takes it.
+            held = stack.pop_all()
+
+        async def pieces() -> AsyncIterator[bytes]:
+            async with held:
+                sent = 0
+                while sent < size:
+                    piece = await session.read_bytes(
+                        path, offset=sent, length=min(_RAW_CHUNK, size - sent)
+                    )
+                    if not piece.data:
+                        return  # it shrank under us: the client sees it cut short
+                    sent += len(piece.data)
+                    yield piece.data
+
+        return StreamingResponse(
+            pieces(),
+            media_type=media_type,
+            headers=headers,
+            # For a body that is never started (the client already gone).
+            background=BackgroundTask(held.aclose),
+        )
+
+    def _raw_head(
+        cfg: FilesConfig, name: str, size: int, download: bool
+    ) -> tuple[str, dict[str, str]]:
+        """The media type and headers ``raw`` answers with for a file called
+        ``name`` — once it is one ``raw`` serves at all."""
+        if size > cfg.limits.max_file_read_bytes:
             raise WebError(413, "file_too_large", "file too large")
         # Prefer the explicit preview map so a nosniff'd inline image carries a
         # correct, OS-stable Content-Type; fall back to mimetypes for non-images
         # (only served via download=1 anyway).
-        is_pdf = resolved.abs.suffix.lower() == ".pdf"
+        is_pdf = name.lower().endswith(".pdf")
         media_type = (
             "application/pdf"
             if is_pdf
-            else preview_image_mime(resolved.abs.name)
-            or mimetypes.guess_type(resolved.abs.name)[0]
+            else preview_image_mime(name) or mimetypes.guess_type(name)[0]
         )
         # Inline only browser-renderable images (by extension) plus PDF, whose
         # in-browser viewer is sandboxed away from the page's origin (no DOM or
         # cookie access — the Files panel embeds it for preview). SVG is excluded
         # (it can carry scripts — a crafted upload would be a stored-XSS vector);
         # it stays reachable via download=1. See lovia/web/media.py.
-        inline_ok = is_preview_image(resolved.abs.name) or is_pdf
+        inline_ok = is_preview_image(name) or is_pdf
         if not download and not inline_ok:
             raise WebError(
                 415, "unsupported_file_type", "inline preview is images and PDFs only"
             )
         # `no-cache` = cache but revalidate: the viewer re-opens the same URL
         # constantly (and re-renders after every agent edit), so unchanged
-        # files answer 304 from the ETag below instead of re-sending bytes —
-        # and changed files show fresh without any query-string busting.
+        # files answer 304 from the ETag instead of re-sending bytes — and
+        # changed files show fresh without any query-string busting.
         # `nosniff` stops a browser from MIME-sniffing a mislabeled file (e.g. a
         # non-image named .png) and rendering it as HTML — defense in depth for
         # serving user-uploaded bytes inline, on top of the images-only gate.
+        return media_type or "application/octet-stream", {
+            "cache-control": "no-cache",
+            "x-content-type-options": "nosniff",
+        }
+
+    def _raw_local(
+        cfg: LocalWorkspace, path: str, request: Request, download: bool
+    ) -> Response:
+        """``raw`` for a file on this machine: straight off the disk."""
+        # Same normalization LocalWorkspaceSession applies to its root.
+        target = resolve_path(Path(cfg.root).expanduser().resolve(), path).abs
+        if not target.is_file():
+            raise WebError(404, "file_not_found", "no such file")
+        try:
+            stat_result = target.stat()
+        except OSError as exc:  # vanished between the is_file check and here
+            raise WebError(404, "file_not_found", "no such file") from exc
+        media_type, headers = _raw_head(cfg, target.name, stat_result.st_size, download)
         response = FileResponse(
-            resolved.abs,
-            media_type=media_type or "application/octet-stream",
+            target,
+            media_type=media_type,
             stat_result=stat_result,
-            filename=resolved.abs.name if download else None,
+            filename=target.name if download else None,
             content_disposition_type="attachment" if download else "inline",
-            headers={"cache-control": "no-cache", "x-content-type-options": "nosniff"},
+            headers=headers,
         )
         etag = response.headers.get("etag")
-        if_none_match = request.headers.get("if-none-match")
-        if etag and if_none_match:
-            candidates = {
-                stripped.removeprefix("W/")
-                for t in if_none_match.split(",")
-                if (stripped := t.strip())
-            }
-            # "*" matches any current representation (RFC 9110 §13.1.2).
-            if "*" in candidates or etag.removeprefix("W/") in candidates:
-                return Response(
-                    status_code=304,
-                    headers={
-                        "etag": etag,
-                        "cache-control": "no-cache",
-                        "x-content-type-options": "nosniff",
-                    },
-                )
+        if etag and _not_modified(request, etag):
+            return Response(status_code=304, headers={"etag": etag, **headers})
         return response
 
     # ---- background processes (chat-scoped) --------------------------------
@@ -505,16 +572,20 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     ) -> UploadedFile:
         """Save a composer/Files-panel upload under the workspace ``uploads/``.
 
-        Requires a local workspace (same 404 gate as the panel). The file's
+        Requires a workspace the panel serves (same 404 gate). The file's
         extension is checked against an allowlist (``LOVIA_UPLOAD_ALLOWED_EXT``)
         and its size against a cap (``LOVIA_MAX_UPLOAD_MB``) enforced while
         reading, so a disallowed or huge upload is rejected without exhausting
         memory. The bytes are then written to a collision-free name, immediately
         servable via ``/api/workspace/raw`` and referenced from chat by path.
+
+        Written through a session of its own, not the chat's: an upload is
+        the user's act, so a chat in a read-only mode takes one too — but
+        only ever under the root (an ``uploads`` that links out of it is
+        refused).
         """
         cfg = await require_cfg(agent, chat, root)
         name = _safe_upload_name(file.filename or "upload")
-        uploads = _root_of(cfg) / _UPLOADS_SUBDIR
         allowed = _allowed_upload_ext()
         max_bytes = _max_upload_bytes()
         ext = Path(name).suffix.lower().lstrip(".")
@@ -530,22 +601,23 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
                     raise WebError(413, "file_too_large", "file too large")
             if not data:
                 raise WebError(422, "invalid_request", "empty file")
-            target = await asyncio.to_thread(_write_upload, uploads, name, bytes(data))
         finally:
             await file.close()
+        async with _view(cfg, write=True) as session:
+            saved, name = await _write_upload(session, name, bytes(data))
         # Type comes from the SAVED extension, never the client's Content-Type;
         # kind="image" is the browser-previewable set (SVG excluded — it can
         # carry scripts), so the composer previews only what is safe to render.
         mime = (
-            preview_image_mime(target.name)
-            or mimetypes.guess_type(target.name)[0]
+            preview_image_mime(name)
+            or mimetypes.guess_type(name)[0]
             or "application/octet-stream"
         )
         return UploadedFile(
-            path=f"{_UPLOADS_SUBDIR}/{target.name}",
-            name=target.name,
+            path=saved,
+            name=name,
             mime=mime,
-            kind="image" if is_preview_image(target.name) else "file",
+            kind="image" if is_preview_image(name) else "file",
             size=len(data),
         )
 

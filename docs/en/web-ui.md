@@ -348,8 +348,10 @@ shows *its* folders. Chats in that folder run there: the agent's file and
 shell tools work on the host, under the chat's permission mode, and the
 sidebar marks the folder with a server icon. The host needs `python3` 3.10
 or newer and nothing installed, and SSH must work without a password prompt
-(keys or an agent). What a remote chat doesn't have yet: the Files panel,
-uploads and attachments, and the folder's `AGENTS.md` and skills. If the
+(keys or an agent). The Files panel shows the host's folder, and uploads
+and attachments are saved there (under `uploads/`, as in a local one); a
+large file takes as long as the link to the host does. What a remote chat
+doesn't have yet: the folder's `AGENTS.md` and skills. If the
 connection drops, the run in progress fails and says so; the next message
 reconnects. See [Remote workspaces](workspace.md#remote-workspaces).
 

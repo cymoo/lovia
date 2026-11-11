@@ -7,6 +7,7 @@ merely happens to be on the same disk, which is how the tests can look.
 
 from __future__ import annotations
 
+import base64
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent  # noqa: E402
+from lovia.parts import ImagePart  # noqa: E402
 from lovia.web import WorkspaceSwitch, create_app  # noqa: E402
 from lovia.web.builder import Deployment  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
@@ -139,10 +141,313 @@ def test_a_chat_works_at_the_remote_location_it_was_opened_in(places) -> None:
             assert by_root[key]["host"] == "far" and by_root[key]["name"] == "there"
             assert by_root[here.resolve().as_posix()]["host"] is None
 
-            # The Files panel reads this machine's disk: not for this chat.
-            files = c.get("/api/workspace/files", params={"session": sid})
-            assert files.status_code == 404
-            assert files.json()["detail"]["code"] == "feature_unavailable"
+        finally:
+            c.portal.call(far.aclose)
+
+
+# ------------------------------------------- Files, uploads, attachments --
+
+_PNG = bytes.fromhex("89504e470d0a1a0a") + b"\x00" * 32
+
+
+@pytest.fixture
+def remote_chat(places):
+    """A client, a chat at the remote location (one run done), and the
+    directory it works in — for the tests to look at from this side."""
+    here, there = places
+    far = _far()
+    agent = _agent(here, [text("ok")] * 8)
+    agent.model.supports_vision = True  # type: ignore[union-attr]
+    switch = WorkspaceSwitch(remotes={"far": far}, modes=("readonly", "coding"))
+    with _client(agent, switch) as c:
+        try:
+            res = c.post(
+                "/api/chat", json={"message": "go", "workspace": f"remote://far{there}"}
+            )
+            assert res.status_code == 200, res.text
+            yield c, res.json()["session_id"], there
+        finally:
+            c.portal.call(far.aclose)
+
+
+def test_the_files_panel_reads_a_remote_chats_directory(remote_chat, places) -> None:
+    c, sid, there = remote_chat
+    (there / "docs").mkdir()
+    (there / "docs" / "note.md").write_text("# hi\nthere\n")
+    (there / "tmp").mkdir()
+    (there / "tmp" / "scratch.txt").write_text("x")
+    (there / ".env").write_text("SECRET=1")
+    (places[0] / "local-only.txt").write_text("not over there")
+    at = {"session": sid}
+
+    assert c.get("/api/workspace", params=at).json()["name"] == "there"
+    listed = c.get("/api/workspace/files", params=at).json()
+    assert [(e["path"], e["is_dir"]) for e in listed] == [("docs", True), ("tmp", True)]
+    inside = c.get("/api/workspace/files", params={**at, "path": "docs"}).json()
+    assert [e["path"] for e in inside] == ["docs/note.md"]
+    assert inside[0]["size"] == 11 and inside[0]["mtime"]
+    # Recent: the same presentation filter, applied over there.
+    recent = c.get("/api/workspace/recent", params=at).json()
+    assert [e["path"] for e in recent] == ["docs/note.md"]
+
+    page = c.get("/api/workspace/file", params={**at, "path": "docs/note.md"}).json()
+    assert (page["content"], page["total_lines"]) == ("# hi\nthere\n", 2)
+    assert not page["binary"]
+
+    # The same boundary as a local chat's panel, judged on the host.
+    for path, status, code in (
+        (".env", 403, "path_denied"),
+        ("/etc/hosts", 403, "path_denied"),
+        ("../here/local-only.txt", 403, "path_denied"),
+        ("nope.md", 404, "file_not_found"),
+        ("docs", 404, "file_not_found"),
+    ):
+        for route in ("file", "raw"):
+            res = c.get(
+                f"/api/workspace/{route}", params={**at, "path": path, "download": 1}
+            )
+            assert (res.status_code, res.json()["detail"]["code"]) == (status, code)
+    missing = c.get("/api/workspace/files", params={**at, "path": "nope"})
+    assert missing.status_code == 404
+
+
+def test_a_draft_reads_the_remote_folder_it_is_about_to_open(remote_chat) -> None:
+    c, _sid, there = remote_chat
+    (there / "a.txt").write_text("a")
+    at = {"root": f"remote://far{there}"}
+    assert [e["path"] for e in c.get("/api/workspace/files", params=at).json()] == [
+        "a.txt"
+    ]
+    # … and only a remote this server opens.
+    res = c.get("/api/workspace/files", params={"root": f"remote://other{there}"})
+    assert (res.status_code, res.json()["detail"]["code"]) == (
+        409,
+        "workspace_not_allowed",
+    )
+
+
+def test_raw_serves_a_remote_file_in_pieces(remote_chat, monkeypatch) -> None:
+    from lovia.web.api import workspace as routes
+
+    c, sid, there = remote_chat
+    monkeypatch.setattr(routes, "_RAW_CHUNK", 1000)  # several pieces, small file
+    blob = bytes(range(256)) * 20  # 5120 bytes: six pieces
+    (there / "data.bin").write_bytes(blob)
+    (there / "pic.png").write_bytes(_PNG)
+    (there / "报告 1.txt").write_text("text")
+    at = {"session": sid}
+
+    got = c.get("/api/workspace/raw", params={**at, "path": "data.bin", "download": 1})
+    assert got.status_code == 200 and got.content == blob
+    assert got.headers["content-length"] == str(len(blob))
+    assert got.headers["content-disposition"] == 'attachment; filename="data.bin"'
+    assert got.headers["x-content-type-options"] == "nosniff"
+    # Revalidation costs a look at the file, not the file.
+    again = c.get(
+        "/api/workspace/raw",
+        params={**at, "path": "data.bin", "download": 1},
+        headers={"if-none-match": got.headers["etag"]},
+    )
+    assert again.status_code == 304 and again.content == b""
+    (there / "data.bin").write_bytes(blob + b"more")
+    changed = c.get(
+        "/api/workspace/raw",
+        params={**at, "path": "data.bin", "download": 1},
+        headers={"if-none-match": got.headers["etag"]},
+    )
+    assert changed.status_code == 200 and changed.content == blob + b"more"
+
+    # Inline: images (and PDFs) only, with the stable type.
+    pic = c.get("/api/workspace/raw", params={**at, "path": "pic.png"})
+    assert pic.content == _PNG and pic.headers["content-type"] == "image/png"
+    assert "content-disposition" not in pic.headers
+    refused = c.get("/api/workspace/raw", params={**at, "path": "data.bin"})
+    assert refused.status_code == 415
+    named = c.get(
+        "/api/workspace/raw", params={**at, "path": "报告 1.txt", "download": 1}
+    )
+    assert named.headers["content-disposition"] == (
+        "attachment; filename*=utf-8''%E6%8A%A5%E5%91%8A%201.txt"
+    )
+    # The binary flag for the viewer comes from the file's head, read there.
+    flagged = c.get("/api/workspace/file", params={**at, "path": "data.bin"}).json()
+    assert flagged["binary"] and flagged["content"] == ""
+
+
+def test_raw_refuses_a_remote_file_over_the_read_limit(places) -> None:
+    from lovia.workspace import WorkspaceLimits
+
+    here, there = places
+    far = _far()
+    (there / "big.bin").write_bytes(b"x" * 64)
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider([text("ok")]),
+        workspace=Workspace.local(
+            str(here), limits=WorkspaceLimits(max_file_read_bytes=32)
+        ),
+    )
+    with _client(agent, WorkspaceSwitch(remotes={"far": far})) as c:
+        try:
+            res = c.get(
+                "/api/workspace/raw",
+                params={
+                    "root": f"remote://far{there}",
+                    "path": "big.bin",
+                    "download": 1,
+                },
+            )
+            assert (res.status_code, res.json()["detail"]["code"]) == (
+                413,
+                "file_too_large",
+            )
+        finally:
+            c.portal.call(far.aclose)
+
+
+def test_an_upload_lands_in_the_remote_chats_directory(remote_chat) -> None:
+    c, sid, there = remote_chat
+    # The chat is read-only; an upload is the user's own act and still lands.
+    assert c.patch(
+        f"/api/sessions/{sid}", json={"workspace_mode": "readonly"}
+    ).is_success
+    at = {"session": sid}
+
+    def upload(name: str, data: bytes):
+        return c.post("/api/workspace/upload", params=at, files={"file": (name, data)})
+
+    first = upload("cat.png", _PNG)
+    assert first.status_code == 200, first.text
+    assert first.json() == {
+        "path": "uploads/cat.png",
+        "name": "cat.png",
+        "mime": "image/png",
+        "kind": "image",
+        "size": len(_PNG),
+    }
+    assert (there / "uploads" / "cat.png").read_bytes() == _PNG
+    # A second one of the same name is kept beside it, not over it.
+    assert upload("cat.png", b"other").json()["path"] == "uploads/cat-1.png"
+    assert (there / "uploads" / "cat.png").read_bytes() == _PNG
+    assert (there / "uploads" / "cat-1.png").read_bytes() == b"other"
+    # It is there for the panel at once.
+    shown = c.get("/api/workspace/raw", params={**at, "path": "uploads/cat.png"})
+    assert shown.content == _PNG
+
+
+def test_attachments_reach_a_remote_chat(remote_chat) -> None:
+    c, sid, there = remote_chat
+    (there / "uploads").mkdir()
+    (there / "uploads" / "cat.png").write_bytes(_PNG)
+    (there / "uploads" / "notes.txt").write_text("n")
+    res = c.post(
+        "/api/chat",
+        json={
+            "message": "look",
+            "session_id": sid,
+            "attachments": [
+                {"path": "uploads/cat.png", "mime": "image/png", "kind": "image"},
+                {"path": "uploads/notes.txt", "mime": "text/plain", "kind": "file"},
+                {"path": "uploads/ghost.png", "mime": "image/png", "kind": "image"},
+                {"path": "/etc/hosts", "mime": "text/plain", "kind": "file"},
+            ],
+        },
+    )
+    assert res.status_code == 200, res.text
+    sent = c.app.state.deps.agents["bot"].model.calls[-1][-1]
+    assert sent.role == "user"
+    images = [p for p in sent.content if isinstance(p, ImagePart)]
+    assert [base64.b64decode(p.data) for p in images] == [_PNG]
+    note = sent.content[-1].text
+    # What is there is named; what is missing or outside the root is dropped.
+    assert note.endswith(
+        "[Attached in the workspace: uploads/cat.png, uploads/notes.txt. "
+        "Read with your file tools when relevant.]"
+    )
+
+
+async def test_every_way_in_reads_attachments_where_the_chat_works(places) -> None:
+    # Send, stream and inject all fold attachments in with the same function.
+    # (Inject hands it the live run's agent: its workspace bound to the
+    # chat's session.)
+    from lovia.web.attachments import user_content
+    from lovia.web.schemas import Attachment
+    from lovia.workspace.workspace import WorkspaceSessionBinding
+
+    _here, there = places
+    (there / "a.txt").write_text("a")
+    far = _far()
+    remote = Workspace.remote(far, str(there))
+    attachment = Attachment(path="a.txt", mime="text/plain", kind="file")
+    try:
+        for workspace in (remote, WorkspaceSessionBinding(remote, None)):  # type: ignore[arg-type]
+            agent = Agent(name="bot", model=None, workspace=workspace)
+            content = await user_content("see", [attachment], agent)
+            assert [p.text for p in content] == [  # type: ignore[union-attr]
+                "see",
+                "\n\n[Attached in the workspace: a.txt. "
+                "Read with your file tools when relevant.]",
+            ]
+            assert await user_content("just text", None, agent) == "just text"
+    finally:
+        await far.aclose()
+
+
+def test_a_host_that_cannot_be_reached_is_said_so_not_dropped(places) -> None:
+    here, there = places
+    gone = RemoteHost("gone", command=(), python="/nonexistent/python3")
+    key = f"remote://gone{there}"
+    with _client(
+        _agent(here, [text("x")]), WorkspaceSwitch(remotes={"gone": gone})
+    ) as c:
+        res = c.get("/api/workspace/recent", params={"root": key})
+        assert (res.status_code, res.json()["detail"]["code"]) == (
+            502,
+            "workspace_unreachable",
+        )
+        up = c.post(
+            "/api/workspace/upload",
+            params={"root": key},
+            files={"file": ("a.txt", b"a")},
+        )
+        assert up.status_code == 502
+        # A message is not sent without what it was shown.
+        sent = c.post(
+            "/api/chat",
+            json={
+                "message": "look",
+                "workspace": key,
+                "attachments": [
+                    {"path": "a.png", "mime": "image/png", "kind": "image"}
+                ],
+            },
+        )
+        assert (sent.status_code, sent.json()["detail"]["code"]) == (
+            502,
+            "workspace_unreachable",
+        )
+        assert c.get("/api/sessions").json() == []
+
+
+def test_an_agent_whose_own_workspace_is_remote_has_a_files_panel(places) -> None:
+    # No switch: the served agent's workspace is itself on a host.
+    _here, there = places
+    (there / "a.txt").write_text("a")
+    far = _far()
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider([text("ok")]),
+        workspace=Workspace.remote(far, str(there), mode="readonly"),
+    )
+    with _client(agent, None) as c:
+        try:
+            assert c.get("/api/agents").json()[0]["workspace"] is True
+            assert [e["path"] for e in c.get("/api/workspace/files").json()] == [
+                "a.txt"
+            ]
+            up = c.post("/api/workspace/upload", files={"file": ("b.txt", b"b")})
+            assert up.json()["path"] == "uploads/b.txt"
+            assert (there / "uploads" / "b.txt").read_bytes() == b"b"
         finally:
             c.portal.call(far.aclose)
 
@@ -391,51 +696,6 @@ def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
     # The server-wide prompt (Settings → Agent) still applies everywhere.
     custom = WebConfig.model_validate({"agent": {"instructions": "be terse"}})
     assert remote_agent(served, custom).instructions == "be terse"
-
-
-def test_attachments_to_a_remote_chat_are_refused_not_dropped(places) -> None:
-    here, there = places
-    far = _far()
-    attachment = {"path": "uploads/a.png", "mime": "image/png", "kind": "image"}
-    with _client(_agent(here, [text("x")]), WorkspaceSwitch(remotes={"far": far})) as c:
-        for message in ("look at this", ""):
-            res = c.post(
-                "/api/chat",
-                json={
-                    "message": message,
-                    "workspace": f"remote://far{there}",
-                    "attachments": [attachment],
-                },
-            )
-            assert res.status_code == 404, res.text
-            assert res.json()["detail"]["code"] == "feature_unavailable"
-        # Nothing was created for the refused turns.
-        assert c.get("/api/sessions").json() == []
-
-
-def test_every_way_in_refuses_attachments_to_a_remote_chat(places) -> None:
-    # Send, stream and inject all fold attachments in with the same function;
-    # the refusal lives there, so none of them can drop one quietly. (Inject
-    # hands it the live run's agent: its workspace bound to the chat's session.)
-    from lovia.web.attachments import user_content
-    from lovia.web.errors import WebError
-    from lovia.web.schemas import Attachment
-    from lovia.workspace.workspace import WorkspaceSessionBinding
-
-    here, there = places
-    remote = Workspace.remote(_far(), str(there))
-    attachment = Attachment(path="uploads/a.png", mime="image/png", kind="image")
-    for workspace in (remote, WorkspaceSessionBinding(remote, None)):  # type: ignore[arg-type]
-        agent = Agent(name="bot", model=None, workspace=workspace)
-        for message in ("look at this", ""):
-            with pytest.raises(WebError) as refused:
-                user_content(message, [attachment], agent)
-            assert refused.value.code == "feature_unavailable"
-        # No attachments: nothing to refuse.
-        assert user_content("just text", None, agent) == "just text"
-    # A local chat is untouched (a missing file is dropped, as before).
-    local = Agent(name="bot", model=None, workspace=Workspace.local(str(here)))
-    assert user_content("hi", [attachment], local) == "hi"
 
 
 def test_a_sandboxed_agent_is_not_quietly_unsandboxed_on_a_remote(places) -> None:

@@ -1,6 +1,6 @@
 # 远程工作区：连到已有容器和 SSH 机器
 
-> 状态：库这一层已实现并发布（PR 1–6：#392–#397，v0.9.167–172）；web 接入分三步，7a（服务端绑定）随本文一起提交，7b（界面）和 7c（Files、上传、附件）未做。实现与原文不同的地方记在 §7 和 §8，以那两节为准 · 2026-11-12 · 范围：`lovia/workspace`（新增 `remote/`，几处协议清理）、core（`tools/base.py`、`runtime/tool_calls.py`：权限判定可 await）、`lovia/web`（`workspaces`、`api/`、`store`、`attachments`、`supervisor`、前端）
+> 状态：库这一层已实现并发布（PR 1–6：#392–#397，v0.9.167–172）；web 接入分三步，7a（服务端绑定，#398）、7b（界面，#399）、7c（Files、上传、附件）均已完成。实现与原文不同的地方记在 §7–§10，以那几节为准 · 2026-11-12 · 范围：`lovia/workspace`（新增 `remote/`，几处协议清理）、core（`tools/base.py`、`runtime/tool_calls.py`：权限判定可 await）、`lovia/web`（`workspaces`、`api/`、`store`、`attachments`、`supervisor`、前端）
 >
 > 行号指向 `main`（`5965346`，v0.9.166）。
 
@@ -222,6 +222,18 @@ WorkspaceSwitch()                                        # remotes=None：没有
 - **断线状态没有单独做界面**。运行失败时已有的错误提示会显示断线原因，下一条消息自动重连（PR 6 的会话 `closed` 检查），目前看不需要更多。
 - 没做：从 `~/.ssh/config` 或 `docker ps` 列出候选主机（仍是手填）；界面上指定解释器路径。
 
+### 10. 7c 做了什么
+
+- **协议加了两样**：`stat(path) -> DirEntry`（是文件还是目录、大小、mtime，不读内容；不存在抛 `FileNotFoundError`），以及 `read_bytes(..., offset=, length=)` 读其中一段。没有加新的结果类型，也没有改协议号：两端跑的是同一份源码。
+- **页面读写文件都走一个自己的会话**（`web/workspaces.py:open_view`）：只读预设加上 Agent 的 `denied_paths`，本地和远程是同一段代码，`replace(cfg, policy=...).open()`。远程时它开在对话共用的那条连接上，每个请求开一次、关一次。Files 的列表、文本预览、上传、附件全部经过它；只有本地文件的 `raw` 还保留 `FileResponse`（Range、sendfile），不让本地退化成整文件进内存。
+- **远程的 `raw` 分块流式返回**：先 `stat` 得到大小和 mtime（算 ETag，判 304 和 413），再每次 256 KiB 地 `read_bytes`，边读边发。分块解决的是"一条消息就是一整个文件"带来的无进度和连接被独占；带宽本身解决不了。**没有做压缩**：走这条路的主要是图片、PDF 和上传，本来就压过；文本预览走 `read_text`，有 5 万字符的上限。远程 `raw` 不支持 Range。
+- **文本预览的二进制判断**改成读文件的前 1 KiB（`read_bytes(length=1024)`），不再靠本地路径。
+- **上传**经过一个"只读 + 允许写根目录内"的会话，所以只读模式的对话照样能上传（和以前本地的行为一致），但 `uploads` 是一个指向根目录之外的链接时现在会被拒绝（403）。重名时先 `stat` 探测再写，避免每次冲突都把整个文件重发一遍；写入仍是 `create_only`，并发时不会互相覆盖。
+- **附件**：`user_content` 改成异步，逐个 `stat`（根目录之外在只读预设下是 deny，等于原来的"必须在根目录内"），图片再 `read_bytes` 后内联。主机连不上时返回 502 `workspace_unreachable`，不会丢掉附件只发文字。
+- **发送端的大小保护**：单条请求超过 `MAX_LINE`（64 MiB）时本地直接抛 `FileTooLargeError`，不发出去。否则远端读到超长行会断开整条连接，连带那台主机上所有对话的会话。
+- **Agent 自己的工作区就是远程的**（没有 `WorkspaceSwitch`，`create_app(Agent(workspace=Workspace.remote(...)))`）现在也有 Files 面板、上传和附件。
+- 没做：远程项目的 `AGENTS.md` 和技能；请求被取消在 `open` 途中时，远端可能留下一个没有进程的空会话，到连接关闭时才回收。
+
 ## 注意事项
 
 - **信任边界。** 远端命令以远端用户身份运行；策略仍是诚实的范围限定，不是隔离。凭据（ssh 密钥、Docker 访问）在 web 服务器上；能访问 Docker 等同宿主机 root。多用户部署（#221）下谁能用哪台主机要另行设计。
@@ -309,7 +321,7 @@ WorkspaceSwitch()                                        # remotes=None：没有
 | 6 | `lovia/workspace/remote/`：协议、引导、代理、`RemoteHost`、`Workspace.remote`；工具集和提示词推导抽成共享函数（第二个调用方在这里才出现）；测试全部走本地子进程 | 是 |
 | 7a | web 服务端：`WorkspaceSwitch.remotes`、`WorkspaceRef`、每轮按绑定重建远程工作区、加入列表时到远端确认、授权上下文、部署约束（见 §8） | 是 |
 | 7b | web 界面：添加文件夹时选本机 / SSH / 容器，远程目录补全，服务器图标（见 §9） | 是 |
-| 7c | web：Files、上传、附件改走会话（要给协议加文件元信息和分段读取，见下） | 是 |
+| 7c | web：Files、上传、附件改走会话（协议加了文件元信息和分段读取，见 §10） | 是 |
 
 **Files、上传、附件为什么不在 PR 3。** 它们现在依赖的东西协议里还没有：`raw` 靠 `FileResponse` 提供 Range、ETag 和流式（本地不能退化成整文件读进内存）；文本预览先读前 1 KB 判断是否二进制；上传绕过策略直接写盘（只读模式的对话也能上传）；附件用本地路径构造 `ImagePart`。要改走会话，协议得先有"文件元信息"和"读一段"之类的方法，而这些方法的形状应该和远程协议一起定，不该在没有第二个后端时猜。
 

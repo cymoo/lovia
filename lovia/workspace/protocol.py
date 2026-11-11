@@ -72,12 +72,30 @@ class WorkspaceSession(Protocol):
         """Return UTF-8 text from ``path`` (optionally a 1-based line range)."""
         ...
 
-    async def read_bytes(self, path: str, *, max_bytes: int | None = None) -> FileBytes:
+    async def stat(self, path: str) -> DirEntry:
+        """What ``path`` is — file or directory, size, modification time —
+        without reading it. Raises ``FileNotFoundError`` when nothing is
+        there."""
+        ...
+
+    async def read_bytes(
+        self,
+        path: str,
+        *,
+        max_bytes: int | None = None,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> FileBytes:
         """Return the raw bytes of ``path`` (binary payloads, e.g. images).
 
         Raises :class:`~lovia.workspace.errors.FileTooLargeError` when the
         file exceeds ``max_bytes`` — sized *before* reading, so a caller's
         cap also bounds memory.
+
+        ``offset`` and ``length`` read one piece of it — at most ``length``
+        bytes from ``offset``, fewer (or none) at the end of the file — so a
+        large file can be taken a piece at a time, or only its head looked
+        at.
         """
         ...
 

@@ -415,9 +415,9 @@ class RouterDeps:
         switch; an agent whose workspace isn't a plain ``LocalWorkspace``
         (a custom backend) keeps its own. The original is never touched.
 
-        A chat at a remote location gets the same policy on a
-        ``RemoteWorkspace`` there instead, and no ``agent_for`` — that hook
-        reads the project's files on this machine.
+        A chat at a remote location gets ``agent_for_remote`` instead of
+        ``agent_for`` (which reads the project's files on this machine), and
+        the same policy on a ``RemoteWorkspace`` there.
         """
         if self.workspace_switch is None:
             return agent
@@ -444,6 +444,8 @@ class RouterDeps:
         if base is None:
             workspace = agent.workspace
         elif ref is not None and ref.remote:
+            if switch.agent_for_remote is not None:
+                agent = switch.agent_for_remote(agent, ref)
             workspace = switch.remote_workspace(base, ref, mode)
         else:
             where = Path(ref.root) if ref is not None else resolve_root(base.root)

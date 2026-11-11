@@ -47,7 +47,9 @@ from ..plugins.subagents import (
     Subagents,
 )
 from .errors import WebError
+from ..workspace.remote import RemoteWorkspace
 from ..workspace.workspace import WorkspaceSessionBinding
+from .workspaces import workspace_config
 from .run_deps import RunTrigger, build_run_deps
 from .sse import SessionCreatedData
 
@@ -227,7 +229,16 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             # own, judged by the spawning run's permissions throughout.
             ws = child.workspace
             if isinstance(ws, WorkspaceSessionBinding):
-                child = child.clone(workspace=ws.workspace)
+                ws = ws.workspace
+                child = child.clone(workspace=ws)
+            if isinstance(ws, RemoteWorkspace):
+                # … and when that chat is on a remote host, the remote
+                # workspace the run was given. A chat's place and mode are
+                # worked out from the agent's own local workspace (the task
+                # run gets the remote one built again), so put that back.
+                own = workspace_config(deps.agents.get(agent_key or "") or child)
+                if own is not None:
+                    child = child.clone(workspace=own)
         # Checked before the hook sees where the task works.
         binding = deps.new_chat_binding(child, inherited.mode, inherited.root)
         # A task works for the chat that spawned it, so in its context. The

@@ -812,9 +812,13 @@ A remote chat's `workspace` is spelled like a URL — `remote://box/srv/project`
 for a declared host, `ssh://box/srv/project` or `docker://dev@api/app` under
 `"any"` — and that string is its `workspace_root` everywhere: in the sidebar's
 grouping, in what an approval is remembered under. It runs with the chat
-mode's policy, enforced on the host. Three things it does not get yet: the
-project hook (`agent_for` reads this machine's files), and the Files panel,
-uploads and attachments, which answer 404 `feature_unavailable`. Adding a
+mode's policy, enforced on the host. In place of `agent_for` — which is
+handed a directory on this machine to read — it gets
+`agent_for_remote(agent, ref)`, where `ref` has the location's `host_name`
+and `root`; if your served agent already carries a local project's
+instructions or skills, take them off there (`lovia web` does). What it does
+not get yet: the Files panel, uploads and attachments, each refused with 404
+`feature_unavailable` rather than quietly ignored. Adding a
 remote location to the list (`POST /api/workspaces`) looks the directory up
 on its host; opening a chat in one does not, so a directory that is gone
 shows up as the run's first error.

@@ -712,8 +712,10 @@ app = create_app(agent, workspaces=WorkspaceSwitch(remotes={"box": RemoteHost.ss
 
 远程对话的 `workspace` 写成 URL 的样子：声明过的主机是 `remote://box/srv/project`，`"any"` 之下是
 `ssh://box/srv/project` 或 `docker://dev@api/app`。这个字符串就是它的 `workspace_root`，侧栏按它分组，
-记住的授权也挂在它下面。它按对话模式对应的 policy 运行，在主机那一端执行。目前它还没有三样东西：项目钩子
-（`agent_for` 读的是本机文件），以及文件面板、上传和附件（返回 404 `feature_unavailable`）。把远程位置加进
+记住的授权也挂在它下面。它按对话模式对应的 policy 运行，在主机那一端执行。`agent_for` 拿到的是本机上的一个目录，
+所以远程对话不调用它，而是调用 `agent_for_remote(agent, ref)`，`ref` 带有位置的 `host_name` 和 `root`；
+如果你提供的 Agent 本身已经带着某个本地项目的指令或技能，就在这里去掉（`lovia web` 是这样做的）。
+目前它还没有的是文件面板、上传和附件，这三样都明确返回 404 `feature_unavailable`，不会被悄悄忽略。把远程位置加进
 列表（`POST /api/workspaces`）时会到主机上确认目录存在；直接在其中开对话则不会，目录不在的话会体现为运行的第一个错误。
 
 `"any"` 等于服务端账号的全部触及范围（它的 SSH 密钥、它的 Docker），所以只适合只有所有者能用的服务。

@@ -41,7 +41,7 @@ from ..sse import SessionCreatedData, _coerce, usage_dict
 from ..store import ChatMeta
 from ..supervisor import RunController, forward
 from ..titles import provisional_title
-from ..workspaces import ChatBinding, own_root
+from ..workspaces import ChatBinding, WorkspaceRef, own_root
 from .deps import RouterDeps
 from .serialization import Run, segments_runs
 
@@ -92,6 +92,28 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             )
 
     def bind(agent: Agent[Any], meta: ChatMeta | None, req: ChatRequest) -> ChatBinding:
+        """:func:`_bind`, then the one thing a remote chat can't take yet."""
+        binding = _bind(agent, meta, req)
+        if (
+            req.attachments
+            and binding.root is not None
+            and WorkspaceRef.parse(binding.root).remote
+        ):
+            # Attachments are files under this machine's copy of the chat's
+            # directory, and a remote chat has none. Said here, before
+            # anything is written: dropping them and answering the text
+            # alone would look like the assistant ignored them.
+            raise WebError(
+                404,
+                "feature_unavailable",
+                "attachments don't reach a remote workspace yet",
+                hint="put the file on the host and name its path in the message",
+            )
+        return binding
+
+    def _bind(
+        agent: Agent[Any], meta: ChatMeta | None, req: ChatRequest
+    ) -> ChatBinding:
         """Where and how this turn's chat works — checked now, before the
         message is read (its attachments live in that directory) or anything
         is written. A new chat takes the request's directory and mode, which

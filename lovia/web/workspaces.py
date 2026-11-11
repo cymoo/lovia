@@ -168,9 +168,13 @@ class WorkspaceSwitch:
       destination or running container the server's own account can reach
       (``ssh://box/path``, ``docker://api/path``) — which is that account's
       whole reach, so it belongs on a server only its owner can use. A
-      remote chat runs with the mode's policy, enforced on the host; it gets
-      no ``agent_for`` (that reads the project's files here), and the Files
-      panel, uploads and attachments are not available to it yet.
+      remote chat runs with the mode's policy, enforced on the host; the
+      Files panel, uploads and attachments are not available to it yet.
+    * ``agent_for_remote`` — ``(agent, ref) -> agent``: ``agent_for`` for a
+      chat at a remote location (a :class:`WorkspaceRef`). ``agent_for``
+      itself is never called for one — it is handed a directory on this
+      machine to read. If the served agent already carries a local
+      project's instructions or skills, this is where they come off.
 
     A chat that never picked a mode keeps the agent's own policy, custom
     rules and all, moved to its directory.
@@ -183,6 +187,7 @@ class WorkspaceSwitch:
     agent_for: Callable[[Agent[Any], Path], Agent[Any]] | None = None
     general: str | Path | None = None
     remotes: Literal["any"] | Mapping[str, RemoteHost] | None = None
+    agent_for_remote: Callable[[Agent[Any], WorkspaceRef], Agent[Any]] | None = None
     # The hosts built for ``remotes="any"``, one per destination for the
     # app's life: a host is a connection, and every chat there shares it.
     _hosts: dict[str, RemoteHost] = field(

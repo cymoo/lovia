@@ -227,3 +227,158 @@ def test_an_approval_is_remembered_for_the_host_and_directory(places) -> None:
         # Not the local directory of the same path.
         local = deps.at_root(agent, ChatBinding(there.as_posix(), None))
         assert agent_grant_context("bot", local) != agent_grant_context("bot", at)
+
+
+# ------------------------------------------------ what rides along, or not --
+
+
+async def test_a_task_spawned_in_a_remote_chat_stays_there(places) -> None:
+    # A self-cloned subagent is the running agent — by then on a remote
+    # workspace. Its task chat must still record where and how it works, or
+    # carrying on in it afterwards has nowhere to run.
+    import asyncio
+
+    from lovia import Subagents
+
+    here, there = places
+    far = _far()
+    key = f"remote://far{there}"
+    parent = Agent(
+        name="bot",
+        model=ScriptedProvider(
+            [call("spawn_subagent", {"prompt": "dig"}), text("ok"), text("dug")]
+        ),
+        plugins=[Subagents()],
+        workspace=Workspace.local(str(here)),
+    )
+    app = create_app(
+        parent,
+        store=ChatStore.in_memory(),
+        titles=False,
+        workspaces=WorkspaceSwitch(remotes={"far": far}),
+    )
+    deps = app.state.deps
+    try:
+        await deps.store.upsert(
+            "p", agent="bot", workspace_root=key, workspace_mode="readonly"
+        )
+        await deps.supervisor.start(
+            session_id="p",
+            agent=parent,
+            input="go",
+            is_new=False,
+            title_message=None,
+            autostart=True,
+        )
+
+        async def task_done() -> bool:
+            kids = await deps.store.list_children("p")
+            if len(kids) != 1:
+                return False
+            run = await deps.store.latest_run_for(f"subagent:{kids[0].id}")
+            return run is not None and run.status != "running"
+
+        async def wait() -> None:
+            while not await task_done():
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(wait(), 10)
+        (task,) = await deps.store.list_children("p")
+        assert (task.workspace_root, task.workspace_mode) == (key, "readonly")
+        # And the chat can be carried on: it resolves to the same place.
+        binding = deps.chat_binding(parent, task)
+        assert (binding.root, binding.mode) == (key, "readonly")
+    finally:
+        await deps.supervisor.shutdown()
+        await deps.workspaces.aclose()
+        await far.aclose()
+
+
+def test_a_remote_chat_gets_the_remote_hook_not_the_local_one(places) -> None:
+    here, there = places
+    far = _far()
+    seen: list[str] = []
+
+    def local_hook(agent: Agent, root: Path) -> Agent:
+        seen.append(f"local:{root}")
+        return agent.clone(instructions="LOCAL PROJECT RULES")
+
+    def remote_hook(agent: Agent, ref: WorkspaceRef) -> Agent:
+        seen.append(f"remote:{ref.host_name}:{ref.root}")
+        return agent.clone(instructions="REMOTE RULES")
+
+    provider = ScriptedProvider([text("x")])
+    agent = Agent(
+        name="bot",
+        model=provider,
+        instructions="BASE",
+        workspace=Workspace.local(str(here)),
+    )
+    switch = WorkspaceSwitch(
+        remotes={"far": far}, agent_for=local_hook, agent_for_remote=remote_hook
+    )
+    with _client(agent, switch) as c:
+        try:
+            res = c.post(
+                "/api/chat",
+                json={"message": "go", "workspace": f"remote://far{there}"},
+            )
+            assert res.status_code == 200, res.text
+        finally:
+            c.portal.call(far.aclose)
+    assert seen == [f"remote:far:{there}"]
+    prompt = str(provider.calls[0][0])
+    assert "REMOTE RULES" in prompt and "LOCAL PROJECT RULES" not in prompt
+
+
+def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
+    tmp_path: Path,
+) -> None:
+    # The served agent is built for the launch directory: its AGENTS.md is in
+    # the prompt, its skills are loaded. Neither belongs to a project that
+    # lives on another machine.
+    from lovia.plugins import Skills
+    from lovia.web.builder import (
+        GENERIC_INSTRUCTIONS,
+        project_agent,
+        remote_agent,
+    )
+    from lovia.web.config.schema import WebConfig
+
+    launch = tmp_path / "launch"
+    (launch / "proj-skills" / "deploy").mkdir(parents=True)
+    (launch / "proj-skills" / "deploy" / "SKILL.md").write_text(
+        "---\nname: deploy\ndescription: ship it\n---\nsteps", encoding="utf-8"
+    )
+    (launch / "AGENTS.md").write_text("LAUNCH DIRECTORY RULES", encoding="utf-8")
+    config = WebConfig.model_validate({"skills": {"dirs": ["proj-skills"]}})
+    served = project_agent(Agent(name="bot", model=None), launch, config)
+    assert "LAUNCH DIRECTORY RULES" in served.instructions
+    assert any(isinstance(p, Skills) for p in served.plugins)
+
+    remote = remote_agent(served, config)
+    assert remote.instructions == GENERIC_INSTRUCTIONS
+    assert not any(isinstance(p, Skills) for p in remote.plugins)
+    # The server-wide prompt (Settings → Agent) still applies everywhere.
+    custom = WebConfig.model_validate({"agent": {"instructions": "be terse"}})
+    assert remote_agent(served, custom).instructions == "be terse"
+
+
+def test_attachments_to_a_remote_chat_are_refused_not_dropped(places) -> None:
+    here, there = places
+    far = _far()
+    attachment = {"path": "uploads/a.png", "mime": "image/png", "kind": "image"}
+    with _client(_agent(here, [text("x")]), WorkspaceSwitch(remotes={"far": far})) as c:
+        for message in ("look at this", ""):
+            res = c.post(
+                "/api/chat",
+                json={
+                    "message": message,
+                    "workspace": f"remote://far{there}",
+                    "attachments": [attachment],
+                },
+            )
+            assert res.status_code == 404, res.text
+            assert res.json()["detail"]["code"] == "feature_unavailable"
+        # Nothing was created for the refused turns.
+        assert c.get("/api/sessions").json() == []

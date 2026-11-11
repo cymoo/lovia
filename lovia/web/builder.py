@@ -324,6 +324,29 @@ def project_agent(agent: Agent[Any], root: Path, config: WebConfig) -> Agent[Any
     )
 
 
+def remote_agent(agent: Agent[Any], config: WebConfig) -> Agent[Any]:
+    """``agent`` for a chat on a remote host — ``WorkspaceSwitch.agent_for_remote``
+    for the CLI. The served agent was built for the launch directory; a
+    project on another machine gets neither that directory's ``AGENTS.md``
+    nor its skills: just the server-wide prompt, and the skill directories
+    that are not relative to a project (``~/.lovia/skills`` and the like)."""
+    plugins: list[Plugin] = [p for p in agent.plugins if not isinstance(p, Skills)]
+    anywhere = config.skills.model_copy(
+        update={
+            "dirs": [
+                d for d in config.skills.dirs if Path(d).expanduser().is_absolute()
+            ]
+        }
+    )
+    dirs = resolve_skills_dirs(anywhere, quiet=True)
+    if dirs:
+        plugins.insert(0, Skills(*dirs))
+    return agent.clone(
+        instructions=config.agent.instructions.strip() or GENERIC_INSTRUCTIONS,
+        plugins=plugins,
+    )
+
+
 def resolve_workspace(
     deployment: Deployment, config: WebConfig | None = None
 ) -> LocalWorkspace | None:

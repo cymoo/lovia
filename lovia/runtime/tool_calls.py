@@ -223,9 +223,11 @@ class ToolCallProcessor:
             yield self._rejected(state, call, err)
             return
 
+        waited = False
         try:
             verdict = tool.decide(args, state.run_ctx)
             if inspect.isawaitable(verdict):
+                waited = True
                 verdict = await verdict
         except Exception as exc:
             # Fail closed, and — like every other outcome — leave a
@@ -243,6 +245,11 @@ class ToolCallProcessor:
             err = f"Tool {call.name} was denied by policy: permission check failed."
             yield self._rejected(state, call, err)
             return
+        if waited:
+            # A stop issued while an async predicate was deciding is the last
+            # word, as it is after the approval wait below. Outside the try:
+            # RunCancelled is a run-control signal, not a failed check.
+            self.cancel_token.check()
         if verdict.action == "deny":
             err = _with_reason(f"Tool {call.name} was denied by policy", verdict.reason)
             yield self._rejected(state, call, err)

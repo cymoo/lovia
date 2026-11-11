@@ -159,6 +159,31 @@ async def test_async_permission_predicate_that_raises_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_during_an_async_permission_check_wins_over_its_allow() -> None:
+    # The stop lands while the predicate is waiting; its "allow" must not run
+    # the call — same contract as a stop that lands while a human is asked.
+    from lovia import CancelToken, RunCancelled
+
+    token = CancelToken()
+    executed: list[int] = []
+
+    async def slow_allow(_args, _ctx):  # type: ignore[no-untyped-def]
+        token.cancel()
+        return "allow"
+
+    @tool(permission=slow_allow)
+    async def guarded() -> str:
+        executed.append(1)
+        return "ran"
+
+    provider = ScriptedProvider([call("guarded", {}, call_id="g1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[guarded])
+    with pytest.raises(RunCancelled):
+        await Runner.run(agent, "go", cancel_token=token)
+    assert executed == []
+
+
+@pytest.mark.asyncio
 async def test_bool_returning_permission_is_rejected_not_guessed() -> None:
     # ``True`` meant "ask" under the old needs_approval and reads as "allowed"
     # under permission — too easy to invert, so a bool is an invalid verdict:

@@ -24,18 +24,25 @@ from ..agent import Agent
 from ..messages import Message, user
 from ..parts import ContentPart, ImagePart, TextPart
 from ..providers import supports_vision
-from ..workspace import LocalWorkspace
+from ..workspace import LocalWorkspace, RemoteWorkspace
 from ..workspace.paths import resolve_path
+from .errors import WebError
 from .media import model_image_mime
 from .schemas import Attachment, ChatRequest
 
 log = logging.getLogger(__name__)
 
 
+def _workspace_config(agent: Agent[Any]) -> Any:
+    """The agent's workspace config — through a session binding, whose
+    ``.workspace`` is the config."""
+    ws = agent.workspace
+    return getattr(ws, "workspace", ws)
+
+
 def _workspace_root(agent: Agent[Any]) -> Path | None:
     """The agent's local-workspace root, or None (mirrors ``workspace_cfg``)."""
-    ws = agent.workspace
-    cfg = getattr(ws, "workspace", ws)
+    cfg = _workspace_config(agent)
     if isinstance(cfg, LocalWorkspace):
         return Path(cfg.root).expanduser().resolve()
     return None
@@ -51,6 +58,18 @@ def user_content(
     inlined images, and a note pointing at every attachment's workspace path.
     """
     attachments = attachments or []
+    if attachments and isinstance(_workspace_config(agent), RemoteWorkspace):
+        # Attachments are files under this machine's copy of the chat's
+        # directory, and a remote chat has none. Refused here — the one place
+        # every way in (send, stream, inject) folds them in — because
+        # dropping them and answering the text alone would read as the
+        # assistant ignoring what it was shown.
+        raise WebError(
+            404,
+            "feature_unavailable",
+            "attachments don't reach a remote workspace yet",
+            hint="put the file on the host and name its path in the message",
+        )
     root = _workspace_root(agent)
     if not attachments or root is None:
         return message

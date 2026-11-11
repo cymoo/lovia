@@ -347,6 +347,15 @@ class RouterDeps:
             switch.remote_host(ref)
         except UserError as exc:
             raise WebError.from_exc(400, "invalid_request", exc) from exc
+        base = workspace_config(agent)
+        if base is not None:
+            try:
+                # What a run there would be given. An agent it cannot be
+                # built for (a sandboxing executor that would be left
+                # behind) is refused here, not part-way into a run.
+                switch.remote_workspace(base, ref, None)
+            except UserError as exc:
+                raise WebError.from_exc(409, "workspace_not_allowed", exc) from exc
         return ref.key
 
     async def admit_new(self, agent: Agent[Any], root: str) -> str:

@@ -382,3 +382,61 @@ def test_attachments_to_a_remote_chat_are_refused_not_dropped(places) -> None:
             assert res.json()["detail"]["code"] == "feature_unavailable"
         # Nothing was created for the refused turns.
         assert c.get("/api/sessions").json() == []
+
+
+def test_every_way_in_refuses_attachments_to_a_remote_chat(places) -> None:
+    # Send, stream and inject all fold attachments in with the same function;
+    # the refusal lives there, so none of them can drop one quietly. (Inject
+    # hands it the live run's agent: its workspace bound to the chat's session.)
+    from lovia.web.attachments import user_content
+    from lovia.web.errors import WebError
+    from lovia.web.schemas import Attachment
+    from lovia.workspace.workspace import WorkspaceSessionBinding
+
+    here, there = places
+    remote = Workspace.remote(_far(), str(there))
+    attachment = Attachment(path="uploads/a.png", mime="image/png", kind="image")
+    for workspace in (remote, WorkspaceSessionBinding(remote, None)):  # type: ignore[arg-type]
+        agent = Agent(name="bot", model=None, workspace=workspace)
+        for message in ("look at this", ""):
+            with pytest.raises(WebError) as refused:
+                user_content(message, [attachment], agent)
+            assert refused.value.code == "feature_unavailable"
+        # No attachments: nothing to refuse.
+        assert user_content("just text", None, agent) == "just text"
+    # A local chat is untouched (a missing file is dropped, as before).
+    local = Agent(name="bot", model=None, workspace=Workspace.local(str(here)))
+    assert user_content("hi", [attachment], local) == "hi"
+
+
+def test_a_sandboxed_agent_is_not_quietly_unsandboxed_on_a_remote(places) -> None:
+    # A shell executor confines commands on this machine. It cannot go with
+    # the workspace to a host, and running there without it would be a
+    # weaker boundary nobody asked for.
+    from lovia.exceptions import UserError
+
+    here, there = places
+
+    class Sandbox:
+        async def run(self, command, *, cwd, env, timeout, policy, root):
+            raise AssertionError("never runs here")
+
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider([_WRITE, text("x")]),
+        workspace=Workspace.local(str(here), executor=Sandbox()),
+    )
+    key = f"remote://far{there}"
+    switch = WorkspaceSwitch(remotes={"far": _far()})
+    with _client(agent, switch) as c:
+        res = c.post("/api/chat", json={"message": "go", "workspace": key})
+        assert res.status_code == 409, res.text
+        detail = res.json()["detail"]
+        assert detail["code"] == "workspace_not_allowed"
+        assert "executor" in detail["hint"]
+        assert c.get("/api/sessions").json() == []
+    assert not (there / "out.txt").exists()
+    # The builder itself refuses too, whatever path leads to it.
+    base = agent.workspace
+    with pytest.raises(UserError, match="executor"):
+        switch.remote_workspace(base, WorkspaceRef.parse(key), None)

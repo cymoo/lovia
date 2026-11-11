@@ -818,7 +818,10 @@ handed a directory on this machine to read — it gets
 and `root`; if your served agent already carries a local project's
 instructions or skills, take them off there (`lovia web` does). What it does
 not get yet: the Files panel, uploads and attachments, each refused with 404
-`feature_unavailable` rather than quietly ignored. Adding a
+`feature_unavailable` rather than quietly ignored. An agent whose workspace
+has a shell `executor` cannot open one at all (409 `workspace_not_allowed`):
+the sandbox stays on this machine, and commands would run on the host
+without it. Adding a
 remote location to the list (`POST /api/workspaces`) looks the directory up
 on its host; opening a chat in one does not, so a directory that is gone
 shows up as the run's first error.

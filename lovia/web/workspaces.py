@@ -306,11 +306,25 @@ class WorkspaceSwitch:
         """The agent's workspace ``base`` as a chat at the remote ``ref``
         gets it: the policy :meth:`workspace` would give a local chat in
         ``mode`` — enforced over there — with ``base``'s limits and shell
-        timeout. Not its ``env``: that was written for this machine."""
+        timeout. Not its ``env``: that was written for this machine.
+
+        Raises :class:`UserError` for a workspace with a shell ``executor``:
+        it confines commands on this machine and cannot go to the host, and
+        leaving it behind would run them there unconfined.
+        """
         # Built for the agent's own root (a path ``build`` may check exists
         # here) and never opened: only what does not depend on the root is
         # taken from it.
         template = self.workspace(base, resolve_root(base.root), mode)
+        if template.executor is not None:
+            raise UserError(
+                "A workspace with a shell executor cannot be opened on a remote host.",
+                hint=(
+                    "the executor sandboxes commands on this machine only; on "
+                    "the host they would run as its account, unconfined — "
+                    "serve remote chats from an agent without one"
+                ),
+            )
         return RemoteWorkspace(
             host=self.remote_host(ref),
             root=ref.root,

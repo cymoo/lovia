@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field, is_dataclass, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
@@ -192,14 +192,15 @@ class WorkspaceSwitch:
 
 def _only_policy_differs(old: WorkspaceLike, new: WorkspaceLike) -> bool:
     """Whether ``new`` is ``old`` with another ``policy`` and nothing else —
-    answerable for dataclass configs that carry one (``LocalWorkspace`` does),
-    False for anything else."""
+    answerable for dataclass configs with a ``policy`` field
+    (``LocalWorkspace`` has one), False for anything else."""
     if type(old) is not type(new) or not is_dataclass(old):
         return False
-    policy = getattr(new, "policy", None)
-    if policy is None or not hasattr(old, "policy"):
+    # A field ``replace`` can set: a derived ``policy`` (a property, an
+    # ``init=False`` field) has no "same config, other policy" to compare.
+    if not any(f.name == "policy" and f.init for f in fields(old)):
         return False
-    return bool(replace(cast(Any, old), policy=policy) == new)
+    return bool(replace(cast(Any, old), policy=cast(Any, new).policy) == new)
 
 
 async def _close_quietly(session_id: str, session: WorkspaceSession) -> None:

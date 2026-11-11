@@ -236,6 +236,60 @@ async def test_registry_binds_a_custom_backend_like_a_local_one(tmp_path) -> Non
     assert _wait_dead(start.pid)
 
 
+async def test_registry_binds_a_backend_without_view_injectors(tmp_path) -> None:
+    # The runner tolerates a backend that predates ``view_injectors`` (it
+    # looks the method up); wrapping it in a binding must not take that away.
+    local = Workspace.local(str(tmp_path))
+
+    class Old:
+        close_after_run = True
+        open = staticmethod(local.open)
+        tools = staticmethod(local.tools)
+        instructions = staticmethod(local.instructions)
+
+    reg = WorkspaceSessions()
+    bound = await reg.bind("chat", Agent(name="t", model=None, workspace=Old()))
+    assert bound.workspace.view_injectors() == []
+    await reg.aclose()
+
+
+async def test_registry_reopens_when_the_policy_cannot_be_swapped(tmp_path) -> None:
+    # A dataclass config whose ``policy`` is derived, not a field: there is
+    # no "same config, other policy" to recognise, so a change reopens.
+    @dataclass(frozen=True)
+    class Derived:
+        local: LocalWorkspace
+        close_after_run: bool = True
+
+        @property
+        def policy(self) -> WorkspacePolicy:
+            return self.local.policy
+
+        async def open(self):
+            return await self.local.open()
+
+        def tools(self):
+            return self.local.tools()
+
+        def instructions(self):
+            return self.local.instructions()
+
+        def view_injectors(self):
+            return self.local.view_injectors()
+
+    reg = WorkspaceSessions()
+    coding = Derived(Workspace.local(str(tmp_path)))
+    readonly = Derived(Workspace.local(str(tmp_path), mode="readonly"))
+    s1 = await (
+        await reg.bind("c", Agent(name="t", model=None, workspace=coding))
+    ).workspace.open()
+    s2 = await (
+        await reg.bind("c", Agent(name="t", model=None, workspace=readonly))
+    ).workspace.open()
+    assert s2 is not s1 and s2.policy.write == "deny"
+    await reg.aclose()
+
+
 async def test_registry_leaves_a_caller_bound_session_alone(tmp_path) -> None:
     reg = WorkspaceSessions()
     async with Workspace.local(str(tmp_path)).session() as binding:

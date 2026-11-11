@@ -562,4 +562,7 @@ class WorkspaceSessionBinding:
         return self.workspace.instructions()
 
     def view_injectors(self) -> list["ViewInjector"]:
-        return self.workspace.view_injectors()
+        # Looked up, like the runner does: a backend that predates the seam
+        # contributes none, bound or not.
+        contribute = getattr(self.workspace, "view_injectors", None)
+        return contribute() if contribute is not None else []

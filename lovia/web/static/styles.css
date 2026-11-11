@@ -1288,9 +1288,13 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
 .lv-agent-select:hover {
   border-color: var(--lv-border-strong);
 }
+/* A focused field says where typing goes, in neutral: a firmer border, a
+   faint ring. The accent is for what the page wants done (the primary
+   button, a selection) and for the keyboard's focus ring (:focus-visible),
+   not for the field a dialog happens to open on. */
 .lv-agent-select:focus {
-  border-color: var(--lv-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lv-accent) 12%, transparent);
+  border-color: var(--lv-muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lv-ink) 8%, transparent);
 }
 
 /* ---- Main page ---------------------------------------------------------- */
@@ -2925,7 +2929,7 @@ button.lv-question-option:hover {
 }
 .lv-question-input:focus {
   outline: none;
-  border-color: var(--lv-accent);
+  border-color: var(--lv-muted);
 }
 .lv-question.lv-resolved {
   opacity: 0.72;
@@ -3876,8 +3880,8 @@ dialog.lv-custom-dialog::backdrop {
 }
 .lv-dialog-input:focus {
   background: var(--lv-surface);
-  border-color: var(--lv-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lv-accent) 12%, transparent);
+  border-color: var(--lv-muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lv-ink) 8%, transparent);
 }
 .lv-dialog-actions {
   display: flex;
@@ -6091,7 +6095,7 @@ body.lv-files-resizing {
 }
 .lv-approval-reason:focus {
   outline: none;
-  border-color: var(--lv-accent);
+  border-color: var(--lv-muted);
 }
 
 /* ---- Grants dialog ("Allowed in this chat") ---------------------------------------------------------- */
@@ -6470,7 +6474,7 @@ body.lv-files-resizing {
 }
 .lv-edit-area textarea:focus {
   outline: none;
-  border-color: var(--lv-accent);
+  border-color: var(--lv-muted);
 }
 .lv-edit-actions {
   display: flex;

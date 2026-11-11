@@ -211,7 +211,7 @@ async def test_a_lost_connection_fails_calls_and_cleans_up(host, tmp_path) -> No
     # (Killed outright, the far side could not clean up after itself — the
     # two commands are this test's to reap.)
     for pid in (started.pid, int((tmp_path / "pid").read_text())):
-        os.kill(pid, signal.SIGKILL)
+        os.killpg(pid, signal.SIGKILL)  # each leads its own group
 
     # The host reconnects for the next session.
     again = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
@@ -250,6 +250,54 @@ async def test_a_silent_far_side_is_given_up_on(tmp_path, monkeypatch) -> None:
         await host.aclose()
 
 
+async def test_a_far_side_that_stops_reading_a_large_request_is_given_up_on(
+    tmp_path, monkeypatch
+) -> None:
+    # The request is bigger than the pipe holds, so it sits half-sent — and
+    # the pings queueing up behind it must not pass for progress.
+    monkeypatch.setattr(host_module, "_PING_SECONDS", 0.05)
+    monkeypatch.setattr(host_module, "_PING_TIMEOUT", 0.2)
+    host = _host()
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    far_pid = host._conn.ready["pid"]
+    os.kill(far_pid, signal.SIGSTOP)
+    try:
+        with pytest.raises(WorkspaceDisconnectedError, match="stopped answering"):
+            await asyncio.wait_for(
+                session.write_bytes("big.bin", os.urandom(4_000_000)), timeout=10
+            )
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(far_pid, signal.SIGKILL)
+        await host.aclose()
+
+
+async def test_progress_is_bytes_that_left_not_bytes_that_queued(tmp_path) -> None:
+    # What the idle check asks while a request is on its way out. (The real
+    # timings are untouched here, so nothing else calls it meanwhile.)
+    host = _host()
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    conn, far_pid = host._conn, host._conn.ready["pid"]
+    blob = os.urandom(4_000_000)
+    try:
+        os.kill(far_pid, signal.SIGSTOP)
+        writing = asyncio.create_task(session.write_bytes("big.bin", blob))
+        await asyncio.sleep(0.2)  # the pipe takes what it can hold, then no more
+        assert conn._sending() is True  # some of it left since the last look
+        assert conn._sending() is False  # and nothing since
+        conn._write({"id": 0, "method": "ping"})
+        assert conn._sending() is False  # a ping joining the queue is no progress
+
+        os.kill(far_pid, signal.SIGCONT)  # the far side reads again
+        assert (await writing).bytes_written == len(blob)
+        assert conn._sending() is False  # all sent: nothing is on its way out
+        assert (tmp_path / "big.bin").read_bytes() == blob
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(far_pid, signal.SIGCONT)
+        await host.aclose()
+
+
 async def test_alive_means_bytes_are_moving_not_whole_messages() -> None:
     # A file crawling over a slow link is one very long line. Neither side
     # may take the wait for its end as silence.
@@ -258,13 +306,13 @@ async def test_alive_means_bytes_are_moving_not_whole_messages() -> None:
     reader = asyncio.StreamReader()
 
     async def dribble() -> None:
-        for piece in (b'{"a":', b" 1", b"}\n", b"second\n"):
-            await asyncio.sleep(0.05)  # each gap under the idle bound …
+        for piece in [b"x"] * 40 + [b"\n", b"second\n"]:
+            await asyncio.sleep(0.02)  # each gap far under the idle bound …
             reader.feed_data(piece)
 
     feeder = asyncio.create_task(dribble())
-    lines = read_lines(reader, idle=0.1)  # … their sum well over it
-    assert [await anext(lines), await anext(lines)] == [b'{"a": 1}', b"second"]
+    lines = read_lines(reader, idle=0.5)  # … their sum (0.8 s) well over it
+    assert [await anext(lines), await anext(lines)] == [b"x" * 40, b"second"]
     await feeder
 
     with pytest.raises(asyncio.TimeoutError):  # real silence
@@ -319,20 +367,27 @@ async def test_the_far_working_directory_cannot_shadow_the_stdlib(tmp_path) -> N
 
 
 async def test_a_connect_that_is_cancelled_leaves_nothing_behind(tmp_path) -> None:
-    host = RemoteHost("slow", command=(), python="sh -c 'sleep 30' sh")
+    # A transport that never gets as far as ready, with a child of its own
+    # (as a wrapper shell or a proxy command would be).
+    script = "echo $$ > sh.pid; sleep 30 & echo $! > child.pid; wait"
+    host = RemoteHost(
+        "slow",
+        command=("sh", "-c", f"cd {tmp_path} && {script}", "sh"),
+        python=sys.executable,
+    )
     opening = asyncio.create_task(
         host.open(str(tmp_path), policy=WorkspacePolicy.coding())
     )
-    await asyncio.sleep(0.2)
+    while (
+        not (tmp_path / "child.pid").exists()
+        or not (tmp_path / "child.pid").read_text().strip()
+    ):
+        await asyncio.sleep(0.02)
     opening.cancel()
     with pytest.raises(asyncio.CancelledError):
         await opening
-    await asyncio.sleep(0.2)
-    stray = await asyncio.create_subprocess_shell(
-        "pgrep -f '[s]leep 30' || true", stdout=asyncio.subprocess.PIPE
-    )
-    out, _ = await stray.communicate()
-    assert out.strip() == b""
+    for name in ("sh.pid", "child.pid"):  # the transport, and what it started
+        assert await _dead(int((tmp_path / name).read_text()))
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import shlex
+import signal
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -44,6 +46,9 @@ _PING_TIMEOUT = 20.0
 _READY_SECONDS = 30.0
 _EXIT_SECONDS = 5.0
 
+# Connections being closed with nobody waiting on them, kept from the GC.
+_reaping: "set[asyncio.Future[None]]" = set()
+
 
 class _Connection:
     """The pipe to one far-side process, and the requests riding on it."""
@@ -54,7 +59,8 @@ class _Connection:
         self.lost: str | None = None  # why, once it is
         self._proc = proc
         self._next = 0
-        self._unsent = 0
+        self._written = 0  # bytes handed to the pipe …
+        self._sent = 0  # … and how many of them had left at the last look
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._stderr: deque[str] = deque(maxlen=20)
         self._tasks: list[asyncio.Task[None]] = []
@@ -87,10 +93,12 @@ class _Connection:
             self.ready = await asyncio.wait_for(self._await_ready(), _READY_SECONDS)
         except BaseException as exc:
             if not isinstance(exc, Exception):
-                # Cancelled mid-connect: leave nothing running behind.
+                # Cancelled mid-connect: leave nothing running behind. Killed
+                # now; reaped in the background, since we cannot wait here.
                 self._hang_up()
-                for task in self._tasks:
-                    task.cancel()
+                reaping = asyncio.ensure_future(self.aclose())
+                _reaping.add(reaping)
+                reaping.add_done_callback(_reaping.discard)
                 raise
             await self.aclose()
             said = "".join(self._stderr).strip()
@@ -154,11 +162,17 @@ class _Connection:
             self._lose(f"{type(exc).__name__}: {exc}")
 
     def _sending(self) -> bool:
-        """Whether a request is still on its way out, and moving."""
+        """Whether a request is still on its way out, and moving.
+
+        Moving means bytes have *left* since the last look. The size of what
+        is waiting is no measure of that: a ping joins the queue every
+        interval whether or not anything in front of it gets through.
+        """
         assert self._proc.stdin is not None
         unsent = self._proc.stdin.transport.get_write_buffer_size()
-        moving, self._unsent = unsent != self._unsent, unsent
-        return unsent > 0 and moving
+        sent = self._written - unsent
+        moved, self._sent = sent > self._sent, sent
+        return unsent > 0 and moved
 
     async def _keep_alive(self) -> None:
         while self.lost is None:
@@ -185,8 +199,14 @@ class _Connection:
         with contextlib.suppress(Exception):
             if self._proc.stdin is not None:
                 self._proc.stdin.close()
-        with contextlib.suppress(ProcessLookupError):
-            if self._proc.returncode is None:
+        if self._proc.returncode is not None:
+            return
+        try:
+            # The whole group (it was started as its own): the transport and
+            # whatever it started in turn — a wrapper shell's child, a proxy.
+            os.killpg(self._proc.pid, signal.SIGKILL)
+        except (AttributeError, OSError):  # no process groups here, or gone
+            with contextlib.suppress(ProcessLookupError):
                 self._proc.kill()
 
     def _disconnected(self) -> WorkspaceDisconnectedError:
@@ -201,7 +221,9 @@ class _Connection:
         if self.lost is not None:
             raise self._disconnected()
         assert self._proc.stdin is not None
-        self._proc.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
+        data = (json.dumps(message) + "\n").encode("utf-8")
+        self._proc.stdin.write(data)
+        self._written += len(data)
 
     async def call(
         self, method: str, sid: str | None = None, params: Any = None

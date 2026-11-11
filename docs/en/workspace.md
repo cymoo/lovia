@@ -252,7 +252,8 @@ opens a session per run and closes it at the run's end — fine for one-shot
 `Runner.run` scripts, where the run *is* the conversation. A serving layer
 that holds conversations open should scope the session wider by binding a
 caller-owned one via `LocalWorkspace.bind(session)` (or the
-`.session()` context manager): `lovia web` binds one session per **chat**,
+`.session()` context manager): `lovia web` binds one session per **chat**
+(for a custom backend too),
 so a dev server started in one turn is still up when the next message
 arrives, and dies when the chat is deleted or the server shuts down
 (Ctrl+C; a hard `kill -9` skips teardown and orphans processes). A custom

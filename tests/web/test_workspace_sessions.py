@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,7 @@ from lovia import Agent  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 from lovia.web.workspaces import WorkspaceSessions  # noqa: E402
-from lovia.workspace import Workspace  # noqa: E402
+from lovia.workspace import LocalWorkspace, Workspace, WorkspacePolicy  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
 
@@ -183,6 +184,64 @@ async def test_registry_passthrough_without_local_workspace(tmp_path) -> None:
     assert (await reg.bind("chat", plain)) is plain
     assert reg.get("chat") is None
     await reg.close("chat")  # idempotent no-op
+
+
+@dataclass(frozen=True)
+class _Backend:
+    """A ``WorkspaceLike`` that is not a ``LocalWorkspace``: it stands in
+    front of one, the way a backend of the caller's own would."""
+
+    local: LocalWorkspace
+    policy: WorkspacePolicy
+    close_after_run: bool = True
+
+    async def open(self):
+        return await replace(self.local, policy=self.policy).open()
+
+    def tools(self):
+        return self.local.tools()
+
+    def instructions(self):
+        return self.local.instructions()
+
+    def view_injectors(self):
+        return self.local.view_injectors()
+
+
+def _backend(tmp_path, mode: str = "coding") -> _Backend:
+    local = Workspace.local(str(tmp_path), mode=mode)
+    return _Backend(local=Workspace.local(str(tmp_path)), policy=local.policy)
+
+
+async def test_registry_binds_a_custom_backend_like_a_local_one(tmp_path) -> None:
+    reg = WorkspaceSessions()
+    agent = Agent(name="t", model=None, workspace=_backend(tmp_path))
+
+    s1 = await (await reg.bind("chat", agent)).workspace.open()
+    start = await s1.spawn("sleep 30")
+    # The next run of the chat gets the same session, process and all …
+    bound = await reg.bind("chat", agent)
+    assert (await bound.workspace.open()) is s1
+    assert bound.workspace.close_after_run is False
+    assert reg.get("chat") is s1
+
+    # … a mode switch keeps it and re-judges …
+    readonly = Agent(name="t", model=None, workspace=_backend(tmp_path, "readonly"))
+    assert (await (await reg.bind("chat", readonly)).workspace.open()) is s1
+    assert s1.policy.write == "deny"
+    assert not _wait_dead(start.pid, timeout=0.3)
+
+    # … and the chat's end closes it.
+    await reg.close("chat")
+    assert _wait_dead(start.pid)
+
+
+async def test_registry_leaves_a_caller_bound_session_alone(tmp_path) -> None:
+    reg = WorkspaceSessions()
+    async with Workspace.local(str(tmp_path)).session() as binding:
+        agent = Agent(name="t", model=None, workspace=binding)
+        assert (await reg.bind("chat", agent)) is agent
+        assert reg.get("chat") is None
 
 
 async def test_registry_reopens_on_workspace_config_change(tmp_path) -> None:

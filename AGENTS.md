@@ -52,6 +52,10 @@ Python 3.10+. Run every Python command through the repo virtualenv: `.venv/bin/p
   run that completed, or one the caller finalized, e.g. the web UI on stop; checkpoint = the run
   that may still resume). The runner auto-appends only on success; finalizing an interrupted run
   into the session is a caller decision. Don't add a `replace`.
+- The workspace **session engine is stdlib-only**: `approvals.py`, `exceptions.py` and `workspace/`'s
+  `local`, `policy`, `paths`, `command_guard`, `rules`, `errors`, `types` import nothing third-party
+  (not pydantic, not the rest of lovia) — they are meant to run where lovia isn't installed.
+  `tests/workspace/test_engine_stdlib.py` enforces it; its result types are dataclasses for that reason.
 - Dropping middle transcript entries? Route through `safe_window()` (`transcript.py`) or you'll orphan
   tool-call/result pairs.
 - Public-behavior change → sync **both** READMEs (`README.md` + `README-zh.md`).
@@ -59,7 +63,8 @@ Python 3.10+. Run every Python command through the repo virtualenv: `.venv/bin/p
 ## Conventions (non-standard only)
 
 - **Async-only** public API; `run_sync()` only wraps `asyncio.run()` — never fork logic across sync/async paths.
-- **Pydantic v2** data models (`model_fields`, `model_validate`, …). Type-annotate every public function and class.
+- **Pydantic v2** data models (`model_fields`, `model_validate`, …), except in the stdlib-only
+  workspace engine (above). Type-annotate every public function and class.
 - **Errors carry `.hint`** — every `LoviaError` accepts `hint=`, rendered in `str(exc)`. Bury no context.
 - Provider adapters live in `lovia/providers/` (translate lovia transcript ⇄ vendor API); register
   third-party ones via the `lovia.providers` entry-point group.

@@ -238,7 +238,7 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 `Verdict`（`action`、`reason`、`scopes`）；文件和命令方法遇到 `deny` 会抛异常，你自己的
 `permission` 谓词可以把判定原样返回。
 （`Workspace.local(...)` 返回 `LocalWorkspace`，其 `open()` 产出 `LocalWorkspaceSession`；
-调用返回类型化结果：`FileContent`、`FileChange`、`EditResult`、`DirEntry`、`GrepMatch`、
+调用返回类型化结果（普通的 frozen dataclass）：`FileContent`、`FileChange`、`EditResult`、`DirEntry`、`GrepMatch`、
 `CommandResult`、`ProcessStart`、`ProcessOutput`；`PathRule.ops` 接受 `FileOp` 值
 `"read"`/`"write"`。）
 

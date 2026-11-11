@@ -328,7 +328,7 @@ Both return a `Verdict` (`action`, `reason`, `scopes`); the file and shell
 methods raise on `deny`, and your tool's own `permission` predicate can
 return the verdict as is. (`Workspace.local(...)` returns a `LocalWorkspace`
 whose `open()` yields a `LocalWorkspaceSession`; the calls return typed
-results — `FileContent`, `FileChange`, `EditResult`, `DirEntry`,
+results, plain frozen dataclasses — `FileContent`, `FileChange`, `EditResult`, `DirEntry`,
 `GrepMatch`, `CommandResult`, `ProcessStart`, `ProcessOutput` — and
 `PathRule.ops` takes `FileOp` values, `"read"`/`"write"`.)
 

@@ -1,36 +1,43 @@
-"""Public data types for workspace sessions and tools."""
+"""Public data types for workspace sessions and tools.
+
+Plain dataclasses, not pydantic models like the rest of lovia's data types:
+the session engine that builds them imports nothing outside the standard
+library (see ``tests/workspace/test_engine_stdlib.py``), so that it can run
+where lovia's dependencies are not installed.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable, Literal, TypeVar
 
-from pydantic import BaseModel, Field
-
 WorkspaceMode = Literal["readonly", "coding", "trusted"]
 
 _ItemT = TypeVar("_ItemT")
 
 
-class FileContent(BaseModel):
+@dataclass(frozen=True, kw_only=True)
+class FileContent:
     """Text returned by ``read_text``."""
 
     path: str
     content: str
-    start: int = Field(ge=1)
-    end: int = Field(ge=0)
+    start: int
+    end: int
     total_lines: int
     truncated: bool = False
 
 
-class FileBytes(BaseModel):
+@dataclass(frozen=True, kw_only=True)
+class FileBytes:
     """Raw bytes returned by ``read_bytes`` (binary payloads, e.g. images)."""
 
     path: str
     data: bytes
 
 
-class FileChange(BaseModel):
+@dataclass(frozen=True, kw_only=True)
+class FileChange:
     """Result of creating or updating a file."""
 
     ok: bool = True
@@ -40,7 +47,8 @@ class FileChange(BaseModel):
     message: str | None = None
 
 
-class EditResult(BaseModel):
+@dataclass(frozen=True, kw_only=True)
+class EditResult:
     """Result of an exact text edit."""
 
     ok: bool
@@ -50,7 +58,8 @@ class EditResult(BaseModel):
     message: str | None = None
 
 
-class DirEntry(BaseModel):
+@dataclass(frozen=True, kw_only=True)
+class DirEntry:
     """One entry returned by ``list_files``.
 
     ``path`` is workspace-relative when the entry is inside the workspace
@@ -66,15 +75,17 @@ class DirEntry(BaseModel):
     symlink_target: str | None = None
 
 
-class GrepMatch(BaseModel):
+@dataclass(frozen=True, kw_only=True)
+class GrepMatch:
     """One matching line returned by ``grep``."""
 
     path: str
-    line: int = Field(ge=1)
+    line: int
     text: str
 
 
-class CommandResult(BaseModel):
+@dataclass(frozen=True, kw_only=True)
+class CommandResult:
     """Outcome of a one-shot shell command."""
 
     exit_code: int | None
@@ -88,7 +99,8 @@ class CommandResult(BaseModel):
         return self.exit_code == 0 and not self.timed_out
 
 
-class ProcessStart(BaseModel):
+@dataclass(frozen=True, kw_only=True)
+class ProcessStart:
     """A background process just started by ``spawn``."""
 
     process_id: str
@@ -96,7 +108,8 @@ class ProcessStart(BaseModel):
     command: str
 
 
-class ProcessOutput(BaseModel):
+@dataclass(frozen=True, kw_only=True)
+class ProcessOutput:
     """One incremental read of a background process.
 
     ``output`` is everything the process wrote (stdout and stderr merged)
@@ -112,7 +125,8 @@ class ProcessOutput(BaseModel):
     truncated: bool = False
 
 
-class ProcessStatus(BaseModel):
+@dataclass(frozen=True, kw_only=True)
+class ProcessStatus:
     """Passive status of one background process — consumes no output.
 
     ``exit_seen`` reports whether a ``read_process_output``/``kill_process``

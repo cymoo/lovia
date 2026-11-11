@@ -370,7 +370,7 @@ def test_result_to_text_fallbacks() -> None:
 
 
 def test_clip_text_variants() -> None:
-    from lovia.tools.base import clip_text
+    from lovia.workspace.local import clip_text
 
     text_in = "H" * 80 + "T" * 20
     # Within the limit: untouched, not flagged.

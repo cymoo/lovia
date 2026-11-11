@@ -1,0 +1,323 @@
+"""Remote workspaces, over the one transport every machine has: a subprocess.
+
+The far side is this interpreter started with ``-I -S`` — no site-packages —
+so each test also proves the shipped engine runs on the standard library
+alone, through the real bootstrap. SSH and containers differ only in the
+command that reaches the far side; what is tested here is everything after.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+import signal
+import sys
+
+import pytest
+
+from lovia import Agent, Runner
+from lovia.exceptions import UserError
+from lovia.workspace import (
+    FileTooLargeError,
+    PermissionDeniedError,
+    RemoteHost,
+    RemoteWorkspace,
+    Workspace,
+    WorkspaceDisconnectedError,
+    WorkspaceError,
+    WorkspacePolicy,
+)
+from lovia.workspace.remote import host as host_module
+from lovia.workspace.remote.wire import decode, encode
+
+from ..scripted_provider import ScriptedProvider, call, text
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX far side")
+
+
+def _host(name: str = "far") -> RemoteHost:
+    return RemoteHost(name, command=(), python=f"{sys.executable} -I -S")
+
+
+@pytest.fixture
+async def host():
+    h = _host()
+    yield h
+    await h.aclose()
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+async def _dead(pid: int, timeout: float = 5.0) -> bool:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if not _alive(pid):
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# The wire
+# ---------------------------------------------------------------------------
+
+
+def test_policy_survives_the_wire_unchanged() -> None:
+    policy = Workspace.local(
+        ".", mode="coding", readable=("~/docs",), denied_paths=("secrets/**",)
+    ).policy
+    assert decode(encode(policy)) == policy
+
+
+def test_a_policy_with_a_callable_cannot_travel() -> None:
+    policy = WorkspacePolicy(command_decider=lambda command: "allow")
+    with pytest.raises(UserError, match="command_decider"):
+        encode(policy)
+
+
+# ---------------------------------------------------------------------------
+# The session, end to end
+# ---------------------------------------------------------------------------
+
+
+async def test_files_round_trip(host, tmp_path) -> None:
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    assert session.root == tmp_path.resolve().as_posix()
+
+    text_in = "héllo — 你好\nline two\r\n"
+    assert (await session.write_text("a/note.txt", text_in)).action == "created"
+    assert (await session.read_text("a/note.txt")).content == text_in
+    assert (tmp_path / "a" / "note.txt").read_bytes() == text_in.encode()
+
+    blob = bytes(range(256)) * 400
+    await session.write_bytes("blob.bin", blob)
+    assert (await session.read_bytes("blob.bin")).data == blob
+
+    edit = await session.edit_text("a/note.txt", "line two", "line 2")
+    assert edit.ok and edit.replacements == 1
+    assert [m.line for m in await session.grep("line 2")] == [2]
+
+    listing = await session.list_files(".", pattern="**/*")
+    assert sorted(e.path for e in listing) == ["a", "a/note.txt", "blob.bin"]
+    assert listing.truncated is False  # the flag survives the trip
+    capped = await session.list_files(".", pattern="**/*", max_results=1)
+    assert len(capped) == 1 and capped.truncated is True
+
+
+async def test_commands_and_background_processes(host, tmp_path) -> None:
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    result = await session.run("echo out; echo err >&2; exit 3")
+    assert (result.exit_code, result.stdout, result.stderr) == (3, "out\n", "err\n")
+    # A command reading stdin gets EOF, not the protocol.
+    assert (await session.run("cat; echo done", timeout=5)).stdout == "done\n"
+
+    started = await session.spawn("sleep 30")
+    assert [p.status for p in await session.background_processes()] == ["running"]
+    assert (await session.kill_process(started.process_id)).status == "killed"
+    assert await _dead(started.pid)
+
+
+async def test_errors_arrive_as_the_same_exceptions(host, tmp_path) -> None:
+    (tmp_path / "big.bin").write_bytes(b"x" * 100)
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.readonly())
+    with pytest.raises(PermissionDeniedError):
+        await session.write_text("x.txt", "x")
+    with pytest.raises(FileTooLargeError):
+        await session.read_bytes("big.bin", max_bytes=10)
+    with pytest.raises(WorkspaceError, match="Not a file") as caught:
+        await session.read_text("nope.txt")
+    assert type(caught.value) is WorkspaceError
+    with pytest.raises(UserError, match="does not exist"):
+        await host.open(str(tmp_path / "missing"), policy=WorkspacePolicy.coding())
+
+
+async def test_policy_is_judged_where_the_files_are(host, tmp_path) -> None:
+    outside = tmp_path / "outside"
+    (tmp_path / "root").mkdir()
+    outside.mkdir()
+    (outside / "secret.txt").write_text("s", encoding="utf-8")
+    (tmp_path / "root" / "link.txt").symlink_to(outside / "secret.txt")
+    session = await host.open(str(tmp_path / "root"), policy=WorkspacePolicy.coding())
+
+    assert (await session.decide_path("plain.txt")).action == "allow"
+    # The symlink is followed over there: it leads outside the root.
+    assert (await session.decide_path("link.txt")).action == "ask"
+    assert (await session.decide_command("git push --force")).action == "deny"
+
+    # A mode switch takes effect for the very next request.
+    session.set_policy(WorkspacePolicy.readonly())
+    assert (await session.decide_path("plain.txt", write=True)).action == "deny"
+    with pytest.raises(PermissionDeniedError):
+        await session.write_text("plain.txt", "x")
+
+
+async def test_one_connection_carries_many_sessions(host, tmp_path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    a = await host.open(str(tmp_path / "a"), policy=WorkspacePolicy.trusted())
+    b = await host.open(str(tmp_path / "b"), policy=WorkspacePolicy.trusted())
+    assert a._conn is b._conn
+
+    started = await a.spawn("sleep 30")
+    await a.close()  # closing one session ends its processes only
+    assert await _dead(started.pid)
+    assert (await b.run("echo still here")).stdout == "still here\n"
+    with pytest.raises(WorkspaceError, match="closed"):
+        await a.read_text("x")
+    assert await a.background_processes() == []
+
+
+# ---------------------------------------------------------------------------
+# Cancel and disconnect
+# ---------------------------------------------------------------------------
+
+
+async def test_cancelling_a_call_kills_what_it_started(host, tmp_path) -> None:
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    task = asyncio.create_task(session.run("echo $$ > pid; exec sleep 30"))
+    while not (tmp_path / "pid").exists() or not (tmp_path / "pid").read_text():
+        await asyncio.sleep(0.02)
+    pid = int((tmp_path / "pid").read_text())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await _dead(pid)
+    # The session and the connection are none the worse.
+    assert (await session.run("echo ok")).stdout == "ok\n"
+
+
+async def test_a_lost_connection_fails_calls_and_cleans_up(host, tmp_path) -> None:
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    started = await session.spawn("sleep 30")
+    in_flight = asyncio.create_task(session.run("echo $$ > pid; exec sleep 30"))
+    while not (tmp_path / "pid").exists() or not (tmp_path / "pid").read_text():
+        await asyncio.sleep(0.02)
+
+    host._conn._proc.kill()  # the far side dies under us
+    with pytest.raises(WorkspaceDisconnectedError, match="may or may not have run"):
+        await in_flight
+    with pytest.raises(WorkspaceDisconnectedError):
+        await session.read_text("x")
+    assert await session.background_processes() == []
+    await session.close()  # no error: it is gone already
+    # (Killed outright, the far side could not clean up after itself — the
+    # two commands are this test's to reap.)
+    for pid in (started.pid, int((tmp_path / "pid").read_text())):
+        os.kill(pid, signal.SIGKILL)
+
+    # The host reconnects for the next session.
+    again = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    assert (await again.run("echo back")).stdout == "back\n"
+
+
+async def test_closing_the_host_ends_the_far_side_and_its_processes(tmp_path) -> None:
+    host = _host()
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    started = await session.spawn("sleep 30")
+    far_pid = host._conn.ready["pid"]
+    await host.aclose()
+    assert await _dead(started.pid) and await _dead(far_pid)
+
+
+async def test_a_far_side_that_cannot_start_says_why(tmp_path) -> None:
+    host = RemoteHost("nowhere", command=(), python="false")
+    with pytest.raises(WorkspaceError, match="Could not start") as caught:
+        await host.open(str(tmp_path), policy=WorkspacePolicy.coding())
+    assert "python3 >= 3.10" in str(caught.value)
+
+
+async def test_a_silent_far_side_is_given_up_on(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(host_module, "_PING_SECONDS", 0.05)
+    monkeypatch.setattr(host_module, "_PING_TIMEOUT", 0.2)
+    host = _host()
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    far_pid = host._conn.ready["pid"]
+    os.kill(far_pid, signal.SIGSTOP)  # alive, but answering nothing
+    try:
+        with pytest.raises(WorkspaceDisconnectedError, match="stopped answering"):
+            await session.run("echo never")
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(far_pid, signal.SIGKILL)
+        await host.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Hosts and the config
+# ---------------------------------------------------------------------------
+
+
+def test_host_commands_are_built_safely() -> None:
+    ssh = RemoteHost.ssh("neo@box", options=("-p", "2222"))
+    argv = ssh._argv()
+    assert argv[:7] == ["ssh", "-T", "-o", "BatchMode=yes", "-p", "2222", "--"]
+    # One shell-quoted word for the far shell, after the destination.
+    assert argv[7] == "neo@box" and argv[8].startswith("python3 -u -c '")
+    assert len(argv) == 9
+
+    docker = RemoteHost.docker("api", user="dev", python="/opt/py/bin/python3")
+    assert docker._argv()[:8] == [
+        "docker", "exec", "-i", "-u", "dev", "api", "/opt/py/bin/python3", "-u"
+    ]  # fmt: skip
+    assert (ssh.name, docker.name) == ("neo@box", "api")
+
+    for bad in ("-oProxyCommand=evil", "two words", ""):
+        with pytest.raises(UserError):
+            RemoteHost.ssh(bad)
+        with pytest.raises(UserError):
+            RemoteHost.docker(bad)
+
+
+async def test_remote_workspace_runs_an_agent(host, tmp_path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "uv.lock").write_text("", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("remember the milk", encoding="utf-8")
+    workspace = Workspace.remote(host, str(tmp_path), mode="trusted")
+    assert isinstance(workspace, RemoteWorkspace)
+    # Before any session: a plain directory, by its name.
+    assert f"named {tmp_path.name!r}" in workspace.instructions()
+    assert "git repository" not in workspace.instructions()
+
+    provider = ScriptedProvider(
+        [
+            call("read_file", {"path": "notes.txt"}, call_id="r"),
+            call("shell", {"command": "echo hi > out.txt"}, call_id="s"),
+            text("done"),
+        ]
+    )
+    agent = Agent(name="far", model=provider, workspace=workspace)
+    result = await Runner.run(agent, "go")
+    outputs = [m.content for m in result.messages if m.role == "tool"]
+    assert "remember the milk" in outputs[0]
+    assert (tmp_path / "out.txt").read_text() == "hi\n"
+
+    # The prompt the run saw describes the root as the far side found it.
+    system = provider.calls[0][0]
+    assert "git repository" in str(system) and "uv-managed" in str(system)
+    # Same tool bundle as the local workspace under the same policy.
+    local = Workspace.local(str(tmp_path), mode="trusted")
+    assert [t.name for t in workspace.tools()] == [t.name for t in local.tools()]
+
+
+async def test_remote_denials_and_asks_reach_the_run(host, tmp_path) -> None:
+    workspace = Workspace.remote(host, str(tmp_path), mode="coding")
+    provider = ScriptedProvider(
+        [
+            call("write_file", {"path": "/tmp/evil.txt", "content": "x"}, call_id="w"),
+            call("shell", {"command": "git push --force"}, call_id="s"),
+            text("done"),
+        ]
+    )
+    result = await Runner.run(
+        Agent(name="far", model=provider, workspace=workspace), "go"
+    )
+    outputs = [m.content for m in result.messages if m.role == "tool"]
+    assert "denied by policy" in outputs[0] and "outside the workspace" in outputs[0]
+    assert "denied by policy" in outputs[1]

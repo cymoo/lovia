@@ -183,11 +183,14 @@ class WorkspaceSession(Protocol):
         """Kill a background process's whole group; report its final tail."""
         ...
 
-    def background_processes(self) -> list[ProcessStatus]:
+    def background_processes(
+        self,
+    ) -> "list[ProcessStatus] | Awaitable[list[ProcessStatus]]":
         """Passive status of every background process (consumes no output).
 
         Feeds the per-turn status reminder and any UI listing; returns
-        ``[]`` when there are none (including after ``close()``).
+        ``[]`` when there are none (including after ``close()``). Awaitable
+        from a session that has to ask elsewhere, like the ``decide_*`` pair.
         """
         ...
 

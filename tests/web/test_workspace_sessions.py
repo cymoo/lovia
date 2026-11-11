@@ -186,6 +186,45 @@ async def test_registry_passthrough_without_local_workspace(tmp_path) -> None:
     await reg.close("chat")  # idempotent no-op
 
 
+def test_a_remote_workspace_gets_the_same_chat_scoped_session(tmp_path) -> None:
+    # The same story as above with the workspace on a remote host (here: a
+    # bare subprocess of this interpreter). The web layer treats it like any
+    # other backend; the process list and the reminder ask the far side.
+    import asyncio
+    import sys
+
+    from lovia.workspace import RemoteHost
+
+    host = RemoteHost("far", command=(), python=f"{sys.executable} -I -S")
+    provider = ScriptedProvider([_BG_CALL, text("started"), text("second run")])
+    agent = Agent(
+        name="bot",
+        model=provider,
+        workspace=Workspace.remote(host, str(tmp_path), mode="trusted"),
+    )
+    try:
+        with TestClient(_app(agent)) as c:
+            sid = c.post("/api/chat", json={"message": "start"}).json()["session_id"]
+            pid = _pid(tmp_path)
+            assert _alive(pid)
+            procs = c.get(f"/api/sessions/{sid}/processes").json()
+            assert [p["status"] for p in procs] == ["running"]
+
+            c.post("/api/chat", json={"message": "again", "session_id": sid})
+            assert _alive(pid)
+            # The second run's model call carried the status reminder.
+            assert "Background processes:" in str(provider.calls[-1])
+
+            killed = c.post(
+                f"/api/sessions/{sid}/processes/{procs[0]['process_id']}/kill"
+            ).json()
+            assert [p["status"] for p in killed] == ["killed"]
+            assert _wait_dead(pid)
+            assert c.delete(f"/api/sessions/{sid}").json() == {"ok": True}
+    finally:
+        asyncio.run(host.aclose())
+
+
 @dataclass(frozen=True)
 class _Backend:
     """A ``WorkspaceLike`` that is not a ``LocalWorkspace``: it stands in

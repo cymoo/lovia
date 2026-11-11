@@ -1,7 +1,9 @@
 """The workspace session engine runs on the standard library alone.
 
-The files in :data:`ENGINE` are what a remote workspace ships to the far side
-and runs there, where lovia's dependencies are not installed. This copies
+The files in :data:`~lovia.workspace.remote.bundle.ENGINE` are what a remote
+workspace ships to the far side and runs there, where lovia's dependencies
+are not installed (``tests/workspace/test_remote.py`` does exactly that,
+through the real bootstrap). This copies
 them into a bare package tree and drives a real session in a subprocess that
 has no site-packages at all (``python -I -S``), so an import that reaches
 outside the standard library — top-level or deferred into a function — fails
@@ -21,19 +23,7 @@ from pathlib import Path
 import pytest
 
 import lovia
-
-# Paths relative to the ``lovia`` package.
-ENGINE = (
-    "approvals.py",
-    "exceptions.py",
-    "workspace/command_guard.py",
-    "workspace/errors.py",
-    "workspace/local.py",
-    "workspace/paths.py",
-    "workspace/policy.py",
-    "workspace/rules.py",
-    "workspace/types.py",
-)
+from lovia.workspace.remote.bundle import ENGINE
 
 # Runs in the bare interpreter. Exercises every kind of operation, since a
 # deferred import only fails when its code path runs.
@@ -43,6 +33,7 @@ import asyncio, dataclasses, json, sys
 from lovia.workspace.errors import PermissionDeniedError
 from lovia.workspace.local import LocalWorkspaceSession
 from lovia.workspace.policy import WorkspacePolicy
+from lovia.workspace.remote import serve, wire  # the far side's own two files
 
 
 async def main(root):
@@ -87,11 +78,12 @@ asyncio.run(main(sys.argv[1]))
 def test_engine_runs_without_third_party_packages(tmp_path) -> None:
     src = Path(lovia.__file__).parent
     pkg = tmp_path / "pkg" / "lovia"
-    (pkg / "workspace").mkdir(parents=True)
-    (pkg / "__init__.py").write_text("", encoding="utf-8")
-    (pkg / "workspace" / "__init__.py").write_text("", encoding="utf-8")
     for rel in ENGINE:
-        (pkg / rel).write_text((src / rel).read_text("utf-8"), encoding="utf-8")
+        target = pkg / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((src / rel).read_text("utf-8"), encoding="utf-8")
+    for directory in (pkg, *(d for d in pkg.rglob("*") if d.is_dir())):
+        (directory / "__init__.py").write_text("", encoding="utf-8")
     root = tmp_path / "root"
     root.mkdir()
 

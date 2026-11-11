@@ -52,9 +52,10 @@ Python 3.10+. Run every Python command through the repo virtualenv: `.venv/bin/p
   run that completed, or one the caller finalized, e.g. the web UI on stop; checkpoint = the run
   that may still resume). The runner auto-appends only on success; finalizing an interrupted run
   into the session is a caller decision. Don't add a `replace`.
-- The workspace **session engine is stdlib-only**: `approvals.py`, `exceptions.py` and `workspace/`'s
-  `local`, `policy`, `paths`, `command_guard`, `rules`, `errors`, `types` import nothing third-party
-  (not pydantic, not the rest of lovia) — they are meant to run where lovia isn't installed.
+- The workspace **session engine is stdlib-only**: the files in `workspace/remote/bundle.py:ENGINE`
+  (`approvals.py`, `exceptions.py`, `workspace/`'s `local`, `policy`, `paths`, `command_guard`, `rules`,
+  `errors`, `types`, `remote/serve`, `remote/wire`) import nothing third-party, not even the rest of
+  lovia — a remote workspace ships them to a host where lovia isn't installed.
   `tests/workspace/test_engine_stdlib.py` enforces it; its result types are dataclasses for that reason.
 - Dropping middle transcript entries? Route through `safe_window()` (`transcript.py`) or you'll orphan
   tool-call/result pairs.

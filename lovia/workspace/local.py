@@ -55,6 +55,7 @@ from .types import (
     ProcessOutput,
     ProcessStart,
     ProcessStatus,
+    RootFacts,
     WorkspaceLimits,
 )
 
@@ -134,6 +135,64 @@ def clip_text(
         tail = limit - head
         return text[:head] + notice + text[-tail:], True
     return text[:limit] + notice.rstrip("\n"), True
+
+
+def _has_tool_table(text: str, tool: str) -> bool:
+    """True if ``pyproject.toml`` declares a ``[tool.<tool>]`` table (or a
+    sub-table like ``[tool.<tool>.sources]``).
+
+    Line-anchored on purpose: a real TOML header is the first non-space token
+    on its line, so this won't fire on the tool name buried in a comment or a
+    string value. ``[tool.uvicorn]`` doesn't match ``uv`` — the ']' / '.' after
+    the name is part of the compared prefix.
+    """
+    head, sub = f"[tool.{tool}]", f"[tool.{tool}."
+    return any(
+        (s := line.strip()).startswith(head) or s.startswith(sub)
+        for line in text.splitlines()
+    )
+
+
+def _python_pkg_flavor(root: Path) -> Literal["uv", "poetry", "pip"]:
+    """Which Python package manager owns this workspace: 'uv', 'poetry', 'pip'.
+
+    Read from lockfiles and ``pyproject.toml`` markers so the shell guidance
+    names the tool that actually works here. The stakes are highest for uv:
+    ``uv venv`` deliberately omits pip, so a generic "python/pip resolve to the
+    venv" story sends the model down three dead ends ('.venv/bin/pip' missing,
+    'python -m pip' with no pip module, host pip with a broken interpreter).
+    Lockfiles are the strongest signal; a ``[tool.<mgr>]`` table is the
+    fallback for a project that hasn't locked yet.
+    """
+    if (root / "uv.lock").is_file():
+        return "uv"
+    if (root / "poetry.lock").is_file():
+        return "poetry"
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            text = pyproject.read_text("utf-8", "ignore")
+        except OSError:
+            return "pip"
+        if _has_tool_table(text, "uv"):
+            return "uv"
+        if _has_tool_table(text, "poetry"):
+            return "poetry"
+    return "pip"
+
+
+def root_facts(root: Path) -> RootFacts:
+    """What the workspace prompt needs to know about ``root`` (resolved).
+
+    Here, next to the session, because it reads the root's filesystem: a
+    backend whose files are elsewhere asks for it where they are.
+    """
+    return RootFacts(
+        name=root.name or str(root),
+        # .git may be a worktree's *file*, hence exists().
+        git=(root / ".git").exists(),
+        python=_python_pkg_flavor(root),
+    )
 
 
 def _has_hidden_segment(rel: str) -> bool:

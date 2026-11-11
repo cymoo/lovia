@@ -93,6 +93,12 @@ lovia/
                     #   shell(+background)/read_process_output/kill_process
                     #   + permission predicates (verdicts: ask/deny + reason)
     protocol.py     #   WorkspaceSession/WorkspaceLike/ShellExecutor protocols
+    remote/         #   A workspace on another machine (container, SSH host):
+                    #   host.py owns the one connection and what losing it
+                    #   means; session.py forwards every call; bundle.py
+                    #   ships the engine's source; serve.py runs there around
+                    #   a real LocalWorkspaceSession; wire.py is the lines
+                    #   in between
   web/              # Optional FastAPI + SSE layer + Jinja2 chat UI
                     #   (decoupled from core; only loaded when lovia[web] is used)
                     #   workspaces.py scopes one workspace session per chat via
@@ -143,7 +149,8 @@ One three-valued ACL (`allow`/`ask`/`deny`) governs both files and shell. The sp
 - Symlinks have no special case: a path is judged by where it resolves. Inside-root reads are always `allow`; `write`, `read_outside`, `write_outside` and `path_rules`/`denied_paths` cover the rest. Presets: `readonly`, `coding` (outside reads ask, outside writes deny), `trusted` (reads anywhere, outside writes ask) — composed from the bundles in `workspace/rules.py` (user rules first, first match wins). `baseline` is judged apart and merged most-restrictive, so it only tightens; `CommandRule.flags` are required words anywhere after the prefix; a leading `VAR=` / thin wrapper is stripped and caps the verdict at `ask`.
 - The command guard is **advisory** (it cannot see `python -c` or `$(...)` payloads) but one-sided: a missed claim falls back to the static rules, and a false claim is almost always a relative token that resolves inside the root where reads are allowed — it can surface extra `ask`s, not loosen anything. Hard enforcement is the `ShellExecutor` seam (`protocol.py`): an executor derives OS sandbox scopes (Seatbelt/bubblewrap) from the policy and runs *after* the policy/approval gates.
 - `instructions()` is generated from the policy so the system prompt never promises more than the session enforces.
-- The session engine — `approvals.py`, `exceptions.py`, and `workspace/`'s `local`, `policy`, `paths`, `command_guard`, `rules`, `errors`, `types` — imports only the standard library, so it can be run where lovia's dependencies are absent (a remote host). That is why the workspace result types are dataclasses rather than pydantic models; `tests/workspace/test_engine_stdlib.py` drives a real session in an interpreter with no site-packages.
+- The session engine — `approvals.py`, `exceptions.py`, and `workspace/`'s `local`, `policy`, `paths`, `command_guard`, `rules`, `errors`, `types`, `remote/serve`, `remote/wire` (the list is `remote/bundle.py:ENGINE`) — imports only the standard library, so it can be run where lovia's dependencies are absent. That is why the workspace result types are dataclasses rather than pydantic models; `tests/workspace/test_engine_stdlib.py` drives a real session in an interpreter with no site-packages.
+- A **remote workspace** runs that engine on the far side: `RemoteHost` starts `python3 -c <bootstrap>` over its transport (ssh, `docker exec`, any command with stdio piped), sends the engine's source down the pipe, and the far loop (`remote/serve.py`) wraps an unchanged `LocalWorkspaceSession`. Policy is judged there because it has to be — listing and search consult it per entry, with symlinks resolved in between. The near `RemoteWorkspaceSession` only forwards, which is why `decide_path`/`decide_command`/`background_processes` may return awaitables. One connection carries many sessions. Lifetime is the pipe's: end of input (or a silent connection, by heartbeat) closes every far session and kills what it started; the near side fails in-flight calls with `WorkspaceDisconnectedError` (outcome unknown, never retried — the mutating tools set `retries=0`) and reconnects for the next session.
 
 ## Plugins and view injectors
 

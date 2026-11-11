@@ -141,6 +141,16 @@ class ProcessStatus:
     exit_seen: bool = False
 
 
+@dataclass(frozen=True, kw_only=True)
+class RootFacts:
+    """What the workspace prompt says about the root beyond its policy —
+    read from the filesystem, so a session reports it for where it runs."""
+
+    name: str
+    git: bool = False
+    python: Literal["uv", "poetry", "pip"] = "pip"
+
+
 @dataclass(frozen=True)
 class WorkspaceLimits:
     """Size and count caps for the workspace tools — one discoverable home.

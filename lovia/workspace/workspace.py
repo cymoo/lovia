@@ -12,10 +12,10 @@ itself, it builds a backend-specific configuration that implements
     )
 
 ``Workspace.local(...)`` returns a :class:`LocalWorkspace` (the local-FS
-backend). Future backends grow as sibling factories — ``Workspace.docker(...)``
-etc. — each returning its own ``WorkspaceLike`` config. The runner only ever
-depends on the protocol, so adding a backend touches neither the runner nor
-the tools.
+backend); ``Workspace.remote(host, ...)`` a ``RemoteWorkspace`` for a
+directory in a running container or on an SSH machine. Each is its own
+``WorkspaceLike`` config, and the runner only ever depends on the protocol,
+so a backend touches neither the runner nor the tools.
 
 The runner opens a session per run, injects it into ``RunContext.workspace``
 (where the built-in tools find it), and closes sessions it owns. Use
@@ -27,17 +27,18 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, AsyncIterator, Mapping, NoReturn
+from typing import TYPE_CHECKING, AsyncIterator, Mapping
 
 from ..exceptions import UserError
-from .local import LocalWorkspaceSession
+from .local import LocalWorkspaceSession, root_facts
 from .policy import CommandRule, Decision, PathRule, WorkspacePolicy
 from .protocol import ShellExecutor, WorkspaceLike, WorkspaceSession
-from .types import WorkspaceLimits, WorkspaceMode
+from .types import RootFacts, WorkspaceLimits, WorkspaceMode
 
 if TYPE_CHECKING:
     from ..plugins.base import ViewInjector
     from ..tools import Tool
+    from .remote import RemoteHost, RemoteWorkspace
 
 __all__ = ["LocalWorkspace", "Workspace", "SCRATCH_DIR"]
 
@@ -48,48 +49,44 @@ __all__ = ["LocalWorkspace", "Workspace", "SCRATCH_DIR"]
 SCRATCH_DIR = "tmp"
 
 
-def _has_tool_table(text: str, tool: str) -> bool:
-    """True if ``pyproject.toml`` declares a ``[tool.<tool>]`` table (or a
-    sub-table like ``[tool.<tool>.sources]``).
-
-    Line-anchored on purpose: a real TOML header is the first non-space token
-    on its line, so this won't fire on the tool name buried in a comment or a
-    string value. ``[tool.uvicorn]`` doesn't match ``uv`` — the ']' / '.' after
-    the name is part of the compared prefix.
-    """
-    head, sub = f"[tool.{tool}]", f"[tool.{tool}."
-    return any(
-        (s := line.strip()).startswith(head) or s.startswith(sub)
-        for line in text.splitlines()
+def policy_tools(policy: WorkspacePolicy) -> list["Tool"]:
+    """The built-in tool bundle ``policy`` permits — the same for every
+    backend, since the tools only ever talk to the session."""
+    from .tools import (
+        edit_file,
+        grep_files,
+        kill_process,
+        list_files,
+        read_file,
+        read_process_output,
+        shell,
+        view_image,
+        write_file,
     )
 
+    # view_image travels with the read tools; the runner drops it for
+    # providers that cannot see images (``Tool.returns_images``).
+    bundle: list["Tool"] = [read_file, view_image, list_files, grep_files]
+    if policy.write != "deny" or policy.write_outside != "deny":
+        bundle += [write_file, edit_file]
+    if policy.allow_shell:
+        # Background processes travel with the shell: they are the same
+        # capability (spawn goes through the same command gate), and
+        # read/kill are useless without a way to start one.
+        bundle += [shell, read_process_output, kill_process]
+    return bundle
 
-def _python_pkg_flavor(root: Path) -> str:
-    """Which Python package manager owns this workspace: 'uv', 'poetry', 'pip'.
 
-    Read from lockfiles and ``pyproject.toml`` markers so the shell guidance
-    names the tool that actually works here. The stakes are highest for uv:
-    ``uv venv`` deliberately omits pip, so a generic "python/pip resolve to the
-    venv" story sends the model down three dead ends ('.venv/bin/pip' missing,
-    'python -m pip' with no pip module, host pip with a broken interpreter).
-    Lockfiles are the strongest signal; a ``[tool.<mgr>]`` table is the
-    fallback for a project that hasn't locked yet.
+def policy_view_injectors(policy: WorkspacePolicy) -> list["ViewInjector"]:
+    """Per-turn reminders for a workspace under ``policy``.
+
+    Just the background-process status line — and only when the policy
+    has a shell at all (no shell means nothing can ever spawn, so no
+    point evaluating the injector every turn).
     """
-    if (root / "uv.lock").is_file():
-        return "uv"
-    if (root / "poetry.lock").is_file():
-        return "poetry"
-    pyproject = root / "pyproject.toml"
-    if pyproject.is_file():
-        try:
-            text = pyproject.read_text("utf-8", "ignore")
-        except OSError:
-            return "pip"
-        if _has_tool_table(text, "uv"):
-            return "uv"
-        if _has_tool_table(text, "poetry"):
-            return "poetry"
-    return "pip"
+    from .tools import background_process_reminder
+
+    return [background_process_reminder] if policy.allow_shell else []
 
 
 @dataclass(frozen=True)
@@ -150,171 +147,143 @@ class LocalWorkspace:
 
     def tools(self) -> list["Tool"]:
         """Return the built-in tool bundle permitted by this policy."""
-        from .tools import (
-            edit_file,
-            grep_files,
-            kill_process,
-            list_files,
-            read_file,
-            read_process_output,
-            shell,
-            view_image,
-            write_file,
-        )
-
-        # view_image travels with the read tools; the runner drops it for
-        # providers that cannot see images (``Tool.returns_images``).
-        bundle: list["Tool"] = [read_file, view_image, list_files, grep_files]
-        if self.policy.write != "deny" or self.policy.write_outside != "deny":
-            bundle += [write_file, edit_file]
-        if self.policy.allow_shell:
-            # Background processes travel with the shell: they are the same
-            # capability (spawn goes through the same command gate), and
-            # read/kill are useless without a way to start one.
-            bundle += [shell, read_process_output, kill_process]
-        return bundle
+        return policy_tools(self.policy)
 
     def view_injectors(self) -> list["ViewInjector"]:
-        """Per-turn reminders for this workspace.
-
-        Just the background-process status line — and only when the policy
-        has a shell at all (no shell means nothing can ever spawn, so no
-        point evaluating the injector every turn).
-        """
-        from .tools import background_process_reminder
-
-        if not self.policy.allow_shell:
-            return []
-        return [background_process_reminder]
+        """Per-turn reminders for this workspace."""
+        return policy_view_injectors(self.policy)
 
     def instructions(self) -> str:
-        """Render the workspace fragment appended to the system prompt.
-
-        Derived from the policy so the prompt states what is actually
-        enforced — it must never promise more than the session delivers.
-        """
-        policy = self.policy
+        """Render the workspace fragment appended to the system prompt."""
         root = Path(self.root).expanduser().resolve()
-        root_name = root.name or str(self.root)
-        lines = [
-            "## Workspace",
-            # The name is a label, never a path: presenting it path-like makes
-            # models call list_files('<name>') and miss ('.' is the root).
-            f"You work in a workspace named {root_name!r}. Its root directory "
-            "is '.' — address files with workspace-relative paths ('.', "
-            "'notes/plan.md'; preferred) or absolute ones, never with the "
-            "workspace name. Symlinks resolve to their targets and are judged "
-            "by where they lead.",
-            "Explore with list_files and grep_files; read a file before editing "
-            "it; use edit_file for targeted changes and write_file for new files "
-            "or full rewrites. Large reads and command output are truncated — "
-            "page with start/end or narrow the command rather than dumping "
-            "everything.",
-        ]
-        if policy.write == "deny":
-            lines.append(
-                "The workspace is read-only: write_file and edit_file are "
-                "disabled inside it."
-            )
-        elif policy.write == "ask":
-            lines.append(
-                "Writes inside the workspace require user approval; batch "
-                "related edits rather than asking one line at a time."
-            )
-        if policy.write != "deny":
-            # Layout, not just permission: SCRATCH_DIR is the one fixed name
-            # (intermediates are junk in any workspace), while deliverable
-            # placement follows what the root is — a git repo brings its own
-            # conventions (.git may be a worktree's *file*, hence exists()).
-            lines.append(
-                "Keep the workspace tidy: scratch and intermediate files go "
-                f"under '{SCRATCH_DIR}/' (disposable — it may be cleaned at "
-                "any time), and never write files nobody asked for — put the "
-                "answer in your reply unless a file is the actual deliverable."
-            )
-            if (root / ".git").exists():
-                lines.append(
-                    "The workspace is a git repository: follow its layout "
-                    "and conventions, keep the tree clean, and never commit "
-                    f"anything under '{SCRATCH_DIR}/'."
-                )
-            else:
-                lines.append(
-                    "Follow the existing directory structure when placing "
-                    "new files; when a task produces several related files, "
-                    "group them in a topical subdirectory rather than "
-                    "scattering the workspace root."
-                )
-        outside = _describe_outside_access(policy.read_outside, policy.write_outside)
-        if outside:
-            lines.append(outside)
-        if policy.denied_paths:
-            denied = ", ".join(repr(p) for p in policy.denied_paths)
-            lines.append(
-                f"Paths matching {denied} are off-limits: file tools refuse "
-                "them, and shell commands that name them are refused too."
-            )
-        lines.extend(_describe_rules(policy))
-        if policy.allow_shell:
-            if policy.shell_default == "allow":
-                lines.append(
-                    "A shell tool is available and generally runs without "
-                    "approval; it is not OS-sandboxed and runs as the host "
-                    "user, so be deliberate with anything destructive or "
-                    "irreversible."
-                )
-            else:
-                lines.append(
-                    "A shell tool is available but gated: a command no rule "
-                    "allows waits for the user's approval, and some are denied "
-                    "by policy. Explore and read with list_files, grep_files "
-                    "and read_file rather than the shell, and keep the shell "
-                    "for what only it can do."
-                )
-            lines.append(
-                "Paths named in shell commands (arguments, redirect targets, "
-                "cwd) are checked against the same rules as the file tools, "
-                "so the shell is not a way around them; a command that needs "
-                "broader access will ask for approval instead."
-            )
-            lines.append(
-                "Python work stays in the workspace's own virtualenv: when a "
-                "real '.venv' (or 'venv') virtualenv exists at the root — one "
-                "with an interpreter inside, not just a directory by that "
-                "name — it is automatically on PATH for shell commands "
-                "(VIRTUAL_ENV set), so 'python' already resolves to it, no "
-                "activation needed. Never install into the global environment."
-            )
-            flavor = _python_pkg_flavor(root)
-            if flavor == "uv":
-                lines.append(
-                    "This project is uv-managed: install packages with "
-                    "'uv pip install <pkg>' (straight into the active venv) or "
-                    "'uv sync' to materialize the lockfile, and create the venv "
-                    "with 'uv venv' when none exists. uv venvs deliberately omit "
-                    "pip, so 'pip' and 'python -m pip' will fail — don't reach "
-                    "for them."
-                )
-            elif flavor == "poetry":
-                lines.append(
-                    "This project is poetry-managed: install with "
-                    "'poetry install' (from the lockfile) or 'poetry add <pkg>', "
-                    "and run code via 'poetry run ...' unless poetry's virtualenv "
-                    "is already active on PATH. Let poetry manage its virtualenv "
-                    "rather than building one by hand."
-                )
-            else:
-                lines.append(
-                    "python and pip already resolve to the venv. To install "
-                    "packages when none exists, create it first (e.g. "
-                    "'python -m venv .venv')."
-                )
+        return render_instructions(self.policy, root_facts(root))
+
+
+def render_instructions(policy: WorkspacePolicy, facts: RootFacts) -> str:
+    """The workspace fragment of the system prompt.
+
+    Derived from the policy so the prompt states what is actually enforced —
+    it must never promise more than the session delivers — plus the few
+    ``facts`` about the root that come from its filesystem.
+    """
+    lines = [
+        "## Workspace",
+        # The name is a label, never a path: presenting it path-like makes
+        # models call list_files('<name>') and miss ('.' is the root).
+        f"You work in a workspace named {facts.name!r}. Its root directory "
+        "is '.' — address files with workspace-relative paths ('.', "
+        "'notes/plan.md'; preferred) or absolute ones, never with the "
+        "workspace name. Symlinks resolve to their targets and are judged "
+        "by where they lead.",
+        "Explore with list_files and grep_files; read a file before editing "
+        "it; use edit_file for targeted changes and write_file for new files "
+        "or full rewrites. Large reads and command output are truncated — "
+        "page with start/end or narrow the command rather than dumping "
+        "everything.",
+    ]
+    if policy.write == "deny":
         lines.append(
-            "A denied or unapproved call comes back with its reason: respect "
-            "it and choose a different approach that the policy allows — "
-            "never retry the same forbidden operation under another spelling."
+            "The workspace is read-only: write_file and edit_file are "
+            "disabled inside it."
         )
-        return "\n".join(lines)
+    elif policy.write == "ask":
+        lines.append(
+            "Writes inside the workspace require user approval; batch "
+            "related edits rather than asking one line at a time."
+        )
+    if policy.write != "deny":
+        # Layout, not just permission: SCRATCH_DIR is the one fixed name
+        # (intermediates are junk in any workspace), while deliverable
+        # placement follows what the root is — a git repo brings its own
+        # conventions.
+        lines.append(
+            "Keep the workspace tidy: scratch and intermediate files go "
+            f"under '{SCRATCH_DIR}/' (disposable — it may be cleaned at "
+            "any time), and never write files nobody asked for — put the "
+            "answer in your reply unless a file is the actual deliverable."
+        )
+        if facts.git:
+            lines.append(
+                "The workspace is a git repository: follow its layout "
+                "and conventions, keep the tree clean, and never commit "
+                f"anything under '{SCRATCH_DIR}/'."
+            )
+        else:
+            lines.append(
+                "Follow the existing directory structure when placing "
+                "new files; when a task produces several related files, "
+                "group them in a topical subdirectory rather than "
+                "scattering the workspace root."
+            )
+    outside = _describe_outside_access(policy.read_outside, policy.write_outside)
+    if outside:
+        lines.append(outside)
+    if policy.denied_paths:
+        denied = ", ".join(repr(p) for p in policy.denied_paths)
+        lines.append(
+            f"Paths matching {denied} are off-limits: file tools refuse "
+            "them, and shell commands that name them are refused too."
+        )
+    lines.extend(_describe_rules(policy))
+    if policy.allow_shell:
+        if policy.shell_default == "allow":
+            lines.append(
+                "A shell tool is available and generally runs without "
+                "approval; it is not OS-sandboxed and runs as the host "
+                "user, so be deliberate with anything destructive or "
+                "irreversible."
+            )
+        else:
+            lines.append(
+                "A shell tool is available but gated: a command no rule "
+                "allows waits for the user's approval, and some are denied "
+                "by policy. Explore and read with list_files, grep_files "
+                "and read_file rather than the shell, and keep the shell "
+                "for what only it can do."
+            )
+        lines.append(
+            "Paths named in shell commands (arguments, redirect targets, "
+            "cwd) are checked against the same rules as the file tools, "
+            "so the shell is not a way around them; a command that needs "
+            "broader access will ask for approval instead."
+        )
+        lines.append(
+            "Python work stays in the workspace's own virtualenv: when a "
+            "real '.venv' (or 'venv') virtualenv exists at the root — one "
+            "with an interpreter inside, not just a directory by that "
+            "name — it is automatically on PATH for shell commands "
+            "(VIRTUAL_ENV set), so 'python' already resolves to it, no "
+            "activation needed. Never install into the global environment."
+        )
+        if facts.python == "uv":
+            lines.append(
+                "This project is uv-managed: install packages with "
+                "'uv pip install <pkg>' (straight into the active venv) or "
+                "'uv sync' to materialize the lockfile, and create the venv "
+                "with 'uv venv' when none exists. uv venvs deliberately omit "
+                "pip, so 'pip' and 'python -m pip' will fail — don't reach "
+                "for them."
+            )
+        elif facts.python == "poetry":
+            lines.append(
+                "This project is poetry-managed: install with "
+                "'poetry install' (from the lockfile) or 'poetry add <pkg>', "
+                "and run code via 'poetry run ...' unless poetry's virtualenv "
+                "is already active on PATH. Let poetry manage its virtualenv "
+                "rather than building one by hand."
+            )
+        else:
+            lines.append(
+                "python and pip already resolve to the venv. To install "
+                "packages when none exists, create it first (e.g. "
+                "'python -m venv .venv')."
+            )
+    lines.append(
+        "A denied or unapproved call comes back with its reason: respect "
+        "it and choose a different approach that the policy allows — "
+        "never retry the same forbidden operation under another spelling."
+    )
+    return "\n".join(lines)
 
 
 def _describe_rules(policy: WorkspacePolicy) -> list[str]:
@@ -452,51 +421,19 @@ class Workspace:
         :class:`~lovia.workspace.protocol.ShellExecutor`); ``limits`` tunes
         the tool size/count caps. Omit both for sensible defaults.
         """
-        rules = _combine_rules(path_rules, readable=readable, writable=writable)
-        if policy is not None:
-            if (
-                denied_paths
-                or command_rules
-                or rules
-                or baseline is not None
-                or shell_default is not None
-            ):
-                raise UserError(
-                    "Pass either policy= or rule shorthands "
-                    "(readable/writable/denied_paths/path_rules/command_rules/"
-                    "baseline/shell_default), not both.",
-                    hint="Put the rules inside your WorkspacePolicy.",
-                )
-        elif mode == "readonly":
-            if command_rules or shell_default is not None:
-                raise UserError(
-                    "mode='readonly' has no shell; command_rules and "
-                    "shell_default are unused."
-                )
-            policy = WorkspacePolicy.readonly(
-                denied_paths=denied_paths, path_rules=rules, baseline=baseline
-            )
-        elif mode == "coding":
-            policy = WorkspacePolicy.coding(
-                denied_paths=denied_paths,
-                path_rules=rules,
-                command_rules=command_rules,
-                baseline=baseline,
-                shell_default=shell_default or "ask",
-            )
-        elif mode == "trusted":
-            policy = WorkspacePolicy.trusted(
-                denied_paths=denied_paths,
-                path_rules=rules,
-                command_rules=command_rules,
-                baseline=baseline,
-                shell_default=shell_default or "allow",
-            )
-        else:
-            raise UserError(f"Unknown workspace mode: {mode!r}")
         return LocalWorkspace(
             root=str(root),
-            policy=policy,
+            policy=_resolve_policy(
+                mode,
+                policy,
+                readable=readable,
+                writable=writable,
+                denied_paths=denied_paths,
+                path_rules=path_rules,
+                command_rules=command_rules,
+                baseline=baseline,
+                shell_default=shell_default,
+            ),
             env=dict(env) if env is not None else None,
             shell_timeout=shell_timeout,
             limits=limits if limits is not None else WorkspaceLimits(),
@@ -505,20 +442,124 @@ class Workspace:
         )
 
     @classmethod
-    def docker(cls, *args: object, **kwargs: object) -> NoReturn:
-        """Placeholder for a future container backend (real OS isolation).
+    def remote(
+        cls,
+        host: "RemoteHost",
+        root: str,
+        *,
+        mode: WorkspaceMode = "coding",
+        policy: WorkspacePolicy | None = None,
+        readable: tuple[str, ...] = (),
+        writable: tuple[str, ...] = (),
+        denied_paths: tuple[str, ...] = (),
+        path_rules: tuple[PathRule, ...] = (),
+        command_rules: tuple[CommandRule, ...] = (),
+        baseline: tuple[PathRule | CommandRule, ...] | None = None,
+        shell_default: Decision | None = None,
+        env: Mapping[str, str] | None = None,
+        shell_timeout: float | None = 300.0,
+        inherit_env: bool = False,
+        limits: WorkspaceLimits | None = None,
+    ) -> "RemoteWorkspace":
+        """Create a workspace rooted at ``root`` on ``host`` — a running
+        container or an SSH machine (see
+        :class:`~lovia.workspace.remote.RemoteHost`)::
 
-        The :class:`~lovia.workspace.protocol.WorkspaceSession` /
-        ``WorkspaceLike`` protocols are the extension point — a container
-        backend implements them without touching the runner or the tools.
+            box = RemoteHost.ssh("box")
+            agent = Agent(..., workspace=Workspace.remote(box, "/srv/project"))
+
+        The policy arguments are :meth:`local`'s and mean the same; the
+        policy is enforced on the host, where the files are, so its patterns
+        (``~``, absolute paths) are the host's. ``root`` must exist there.
+        ``env`` and ``inherit_env`` concern the far side's environment.
+
+        Two things a remote policy cannot carry, both Python callables: a
+        ``command_decider`` (use ``command_rules``) and a shell ``executor``.
+
+        The host needs ``python3`` >= 3.10 and nothing else. A lost
+        connection fails what was in flight with
+        :class:`~lovia.workspace.WorkspaceDisconnectedError` and ends the
+        session's background processes; the next run reconnects.
         """
-        raise NotImplementedError(
-            "Workspace.docker() is not implemented yet. The local backend "
-            "(Workspace.local) is an honest policy gate, not OS isolation; a "
-            "container backend implementing the WorkspaceSession/WorkspaceLike "
-            "protocols (see lovia.workspace.protocol) is the path to real "
-            "isolation."
+        from .remote import RemoteWorkspace
+
+        return RemoteWorkspace(
+            host=host,
+            root=str(root),
+            policy=_resolve_policy(
+                mode,
+                policy,
+                readable=readable,
+                writable=writable,
+                denied_paths=denied_paths,
+                path_rules=path_rules,
+                command_rules=command_rules,
+                baseline=baseline,
+                shell_default=shell_default,
+            ),
+            env=dict(env) if env is not None else None,
+            shell_timeout=shell_timeout,
+            limits=limits if limits is not None else WorkspaceLimits(),
+            inherit_env=inherit_env,
         )
+
+
+def _resolve_policy(
+    mode: WorkspaceMode,
+    policy: WorkspacePolicy | None,
+    *,
+    readable: tuple[str, ...],
+    writable: tuple[str, ...],
+    denied_paths: tuple[str, ...],
+    path_rules: tuple[PathRule, ...],
+    command_rules: tuple[CommandRule, ...],
+    baseline: tuple[PathRule | CommandRule, ...] | None,
+    shell_default: Decision | None,
+) -> WorkspacePolicy:
+    """The policy a workspace factory was asked for: an explicit one, or the
+    ``mode`` preset refined by the rule shorthands (never both)."""
+    rules = _combine_rules(path_rules, readable=readable, writable=writable)
+    if policy is not None:
+        if (
+            denied_paths
+            or command_rules
+            or rules
+            or baseline is not None
+            or shell_default is not None
+        ):
+            raise UserError(
+                "Pass either policy= or rule shorthands "
+                "(readable/writable/denied_paths/path_rules/command_rules/"
+                "baseline/shell_default), not both.",
+                hint="Put the rules inside your WorkspacePolicy.",
+            )
+        return policy
+    if mode == "readonly":
+        if command_rules or shell_default is not None:
+            raise UserError(
+                "mode='readonly' has no shell; command_rules and "
+                "shell_default are unused."
+            )
+        return WorkspacePolicy.readonly(
+            denied_paths=denied_paths, path_rules=rules, baseline=baseline
+        )
+    if mode == "coding":
+        return WorkspacePolicy.coding(
+            denied_paths=denied_paths,
+            path_rules=rules,
+            command_rules=command_rules,
+            baseline=baseline,
+            shell_default=shell_default or "ask",
+        )
+    if mode == "trusted":
+        return WorkspacePolicy.trusted(
+            denied_paths=denied_paths,
+            path_rules=rules,
+            command_rules=command_rules,
+            baseline=baseline,
+            shell_default=shell_default or "allow",
+        )
+    raise UserError(f"Unknown workspace mode: {mode!r}")
 
 
 def _combine_rules(

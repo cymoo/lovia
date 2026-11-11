@@ -42,6 +42,7 @@ from .types import (
     GrepMatch,
     ProcessOutput,
     ProcessStart,
+    ProcessStatus,
 )
 
 __all__ = [
@@ -689,7 +690,9 @@ def _preview(command: str, limit: int = 60) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
-def background_process_reminder(ctx: RunContext[Any]) -> list[TranscriptEntry] | None:
+def background_process_reminder(
+    ctx: RunContext[Any],
+) -> "list[TranscriptEntry] | None | Awaitable[list[TranscriptEntry] | None]":
     """Per-turn view injector: one transient status line per background process.
 
     Running processes are re-shown every turn, so the model keeps the id and
@@ -706,7 +709,18 @@ def background_process_reminder(ctx: RunContext[Any]) -> list[TranscriptEntry] |
     lister = getattr(ctx.workspace, "background_processes", None)
     if lister is None:  # no workspace, or a backend without background support
         return None
-    procs = [p for p in lister() if p.status == "running" or not p.exit_seen]
+    listed = lister()
+    if inspect.isawaitable(listed):  # a session that has to ask elsewhere
+
+        async def _later() -> list[TranscriptEntry] | None:
+            return _process_reminder(await listed)
+
+        return _later()
+    return _process_reminder(listed)
+
+
+def _process_reminder(statuses: list[ProcessStatus]) -> list[TranscriptEntry] | None:
+    procs = [p for p in statuses if p.status == "running" or not p.exit_seen]
     if not procs:
         return None
     lines = []

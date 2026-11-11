@@ -336,6 +336,69 @@ By default each run opens a fresh session and closes it at run end; the
 `.session()` context manager above holds one open across runs
 (`close_after_run=False`) when startup cost matters.
 
+## Remote workspaces
+
+A workspace can live somewhere other than this machine: in a running
+container, or on a host you reach over SSH.
+
+```python
+from lovia.workspace import RemoteHost, Workspace
+
+box = RemoteHost.ssh("box")                    # a Host from ~/.ssh/config, or user@host
+api = RemoteHost.docker("my-api", user="dev")  # a running container
+
+agent = Agent(
+    name="coder",
+    model="<model>",
+    workspace=Workspace.remote(box, "/srv/project", mode="coding"),
+)
+...
+await box.aclose()
+```
+
+`Workspace.remote` takes the same policy arguments as `Workspace.local`, the
+agent gets the same tools, and the same rules decide what they may do. What
+changes is where: the session — policy, path resolution, commands — runs on
+the host, next to the files, and this side forwards each call to it. So a
+`~` or an absolute path in a rule is the host's, a symlink is followed over
+there, and `env=` / `inherit_env=` concern the host's environment.
+
+**The host needs `python3` 3.10 or newer, and nothing else.** No lovia, no
+`pip install`, nothing written to its disk: the engine is sent down the
+connection each time it opens, so both ends always run the same code. Point
+at another interpreter with `RemoteHost.ssh("box", python="/opt/py/bin/python3")`.
+
+- **SSH** is always non-interactive (`BatchMode`): set up key or agent
+  authentication first — a password prompt could only hang. Port, key and
+  jump host belong in `~/.ssh/config`.
+- **Containers** are entered as the image's default user, often root; pass
+  `user=` so files the agent writes are owned by someone sensible.
+- **Anything else** that can run a command with stdio piped is a host too:
+  `RemoteHost("pod", command=("kubectl", "exec", "-i", "pod", "--"))`. Set
+  `quote=True` when the command hands its arguments to a shell (as `ssh` does).
+
+One `RemoteHost` holds one connection and any number of sessions on it;
+opening the connection costs a moment, a session after that does not. Each
+tool call costs a network round trip.
+
+**When the connection drops**, whatever was in flight fails with
+`WorkspaceDisconnectedError` — its outcome is unknown, and it is never
+retried for you. The host closes its sessions as soon as it notices, which
+ends their background processes; the next run reconnects and starts a fresh
+session. Cancelling a run kills the command it was waiting on, as it does
+locally.
+
+Two things a remote policy cannot carry, because they are Python callables
+and the policy is judged on the host: a `command_decider` (use
+`command_rules`) and a shell `executor`. Custom tools that call
+`ctx.workspace.decide_path(...)`, `decide_command(...)` or
+`background_processes()` get an awaitable from a remote session — `await`
+the result when `inspect.isawaitable` says so.
+
+`lovia web` keeps a remote workspace's session for the whole chat, like a
+local one, and lists its background processes. The Files panel, uploads and
+attachments still need a local workspace.
+
 ## Sharp edges
 
 - **The command guard is not a sandbox.** It is an honest, lexical gate;

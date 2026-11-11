@@ -96,3 +96,26 @@ test('shortAge: the largest whole unit', () => {
   assert.equal(shortAge(ago(400 * 86400), now), '1y');
   assert.equal(shortAge(now / 1000 + 60, now), 'now'); // clock skew
 });
+
+test('a remote location is a key spelled like a URL; a path is local', () => {
+  const { isRemote } = load();
+  for (const key of ['ssh://box/srv/app', 'docker://dev@api/app', 'remote://far/~/app']) {
+    assert.equal(isRemote(key), true, key);
+  }
+  for (const path of ['/srv/app', '~/app', 'C:/code', '/tmp/odd://name', 'git://host/x', '', null]) {
+    assert.equal(isRemote(path), false, String(path));
+  }
+});
+
+test('remoteKey: a host and a typed path make the key the server stores', () => {
+  const { remoteKey } = load();
+  assert.equal(remoteKey('ssh://box', '/srv/app'), 'ssh://box/srv/app');
+  assert.equal(remoteKey('docker://dev@api', '/app/'), 'docker://dev@api/app/');
+  // Under the home directory: the "~" travels, the host expands it.
+  assert.equal(remoteKey('remote://far', '~/app'), 'remote://far/~/app');
+  assert.equal(remoteKey('ssh://box/', '~'), 'ssh://box/~');
+  // Not something the host can take as typed.
+  for (const path of ['srv/app', './app', '', '~user/app']) {
+    assert.equal(remoteKey('ssh://box', path), null, path);
+  }
+});

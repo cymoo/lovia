@@ -10,7 +10,6 @@ Chats from before chats had a directory are bound to one here too.
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from typing import Any
 
@@ -31,55 +30,11 @@ from ..schemas import (
     WorkspaceList,
     WorkspaceRename,
 )
+from ...exceptions import UserError
+from ...workspace import WorkspaceError
+from ...workspace.paths import complete_dirs
 from ..workspaces import WorkspaceRef, own_root
 from .deps import RouterDeps
-
-# A completion lists this many directories at most, from at most this many
-# entries read (a huge directory must not stall the request).
-_MAX_SUGGESTIONS = 50
-_MAX_SCANNED = 5000
-
-
-def _suggest(raw: str, roots: tuple[Path, ...] | None) -> list[str]:
-    """Subdirectories completing ``raw`` (a path being typed), as typed.
-
-    ``raw`` ending in a separator lists that directory; otherwise its parent,
-    filtered by the last segment (case-insensitively). Hidden directories
-    show only once a dot is typed. ``roots`` limits the tree: a suggestion
-    must lie under one of them or on the way to one.
-    """
-    expanded = os.path.expanduser(raw)
-    if not os.path.isabs(expanded):
-        return []
-    # Split on the last separator by hand: Path would normalize a trailing
-    # "." (a hidden name being typed) away.
-    cut = max(expanded.rfind("/"), expanded.rfind(os.sep)) + 1
-    parent, prefix = expanded[:cut], expanded[cut:]
-    head = raw[: len(raw) - len(prefix)]
-    found: list[str] = []
-    try:
-        with os.scandir(parent) as it:
-            for n, entry in enumerate(it):
-                if n >= _MAX_SCANNED:
-                    break
-                name = entry.name
-                if name.startswith(".") and not prefix.startswith("."):
-                    continue
-                if not name.lower().startswith(prefix.lower()):
-                    continue
-                if not entry.is_dir():
-                    continue
-                if roots is not None:
-                    path = Path(entry.path).resolve()
-                    if not any(
-                        path.is_relative_to(r) or r.is_relative_to(path) for r in roots
-                    ):
-                        continue
-                found.append(name)
-    except OSError:
-        return []
-    found.sort(key=str.lower)
-    return [head + name for name in found[:_MAX_SUGGESTIONS]]
 
 
 def build_workspaces_router(deps: RouterDeps) -> APIRouter:
@@ -240,16 +195,33 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
         return {"ok": True}
 
     @router.get("/api/workspaces/dirs", response_model=list[str])
-    async def complete_dir(path: str = Query("", max_length=4096)) -> list[str]:
+    async def complete_dir(
+        path: str = Query("", max_length=4096),
+        host: str | None = Query(None, max_length=512),
+    ) -> list[str]:
         """Completions for a directory path being typed: subdirectory paths
-        as typed (``~`` kept), within what this server allows to be added."""
+        as typed (``~`` kept), within what this server allows to be added.
+
+        With ``host`` — the front of a remote location's key, ``ssh://box`` —
+        the folders are that host's. Nothing to suggest (a host that can't
+        be reached included) is an empty list: this only feeds a picker, and
+        adding the location is what reports why.
+        """
         require_switch()
         switch = deps.workspace_switch
         assert switch is not None
+        if host is not None:
+            ref = WorkspaceRef.parse(f"{host.rstrip('/')}/x")
+            if not ref.remote or switch.remote_refusal(ref) is not None:
+                return []
+            try:
+                return await switch.remote_host(ref).complete_dirs(path or "~/")
+            except (UserError, WorkspaceError):
+                return []
         if switch.roots is None:
             return []
         roots = None if switch.roots == "any" else tuple(Path(r) for r in switch.roots)
-        return await asyncio.to_thread(_suggest, path or "~/", roots)
+        return await asyncio.to_thread(complete_dirs, path or "~/", roots)
 
     @router.post("/api/sessions/associate", response_model=AssociateResponse)
     async def associate_sessions(req: AssociateRequest) -> AssociateResponse:

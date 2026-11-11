@@ -26,6 +26,7 @@ from typing import Any
 from ...exceptions import UserError
 from ..errors import WorkspaceClosedError
 from ..local import LocalWorkspaceSession, root_facts
+from ..paths import complete_dirs
 from .wire import PROTOCOL, decode, encode, encode_error, read_lines
 
 __all__ = ["main"]
@@ -171,6 +172,8 @@ class _Server:
             return None
         if method == "resolve_root":
             return _resolve_root(params["path"])
+        if method == "complete_dirs":
+            return await asyncio.to_thread(complete_dirs, params["path"])
         if method == "open":
             opened = LocalWorkspaceSession(**params)
             self._sessions[opened.id] = opened

@@ -473,6 +473,7 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   浏览器断开后运行仍在服务端继续。
 - **设置不用重启** —— `lovia web` 的模型、工作区模式、运行上限、记忆和系统提示都在设置页里改，
   从下次运行起生效。每个对话在自己的目录里工作——侧栏按目录分组，权限模式也可以单独选择（自己的应用里用 `create_app(workspaces=WorkspaceSwitch())`）。
+  目录也可以在 SSH 主机上或运行中的容器里：在添加对话框里选好位置，对话的工具就在那边执行。
 - **富工具结果** —— 工具返回 `ui_result(kind, props)` 即可渲染 UI；内置表格、ECharts 图表
   和沙箱 HTML 页面（`show_table`、`show_chart`、`show_html`）。
 - **页面可定制** —— `ChatUI(...)` 与 `assets=` 修改文案、logo、样式和脚本；脚本通过

@@ -1037,6 +1037,21 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   gap: 8px;
   justify-content: flex-end;
 }
+/* Where the folder is: this computer, or a host to name beside it. */
+.lv-ws-where {
+  display: flex;
+  gap: 8px;
+}
+.lv-ws-where select {
+  flex: 0 0 auto;
+  width: auto;
+}
+.lv-ws-where-host {
+  flex: 1 1 0;
+  min-width: 0;
+  font-family: var(--lv-mono);
+  font-size: 13px;
+}
 .lv-ws-path {
   position: relative;
 }

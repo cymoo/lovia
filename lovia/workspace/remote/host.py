@@ -423,6 +423,14 @@ class RemoteHost:
         resolved: str = await conn.call("resolve_root", params={"path": path})
         return resolved
 
+    async def complete_dirs(self, path: str) -> list[str]:
+        """Folders on this host completing ``path`` as it is being typed —
+        what a folder picker lists (see
+        :func:`~lovia.workspace.paths.complete_dirs`)."""
+        conn = await self._connection()
+        found: list[str] = await conn.call("complete_dirs", params={"path": path})
+        return found
+
     def facts(self, root: str) -> RootFacts | None:
         """What the last session opened at ``root`` reported about it."""
         return self._facts.get(root)

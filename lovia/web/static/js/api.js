@@ -255,10 +255,11 @@ export const api = {
   /** @param {string} id */
   removeWorkspace: (id) =>
     request(`/api/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(_json),
-  // Subdirectory paths completing `path` as typed.
-  /** @param {string} path @param {{ signal?: AbortSignal }} [opts] */
-  completeDir: (path, { signal } = {}) =>
-    request(`/api/workspaces/dirs${qs({ path })}`, { signal }).then(_json),
+  // Subdirectory paths completing `path` as typed — on this machine, or with
+  // `host` (the front of a remote location's key, "ssh://box") on that one.
+  /** @param {string} path @param {{ signal?: AbortSignal, host?: string }} [opts] */
+  completeDir: (path, { signal, host } = {}) =>
+    request(`/api/workspaces/dirs${qs({ path, host })}`, { signal }).then(_json),
   setPinned: (id, pinned) =>
     request(`/api/sessions/${encodeURIComponent(id)}`, {
       method: 'PATCH',

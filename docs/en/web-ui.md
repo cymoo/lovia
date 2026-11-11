@@ -339,6 +339,20 @@ chat. Attachments are saved into the draft's folder, so the chip locks while
 the draft holds some. The Files panel shows the open chat's folder, and the
 agent reads that folder's `AGENTS.md` and skills.
 
+**A folder on another machine.** When the page is served on this computer
+only (the default, `127.0.0.1`), the add dialog has a **Where** choice:
+**This computer**, **SSH host** or **Container**. Name the host — an alias
+from `~/.ssh/config` or `user@host`; a running container, or
+`user@container` to be someone other than its default user — and the list
+shows *its* folders. Chats in that folder run there: the agent's file and
+shell tools work on the host, under the chat's permission mode, and the
+sidebar marks the folder with a server icon. The host needs `python3` 3.10
+or newer and nothing installed, and SSH must work without a password prompt
+(keys or an agent). What a remote chat doesn't have yet: the Files panel,
+uploads and attachments, and the folder's `AGENTS.md` and skills. If the
+connection drops, the run in progress fails and says so; the next message
+reconnects. See [Remote workspaces](workspace.md#remote-workspaces).
+
 Chats from before folders existed gather under **Not linked**. Reading them
 needs nothing; the first message to one asks which folder it works in
 (folders where its approvals were given come first), and **Link…** on the

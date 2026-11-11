@@ -71,6 +71,11 @@ def require_workspace(ctx: RunContext[Any]) -> WorkspaceSession:
 
 _UNJUDGED = Verdict("ask", "the workspace policy could not judge this call")
 
+# The mutating tools opt out of ``Agent.default_tool_retries``: a failure
+# doesn't say the side effect didn't happen (a write that landed before the
+# error, a command half-run), so a blind re-run can apply it twice.
+_NO_RETRY = 0
+
 
 def path_permission(*ops: Literal["read", "write"]) -> PermissionFn:
     """Permission predicate for a path-taking tool.
@@ -292,6 +297,7 @@ async def view_image(
     # Mutates the shared workspace: run as an execution barrier so two writes
     # (or a write racing a shell command) cannot interleave within one turn.
     parallel=False,
+    retries=_NO_RETRY,
 )
 async def write_file(
     ctx: RunContext[Any],
@@ -323,6 +329,7 @@ async def write_file(
     result_renderer=_render_edit_result,
     # Mutates the shared workspace — barrier, same as write_file.
     parallel=False,
+    retries=_NO_RETRY,
 )
 async def edit_file(
     ctx: RunContext[Any],
@@ -543,6 +550,7 @@ def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
     # races file tools or another command within one turn. background=true
     # keeps the barrier: the *start* is still an ordered side effect.
     parallel=False,
+    retries=_NO_RETRY,
 )
 async def shell(
     ctx: RunContext[Any],
@@ -710,6 +718,7 @@ def background_process_reminder(ctx: RunContext[Any]) -> list[TranscriptEntry] |
     # Killing changes what every later command observes (ports freed, files
     # no longer being written) — barrier, same as shell.
     parallel=False,
+    retries=_NO_RETRY,
 )
 async def kill_process(
     ctx: RunContext[Any],

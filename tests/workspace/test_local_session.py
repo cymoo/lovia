@@ -655,6 +655,24 @@ async def test_run_in_relative_cwd(tmp_path) -> None:
     assert result.stdout.strip().endswith("/sub")
 
 
+async def test_run_gives_the_command_no_stdin(tmp_path) -> None:
+    # The host's stdin must not reach the command: here fd 0 is a pipe nobody
+    # writes to, which `cat` would block on until the timeout. (pytest itself
+    # points fd 0 at /dev/null, which would hide an inherited stdin.)
+    read_fd, write_fd = os.pipe()
+    saved = os.dup(0)
+    os.dup2(read_fd, 0)
+    try:
+        session = await _session(tmp_path)
+        result = await session.run("cat; echo done", timeout=5)
+    finally:
+        os.dup2(saved, 0)
+        for fd in (saved, read_fd, write_fd):
+            os.close(fd)
+    assert result.timed_out is False
+    assert result.stdout.strip() == "done"
+
+
 async def test_run_timeout_kills_process(tmp_path) -> None:
     session = await _session(tmp_path)
     result = await session.run("sleep 5", timeout=0.2)

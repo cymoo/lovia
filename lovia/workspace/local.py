@@ -1044,6 +1044,10 @@ class LocalWorkspaceSession:
             command,
             cwd=str(run_cwd),
             env=merged_env,
+            # No stdin, same as spawn(): a command that reads it gets EOF at
+            # once instead of the host's terminal (a hang until the timeout)
+            # or whatever pipe the host process itself is reading.
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,

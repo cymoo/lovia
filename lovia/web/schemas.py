@@ -144,8 +144,12 @@ class WorkspaceItem(BaseModel):
 
     # None for the entries always listed (they can't be removed).
     id: str | None = None
-    root: str  # absolute, resolved
+    # Absolute and resolved; or a remote location's key (ssh://box/srv/app).
+    root: str
     name: str
+    # The host a remote location is on ("ssh:box", "docker:api", a declared
+    # name); None for a directory on this machine.
+    host: str | None = None
     # "default": the agent's own directory, where a new tab starts;
     # "general": the catch-all for chats of no project; "added": the rest.
     kind: Literal["default", "general", "added"] = "added"
@@ -162,6 +166,9 @@ class WorkspaceList(BaseModel):
     can_add: bool = False
     # When only some trees are allowed: their roots; None when any is.
     roots: list[str] | None = None
+    # Remote locations a chat may open: None (none), "any" (any SSH
+    # destination or running container), or the declared hosts' names.
+    remotes: Literal["any"] | list[str] | None = None
 
 
 class WorkspaceAdd(BaseModel):

@@ -23,6 +23,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from ...exceptions import UserError
 from ..errors import WorkspaceClosedError
 from ..local import LocalWorkspaceSession, root_facts
 from .wire import PROTOCOL, decode, encode, encode_error, read_lines
@@ -168,6 +169,8 @@ class _Server:
         params = params or {}
         if method == "ping":
             return None
+        if method == "resolve_root":
+            return _resolve_root(params["path"])
         if method == "open":
             opened = LocalWorkspaceSession(**params)
             self._sessions[opened.id] = opened
@@ -188,6 +191,21 @@ class _Server:
             raise ValueError(f"unknown method {method!r}")
         result = getattr(session, method)(**params)
         return await result if asyncio.iscoroutine(result) else result
+
+
+def _resolve_root(path: str) -> str:
+    """``path`` as a workspace root here: absolute (or ``~``), resolved, and
+    an existing directory."""
+    expanded = Path(path).expanduser()
+    if not expanded.is_absolute():
+        raise UserError(
+            f"{path!r} is not an absolute path",
+            hint="give the full path, e.g. /srv/project or ~/project",
+        )
+    resolved = expanded.resolve()
+    if not resolved.is_dir():
+        raise UserError(f"No such directory: {resolved}")
+    return resolved.as_posix()
 
 
 def main() -> None:

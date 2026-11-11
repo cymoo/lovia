@@ -77,6 +77,7 @@ ErrorCode = Literal[
     "workspace_unassociated",
     "workspace_fixed",
     "workspace_not_found",
+    "workspace_unreachable",
     "file_too_large",
     "unsupported_file_type",
     "too_many_runs",

@@ -26,7 +26,8 @@ from ...providers import Provider
 from ...reliability import RetryPolicy, RunBudget
 from ...session import Session
 from ...tracing import Tracer
-from ...workspace import WorkspaceMode
+from ...exceptions import UserError
+from ...workspace import WorkspaceError, WorkspaceMode
 from ..approvals import ApprovalRegistry
 from ..errors import WebError
 from ..followups import (
@@ -40,6 +41,7 @@ from ..store import ChatMeta, ChatStore
 from ..titles import generate_title, provisional_title
 from ..workspaces import (
     ChatBinding,
+    WorkspaceRef,
     WorkspaceSessions,
     WorkspaceSwitch,
     own_root,
@@ -254,6 +256,9 @@ class RouterDeps:
             # After the runs: workspace processes deliberately outlive run
             # ends, so only this closes them (kill -9 orphans them).
             await self.workspaces.aclose()
+            if self.workspace_switch is not None:
+                # After their sessions: the connections chats there shared.
+                await self.workspace_switch.aclose()
             if self._bus is not None:
                 self._bus.close()
             for agent in self.agents.values():
@@ -314,12 +319,73 @@ class RouterDeps:
             )
         return path
 
+    def admit(
+        self, agent: Agent[Any], root: str | Path, mode: str | None = None
+    ) -> str:
+        """``root`` as a chat stores it, once this server lets ``agent``'s
+        chats work there — else a 409 naming the constraint.
+
+        A local directory goes through :meth:`admit_root`. A remote location
+        (:class:`~lovia.web.workspaces.WorkspaceRef`) is checked against the
+        switch's ``remotes``, and that the workspace a run would be given
+        there can be built at all — in ``mode``, the one the chat runs in,
+        since ``build`` decides per mode what a workspace carries. Whether
+        the directory exists over there is found out when a session opens:
+        asking now would mean a round trip to the host on every run.
+        """
+        ref = WorkspaceRef.parse(str(root))
+        if not ref.remote:
+            return self.admit_root(agent, root).as_posix()
+        switch = self.workspace_switch
+        why = (
+            switch.remote_refusal(ref)
+            if switch is not None
+            else "this server keeps every chat in its directory"
+        )
+        if why is not None:
+            raise WebError(
+                409, "workspace_not_allowed", f"{ref.key} is not allowed", hint=why
+            )
+        assert switch is not None
+        try:
+            switch.remote_host(ref)
+        except UserError as exc:
+            raise WebError.from_exc(400, "invalid_request", exc) from exc
+        try:
+            # The workspaces a run there is given — the entry agent's and
+            # every handoff target's, in this mode — built and thrown away.
+            # Whatever cannot be built (a sandboxing executor that would be
+            # left behind) is refused here, by the same code the run uses,
+            # so the two cannot come to disagree.
+            self.effective_agent(agent, ChatBinding(ref.key, mode), hooks=False)
+        except UserError as exc:
+            raise WebError.from_exc(409, "workspace_not_allowed", exc) from exc
+        return ref.key
+
+    async def admit_new(self, agent: Agent[Any], root: str) -> str:
+        """:meth:`admit` for a location being added to the list. A remote one
+        is looked up on its host first: the directory must exist there, and
+        the key stored is its resolved path — so one directory is one entry."""
+        key = self.admit(agent, root)
+        ref = WorkspaceRef.parse(key)
+        if not ref.remote:
+            return key
+        assert self.workspace_switch is not None
+        host = self.workspace_switch.remote_host(ref)
+        try:
+            resolved = await host.resolve_root(ref.root)
+        except UserError as exc:
+            raise WebError.from_exc(404, "file_not_found", exc) from exc
+        except WorkspaceError as exc:
+            raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
+        return replace(ref, root=resolved).key
+
     def new_chat_binding(
         self, agent: Agent[Any], mode: str | None, root: str | Path | None = None
     ) -> ChatBinding:
         """The binding to store on a new chat of ``agent``.
 
-        ``root`` (checked by :meth:`admit_root`) defaults to the agent's own;
+        ``root`` (checked by :meth:`admit`) defaults to the agent's own;
         ``mode`` is stored as given (an inherited None stays None: the
         agent's own policy) — both None-free only with a switch.
         """
@@ -328,8 +394,8 @@ class RouterDeps:
             return ChatBinding(None, None)
         if self.workspace_switch is None:
             return ChatBinding(own.as_posix(), None)
-        path = own if root is None else self.admit_root(agent, root)
-        return ChatBinding(path.as_posix(), mode)
+        where = own.as_posix() if root is None else self.admit(agent, root, mode)
+        return ChatBinding(where, mode)
 
     def chat_binding(self, agent: Agent[Any], meta: ChatMeta | None) -> ChatBinding:
         """Where and how a stored chat of ``agent`` runs, checked against
@@ -346,13 +412,15 @@ class RouterDeps:
             # elsewhere (by a server that had a switch, or an agent since
             # moved) is refused like any other, never run in this one.
             if stored is not None:
-                self.admit_root(agent, stored)
+                self.admit(agent, stored)
             return ChatBinding(own.as_posix(), None)
         mode = self.effective_mode(meta.workspace_mode if meta is not None else None)
-        path = own if stored is None else self.admit_root(agent, stored)
-        return ChatBinding(path.as_posix(), mode)
+        where = own.as_posix() if stored is None else self.admit(agent, stored, mode)
+        return ChatBinding(where, mode)
 
-    def effective_agent(self, agent: Agent[Any], binding: ChatBinding) -> Agent[Any]:
+    def effective_agent(
+        self, agent: Agent[Any], binding: ChatBinding, *, hooks: bool = True
+    ) -> Agent[Any]:
         """``agent`` as a run of a chat with ``binding`` uses it.
 
         Each agent the run can reach — the entry agent and every handoff
@@ -361,19 +429,28 @@ class RouterDeps:
         mode (capped to what this server offers). Unchanged without a
         switch; an agent whose workspace isn't a plain ``LocalWorkspace``
         (a custom backend) keeps its own. The original is never touched.
+
+        A chat at a remote location gets ``agent_for_remote`` instead of
+        ``agent_for`` (which reads the project's files on this machine), and
+        the same policy on a ``RemoteWorkspace`` there.
+
+        ``hooks=False`` leaves the two project hooks out: the same workspaces
+        get built, for a caller that only wants to know they can be (the
+        hooks read disk on every call, and belong to the run).
         """
         if self.workspace_switch is None:
             return agent
-        root = Path(binding.root) if binding.root is not None else None
+        ref = WorkspaceRef.parse(binding.root) if binding.root is not None else None
         mode = cast("WorkspaceMode | None", self.effective_mode(binding.mode))
-        return self._rebind(agent, root, mode, {})
+        return self._rebind(agent, ref, mode, {}, hooks)
 
     def _rebind(
         self,
         agent: Agent[Any],
-        root: Path | None,
+        ref: WorkspaceRef | None,
         mode: WorkspaceMode | None,
         done: dict[int, Agent[Any]],
+        hooks: bool = True,
     ) -> Agent[Any]:
         if id(agent) in done:  # handoffs may form a cycle
             return done[id(agent)]
@@ -383,13 +460,18 @@ class RouterDeps:
         # A session binding (a self-cloned subagent's) → its config: the
         # rebuilt workspace opens a session of its own.
         base = workspace_config(agent)
-        if base is not None:
-            where = root or resolve_root(base.root)
-            if switch.agent_for is not None:
-                agent = switch.agent_for(agent, where)
-            workspace: Any = switch.workspace(base, where, mode)
-        else:
+        workspace: Any
+        if base is None:
             workspace = agent.workspace
+        elif ref is not None and ref.remote:
+            if hooks and switch.agent_for_remote is not None:
+                agent = switch.agent_for_remote(agent, ref)
+            workspace = switch.remote_workspace(base, ref, mode)
+        else:
+            where = Path(ref.root) if ref is not None else resolve_root(base.root)
+            if hooks and switch.agent_for is not None:
+                agent = switch.agent_for(agent, where)
+            workspace = switch.workspace(base, where, mode)
         # A fresh handoffs list, filled after registering the copy so a cycle
         # resolves to it.
         copy = agent.clone(workspace=workspace, handoffs=[])
@@ -397,21 +479,27 @@ class RouterDeps:
         for h in agent.handoffs:
             if isinstance(h, Handoff):
                 copy.handoffs.append(
-                    replace(h, target=self._rebind(h.target, root, mode, done))
+                    replace(h, target=self._rebind(h.target, ref, mode, done, hooks))
                 )
             else:
-                copy.handoffs.append(self._rebind(h, root, mode, done))
+                copy.handoffs.append(self._rebind(h, ref, mode, done, hooks))
         return copy
 
-    @staticmethod
-    def at_root(agent: Agent[Any], binding: ChatBinding) -> Agent[Any]:
+    def at_root(self, agent: Agent[Any], binding: ChatBinding) -> Agent[Any]:
         """``agent`` with its workspace moved to the chat's directory, and
-        nothing else: what attachments resolve against, and the agent a
-        ``run_deps`` hook is shown, before the run binds the whole thing."""
+        nothing else: what attachments resolve against, what an approval is
+        remembered under, and the agent a ``run_deps`` hook is shown, before
+        the run binds the whole thing."""
         base = workspace_config(agent)
         if base is None or binding.root is None:
             return agent
-        return agent.clone(workspace=replace(base, root=binding.root))
+        ref = WorkspaceRef.parse(binding.root)
+        if not ref.remote:
+            return agent.clone(workspace=replace(base, root=binding.root))
+        switch = self.workspace_switch
+        if switch is None or switch.remote_refusal(ref) is not None:
+            return agent  # not a place this server opens; the run says so
+        return agent.clone(workspace=switch.remote_workspace(base, ref, None))
 
     def run_snapshot(self, session_id: str | None) -> ChatBinding | None:
         """The binding of the run live in ``session_id``, read now; None when
@@ -457,7 +545,7 @@ class RouterDeps:
         resolved = ""
         for meta in metas:
             agent = self.agents.get(meta.agent or "") or self.pick(None)
-            resolved = self.admit_root(agent, root).as_posix()
+            resolved = self.admit(agent, root)
         async with AsyncExitStack() as locks:
             # One order for every caller: two overlapping batches can't
             # each hold a lock the other waits for.

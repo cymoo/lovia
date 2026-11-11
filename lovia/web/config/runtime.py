@@ -173,6 +173,13 @@ class ConfigRuntime:
 
         return project_agent(agent, root, self.config)
 
+    def agent_for_remote(self, agent: Agent[Any], ref: Any) -> Agent[Any]:
+        """``WorkspaceSwitch.agent_for_remote`` for the CLI: the served
+        agent without the launch directory's ``AGENTS.md`` and skills."""
+        from ..builder import remote_agent
+
+        return remote_agent(agent, self.config)
+
     # ---------------------------------------------------------- applying -
 
     async def apply(

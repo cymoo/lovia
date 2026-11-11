@@ -56,6 +56,7 @@ from ..schemas import (
     WorkspaceFile,
     WorkspaceInfo,
 )
+from ..workspaces import WorkspaceRef
 from .deps import RouterDeps
 
 
@@ -233,12 +234,20 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
                 if meta.agent in deps.agents
                 else deps.pick(agent_name)
             )
-            if meta.workspace_root is not None and workspace_cfg(agent) is not None:
-                where = deps.admit_root(agent, meta.workspace_root).as_posix()
+            root = meta.workspace_root
         else:
             agent = deps.pick(agent_name)
-            if root is not None and workspace_cfg(agent) is not None:
-                where = deps.admit_root(agent, root).as_posix()
+        if root is not None and workspace_cfg(agent) is not None:
+            if WorkspaceRef.parse(root).remote:
+                # These routes read this machine's disk; a remote chat's
+                # files are on its host.
+                raise WebError(
+                    404,
+                    "feature_unavailable",
+                    "the Files panel and uploads don't reach a remote workspace yet",
+                    hint="ask the assistant to read or list files there instead",
+                )
+            where = deps.admit_root(agent, root).as_posix()
         cfg = workspace_cfg(agent)
         if cfg is None:
             raise WebError(404, "feature_unavailable", "agent has no workspace")

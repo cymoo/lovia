@@ -319,15 +319,19 @@ class RouterDeps:
             )
         return path
 
-    def admit(self, agent: Agent[Any], root: str | Path) -> str:
+    def admit(
+        self, agent: Agent[Any], root: str | Path, mode: str | None = None
+    ) -> str:
         """``root`` as a chat stores it, once this server lets ``agent``'s
         chats work there — else a 409 naming the constraint.
 
         A local directory goes through :meth:`admit_root`. A remote location
         (:class:`~lovia.web.workspaces.WorkspaceRef`) is checked against the
-        switch's ``remotes``; whether its directory exists over there is
-        found out when a session opens — asking now would mean a round trip
-        to the host on every run.
+        switch's ``remotes``, and that the workspace a run would be given
+        there can be built at all — in ``mode``, the one the chat runs in,
+        since ``build`` decides per mode what a workspace carries. Whether
+        the directory exists over there is found out when a session opens:
+        asking now would mean a round trip to the host on every run.
         """
         ref = WorkspaceRef.parse(str(root))
         if not ref.remote:
@@ -347,15 +351,15 @@ class RouterDeps:
             switch.remote_host(ref)
         except UserError as exc:
             raise WebError.from_exc(400, "invalid_request", exc) from exc
-        base = workspace_config(agent)
-        if base is not None:
-            try:
-                # What a run there would be given. An agent it cannot be
-                # built for (a sandboxing executor that would be left
-                # behind) is refused here, not part-way into a run.
-                switch.remote_workspace(base, ref, None)
-            except UserError as exc:
-                raise WebError.from_exc(409, "workspace_not_allowed", exc) from exc
+        try:
+            # The workspaces a run there is given — the entry agent's and
+            # every handoff target's, in this mode — built and thrown away.
+            # Whatever cannot be built (a sandboxing executor that would be
+            # left behind) is refused here, by the same code the run uses,
+            # so the two cannot come to disagree.
+            self.effective_agent(agent, ChatBinding(ref.key, mode), hooks=False)
+        except UserError as exc:
+            raise WebError.from_exc(409, "workspace_not_allowed", exc) from exc
         return ref.key
 
     async def admit_new(self, agent: Agent[Any], root: str) -> str:
@@ -390,7 +394,7 @@ class RouterDeps:
             return ChatBinding(None, None)
         if self.workspace_switch is None:
             return ChatBinding(own.as_posix(), None)
-        where = own.as_posix() if root is None else self.admit(agent, root)
+        where = own.as_posix() if root is None else self.admit(agent, root, mode)
         return ChatBinding(where, mode)
 
     def chat_binding(self, agent: Agent[Any], meta: ChatMeta | None) -> ChatBinding:
@@ -411,10 +415,12 @@ class RouterDeps:
                 self.admit(agent, stored)
             return ChatBinding(own.as_posix(), None)
         mode = self.effective_mode(meta.workspace_mode if meta is not None else None)
-        where = own.as_posix() if stored is None else self.admit(agent, stored)
+        where = own.as_posix() if stored is None else self.admit(agent, stored, mode)
         return ChatBinding(where, mode)
 
-    def effective_agent(self, agent: Agent[Any], binding: ChatBinding) -> Agent[Any]:
+    def effective_agent(
+        self, agent: Agent[Any], binding: ChatBinding, *, hooks: bool = True
+    ) -> Agent[Any]:
         """``agent`` as a run of a chat with ``binding`` uses it.
 
         Each agent the run can reach — the entry agent and every handoff
@@ -427,12 +433,16 @@ class RouterDeps:
         A chat at a remote location gets ``agent_for_remote`` instead of
         ``agent_for`` (which reads the project's files on this machine), and
         the same policy on a ``RemoteWorkspace`` there.
+
+        ``hooks=False`` leaves the two project hooks out: the same workspaces
+        get built, for a caller that only wants to know they can be (the
+        hooks read disk on every call, and belong to the run).
         """
         if self.workspace_switch is None:
             return agent
         ref = WorkspaceRef.parse(binding.root) if binding.root is not None else None
         mode = cast("WorkspaceMode | None", self.effective_mode(binding.mode))
-        return self._rebind(agent, ref, mode, {})
+        return self._rebind(agent, ref, mode, {}, hooks)
 
     def _rebind(
         self,
@@ -440,6 +450,7 @@ class RouterDeps:
         ref: WorkspaceRef | None,
         mode: WorkspaceMode | None,
         done: dict[int, Agent[Any]],
+        hooks: bool = True,
     ) -> Agent[Any]:
         if id(agent) in done:  # handoffs may form a cycle
             return done[id(agent)]
@@ -453,12 +464,12 @@ class RouterDeps:
         if base is None:
             workspace = agent.workspace
         elif ref is not None and ref.remote:
-            if switch.agent_for_remote is not None:
+            if hooks and switch.agent_for_remote is not None:
                 agent = switch.agent_for_remote(agent, ref)
             workspace = switch.remote_workspace(base, ref, mode)
         else:
             where = Path(ref.root) if ref is not None else resolve_root(base.root)
-            if switch.agent_for is not None:
+            if hooks and switch.agent_for is not None:
                 agent = switch.agent_for(agent, where)
             workspace = switch.workspace(base, where, mode)
         # A fresh handoffs list, filled after registering the copy so a cycle
@@ -468,10 +479,10 @@ class RouterDeps:
         for h in agent.handoffs:
             if isinstance(h, Handoff):
                 copy.handoffs.append(
-                    replace(h, target=self._rebind(h.target, ref, mode, done))
+                    replace(h, target=self._rebind(h.target, ref, mode, done, hooks))
                 )
             else:
-                copy.handoffs.append(self._rebind(h, ref, mode, done))
+                copy.handoffs.append(self._rebind(h, ref, mode, done, hooks))
         return copy
 
     def at_root(self, agent: Agent[Any], binding: ChatBinding) -> Agent[Any]:

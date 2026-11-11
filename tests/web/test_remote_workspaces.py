@@ -440,3 +440,77 @@ def test_a_sandboxed_agent_is_not_quietly_unsandboxed_on_a_remote(places) -> Non
     base = agent.workspace
     with pytest.raises(UserError, match="executor"):
         switch.remote_workspace(base, WorkspaceRef.parse(key), None)
+
+
+def test_a_sandbox_that_comes_with_a_mode_is_caught_for_that_mode(places) -> None:
+    # The agent's own workspace has no executor; the switch's ``build`` adds
+    # one to the modes it builds. Whether a remote chat can be given its
+    # workspace then depends on the mode — and must be settled before the
+    # chat is written, as a refusal, not found out as a failed start.
+    here, there = places
+    far = _far()
+
+    class Sandbox:
+        async def run(self, command, *, cwd, env, timeout, policy, root):
+            raise AssertionError("never runs here")
+
+    def build(root: Path, mode: str):
+        return Workspace.local(str(root), mode=mode, executor=Sandbox())  # type: ignore[arg-type]
+
+    agent = _agent(here, [text("one"), text("two")])
+    key = f"remote://far{there}"
+    switch = WorkspaceSwitch(remotes={"far": far}, build=build)
+    with _client(agent, switch) as c:
+        try:
+            # A new chat in a built mode: refused, and nothing is left behind.
+            res = c.post(
+                "/api/chat",
+                json={"message": "go", "workspace": key, "workspace_mode": "coding"},
+            )
+            assert res.status_code == 409, res.text
+            assert res.json()["detail"]["code"] == "workspace_not_allowed"
+            assert c.get("/api/sessions").json() == []
+
+            # On the agent's own policy (no mode, so no ``build``): fine.
+            res = c.post("/api/chat", json={"message": "go", "workspace": key})
+            assert res.status_code == 200, res.text
+            sid = res.json()["session_id"]
+
+            # Switched to a built mode later: the next run is refused the
+            # same way, and the chat is otherwise as it was.
+            patched = c.patch(f"/api/sessions/{sid}", json={"workspace_mode": "coding"})
+            assert patched.status_code == 200, patched.text
+            res = c.post("/api/chat", json={"message": "again", "session_id": sid})
+            assert res.status_code == 409, res.text
+            assert res.json()["detail"]["code"] == "workspace_not_allowed"
+        finally:
+            c.portal.call(far.aclose)
+
+
+def test_a_sandboxed_handoff_target_is_caught_at_the_door_too(places) -> None:
+    # The run rebuilds every agent it can reach, not just the one it starts
+    # with; the check before the chat exists does the same.
+    here, there = places
+
+    class Sandbox:
+        async def run(self, command, *, cwd, env, timeout, policy, root):
+            raise AssertionError("never runs here")
+
+    specialist = Agent(
+        name="specialist",
+        model=ScriptedProvider([text("x")]),
+        workspace=Workspace.local(str(here), executor=Sandbox()),
+    )
+    entry = Agent(
+        name="bot",
+        model=ScriptedProvider([text("x")]),
+        workspace=Workspace.local(str(here)),
+        handoffs=[specialist],
+    )
+    with _client(entry, WorkspaceSwitch(remotes={"far": _far()})) as c:
+        res = c.post(
+            "/api/chat", json={"message": "go", "workspace": f"remote://far{there}"}
+        )
+        assert res.status_code == 409, res.text
+        assert "executor" in res.json()["detail"]["hint"]
+        assert c.get("/api/sessions").json() == []

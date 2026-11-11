@@ -17,9 +17,11 @@ infrastructure), keeping the package dependency one-directional:
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import inspect
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Awaitable, Literal, cast
 
 from pydantic import Field
 
@@ -90,7 +92,9 @@ def path_permission(*ops: Literal["read", "write"]) -> PermissionFn:
     policy, fail closed: ask rather than run unjudged.
     """
 
-    def _permission(args: dict[str, Any], ctx: RunContext[Any]) -> Verdict:
+    def _permission(
+        args: dict[str, Any], ctx: RunContext[Any]
+    ) -> "Verdict | Awaitable[Verdict]":
         workspace = ctx.workspace
         if workspace is None:
             return Verdict("allow")
@@ -98,13 +102,34 @@ def path_permission(*ops: Literal["read", "write"]) -> PermissionFn:
         if not isinstance(path, str):
             return _UNJUDGED
         try:
-            return merge_verdicts(
+            return _judged(
                 *(workspace.decide_path(path, write=op == "write") for op in ops)
             )
         except Exception:  # noqa: BLE001 — never run unjudged on a bad policy
             return _UNJUDGED
 
     return _permission
+
+
+def _judged(
+    *verdicts: "Verdict | Awaitable[Verdict]",
+) -> "Verdict | Awaitable[Verdict]":
+    """The session's verdicts merged, most restrictive wins — at once when it
+    answered at once, else as an awaitable (a session that had to ask
+    elsewhere). Either way a failure asks rather than running unjudged."""
+    if not any(inspect.isawaitable(v) for v in verdicts):
+        return merge_verdicts(*cast("tuple[Verdict, ...]", verdicts))
+
+    async def _settle() -> Verdict:
+        async def one(v: "Verdict | Awaitable[Verdict]") -> Verdict:
+            return await v if inspect.isawaitable(v) else v
+
+        try:
+            return merge_verdicts(*await asyncio.gather(*(one(v) for v in verdicts)))
+        except Exception:  # noqa: BLE001 — same fail-closed rule as the sync path
+            return _UNJUDGED
+
+    return _settle()
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +490,9 @@ async def grep_files(
 # ---------------------------------------------------------------------------
 
 
-def _shell_permission(args: dict[str, Any], ctx: RunContext[Any]) -> Verdict:
+def _shell_permission(
+    args: dict[str, Any], ctx: RunContext[Any]
+) -> "Verdict | Awaitable[Verdict]":
     # With no workspace nothing can run — require_workspace raises its setup
     # hint, so don't hide it behind an approval prompt. With a workspace but
     # malformed args or a broken policy, fail closed: ask rather than run
@@ -480,7 +507,7 @@ def _shell_permission(args: dict[str, Any], ctx: RunContext[Any]) -> Verdict:
     try:
         # The session's combined verdict: static command rules merged with
         # the path ACL over the command's path claims and working directory.
-        return workspace.decide_command(command, cwd)
+        return _judged(workspace.decide_command(command, cwd))
     except Exception:  # noqa: BLE001 — never run unjudged on a bad policy
         return _UNJUDGED
 

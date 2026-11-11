@@ -198,7 +198,8 @@ async for event in handle:
 result = await handle.result()
 ```
 
-总是要问的工具写 `@tool(permission="ask")` 就够了。谓词返回决定或 `Verdict`，
+总是要问的工具写 `@tool(permission="ask")` 就够了。判定需要 I/O（查一次库、问一次远端）时，
+谓词可以写成 `async def`，调用会等它返回。谓词返回决定或 `Verdict`，
 **不接受 `bool`**（含义太容易反过来；返回 bool 会被当作非法判定，调用被拒并发出
 `ToolCallFailed` 事件）。
 

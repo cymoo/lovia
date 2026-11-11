@@ -102,6 +102,88 @@ async def test_raising_approval_predicate_denies_without_dangling_call() -> None
 
 
 @pytest.mark.asyncio
+async def test_async_permission_predicate_is_awaited() -> None:
+    # A verdict that needs I/O: the predicate is a coroutine function, and the
+    # runner waits for its answer before the call runs — or doesn't.
+    import asyncio
+
+    from lovia.approvals import Verdict
+
+    executed: list[str] = []
+
+    async def judge(args, _ctx):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(0)
+        if args["what"] == "bad":
+            return Verdict("deny", "looked it up: not allowed")
+        return "allow"
+
+    @tool(permission=judge)
+    async def act(what: str) -> str:
+        executed.append(what)
+        return f"did {what}"
+
+    provider = ScriptedProvider(
+        [
+            call("act", {"what": "good"}, call_id="a1"),
+            call("act", {"what": "bad"}, call_id="a2"),
+            text("done"),
+        ]
+    )
+    result = await Runner.run(Agent(name="t", model=provider, tools=[act]), "go")
+    outputs = [m.content for m in result.messages if m.role == "tool"]
+    assert executed == ["good"]
+    assert outputs[0] == "did good"
+    assert "denied by policy" in outputs[1] and "looked it up" in outputs[1]
+
+
+@pytest.mark.asyncio
+async def test_async_permission_predicate_that_raises_fails_closed() -> None:
+    executed: list[int] = []
+
+    async def exploding(_args, _ctx):  # type: ignore[no-untyped-def]
+        raise ConnectionError("could not reach the judge")
+
+    @tool(permission=exploding)
+    async def guarded() -> str:
+        executed.append(1)
+        return "ran"
+
+    provider = ScriptedProvider([call("guarded", {}, call_id="g1"), text("done")])
+    handle = Runner.stream(Agent(name="t", model=provider, tools=[guarded]), "go")
+    errors = [ev.error async for ev in handle if isinstance(ev, events.ToolCallFailed)]
+    result = await handle.result()
+    assert executed == []
+    assert any(isinstance(e, ConnectionError) for e in errors)
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert "permission check failed" in tool_msg.content
+
+
+@pytest.mark.asyncio
+async def test_stop_during_an_async_permission_check_wins_over_its_allow() -> None:
+    # The stop lands while the predicate is waiting; its "allow" must not run
+    # the call — same contract as a stop that lands while a human is asked.
+    from lovia import CancelToken, RunCancelled
+
+    token = CancelToken()
+    executed: list[int] = []
+
+    async def slow_allow(_args, _ctx):  # type: ignore[no-untyped-def]
+        token.cancel()
+        return "allow"
+
+    @tool(permission=slow_allow)
+    async def guarded() -> str:
+        executed.append(1)
+        return "ran"
+
+    provider = ScriptedProvider([call("guarded", {}, call_id="g1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[guarded])
+    with pytest.raises(RunCancelled):
+        await Runner.run(agent, "go", cancel_token=token)
+    assert executed == []
+
+
+@pytest.mark.asyncio
 async def test_bool_returning_permission_is_rejected_not_guessed() -> None:
     # ``True`` meant "ask" under the old needs_approval and reads as "allowed"
     # under permission — too easy to invert, so a bool is an invalid verdict:

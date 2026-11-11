@@ -641,6 +641,15 @@ async def test_call_delegates_permission_to_the_underlying_tool() -> None:
     assert call_tool.decide(bad, ctx).action == "allow"
 
 
+async def test_call_delegates_an_async_permission_too() -> None:
+    async def judge(args: dict[str, Any], ctx: RunContext[Any]) -> str:
+        return "ask" if args.get("danger") else "allow"
+
+    tools, _ = await _deferred_plugin(permission=judge)
+    hot = {"tool": "create_issue", "arguments": {"danger": True}}
+    assert (await tools["call_mcp_tool"].decide(hot, _ctx())).action == "ask"
+
+
 async def test_call_honors_underlying_renderer_and_output_cap() -> None:
     def upper(result: Any, ctx: RunContext[Any]) -> str:
         return render_mcp_content(result.content).upper() * 20

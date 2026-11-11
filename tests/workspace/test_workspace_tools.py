@@ -510,6 +510,53 @@ def test_shell_permission_consults_path_claims(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
+class _FarSession:
+    """A session whose verdicts take a round trip: the ``decide_*`` methods
+    are coroutines, everything else is the local session's."""
+
+    def __init__(self, local: LocalWorkspaceSession, *, broken: bool = False) -> None:
+        self._local, self._broken = local, broken
+
+    async def decide_path(self, path: str, *, write: bool = False):
+        await asyncio.sleep(0)
+        if self._broken:
+            raise ConnectionError("far side gone")
+        return self._local.decide_path(path, write=write)
+
+    async def decide_command(self, command: str, cwd: str = "."):
+        await asyncio.sleep(0)
+        if self._broken:
+            raise ConnectionError("far side gone")
+        return self._local.decide_command(command, cwd)
+
+    def __getattr__(self, name: str):
+        return getattr(self._local, name)
+
+
+async def test_tool_permissions_await_a_session_that_answers_later(tmp_path) -> None:
+    from lovia.workspace import WorkspacePolicy
+
+    local = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
+    ctx = _ctx(_FarSession(local))  # type: ignore[arg-type]
+
+    assert (await read_file.decide({"path": "inside.txt"}, ctx)).action == "allow"
+    assert (await read_file.decide({"path": "/etc/hosts"}, ctx)).action == "ask"
+    verdict = await write_file.decide({"path": "/tmp/evil.txt", "content": "x"}, ctx)
+    assert verdict.action == "deny" and "outside the workspace root" in verdict.reason
+    # Same answers as the local session gives at once.
+    assert (await shell.decide({"command": "git push --force"}, ctx)).action == (
+        shell.decide({"command": "git push --force"}, _ctx(local)).action
+    )
+
+
+async def test_tool_permissions_ask_when_the_session_cannot_answer(tmp_path) -> None:
+    local = LocalWorkspaceSession(root=str(tmp_path))
+    ctx = _ctx(_FarSession(local, broken=True))  # type: ignore[arg-type]
+    # Fail closed, exactly like a broken policy on the sync path: ask.
+    assert (await read_file.decide({"path": "a.txt"}, ctx)).action == "ask"
+    assert (await shell.decide({"command": "ls"}, ctx)).action == "ask"
+
+
 def test_file_tools_ask_for_outside_paths_under_coding(tmp_path) -> None:
     from lovia.workspace import WorkspacePolicy
 

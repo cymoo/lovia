@@ -4486,7 +4486,9 @@ body.lv-files-resizing {
   > :is(.lv-files-crumbs, .lv-files-search, .lv-files-procs, .lv-files-list) {
   display: none;
 }
-.lv-files-panel.lv-files-wide.lv-viewing {
+/* `.lv-open` is part of it: this outweighs the rule that shows the panel, and
+   without it a closed panel that was wide with a file open stays on screen. */
+.lv-files-panel.lv-open.lv-files-wide.lv-viewing {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
   grid-template-rows: auto auto auto auto minmax(0, 1fr);
@@ -4562,6 +4564,17 @@ body.lv-files-resizing {
 }
 #files-refresh {
   position: relative;
+}
+/* … and turns while a listing is on its way — once the wait is felt, which a
+   local folder's never is. */
+#files-refresh.lv-loading svg {
+  animation: lv-spin 0.9s linear 0.3s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  #files-refresh.lv-loading svg {
+    animation: none;
+    opacity: 0.5;
+  }
 }
 
 .lv-files-crumbs {

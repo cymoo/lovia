@@ -320,6 +320,8 @@ const MESSAGES = {
     'files.readFailed': '无法读取文件',
     'files.outsideWorkspace': '文件面板只显示工作区内的文件——该文件在工作区之外，或被工作区规则隐藏。',
     'files.loadFailed': '无法加载文件',
+    'files.loading': '加载中…',
+    'files.retry': '重试',
     'files.rendered': '显示渲染效果',
     'files.raw': '显示源码',
     'files.thisChat': '本对话',
@@ -975,6 +977,8 @@ const EN = {
   'files.outsideWorkspace':
     'The Files panel only shows workspace files — this one is outside the workspace, or hidden by its rules.',
   'files.loadFailed': 'Couldn’t load more',
+  'files.loading': 'Loading…',
+  'files.retry': 'Try again',
   'files.rendered': 'Show rendered',
   'files.raw': 'Show source',
   'files.thisChat': 'This chat',

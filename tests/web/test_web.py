@@ -364,6 +364,33 @@ def test_bundled_styles_sit_in_the_lovia_layer() -> None:
     assert body[1].rstrip().endswith("} /* @layer lovia */")
 
 
+def test_a_closed_files_panel_is_never_displayed() -> None:
+    """The panel is hidden unless ``.lv-open``; a rule that lays it out some
+    other way (the wide list-beside-preview grid) outweighs the one that
+    shows it, so it has to ask for ``.lv-open`` itself — or closing the
+    panel in that layout does nothing."""
+    from pathlib import Path
+
+    import lovia.web
+
+    css = (Path(lovia.web.__file__).parent / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    shown = 0
+    for selector, block in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        selector = selector.strip()
+        if not re.fullmatch(r"\.lv-files-panel(\.[\w-]+)*", selector):
+            continue
+        # The phone drawer is always laid out and slides off screen instead.
+        if "position: fixed" in block:
+            continue
+        if re.search(r"display:\s*(?!none)\S", block):
+            shown += 1
+            assert ".lv-open" in selector, selector
+    assert shown >= 2  # the plain panel, and the wide grid
+
+
 def test_shell_assets_get_executable_content_types(monkeypatch) -> None:
     """Shell assets keep an executable MIME type even on a hostile platform DB.
 

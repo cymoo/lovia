@@ -151,6 +151,10 @@ async def flaky_lookup(key: str) -> str:
   `default_tool_timeout` (default: no timeout).
 - Cancellation, budget exhaustion, and invalid arguments are never retried —
   none of them can clear on their own.
+- The workspace's mutating tools (`write_file`, `edit_file`, `shell`,
+  `kill_process`) set `retries=0`, so `default_tool_retries` never re-runs
+  them: a failed mutation may already have happened. Do the same for your own
+  tools with side effects.
 
 ## Output truncation
 

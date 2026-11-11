@@ -133,6 +133,9 @@ async def flaky_lookup(key: str) -> str:
 - `timeout`：每次尝试的秒数；`None` 表示继承 agent 的 `default_tool_timeout`
   （默认无超时）。
 - 取消、预算耗尽和参数无效永不重试，因为重试不会改变这些条件。
+- 工作区里会改动状态的工具（`write_file`、`edit_file`、`shell`、`kill_process`）
+  设了 `retries=0`，`default_tool_retries` 不会重跑它们：一次失败的改动可能已经
+  发生了。你自己有副作用的工具也建议这样设置。
 
 ## 输出截断
 

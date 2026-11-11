@@ -289,6 +289,15 @@ def test_background_tool_parallel_flags() -> None:
     assert read_process_output.parallel is True
 
 
+def test_mutating_tools_opt_out_of_default_retries() -> None:
+    # A failed mutation may have half-happened; re-running it blind could
+    # apply it twice. Reads stay on the agent's default.
+    for mutator in (write_file, edit_file, shell, kill_process):
+        assert mutator.retries == 0
+    for reader in (read_file, list_files, grep_files, read_process_output):
+        assert reader.retries is None
+
+
 @pytest.mark.asyncio
 async def test_background_reminder_announces_until_seen(session) -> None:
     ctx = _ctx(session)

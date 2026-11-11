@@ -23,15 +23,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
 from ..agent import Agent
 from ..exceptions import UserError
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
-from ..workspace.local import LocalWorkspaceSession
-from ..workspace.protocol import WorkspaceSession
+from ..workspace.protocol import WorkspaceLike, WorkspaceSession
+from ..workspace.workspace import WorkspaceSessionBinding
 
 log = logging.getLogger(__name__)
 
@@ -190,6 +190,19 @@ class WorkspaceSwitch:
         )
 
 
+def _only_policy_differs(old: WorkspaceLike, new: WorkspaceLike) -> bool:
+    """Whether ``new`` is ``old`` with another ``policy`` and nothing else —
+    answerable for dataclass configs with a ``policy`` field
+    (``LocalWorkspace`` has one), False for anything else."""
+    if type(old) is not type(new) or not is_dataclass(old):
+        return False
+    # A field ``replace`` can set: a derived ``policy`` (a property, an
+    # ``init=False`` field) has no "same config, other policy" to compare.
+    if not any(f.name == "policy" and f.init for f in fields(old)):
+        return False
+    return bool(replace(cast(Any, old), policy=cast(Any, new).policy) == new)
+
+
 async def _close_quietly(session_id: str, session: WorkspaceSession) -> None:
     """Best-effort close: teardown on delete/shutdown paths must not mask
     the operation the user actually asked for."""
@@ -210,7 +223,7 @@ class WorkspaceSessions:
     sessions.
     """
 
-    _live: dict[str, tuple[LocalWorkspace, WorkspaceSession]] = field(
+    _live: dict[str, tuple[WorkspaceLike, WorkspaceSession]] = field(
         default_factory=dict
     )
     # Serializes opens so two concurrent runs of one chat share a session
@@ -220,24 +233,24 @@ class WorkspaceSessions:
     async def bind(self, session_id: str, agent: Agent[Any]) -> Agent[Any]:
         """Return ``agent`` with its workspace bound to the chat's session.
 
-        Only plain :class:`LocalWorkspace` configs are intercepted. ``None``
-        and custom ``WorkspaceLike`` backends pass through untouched, and so
-        does an agent the caller already bound to a session of its own —
-        their lifetimes are not this registry's to manage.
+        Any backend whose sessions the runner would open and close per run
+        (``close_after_run``) is intercepted — ``LocalWorkspace`` or a custom
+        ``WorkspaceLike`` alike. No workspace passes through untouched, and
+        so does an agent the caller already bound to a session of its own:
+        that lifetime is not this registry's to manage.
         """
         cfg = agent.workspace
-        if not isinstance(cfg, LocalWorkspace):
+        if cfg is None or not cfg.close_after_run:
             return agent
         async with self._lock:
             held = self._live.get(session_id)
             if held is not None and not (held[0] is cfg or held[0] == cfg):
-                if replace(held[0], policy=cfg.policy) == cfg and isinstance(
-                    held[1], LocalWorkspaceSession
-                ):
+                set_policy = getattr(held[1], "set_policy", None)
+                if set_policy is not None and _only_policy_differs(held[0], cfg):
                     # Only the permissions changed (the chat switched mode):
                     # keep the session — and the dev server it runs — and
                     # judge from now on by the new policy.
-                    held[1].set_policy(cfg.policy)
+                    set_policy(cast(Any, cfg).policy)
                     held = (cfg, held[1])
                     self._live[session_id] = held
                 else:
@@ -249,7 +262,7 @@ class WorkspaceSessions:
             if held is None:
                 held = (cfg, await cfg.open())
                 self._live[session_id] = held
-        return replace(agent, workspace=cfg.bind(held[1]))
+        return replace(agent, workspace=WorkspaceSessionBinding(cfg, held[1]))
 
     def get(self, session_id: str) -> WorkspaceSession | None:
         """The chat's live session, or None (no run bound one yet)."""

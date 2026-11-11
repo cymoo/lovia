@@ -25,14 +25,13 @@ from typing import Any
 
 from ..errors import WorkspaceClosedError
 from ..local import LocalWorkspaceSession, root_facts
-from .wire import PROTOCOL, decode, encode, encode_error
+from .wire import PROTOCOL, decode, encode, encode_error, read_lines
 
 __all__ = ["main"]
 
-# The near side pings well inside this; see ``host._PING_SECONDS``.
+# Without a byte from the near side for this long, it is gone. It pings well
+# inside this; see ``host._PING_SECONDS``.
 IDLE_SECONDS = 120.0
-# One line can carry a whole file (base64): room for the read cap and then some.
-_MAX_LINE = 64 * 1024 * 1024
 
 # What a request may call on a session — the WorkspaceSession protocol.
 _SESSION_METHODS = frozenset(
@@ -73,10 +72,17 @@ class _Server:
         self._in, self._out = rpc_in, rpc_out
         self._sessions: dict[str, LocalWorkspaceSession] = {}
         self._tasks: dict[int, asyncio.Task[None]] = {}
+        self._closing: set[asyncio.Future[None]] = set()  # kept from the GC
         self._write_lock = asyncio.Lock()
 
     async def _send(self, message: dict[str, Any]) -> None:
         data = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
+        # Shielded: a request cancelled while its reply is going out must not
+        # release the lock under the writing thread — the next message would
+        # be written into the middle of this one.
+        await asyncio.shield(self._send_whole(data))
+
+    async def _send_whole(self, data: bytes) -> None:
         async with self._write_lock:
             await asyncio.to_thread(self._write_all, data)
 
@@ -86,7 +92,7 @@ class _Server:
             view = view[os.write(self._out, view) :]
 
     async def serve(self) -> None:
-        reader = asyncio.StreamReader(limit=_MAX_LINE)
+        reader = asyncio.StreamReader()
         await asyncio.get_running_loop().connect_read_pipe(
             lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(self._in, "rb", 0)
         )
@@ -101,13 +107,7 @@ class _Server:
             }
         )
         try:
-            while True:
-                try:
-                    line = await asyncio.wait_for(reader.readline(), IDLE_SECONDS)
-                except asyncio.TimeoutError:
-                    break  # the near side is gone without saying so
-                if not line:
-                    break
+            async for line in read_lines(reader, IDLE_SECONDS):
                 message = json.loads(line)
                 if "id" not in message:
                     self._notified(message)
@@ -116,6 +116,8 @@ class _Server:
                 task = asyncio.create_task(self._answer(message))
                 self._tasks[request_id] = task
                 task.add_done_callback(partial(self._forget, request_id))
+        except asyncio.TimeoutError:
+            pass  # the near side is gone without saying so
         finally:
             for task in list(self._tasks.values()):
                 task.cancel()
@@ -129,15 +131,23 @@ class _Server:
     def _notified(self, message: dict[str, Any]) -> None:
         """Handled inline, in arrival order — so a policy change is in force
         for every request that was sent after it."""
-        method, params = message.get("method"), decode(message.get("params")) or {}
-        if method == "cancel":
-            task = self._tasks.get(int(params.get("id", -1)))
-            if task is not None:
-                task.cancel()
-        elif method == "set_policy":
-            session = self._sessions.get(message.get("sid") or "")
-            if session is not None:
+        method = message.get("method")
+        session = self._sessions.get(message.get("sid") or "")
+        try:
+            params = decode(message.get("params")) or {}
+            if method == "cancel":
+                task = self._tasks.get(int(params["id"]))
+                if task is not None:
+                    task.cancel()
+            elif method == "set_policy" and session is not None:
                 session.set_policy(params["policy"])
+        except Exception as exc:  # noqa: BLE001 — one bad message must not end them all
+            print(f"lovia: bad {method} notification: {exc!r}", file=sys.stderr)
+            if method == "set_policy" and session is not None:
+                # The near side now believes in a policy this session does
+                # not have. Better no session than one judging by the old.
+                del self._sessions[session.id]
+                self._closing.add(asyncio.ensure_future(session.close()))
 
     async def _answer(self, message: dict[str, Any]) -> None:
         try:
@@ -146,9 +156,9 @@ class _Server:
             )
             reply: dict[str, Any] = {"id": message["id"], "result": encode(result)}
         except asyncio.CancelledError:
-            # Shielded: the reply to a cancelled request still has to go out.
+            # The reply to a cancelled request still goes out (_send shields).
             cancelled = {"type": "Cancelled", "message": "cancelled", "hint": None}
-            await asyncio.shield(self._send({"id": message["id"], "error": cancelled}))
+            await self._send({"id": message["id"], "error": cancelled})
             raise
         except Exception as exc:  # noqa: BLE001 — every failure goes back over the wire
             reply = {"id": message["id"], "error": encode_error(exc)}

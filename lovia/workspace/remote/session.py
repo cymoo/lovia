@@ -55,6 +55,13 @@ class RemoteWorkspaceSession:
         self._conn = conn
         self._closed = False
 
+    @property
+    def closed(self) -> bool:
+        """Whether this session is of no further use: closed here, or gone
+        with its connection. Whoever holds a session across runs (a serving
+        layer scoping one to a chat) checks this and opens another."""
+        return self._closed or self._conn.lost is not None
+
     async def _call(self, method: str, **params: Any) -> Any:
         if self._closed:
             raise WorkspaceClosedError(f"Workspace session {self.id} is closed.")

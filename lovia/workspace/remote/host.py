@@ -30,19 +30,19 @@ from ..policy import WorkspacePolicy
 from ..types import RootFacts, WorkspaceLimits
 from .bundle import BOOT, bundle
 from .session import RemoteWorkspaceSession
-from .wire import PROTOCOL, decode, decode_error, encode
+from .wire import MAX_LINE, PROTOCOL, decode, decode_error, encode, read_lines
 
 __all__ = ["RemoteHost"]
 
 logger = logging.getLogger(__name__)
 
-# The far side gives up after ``serve.IDLE_SECONDS`` of silence; ping well
-# inside that, and give up on it ourselves when a ping goes unanswered.
+# The far side gives up after ``serve.IDLE_SECONDS`` without a byte from us;
+# ping well inside that, and give up on it ourselves when nothing has come
+# back for a ping interval plus this grace.
 _PING_SECONDS = 30.0
 _PING_TIMEOUT = 20.0
 _READY_SECONDS = 30.0
 _EXIT_SECONDS = 5.0
-_MAX_LINE = 64 * 1024 * 1024
 
 
 class _Connection:
@@ -54,6 +54,7 @@ class _Connection:
         self.lost: str | None = None  # why, once it is
         self._proc = proc
         self._next = 0
+        self._unsent = 0
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._stderr: deque[str] = deque(maxlen=20)
         self._tasks: list[asyncio.Task[None]] = []
@@ -67,7 +68,7 @@ class _Connection:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                limit=_MAX_LINE,
+                limit=MAX_LINE,
                 # Its own group: a Ctrl+C at our terminal must reach the far
                 # side as a closed pipe (sessions cleaned up), not as a signal
                 # to the transport first.
@@ -84,7 +85,13 @@ class _Connection:
         proc.stdin.write(bundle())
         try:
             self.ready = await asyncio.wait_for(self._await_ready(), _READY_SECONDS)
-        except (asyncio.TimeoutError, WorkspaceError) as exc:
+        except BaseException as exc:
+            if not isinstance(exc, Exception):
+                # Cancelled mid-connect: leave nothing running behind.
+                self._hang_up()
+                for task in self._tasks:
+                    task.cancel()
+                raise
             await self.aclose()
             said = "".join(self._stderr).strip()
             raise WorkspaceError(
@@ -122,29 +129,44 @@ class _Connection:
 
     async def _read(self) -> None:
         assert self._proc.stdout is not None
+        # Alive means bytes are moving, either way — not that a whole message
+        # made it: a file crawling over a slow link is one very long line.
+        quiet = _PING_SECONDS + _PING_TIMEOUT
         try:
-            while line := await self._proc.stdout.readline():
+            async for line in read_lines(self._proc.stdout, quiet, self._sending):
                 message = json.loads(line)
                 future = self._pending.pop(message.get("id"), None)
                 if future is None or future.done():
-                    continue  # the caller gave up on it (cancelled)
-                if "error" in message:
-                    future.set_exception(decode_error(message["error"]))
-                else:
-                    future.set_result(decode(message.get("result")))
+                    continue  # a ping's reply, or one whose caller gave up
+                try:
+                    if "error" in message:
+                        future.set_exception(decode_error(message["error"]))
+                    else:
+                        future.set_result(decode(message.get("result")))
+                except Exception as exc:  # noqa: BLE001 — that reply's problem alone
+                    future.set_exception(
+                        WorkspaceError(f"Unreadable reply from {self.name}: {exc!r}")
+                    )
             self._lose("the connection closed")
+        except asyncio.TimeoutError:
+            self._lose("it stopped answering")
         except Exception as exc:  # noqa: BLE001 — a broken stream is a lost connection
             self._lose(f"{type(exc).__name__}: {exc}")
+
+    def _sending(self) -> bool:
+        """Whether a request is still on its way out, and moving."""
+        assert self._proc.stdin is not None
+        unsent = self._proc.stdin.transport.get_write_buffer_size()
+        moving, self._unsent = unsent != self._unsent, unsent
+        return unsent > 0 and moving
 
     async def _keep_alive(self) -> None:
         while self.lost is None:
             await asyncio.sleep(_PING_SECONDS)
-            try:
-                await asyncio.wait_for(self.call("ping"), _PING_TIMEOUT)
-            except asyncio.TimeoutError:
-                self._lose("it stopped answering")
-            except WorkspaceDisconnectedError:
-                return
+            with contextlib.suppress(Exception):
+                # Request 0 is nobody's: its reply is dropped on arrival, and
+                # the bytes of it are the sign of life ``_read`` waits for.
+                self._write({"id": 0, "method": "ping"})
 
     def _lose(self, why: str) -> None:
         if self.lost is not None:
@@ -325,7 +347,10 @@ class RemoteHost:
         )
 
     def _argv(self) -> list[str]:
-        far = [*shlex.split(self.python), "-u", "-c", BOOT]
+        # -I: isolated. Without it the far working directory leads sys.path,
+        # and a container's WORKDIR is the project — whose json.py or
+        # platform.py would be imported in place of the standard library's.
+        far = [*shlex.split(self.python), "-I", "-u", "-c", BOOT]
         return [*self.command, shlex.join(far)] if self.quote else [*self.command, *far]
 
     async def _connection(self) -> _Connection:

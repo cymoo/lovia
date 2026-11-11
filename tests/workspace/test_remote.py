@@ -206,6 +206,7 @@ async def test_a_lost_connection_fails_calls_and_cleans_up(host, tmp_path) -> No
     with pytest.raises(WorkspaceDisconnectedError):
         await session.read_text("x")
     assert await session.background_processes() == []
+    assert session.closed  # what a holder across runs checks before reuse
     await session.close()  # no error: it is gone already
     # (Killed outright, the far side could not clean up after itself — the
     # two commands are this test's to reap.)
@@ -249,6 +250,91 @@ async def test_a_silent_far_side_is_given_up_on(tmp_path, monkeypatch) -> None:
         await host.aclose()
 
 
+async def test_alive_means_bytes_are_moving_not_whole_messages() -> None:
+    # A file crawling over a slow link is one very long line. Neither side
+    # may take the wait for its end as silence.
+    from lovia.workspace.remote.wire import read_lines
+
+    reader = asyncio.StreamReader()
+
+    async def dribble() -> None:
+        for piece in (b'{"a":', b" 1", b"}\n", b"second\n"):
+            await asyncio.sleep(0.05)  # each gap under the idle bound …
+            reader.feed_data(piece)
+
+    feeder = asyncio.create_task(dribble())
+    lines = read_lines(reader, idle=0.1)  # … their sum well over it
+    assert [await anext(lines), await anext(lines)] == [b'{"a": 1}', b"second"]
+    await feeder
+
+    with pytest.raises(asyncio.TimeoutError):  # real silence
+        await anext(lines)
+
+    # Silence on the way in is no verdict while a request is on its way out.
+    excuses = iter([True, True, False])
+    waiting = read_lines(reader, idle=0.05, still_alive=lambda: next(excuses))
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(asyncio.TimeoutError):
+        await anext(waiting)
+    assert asyncio.get_running_loop().time() - started >= 0.14
+
+
+async def test_cancelling_replies_in_flight_never_garbles_the_stream(
+    host, tmp_path
+) -> None:
+    # A cancel that lands while a large reply is being written must not let
+    # the next message be written into the middle of it.
+    (tmp_path / "big.bin").write_bytes(os.urandom(400_000))
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    for delay in (0.0, 0.001, 0.003, 0.006, 0.01):
+        tasks = [asyncio.create_task(session.read_bytes("big.bin")) for _ in range(12)]
+        await asyncio.sleep(delay)
+        for task in tasks[::2]:
+            task.cancel()
+        done = await asyncio.gather(*tasks, return_exceptions=True)
+        assert all(
+            isinstance(d, asyncio.CancelledError) or len(d.data) == 400_000
+            for d in done
+        )
+    assert host._conn.lost is None
+    assert (await session.run("echo intact")).stdout == "intact\n"
+
+
+async def test_the_far_working_directory_cannot_shadow_the_stdlib(tmp_path) -> None:
+    # A container's WORKDIR is the project; its json.py must not be what the
+    # far side imports.
+    (tmp_path / "json.py").write_text("raise SystemExit('shadowed')", "utf-8")
+    (tmp_path / "platform.py").write_text("raise SystemExit('shadowed')", "utf-8")
+    host = RemoteHost(
+        "far",
+        command=("sh", "-c", f'cd {tmp_path} && exec "$@"', "sh"),
+        python=sys.executable,
+    )
+    try:
+        session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+        assert host._conn.ready["cwd"] == str(tmp_path.resolve())
+        assert (await session.run("echo fine")).stdout == "fine\n"
+    finally:
+        await host.aclose()
+
+
+async def test_a_connect_that_is_cancelled_leaves_nothing_behind(tmp_path) -> None:
+    host = RemoteHost("slow", command=(), python="sh -c 'sleep 30' sh")
+    opening = asyncio.create_task(
+        host.open(str(tmp_path), policy=WorkspacePolicy.coding())
+    )
+    await asyncio.sleep(0.2)
+    opening.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+    await asyncio.sleep(0.2)
+    stray = await asyncio.create_subprocess_shell(
+        "pgrep -f '[s]leep 30' || true", stdout=asyncio.subprocess.PIPE
+    )
+    out, _ = await stray.communicate()
+    assert out.strip() == b""
+
+
 # ---------------------------------------------------------------------------
 # Hosts and the config
 # ---------------------------------------------------------------------------
@@ -259,12 +345,12 @@ def test_host_commands_are_built_safely() -> None:
     argv = ssh._argv()
     assert argv[:7] == ["ssh", "-T", "-o", "BatchMode=yes", "-p", "2222", "--"]
     # One shell-quoted word for the far shell, after the destination.
-    assert argv[7] == "neo@box" and argv[8].startswith("python3 -u -c '")
+    assert argv[7] == "neo@box" and argv[8].startswith("python3 -I -u -c '")
     assert len(argv) == 9
 
     docker = RemoteHost.docker("api", user="dev", python="/opt/py/bin/python3")
     assert docker._argv()[:8] == [
-        "docker", "exec", "-i", "-u", "dev", "api", "/opt/py/bin/python3", "-u"
+        "docker", "exec", "-i", "-u", "dev", "api", "/opt/py/bin/python3", "-I"
     ]  # fmt: skip
     assert (ssh.name, docker.name) == ("neo@box", "api")
 

@@ -84,6 +84,35 @@ def test_grant_context_is_unambiguous() -> None:
     assert a != b and json.loads(a) == ["bot@/x", None]
 
 
+def test_grant_context_tells_remote_workspaces_apart(tmp_path) -> None:
+    # An "always allow" given on one host's directory must not follow the
+    # agent to another host, another directory there, or the local directory
+    # of the same name.
+    from lovia.web.supervisor import agent_grant_context
+    from lovia.workspace import RemoteHost
+    from lovia.workspace.workspace import WorkspaceSessionBinding
+
+    box, api = RemoteHost.ssh("box"), RemoteHost.docker("api")
+
+    def context(workspace) -> str:
+        return agent_grant_context("bot", Agent(name="bot", workspace=workspace))
+
+    on_box = context(Workspace.remote(box, "/srv/app"))
+    assert json.loads(on_box) == ["bot", "/srv/app", "box"]
+    others = {
+        context(Workspace.remote(api, "/srv/app")),  # another host
+        context(Workspace.remote(box, "/srv/other")),  # another directory
+        context(Workspace.local(str(tmp_path))),  # a local workspace
+        context(None),  # none at all
+        grant_context("bot", "/srv/app"),  # the same path, here
+    }
+    assert on_box not in others and len(others) == 5
+    # A mode switch is the same place; so is the chat-bound form of it.
+    readonly = Workspace.remote(box, "/srv/app", mode="readonly")
+    assert context(readonly) == on_box
+    assert context(WorkspaceSessionBinding(readonly, None)) == on_box  # type: ignore[arg-type]
+
+
 # ------------------------------------------------------------- registry ---
 
 

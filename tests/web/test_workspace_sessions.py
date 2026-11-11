@@ -225,6 +225,43 @@ def test_a_remote_workspace_gets_the_same_chat_scoped_session(tmp_path) -> None:
         asyncio.run(host.aclose())
 
 
+def test_a_chat_recovers_after_its_remote_connection_drops(tmp_path) -> None:
+    import asyncio
+    import sys
+
+    from lovia.workspace import RemoteHost
+
+    host = RemoteHost("far", command=(), python=f"{sys.executable} -I -S")
+    provider = ScriptedProvider(
+        [
+            call("shell", {"command": "echo one > one.txt"}),
+            text("first"),
+            call("shell", {"command": "echo two > two.txt"}),
+            text("second"),
+        ]
+    )
+    agent = Agent(
+        name="bot",
+        model=provider,
+        workspace=Workspace.remote(host, str(tmp_path), mode="trusted"),
+    )
+    try:
+        with TestClient(_app(agent)) as c:
+            sid = c.post("/api/chat", json={"message": "one"}).json()["session_id"]
+            assert (tmp_path / "one.txt").read_text() == "one\n"
+
+            os.kill(host._conn.ready["pid"], 9)  # the far side dies between runs
+            assert _wait_dead(host._conn.ready["pid"])
+
+            # The chat's next run gets a fresh session on a fresh connection,
+            # not the dead one for ever after.
+            c.post("/api/chat", json={"message": "two", "session_id": sid})
+            assert (tmp_path / "two.txt").read_text() == "two\n"
+            assert c.get(f"/api/sessions/{sid}/processes").json() == []
+    finally:
+        asyncio.run(host.aclose())
+
+
 @dataclass(frozen=True)
 class _Backend:
     """A ``WorkspaceLike`` that is not a ``LocalWorkspace``: it stands in

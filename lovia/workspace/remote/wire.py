@@ -18,7 +18,9 @@ Runs on both sides, so it is part of the stdlib-only engine (see
 
 from __future__ import annotations
 
+import asyncio
 import base64
+from collections.abc import AsyncIterator, Callable
 from dataclasses import fields, is_dataclass
 from typing import Any
 
@@ -48,12 +50,23 @@ from ..types import (
     WorkspaceLimits,
 )
 
-__all__ = ["PROTOCOL", "decode", "decode_error", "encode", "encode_error"]
+__all__ = [
+    "MAX_LINE",
+    "PROTOCOL",
+    "decode",
+    "decode_error",
+    "encode",
+    "encode_error",
+    "read_lines",
+]
 
 # Bumped on any incompatible change. Both ends run the same source (the near
 # side ships it), so a mismatch means a stale far process, never a version
 # to negotiate with.
 PROTOCOL = 1
+
+# One line can carry a whole file (base64): room for the read cap, and then some.
+MAX_LINE = 64 * 1024 * 1024
 
 _TYPES: dict[str, type] = {
     cls.__name__: cls
@@ -93,6 +106,39 @@ _ERRORS: dict[str, type[Exception]] = {
         WorkspaceError,
     )
 }
+
+
+async def read_lines(
+    reader: asyncio.StreamReader,
+    idle: float | None = None,
+    still_alive: Callable[[], bool] | None = None,
+) -> AsyncIterator[bytes]:
+    """Complete lines off ``reader`` until it ends.
+
+    ``idle`` bounds the wait for *bytes*, not for a line: one line can be a
+    whole file crawling over a slow link, and that is a live connection all
+    the way through. When nothing at all arrives for ``idle`` seconds,
+    ``still_alive`` gets a say (the near side is still alive while it is
+    pushing a large request out); otherwise ``asyncio.TimeoutError``.
+    """
+    buffer, scanned = bytearray(), 0
+    while True:
+        try:
+            chunk = await asyncio.wait_for(reader.read(1 << 16), idle)
+        except asyncio.TimeoutError:
+            if still_alive is not None and still_alive():
+                continue
+            raise
+        if not chunk:
+            return
+        buffer += chunk
+        while (end := buffer.find(b"\n", scanned)) >= 0:
+            yield bytes(buffer[:end])
+            del buffer[: end + 1]
+            scanned = 0
+        scanned = len(buffer)
+        if scanned > MAX_LINE:
+            raise ValueError(f"a message exceeded {MAX_LINE} bytes")
 
 
 def encode(value: Any) -> Any:

@@ -64,6 +64,7 @@ const state = {
   // Deliverable paths written by the live run since the panel was last open
   // (the button badge). A set: three edits to one file are one new file.
   unseen: new Set(),
+  failed: false, // the last listing failed: the list shows why, and a retry
   filter: '', // case-insensitive substring over listed paths
   wrap: localStorage.getItem('lovia-files-wrap') !== '0', // wrap long lines
   viewing: null, // { path, kind, raw, name, end, totalLines, truncated }
@@ -265,26 +266,96 @@ function updateVisibility() {
 }
 
 // ---- Lists ------------------------------------------------------------------
-async function refresh() {
-  if (!state.open) return;
-  state.stale = false;
-  els.refresh.classList.remove('lv-stale');
-  try {
-    if (state.mode === 'recent') {
-      state.entries = await api.workspaceRecent({ agent: store.agent });
-    } else {
-      state.entries = await api.workspaceFiles({
-        agent: store.agent,
-        path: state.browsePath || '.',
-      });
-    }
-  } catch (err) {
-    els.list.replaceChildren(emptyNode(err.message || t('files.loadFailed')));
+// The listing is asked for in two ways. `refresh()` is the user's own move (a
+// tab, a crumb, another chat's folder): it asks at once, and whatever was
+// still on its way for the place just left is dropped when it lands.
+// `queueRefresh()` is for what happens to the files meanwhile — every write
+// the chat makes, and every past one a history replay re-emits on opening a
+// chat: a burst of those asks once, and never while an answer is pending
+// (each ask walks the whole tree, on another machine for a remote folder).
+let _refreshSeq = 0; // the newest request; an older one's answer is stale
+let _refreshing = false; // the newest request is still out
+let _refreshAgain = false; // something changed while it was
+let _refreshTimer = null;
+let _slowTimer = null;
+
+function queueRefresh() {
+  if (!state.open || _refreshTimer) return;
+  if (_refreshing) {
+    _refreshAgain = true;
     return;
   }
+  _refreshTimer = setTimeout(refresh, 150);
+}
+
+// The list repaints from what is already here (a touched file moves into
+// "this chat") without waiting for the next listing; a burst paints once.
+let _renderQueued = false;
+function queueRender() {
+  if (_renderQueued) return;
+  _renderQueued = true;
+  queueMicrotask(() => {
+    _renderQueued = false;
+    if (state.open) renderList();
+  });
+}
+
+async function refresh() {
+  clearTimeout(_refreshTimer);
+  _refreshTimer = null;
+  _refreshAgain = false;
+  if (!state.open) return;
+  const seq = ++_refreshSeq;
+  _refreshing = true;
+  state.stale = false;
+  els.refresh.classList.remove('lv-stale');
+  els.refresh.classList.add('lv-loading');
+  // An empty list says it is on its way only once the wait is felt (a
+  // folder on another machine): a local one answers before the eye asks.
+  clearTimeout(_slowTimer);
+  _slowTimer = setTimeout(() => {
+    if (!state.entries.length) els.list.replaceChildren(emptyNode(t('files.loading')));
+  }, 300);
+  let entries = null;
+  let failure = null;
+  try {
+    entries =
+      state.mode === 'recent'
+        ? await api.workspaceRecent({ agent: store.agent })
+        : await api.workspaceFiles({ agent: store.agent, path: state.browsePath || '.' });
+  } catch (err) {
+    failure = err;
+  }
+  if (seq !== _refreshSeq) return; // a newer request owns the list now
+  clearTimeout(_slowTimer);
+  _refreshing = false;
+  els.refresh.classList.remove('lv-loading');
+  if (_refreshAgain) queueRefresh();
+  state.failed = !!failure;
+  if (failure) {
+    state.entries = [];
+    const failed = emptyNode(failure.message || t('files.loadFailed'));
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-files-empty-upload';
+    retry.innerHTML = icon('refresh-cw', { size: 14 });
+    retry.append(t('files.retry'));
+    retry.addEventListener('click', refresh);
+    failed.append(retry);
+    els.list.replaceChildren(failed);
+    return;
+  }
+  state.entries = entries;
   renderCrumbs();
   renderList();
   void restoreViewing();
+}
+
+/** The list has nothing of the place just left to show while the new one loads. */
+function clearList() {
+  state.entries = [];
+  state.failed = false;
+  els.list.replaceChildren();
 }
 
 function emptyNode(text) {
@@ -614,6 +685,7 @@ function groupLabel(text) {
 }
 
 function renderList() {
+  if (state.failed) return; // the list is the failure and its retry until one works
   const frag = document.createDocumentFragment();
   const needle = state.filter.toLowerCase();
   const entries = needle
@@ -1398,6 +1470,7 @@ export function initFiles() {
     if (els.filter) els.filter.value = '';
     clearUnseen();
     closeViewer({ forget: false });
+    clearList();
     updateVisibility();
     if (state.open) {
       refresh();
@@ -1411,31 +1484,29 @@ export function initFiles() {
     state.filter = '';
     if (els.filter) els.filter.value = '';
     closeViewer({ forget: false });
+    clearList();
     if (state.open) refresh();
   });
   // "touched" (and the edit revisions) are scoped to the chat on screen —
-  // and so are background processes.
-  store.on('session-switched', () => {
+  // and so are background processes. The list regroups at once: what the
+  // chat just left wrote is no longer "this chat".
+  const chatChanged = () => {
     state.touched.clear();
     state.revs.clear();
     clearUnseen();
+    queueRender();
     state.procs = [];
     renderProcs();
     refreshProcs();
-  });
-  store.on('reset-chat-view', () => {
-    state.touched.clear();
-    state.revs.clear();
-    clearUnseen();
-    state.procs = [];
-    renderProcs();
-    refreshProcs();
-  });
+  };
+  store.on('session-switched', chatChanged);
+  store.on('reset-chat-view', chatChanged);
   store.on('workspace-file-touched', async ({ path }) => {
     const key = touchKey(path);
     state.touched.add(key);
     state.revs.set(key, (state.revs.get(key) || 0) + 1);
-    if (state.open) refresh();
+    queueRender();
+    queueRefresh();
     maybeReloadViewing(key);
     // Badge only live-run writes of deliverables: replayed history re-emits
     // old touches, and a scratch write never reaches the Recent list the

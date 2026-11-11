@@ -35,6 +35,7 @@ from ..workspace import (
     RemoteWorkspace,
     Workspace,
     WorkspaceMode,
+    WorkspacePolicy,
 )
 from ..workspace.protocol import WorkspaceLike, WorkspaceSession
 from ..workspace.workspace import WorkspaceSessionBinding
@@ -58,6 +59,41 @@ def workspace_config(agent: Agent[Any]) -> LocalWorkspace | None:
     ws = agent.workspace
     cfg = getattr(ws, "workspace", ws)
     return cfg if isinstance(cfg, LocalWorkspace) else None
+
+
+def files_config(agent: Agent[Any]) -> LocalWorkspace | RemoteWorkspace | None:
+    """The workspace config whose files the page itself may show — the Files
+    panel, an upload, an attachment — or None: a custom backend has no root
+    and policy to derive a view from."""
+    ws = agent.workspace
+    cfg = getattr(ws, "workspace", ws)
+    return cfg if isinstance(cfg, (LocalWorkspace, RemoteWorkspace)) else None
+
+
+async def open_view(
+    cfg: LocalWorkspace | RemoteWorkspace,
+    *,
+    skip: tuple[str, ...] = (),
+    write: bool = False,
+) -> WorkspaceSession:
+    """A session on ``cfg``'s files for the page itself, not for a run.
+
+    Readonly, whatever the chat's mode: a web request has no approval flow,
+    and under this preset everything outside the root — and everything the
+    agent's ``denied_paths`` hide — is a plain ``deny``. Only ``denied_paths``
+    carry over from the agent's policy, never its ``path_rules``, which
+    could *widen* access. ``skip`` adds paths for a listing to leave out (to
+    the walk, "skipped" and "denied" look the same). ``write`` lets it write
+    inside the root, for an upload: the user's own act, so it does not wait
+    on the chat's mode.
+
+    Opened where the files are — on the host, for a remote workspace, over
+    the connection its chats share. The caller closes it.
+    """
+    policy = WorkspacePolicy.readonly(denied_paths=cfg.policy.denied_paths + skip)
+    if write:
+        policy = replace(policy, write="allow")
+    return await replace(cfg, policy=policy).open()
 
 
 def own_root(agent: Agent[Any]) -> Path | None:
@@ -169,7 +205,7 @@ class WorkspaceSwitch:
       (``ssh://box/path``, ``docker://api/path``) — which is that account's
       whole reach, so it belongs on a server only its owner can use. A
       remote chat runs with the mode's policy, enforced on the host; the
-      Files panel, uploads and attachments are not available to it yet.
+      Files panel, uploads and attachments read and write there too.
     * ``agent_for_remote`` — ``(agent, ref) -> agent``: ``agent_for`` for a
       chat at a remote location (a :class:`WorkspaceRef`). ``agent_for``
       itself is never called for one — it is handed a directory on this

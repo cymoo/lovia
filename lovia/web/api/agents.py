@@ -17,7 +17,7 @@ from ..errors import WebError
 from ..schemas import AgentInfo
 from .deps import RouterDeps
 from .memory import memory_plugin
-from .workspace import workspace_cfg
+from ..workspaces import files_config
 
 
 def resolve_context_window(agent: Agent[Any], server_policy: Any) -> int | None:
@@ -58,7 +58,7 @@ def agent_info(
         if isinstance(agent.instructions, str)
         else None,
         tools=[t.name for t in (agent.tools or [])],
-        workspace=workspace_cfg(agent) is not None,
+        workspace=files_config(agent) is not None,
         memory=memory_plugin(agent) is not None,
         context_window=context_window,
         model=model_name(agent),

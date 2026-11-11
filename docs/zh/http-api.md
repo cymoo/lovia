@@ -140,7 +140,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `workspace_unassociated` | 409 | 早于目录绑定的旧对话：先关联一个目录（`POST /api/sessions/associate`） |
 | `workspace_fixed` | 409 | 对话已经绑定了目录，目录不能再改 |
 | `workspace_not_found` | 404 | 工作区列表里没有这一项（固定的几项不能移除） |
-| `workspace_unreachable` | 502 | 连不上远程位置所在的主机，无法确认目录（`hint` 里是它的报错） |
+| `workspace_unreachable` | 502 | 连不上远程位置所在的主机，无法确认目录或读写其中的文件（`hint` 里是它的报错） |
 | `file_too_large` | 413 | 超过工作区读取或上传上限 |
 | `unsupported_file_type` | 415 | 不支持内联预览，或扩展名不允许上传 |
 | `too_many_runs` | 429 | 已达到并发 Run 上限 |

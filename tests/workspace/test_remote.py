@@ -24,6 +24,7 @@ from lovia.workspace import (
     RemoteHost,
     RemoteWorkspace,
     Workspace,
+    WorkspaceClosedError,
     WorkspaceDisconnectedError,
     WorkspaceError,
     WorkspacePolicy,
@@ -100,6 +101,15 @@ async def test_files_round_trip(host, tmp_path) -> None:
     await session.write_bytes("blob.bin", blob)
     assert (await session.read_bytes("blob.bin")).data == blob
 
+    # … or a piece of it, and what it is without any of it.
+    piece = await session.read_bytes("blob.bin", offset=250, length=12)
+    assert piece.data == blob[250:262]
+    entry = await session.stat("blob.bin")
+    assert (entry.path, entry.is_dir, entry.size) == ("blob.bin", False, len(blob))
+    assert entry.mtime == (tmp_path / "blob.bin").stat().st_mtime
+    with pytest.raises(FileNotFoundError):
+        await session.stat("nope.bin")
+
     edit = await session.edit_text("a/note.txt", "line two", "line 2")
     assert edit.ok and edit.replacements == 1
     assert [m.line for m in await session.grep("line 2")] == [2]
@@ -109,6 +119,48 @@ async def test_files_round_trip(host, tmp_path) -> None:
     assert listing.truncated is False  # the flag survives the trip
     capped = await session.list_files(".", pattern="**/*", max_results=1)
     assert len(capped) == 1 and capped.truncated is True
+
+
+async def test_a_request_too_large_to_send_is_refused_not_fatal(
+    host, tmp_path, monkeypatch
+) -> None:
+    # Past the line limit the far side would hang up — on every session of
+    # every chat there. The near side refuses to send it instead.
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    monkeypatch.setattr(host_module, "MAX_LINE", 4096)
+    with pytest.raises(FileTooLargeError, match="can be sent at once"):
+        await session.write_bytes("big.bin", b"x" * 8192)
+    assert not (tmp_path / "big.bin").exists()
+    # The connection, and the session on it, are none the worse.
+    assert (await session.write_bytes("ok.bin", b"x" * 16)).ok
+    assert host._conn is not None and host._conn.lost is None
+
+
+async def test_a_close_whose_caller_is_cancelled_still_closes(host, tmp_path) -> None:
+    # A request whose client went away closes its session from inside a
+    # cancelled scope (anyio's stay cancelled: every await in them raises).
+    # The far side must still close it — and end what it started.
+    anyio = pytest.importorskip("anyio")
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    started = await session.spawn("sleep 30")
+    conn = host._conn
+    assert conn is not None
+    told: list[str] = []
+    notify = conn.notify
+    conn.notify = lambda method, *a, **k: (
+        told.append(method),
+        notify(method, *a, **k),
+    )[1]  # type: ignore[method-assign]
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        await session.close()
+    assert scope.cancelled_caught and session.closed
+    # The far side was never told to drop the close …
+    assert told == []
+    # … so the session is gone there, and its process with it.
+    with pytest.raises(WorkspaceClosedError):
+        await conn.call("background_processes", session.id, {})
+    assert await _dead(started.pid)
 
 
 async def test_commands_and_background_processes(host, tmp_path) -> None:

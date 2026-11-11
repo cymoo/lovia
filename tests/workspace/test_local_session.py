@@ -875,6 +875,44 @@ async def test_read_bytes_roundtrip_and_cap(tmp_path) -> None:
         await session.read_bytes("blob.bin", max_bytes=3)
 
 
+async def test_read_bytes_takes_a_file_a_piece_at_a_time(tmp_path) -> None:
+    (tmp_path / "blob.bin").write_bytes(b"0123456789")
+    session = await _session(tmp_path)
+
+    assert (await session.read_bytes("blob.bin", length=4)).data == b"0123"
+    assert (await session.read_bytes("blob.bin", offset=4, length=4)).data == b"4567"
+    # Past what is there: fewer bytes, then none — never an error.
+    assert (await session.read_bytes("blob.bin", offset=8, length=4)).data == b"89"
+    assert (await session.read_bytes("blob.bin", offset=10, length=4)).data == b""
+    assert (await session.read_bytes("blob.bin", offset=7)).data == b"789"
+    with pytest.raises(WorkspaceError, match=">= 0"):
+        await session.read_bytes("blob.bin", offset=-1)
+
+
+async def test_stat_says_what_a_path_is_without_reading_it(tmp_path) -> None:
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "a.txt").write_text("hello")
+    (tmp_path / "link").symlink_to(tmp_path / "sub" / "a.txt")
+    (tmp_path / ".env").write_text("SECRET=1")
+    session = await _session(
+        tmp_path, policy=WorkspacePolicy.readonly(denied_paths=(".env",))
+    )
+
+    entry = await session.stat("sub/a.txt")
+    assert (entry.path, entry.is_dir, entry.size) == ("sub/a.txt", False, 5)
+    assert entry.mtime == (tmp_path / "sub" / "a.txt").stat().st_mtime
+    assert (await session.stat("sub")).is_dir
+    # A link is what it leads to, named as such.
+    assert (await session.stat("link")).path == "sub/a.txt"
+    with pytest.raises(FileNotFoundError):
+        await session.stat("nope.txt")
+    # Gated like a read: what may not be read may not be sized up either.
+    with pytest.raises(PermissionDeniedError):
+        await session.stat(".env")
+    with pytest.raises(PermissionDeniedError):
+        await session.stat("/etc/hosts")
+
+
 async def test_workspace_local_rejects_conflicting_policy_kwargs(tmp_path) -> None:
     with pytest.raises(Exception, match="not both"):
         Workspace.local(

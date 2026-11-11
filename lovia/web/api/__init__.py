@@ -31,7 +31,8 @@ from .events import build_events_router
 from .memory import build_memory_router, memory_plugin
 from .schedules import build_schedules_router
 from .sessions import build_sessions_router
-from .workspace import build_workspace_router, workspace_cfg
+from ..workspaces import files_config
+from .workspace import build_workspace_router
 from .workspaces import build_workspaces_router
 
 __all__ = ["RouterDeps", "build_api_router"]
@@ -87,7 +88,7 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 "followups": bool(deps.followups),
                 "scheduling": True,
                 "workspace": any(
-                    workspace_cfg(a) is not None for a in deps.agents.values()
+                    files_config(a) is not None for a in deps.agents.values()
                 ),
                 "memory": any(
                     memory_plugin(a) is not None for a in deps.agents.values()

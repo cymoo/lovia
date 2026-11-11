@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ...exceptions import UserError
-from ..errors import WorkspaceDisconnectedError, WorkspaceError
+from ..errors import FileTooLargeError, WorkspaceDisconnectedError, WorkspaceError
 from ..policy import WorkspacePolicy
 from ..types import RootFacts, WorkspaceLimits
 from .bundle import BOOT, bundle
@@ -222,6 +222,13 @@ class _Connection:
             raise self._disconnected()
         assert self._proc.stdin is not None
         data = (json.dumps(message) + "\n").encode("utf-8")
+        if len(data) > MAX_LINE:
+            # The far side would drop the whole connection over it — and
+            # with it every session of every chat on this host.
+            raise FileTooLargeError(
+                f"A {len(data):,}-byte request is more than {self.name} can be "
+                f"sent at once (limit {MAX_LINE:,} bytes)."
+            )
         self._proc.stdin.write(data)
         self._written += len(data)
 

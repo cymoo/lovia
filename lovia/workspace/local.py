@@ -650,12 +650,32 @@ class LocalWorkspaceSession:
         async with lock:
             return await asyncio.to_thread(_read)
 
-    async def read_bytes(self, path: str, *, max_bytes: int | None = None) -> FileBytes:
+    async def stat(self, path: str) -> DirEntry:
+        self._check_open()
+        rp = self._resolve_checked(path, "read")
+
+        def _stat() -> DirEntry:
+            if not rp.abs.exists():
+                raise FileNotFoundError(f"No such file or directory: {rp.display()}")
+            return self._entry_for(rp.abs, is_dir=rp.abs.is_dir())
+
+        return await asyncio.to_thread(_stat)
+
+    async def read_bytes(
+        self,
+        path: str,
+        *,
+        max_bytes: int | None = None,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> FileBytes:
         self._check_open()
         rp = self._resolve_checked(path, "read")
         p = rp.abs
         if not p.is_file():
             raise WorkspaceError(f"Not a file: {rp.display()}")
+        if offset < 0 or (length is not None and length < 0):
+            raise WorkspaceError("offset and length must be >= 0.")
 
         def _read() -> FileBytes:
             if max_bytes is not None:
@@ -668,7 +688,10 @@ class LocalWorkspaceSession:
                     raise FileTooLargeError(
                         f"{rp.display()} is {size:,} bytes (limit {max_bytes:,} bytes)."
                     )
-            return FileBytes(path=rp.display(), data=p.read_bytes())
+            with p.open("rb") as fh:
+                fh.seek(offset)
+                data = fh.read(-1 if length is None else length)
+            return FileBytes(path=rp.display(), data=data)
 
         lock = await self._lock_for(rp)
         async with lock:

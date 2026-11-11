@@ -90,8 +90,20 @@ class RemoteWorkspaceSession:
     ) -> FileContent:
         return await self._call("read_text", path=path, start=start, end=end)
 
-    async def read_bytes(self, path: str, *, max_bytes: int | None = None) -> FileBytes:
-        return await self._call("read_bytes", path=path, max_bytes=max_bytes)
+    async def stat(self, path: str) -> DirEntry:
+        return await self._call("stat", path=path)
+
+    async def read_bytes(
+        self,
+        path: str,
+        *,
+        max_bytes: int | None = None,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> FileBytes:
+        return await self._call(
+            "read_bytes", path=path, max_bytes=max_bytes, offset=offset, length=length
+        )
 
     async def write_text(
         self, path: str, content: str, *, create_only: bool = False
@@ -200,7 +212,11 @@ class RemoteWorkspaceSession:
         if self._closed:
             return
         try:
-            await self._call("close")
+            # Shielded: a close is often the last thing a cancelled caller
+            # does (a request whose client went away). Cancelling the wait
+            # must not cancel the close — the far side would be told to
+            # drop the request and keep the session, and what it started.
+            await asyncio.shield(self._call("close"))
         except (WorkspaceClosedError, WorkspaceDisconnectedError):
             pass  # already gone, and its processes with it
         finally:

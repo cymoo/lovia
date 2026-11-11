@@ -50,6 +50,7 @@ _SESSION_METHODS = frozenset(
         "read_text",
         "run",
         "spawn",
+        "stat",
         "write_bytes",
         "write_text",
     }

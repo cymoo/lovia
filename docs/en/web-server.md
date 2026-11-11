@@ -816,9 +816,12 @@ mode's policy, enforced on the host. In place of `agent_for` — which is
 handed a directory on this machine to read — it gets
 `agent_for_remote(agent, ref)`, where `ref` has the location's `host_name`
 and `root`; if your served agent already carries a local project's
-instructions or skills, take them off there (`lovia web` does). What it does
-not get yet: the Files panel, uploads and attachments, each refused with 404
-`feature_unavailable` rather than quietly ignored. An agent whose workspace
+instructions or skills, take them off there (`lovia web` does). The Files
+panel, uploads and attachments read and write the host's files too, through
+a read-only session of the page's own on the same connection (an upload may
+write inside the root, nowhere else); when the host can't be reached they
+answer 502 `workspace_unreachable`, and a message is never sent without the
+attachments it came with. An agent whose workspace
 has a shell `executor` cannot open one at all (409 `workspace_not_allowed`):
 the sandbox stays on this machine, and commands would run on the host
 without it. Adding a

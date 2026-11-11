@@ -523,6 +523,39 @@ def test_upload_dedupes_name_collisions(client: TestClient) -> None:
     assert send() != send()
 
 
+def test_upload_lands_whatever_the_agents_mode(tmp_path: Path) -> None:
+    # An upload is the user's own act: a read-only agent's workspace takes
+    # one too (it is how a file gets in front of it at all).
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider([text("ok")]),
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+    )
+    app = create_app(agent, store=ChatStore.in_memory(), titles=False)
+    with TestClient(app) as c:
+        r = c.post("/api/workspace/upload", files={"file": ("a.txt", b"data")})
+        assert r.status_code == 200, r.text
+    assert (tmp_path / "uploads" / "a.txt").read_bytes() == b"data"
+
+
+def test_upload_never_leaves_the_workspace(
+    client: TestClient, ws_app, tmp_path
+) -> None:
+    # An ``uploads`` that links out of the root would carry the write with it.
+    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (root / "uploads").symlink_to(outside, target_is_directory=True)
+    r = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("a.txt", b"data", "text/plain")},
+    )
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "path_denied"
+    assert list(outside.iterdir()) == []
+
+
 def test_upload_rejects_empty_file(client: TestClient) -> None:
     r = client.post(
         "/api/workspace/upload",

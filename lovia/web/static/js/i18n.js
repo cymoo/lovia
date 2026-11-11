@@ -603,7 +603,7 @@ const MESSAGES = {
     'ws.hostSsh': '主机别名，或 user@host',
     'ws.hostDocker': '容器名，或 user@容器名',
     'ws.addRemoteHint':
-      '对话在那台主机上运行，主机需要有 python3 3.10 或更新版本。文件面板、上传和附件暂不支持远程目录。',
+      '对话在那台主机上运行，主机需要有 python3 3.10 或更新版本。上传的文件和附件也保存在那台主机上。',
     'ws.errHost': '请先填写主机',
     'ws.errUnreachable': '连不上这台主机：{why}',
     'ws.noFolders': '这里没有子目录',
@@ -1259,7 +1259,7 @@ const EN = {
   'ws.hostSsh': 'host alias, or user@host',
   'ws.hostDocker': 'container, or user@container',
   'ws.addRemoteHint':
-    'Chats there run on that host, which needs python3 3.10 or newer. The Files panel, uploads and attachments don’t reach a remote folder yet.',
+    'Chats there run on that host, which needs python3 3.10 or newer. Files you upload or attach are kept on that host too.',
   'ws.errHost': 'Name the host first',
   'ws.errUnreachable': 'Couldn’t reach that host: {why}',
   'ws.noFolders': 'No folders in here',

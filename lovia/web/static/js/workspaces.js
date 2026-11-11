@@ -22,11 +22,34 @@ const PICK_KEY = 'lovia-workspace'; // sessionStorage: this tab's pick
 const COLLAPSED_KEY = 'lovia-workspace-collapsed'; // localStorage: folded groups
 
 /**
- * @typedef {{ id: string | null, root: string, name: string,
+ * @typedef {{ id: string | null, root: string, name: string, host?: string | null,
  *   kind: 'default' | 'general' | 'added', last_used_at: number | null }} Workspace
  * @typedef {{ workspaces: Workspace[], default: string | null,
- *   can_add: boolean, roots: string[] | null }} WorkspaceList
+ *   can_add: boolean, roots: string[] | null,
+ *   remotes?: 'any' | string[] | null }} WorkspaceList
  */
+
+/**
+ * Whether `root` names a place on another machine. A remote location is
+ * stored as one string spelled like a URL — "ssh://box/srv/app",
+ * "docker://dev@api/app", "remote://name/srv/app" — where a local one is a path.
+ * @param {string | null | undefined} root
+ */
+export function isRemote(root) {
+  return /^(ssh|docker|remote):\/\//.test(root || '');
+}
+
+/**
+ * The key of the directory `path` on the host `front` ("ssh://box"), or null
+ * when `path` is not one the host can take as typed: it must be absolute or
+ * start at the home directory ("~").
+ * @param {string} front
+ * @param {string} path
+ */
+export function remoteKey(front, path) {
+  if (!/^(\/|~(\/|$))/.test(path)) return null;
+  return `${front.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+}
 
 /** @type {WorkspaceList | null} */
 let _list = null;
@@ -267,7 +290,9 @@ export function groupHeader(group, rerender) {
       : group.kind === 'general'
         ? t('ws.generalTitle', { path: group.root || '' })
         : group.root || '';
-  const glyph = { unlinked: 'triangle-alert', pinned: 'pin' }[group.kind] || 'folder';
+  const glyph =
+    { unlinked: 'triangle-alert', pinned: 'pin' }[group.kind] ||
+    (isRemote(group.root) ? 'server' : 'folder');
   toggle.innerHTML = `<span class="lv-ws-group-icon" aria-hidden="true">${icon(glyph, { size: 15 })}</span>`;
   const name = document.createElement('span');
   name.className = 'lv-ws-group-name';
@@ -399,7 +424,8 @@ function renderChip() {
   _chip.classList.toggle('lv-unlinked', !!id && root === null && !!_list.can_add);
   _chip.classList.toggle('lv-fixed', !!id && !!root);
   const unlinked = _chip.classList.contains('lv-unlinked');
-  glyph.innerHTML = icon(unlinked ? 'triangle-alert' : 'folder', { size: 14 });
+  const where = unlinked ? 'triangle-alert' : isRemote(root) ? 'server' : 'folder';
+  glyph.innerHTML = icon(where, { size: 14 });
   label.textContent = root ? workspaceName(root) : t('ws.unassociated');
   const locked = !id && _draftHasFiles;
   _chip.setAttribute('aria-disabled', String(locked));
@@ -496,9 +522,15 @@ export function parentDir(value) {
  * browser: a click (or Tab / Enter on the highlighted row) steps into a
  * folder, ".." steps out. The list keeps its place and height whatever it
  * holds, so the dialog never moves under the pointer.
+ *
+ * `host`, when given, says whose folders: it returns the front of a remote
+ * location's key ("ssh://box"), '' while that host is still being named
+ * (nothing to list yet), or undefined for this machine. `refresh()` lists
+ * again after it changed.
  * @param {(path: string) => void} onSubmit
+ * @param {() => string | undefined} [host]
  */
-function pathInput(onSubmit) {
+function pathInput(onSubmit, host) {
   const wrap = document.createElement('div');
   wrap.className = 'lv-ws-path';
   const input = document.createElement('input');
@@ -568,9 +600,20 @@ function pathInput(onSubmit) {
   const fetchNow = async () => {
     inflight?.abort();
     const ctrl = (inflight = new AbortController());
+    const front = host?.();
+    if (front === '') {
+      // A remote host not named yet: nothing to ask, nothing to show.
+      options = [];
+      loaded = false;
+      draw();
+      return;
+    }
     try {
       // Empty: what's in the home directory, without typing it in for them.
-      const found = await api.completeDir(input.value || '~/', { signal: ctrl.signal });
+      const found = await api.completeDir(input.value || '~/', {
+        signal: ctrl.signal,
+        host: front,
+      });
       if (ctrl.signal.aborted) return;
       options = Array.isArray(found) ? found : [];
       loaded = true;
@@ -583,6 +626,20 @@ function pathInput(onSubmit) {
   const schedule = () => {
     clearTimeout(timer);
     timer = setTimeout(fetchNow, 120);
+  };
+  /**
+   * The place changed (another tab, another host): what is listed belongs
+   * to the old one. Drop it now — a folder clicked while the new list is on
+   * its way would be taken as a folder over there — then list again.
+   */
+  const reset = () => {
+    clearTimeout(timer);
+    inflight?.abort();
+    options = [];
+    loaded = false;
+    active = -1;
+    draw();
+    void fetchNow();
   };
   /** Step into `path`: it becomes what's typed, and the list shows its folders. */
   const take = (/** @type {string} */ path) => {
@@ -613,7 +670,7 @@ function pathInput(onSubmit) {
       else onSubmit(input.value.trim());
     }
   });
-  return { wrap, input };
+  return { wrap, input, refresh: reset };
 }
 
 /**
@@ -623,6 +680,9 @@ function pathInput(onSubmit) {
  */
 function folderError(err) {
   if (err?.code === 'file_not_found' || err?.code === 'workspace_missing') return t('ws.errMissing');
+  if (err?.code === 'workspace_unreachable') {
+    return t('ws.errUnreachable', { why: err.hint || err.message || '' });
+  }
   if (err?.code === 'invalid_request' && err?.status === 400) return t('ws.errAbsolute');
   if (err?.code === 'workspace_not_allowed') {
     return t('ws.errNotAllowed', { why: err.hint || '' });
@@ -639,6 +699,94 @@ function para(text, className = '') {
 }
 
 /**
+ * Where the folder being added is: this computer, or — on a server that
+ * opens remote workspaces — an SSH host, a running container, or one of the
+ * hosts it declared. `row` is the control (null when there is only "here");
+ * `front()` the front of a remote location's key ("ssh://box"), '' while the
+ * host is still to be named, undefined for this computer.
+ * @param {() => void} onChange
+ */
+function whereRow(onChange) {
+  const remotes = _list?.remotes;
+  if (!remotes) return { row: null, front: () => /** @type {string | undefined} */ (undefined) };
+  const row = document.createElement('div');
+  row.className = 'lv-ws-where';
+  // Tabs, in the Files panel's look: a handful of choices, all in view.
+  const tabs = document.createElement('div');
+  tabs.className = 'lv-files-tabs';
+  tabs.setAttribute('role', 'tablist');
+  tabs.setAttribute('aria-label', t('ws.where'));
+  /** @type {[string, string][]} */
+  const choices = [['', t('ws.whereLocal')]];
+  if (remotes === 'any') {
+    choices.push(['ssh', t('ws.whereSsh')], ['docker', t('ws.whereDocker')]);
+  } else {
+    for (const name of remotes) choices.push([`remote://${name}`, name]);
+  }
+  let kind = '';
+  const host = document.createElement('input');
+  host.type = 'text';
+  host.className = 'lv-dialog-input lv-ws-where-host';
+  host.spellcheck = false;
+  host.autocomplete = 'off';
+  host.setAttribute('autocapitalize', 'off');
+  host.hidden = true;
+  const named = () => kind === 'ssh' || kind === 'docker';
+  const buttons = choices.map(([value, label]) => {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'lv-files-tab';
+    tab.setAttribute('role', 'tab');
+    tab.textContent = label;
+    tab.addEventListener('click', () => choose(value, false));
+    tabs.appendChild(tab);
+    return tab;
+  });
+  const paint = () =>
+    buttons.forEach((tab, i) => {
+      const on = choices[i][0] === kind;
+      tab.classList.toggle('lv-active', on);
+      tab.setAttribute('aria-selected', String(on));
+      tab.tabIndex = on ? 0 : -1; // one tab stop; arrows move within
+    });
+  /** @param {string} value @param {boolean} byKey — keep the focus on the tabs */
+  const choose = (value, byKey) => {
+    if (value === kind) return;
+    kind = value;
+    paint();
+    host.hidden = !named();
+    host.value = '';
+    if (named()) {
+      host.placeholder = t(kind === 'ssh' ? 'ws.hostSsh' : 'ws.hostDocker');
+      host.setAttribute('aria-label', host.placeholder);
+      if (!byKey) host.focus();
+    }
+    onChange();
+  };
+  tabs.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const n = choices.length;
+    const at = choices.findIndex(([value]) => value === kind);
+    const next = (at + (e.key === 'ArrowRight' ? 1 : n - 1)) % n;
+    choose(choices[next][0], true);
+    buttons[next].focus();
+  });
+  host.addEventListener('change', onChange);
+  paint();
+  row.append(tabs, host);
+  return {
+    row,
+    front: () => {
+      if (!kind) return undefined;
+      if (!named()) return kind; // a declared host: "remote://name"
+      const name = host.value.trim();
+      return name ? `${kind}://${name}` : '';
+    },
+  };
+}
+
+/**
  * The "Add a workspace" dialog. Resolves to the added entry, or null.
  * @returns {Promise<Workspace | null>}
  */
@@ -652,14 +800,29 @@ export function addWorkspaceDialog() {
     title.textContent = t('ws.addTitle');
     const error = para('', 'lv-ws-dialog-error');
     error.hidden = true;
+    const fail = (/** @type {string} */ message) => {
+      error.textContent = message;
+      error.hidden = false;
+    };
+    const where = whereRow(() => {
+      error.hidden = true;
+      hint.textContent = t(where.front() === undefined ? 'ws.addHint' : 'ws.addRemoteHint');
+      input.placeholder = placeholder();
+      input.value = '';
+      refresh();
+    });
     const submit = async (/** @type {string} */ path) => {
       if (!path) return;
+      const front = where.front();
+      if (front === '') return fail(t('ws.errHost'));
+      // On a host the location is its key; here, the path as typed.
+      const target = front === undefined ? path : remoteKey(front, path);
+      if (target === null) return fail(t('ws.errAbsolute'));
       okBtn.disabled = true;
       try {
-        added = await api.addWorkspace(path);
+        added = await api.addWorkspace(target);
       } catch (err) {
-        error.textContent = folderError(err);
-        error.hidden = false;
+        fail(folderError(err));
         okBtn.disabled = false;
         return;
       }
@@ -667,9 +830,18 @@ export function addWorkspaceDialog() {
       toast(t('ws.added', { name: workspaceName(added?.root) }));
       dialog.close('ok');
     };
-    const { wrap, input } = pathInput((path) => void submit(path));
+    const { wrap, input, refresh } = pathInput((path) => void submit(path), where.front);
+    const localPlaceholder = input.placeholder;
+    const placeholder = () =>
+      where.front() === undefined ? localPlaceholder : t('ws.pathPlaceholder');
     input.addEventListener('input', () => (error.hidden = true));
-    body.append(title, para(t('ws.addHint'), 'lv-ws-dialog-hint'), wrap, error);
+    // With tabs above it the hint changes per tab: hold its two lines, so
+    // the dialog keeps its height and the tabs stay under the pointer.
+    const hint = para(
+      t('ws.addHint'),
+      'lv-ws-dialog-hint' + (where.row ? ' lv-ws-dialog-hint-held' : ''),
+    );
+    body.append(title, hint, ...(where.row ? [where.row] : []), wrap, error);
 
     const actions = document.createElement('div');
     actions.className = 'lv-ws-dialog-actions';

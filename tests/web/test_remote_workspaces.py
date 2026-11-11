@@ -190,6 +190,35 @@ def test_adding_a_remote_location_looks_it_up_on_its_host(places) -> None:
             c.portal.call(far.aclose)
 
 
+def test_the_folder_picker_lists_the_hosts_folders(places) -> None:
+    here, there = places
+    for name in ("alpha", "beta", ".hidden"):
+        (there / name).mkdir()
+    (there / "a-file.txt").write_text("x", encoding="utf-8")
+    far = _far()
+    with _client(_agent(here, [text("x")]), WorkspaceSwitch(remotes={"far": far})) as c:
+        try:
+
+            def dirs(path: str, host: str | None = "remote://far") -> list[str]:
+                params = {"path": path, **({"host": host} if host else {})}
+                res = c.get("/api/workspaces/dirs", params=params)
+                assert res.status_code == 200, res.text
+                return res.json()
+
+            # As typed, folders only, hidden ones once a dot is typed.
+            assert dirs(f"{there}/") == [f"{there}/alpha", f"{there}/beta"]
+            assert dirs(f"{there}/al") == [f"{there}/alpha"]
+            assert dirs(f"{there}/.") == [f"{there}/.hidden"]
+            # A host this server doesn't open, or no host at all in the
+            # value, suggests nothing rather than failing the picker.
+            assert dirs(f"{there}/", host="remote://elsewhere") == []
+            assert dirs(f"{there}/", host="nonsense") == []
+            # Without a host it is this machine's folders, as before.
+            assert dirs(f"{there}/", host=None) == [f"{there}/alpha", f"{there}/beta"]
+        finally:
+            c.portal.call(far.aclose)
+
+
 def test_remote_locations_are_refused_where_they_are_not_offered(places) -> None:
     here, there = places
     key = f"remote://far{there}"

@@ -225,7 +225,9 @@ result = await handle.result()
 ```
 
 `@tool(permission="ask")` is the whole configuration for a tool that should
-always ask. A predicate returns a decision or a `Verdict` — never a `bool`
+always ask. A predicate may be `async def` when its answer needs I/O (a
+lookup, a remote check); the call waits for it. A predicate returns a
+decision or a `Verdict` — never a `bool`
 (its meaning is too easy to invert; a `bool` is treated as an invalid verdict
 and the call is denied with a `ToolCallFailed` event).
 

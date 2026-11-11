@@ -225,6 +225,8 @@ class ToolCallProcessor:
 
         try:
             verdict = tool.decide(args, state.run_ctx)
+            if inspect.isawaitable(verdict):
+                verdict = await verdict
         except Exception as exc:
             # Fail closed, and — like every other outcome — leave a
             # ToolResultEntry: a raising (or bool-returning) predicate must

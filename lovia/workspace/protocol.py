@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping, Protocol
+from typing import TYPE_CHECKING, Awaitable, Mapping, Protocol
 
 from .policy import Verdict, WorkspacePolicy
 from .types import (
@@ -48,12 +48,22 @@ class WorkspaceSession(Protocol):
         """
         ...
 
-    def decide_path(self, path: str, *, write: bool = False) -> Verdict:
-        """Policy verdict for one path (for the tools' permission predicates)."""
+    def decide_path(
+        self, path: str, *, write: bool = False
+    ) -> "Verdict | Awaitable[Verdict]":
+        """Policy verdict for one path (for the tools' permission predicates).
+
+        A session that has to ask elsewhere where the path leads (a backend
+        whose files are not on this machine) returns an awaitable; the local
+        session answers at once.
+        """
         ...
 
-    def decide_command(self, command: str, cwd: str = ".") -> Verdict:
-        """Combined verdict for a shell command: static rules ⊕ path guard."""
+    def decide_command(
+        self, command: str, cwd: str = "."
+    ) -> "Verdict | Awaitable[Verdict]":
+        """Combined verdict for a shell command: static rules ⊕ path guard.
+        Awaitable on the same terms as :meth:`decide_path`."""
         ...
 
     async def read_text(

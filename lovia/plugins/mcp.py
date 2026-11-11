@@ -689,7 +689,9 @@ def _make_search_tool(catalog: dict[str, Tool]) -> Tool:
 
 
 def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
-    def _permission(args: dict[str, Any], ctx: RunContext[Any]) -> Verdict:
+    def _permission(
+        args: dict[str, Any], ctx: RunContext[Any]
+    ) -> "Verdict | Awaitable[Verdict]":
         target = catalog.get(str(args.get("tool", "")))
         if target is None:
             return Verdict("allow")  # the call fails with unknown-tool before running

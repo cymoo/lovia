@@ -61,8 +61,12 @@ from ..schema import build_args_validator, function_args_schema
 # run context: ``"allow"`` runs it, ``"ask"`` routes it through the approval
 # channel, ``"deny"`` refuses it; a ``Verdict`` adds the reason (and, for
 # ``ask``, the scopes an "always allow" would cover). Never ``bool`` — see
-# :func:`lovia.approvals.as_verdict`.
-PermissionFn = Callable[[dict[str, Any], "RunContext[Any]"], "Decision | Verdict"]
+# :func:`lovia.approvals.as_verdict`. A predicate whose verdict needs I/O may
+# be ``async`` (or return any awaitable); the runner awaits it before the call.
+PermissionFn = Callable[
+    [dict[str, Any], "RunContext[Any]"],
+    "Decision | Verdict | Awaitable[Decision | Verdict]",
+]
 # What ``Tool.permission`` accepts: a constant decision/verdict or a predicate.
 Permission = Union[Decision, Verdict, PermissionFn]
 
@@ -150,12 +154,18 @@ class Tool:
     # without firing its on_handoff side effects.
     _handoff: bool = field(default=False, repr=False)
 
-    def decide(self, args: dict[str, Any], ctx: "RunContext[Any]") -> Verdict:
-        """The permission verdict for one call. Raises ``TypeError`` on an
-        invalid ``permission`` value (the runner fails closed on that)."""
+    def decide(
+        self, args: dict[str, Any], ctx: "RunContext[Any]"
+    ) -> "Verdict | Awaitable[Verdict]":
+        """The permission verdict for one call — or, for an async predicate,
+        an awaitable of it (``await`` the result when ``inspect.isawaitable``
+        says so). Raises ``TypeError`` on an invalid ``permission`` value,
+        from the call or from the await (the runner fails closed on that)."""
         value = (
             self.permission(args, ctx) if callable(self.permission) else self.permission
         )
+        if inspect.isawaitable(value):
+            return _awaited_verdict(value)
         return as_verdict(value)
 
     def openai_schema(self) -> JsonObject:
@@ -186,6 +196,10 @@ def truncate_tool_output(text: str, limit: int) -> str:
         f"of {len(text):,} chars ...]\n\n"
     )
     return text[:head] + marker + (text[-tail:] if tail else "")
+
+
+async def _awaited_verdict(value: "Awaitable[Decision | Verdict]") -> Verdict:
+    return as_verdict(await value)
 
 
 async def _maybe_await(value: Any) -> Any:

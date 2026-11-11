@@ -31,7 +31,7 @@ from ..schemas import (
     WorkspaceList,
     WorkspaceRename,
 )
-from ..workspaces import own_root
+from ..workspaces import WorkspaceRef, own_root
 from .deps import RouterDeps
 
 # A completion lists this many directories at most, from at most this many
@@ -138,6 +138,7 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
             id=row.id if row else None,
             root=root,
             name=row.name if row else Path(root).name,
+            host=WorkspaceRef.parse(root).host_name,
             last_used_at=row.last_used_at if row else None,
         )
 
@@ -157,8 +158,14 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
                 if shown[row.root].kind == "default":
                     shown[row.root].name = row.name
                 continue
-            # A directory a narrower deployment no longer allows isn't offered.
-            if switch.refusal(Path(row.root), own) is not None:
+            # A place a narrower deployment no longer allows isn't offered.
+            ref = WorkspaceRef.parse(row.root)
+            refused = (
+                switch.remote_refusal(ref)
+                if ref.remote
+                else switch.refusal(Path(row.root), own)
+            )
+            if refused is not None:
                 continue
             items.append(item_of(agent, row.root, row=row))
         roots = switch.roots
@@ -166,6 +173,13 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
             workspaces=items,
             default=own.as_posix() if own else None,
             can_add=roots is not None,
+            remotes=(
+                None
+                if switch.remotes is None
+                else "any"
+                if switch.remotes == "any"
+                else list(switch.remotes)
+            ),
             roots=(
                 None
                 if roots is None or roots == "any"
@@ -176,11 +190,13 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
     @router.post("/api/workspaces", response_model=WorkspaceItem)
     async def add_workspace(req: WorkspaceAdd) -> WorkspaceItem:
         """Add a directory to the list (symlinks resolved; it must exist and
-        be allowed here)."""
+        be allowed here). ``path`` may name a remote location —
+        ``ssh://box/srv/project``, ``docker://api/app`` — which is looked up
+        on its host."""
         require_switch()
         agent = agent_of()
         try:
-            path = deps.admit_root(agent, req.path.strip())
+            key = await deps.admit_new(agent, req.path.strip())
         except WebError as exc:
             if exc.code == "workspace_missing":
                 raise WebError(
@@ -190,7 +206,7 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
                     hint="check the path; it must be an existing directory",
                 ) from None
             raise
-        row = await store.touch_workspace(path.as_posix())
+        row = await store.touch_workspace(key)
         return item_of(agent, row.root, row=row)
 
     @router.patch("/api/workspaces", response_model=WorkspaceItem)

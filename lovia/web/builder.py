@@ -109,6 +109,14 @@ class Deployment:
             return None
         return "any"
 
+    def remotes(self) -> Literal["any"] | None:
+        """Whether a chat may open a workspace on another machine — an SSH
+        destination, a running container: only on loopback, and only where
+        chats may pick a directory at all. Not with
+        ``--allow-workspace-switch``: that opens this server's directories to
+        a token holder, where this would lend them its keys to other hosts."""
+        return "any" if self.loopback and self.roots() == "any" else None
+
     def modes(self) -> tuple[str, ...]:
         """The workspace modes this deployment allows, narrowest first."""
         if self.workspace is None:

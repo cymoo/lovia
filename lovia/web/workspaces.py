@@ -22,20 +22,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
 from ..agent import Agent
 from ..exceptions import UserError
-from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
+from ..workspace import (
+    LocalWorkspace,
+    RemoteHost,
+    RemoteWorkspace,
+    Workspace,
+    WorkspaceMode,
+)
 from ..workspace.protocol import WorkspaceLike, WorkspaceSession
 from ..workspace.workspace import WorkspaceSessionBinding
 
 log = logging.getLogger(__name__)
 
-__all__ = ["ChatBinding", "WorkspaceSessions", "WorkspaceSwitch"]
+__all__ = ["ChatBinding", "WorkspaceRef", "WorkspaceSessions", "WorkspaceSwitch"]
 
 # Narrowest first: a mode may only ever be capped toward the front.
 MODE_ORDER: tuple[str, ...] = get_args(WorkspaceMode)
@@ -61,11 +67,63 @@ def own_root(agent: Agent[Any]) -> Path | None:
 
 
 @dataclass(frozen=True)
+class WorkspaceRef:
+    """Where a chat works, taken apart: a local directory, or a host and a
+    directory on it.
+
+    A chat stores it as one string — its ``workspace_root``, the same string
+    the sidebar groups by and an approval is remembered under. A local
+    directory is its resolved path, as ever. A remote one is spelled like a
+    URL: ``ssh://box/srv/project`` (an SSH destination), ``docker://api/app``
+    or ``docker://dev@api/app`` (a running container, entered as ``dev``),
+    ``remote://name/srv/project`` (a host the deployment declared by name).
+    Only the few places that open, check or describe a workspace parse it;
+    everything else just carries the string.
+    """
+
+    root: str
+    scheme: str | None = None
+    """``None`` for a local directory, else ``ssh`` / ``docker`` / ``remote``."""
+    host: str | None = None
+
+    @classmethod
+    def parse(cls, key: str) -> "WorkspaceRef":
+        scheme, sep, rest = key.partition("://")
+        if not sep or scheme not in ("ssh", "docker", "remote"):
+            return cls(root=key)
+        host, _, path = rest.partition("/")
+        # ``host/srv/x`` is /srv/x there; ``host/~/x`` is under its home.
+        return cls(
+            root=path if path.startswith("~") else "/" + path, scheme=scheme, host=host
+        )
+
+    @property
+    def remote(self) -> bool:
+        return self.scheme is not None
+
+    @property
+    def key(self) -> str:
+        """The string a chat stores: :meth:`parse` reads it back."""
+        if self.scheme is None:
+            return self.root
+        return f"{self.scheme}://{self.host}/{self.root.lstrip('/')}"
+
+    @property
+    def host_name(self) -> str | None:
+        """What the host is called — in the page, and in the record of an
+        approval: the declared name, or ``ssh:box`` / ``docker:api``."""
+        if self.scheme is None:
+            return None
+        return self.host if self.scheme == "remote" else f"{self.scheme}:{self.host}"
+
+
+@dataclass(frozen=True)
 class ChatBinding:
     """Where and how a chat's runs work, as stored on the chat.
 
-    ``root`` is the resolved directory (None: the agent has no local
-    workspace); ``mode`` the permission mode (None: the agent's own policy).
+    ``root`` is the resolved directory, or a remote location's key (see
+    :class:`WorkspaceRef`); None: the agent has no local workspace. ``mode``
+    is the permission mode (None: the agent's own policy).
     """
 
     root: str | None
@@ -103,6 +161,16 @@ class WorkspaceSwitch:
       workspace it sets is replaced.
     * ``general`` — a catch-all directory for chats that belong to no
       project: always listed, created on first use.
+    * ``remotes`` — whether a chat may work somewhere other than this
+      machine, the counterpart of ``roots``: ``None`` (the default) for no,
+      a mapping of names to :class:`~lovia.workspace.RemoteHost` for those
+      hosts only (``remote://name/path``), or ``"any"`` for any SSH
+      destination or running container the server's own account can reach
+      (``ssh://box/path``, ``docker://api/path``) — which is that account's
+      whole reach, so it belongs on a server only its owner can use. A
+      remote chat runs with the mode's policy, enforced on the host; it gets
+      no ``agent_for`` (that reads the project's files here), and the Files
+      panel, uploads and attachments are not available to it yet.
 
     A chat that never picked a mode keeps the agent's own policy, custom
     rules and all, moved to its directory.
@@ -114,6 +182,12 @@ class WorkspaceSwitch:
     build: Callable[[Path, WorkspaceMode], LocalWorkspace] | None = None
     agent_for: Callable[[Agent[Any], Path], Agent[Any]] | None = None
     general: str | Path | None = None
+    remotes: Literal["any"] | Mapping[str, RemoteHost] | None = None
+    # The hosts built for ``remotes="any"``, one per destination for the
+    # app's life: a host is a connection, and every chat there shares it.
+    _hosts: dict[str, RemoteHost] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if self.roots is not None and self.roots != "any":
@@ -188,6 +262,68 @@ class WorkspaceSwitch:
             inherit_env=base.inherit_env,
             executor=base.executor,
         )
+
+    # ---- remote locations ------------------------------------------------
+
+    def remote_refusal(self, ref: WorkspaceRef) -> str | None:
+        """Why a chat may not work at the remote ``ref``, or ``None``."""
+        if self.remotes is None:
+            return "this server doesn't open remote workspaces"
+        declared = () if self.remotes == "any" else tuple(self.remotes)
+        if ref.scheme == "remote":
+            if ref.host in declared:
+                return None
+            listed = ", ".join(declared) or "(none)"
+            return f"no remote host named {ref.host!r} is configured (there: {listed})"
+        if self.remotes != "any":
+            return "only the configured remote hosts are allowed here"
+        return None
+
+    def remote_host(self, ref: WorkspaceRef) -> RemoteHost:
+        """The host behind an admitted ``ref``. Raises :class:`UserError` for
+        a destination or container name that is not one safe word."""
+        if ref.scheme == "remote":
+            return cast("Mapping[str, RemoteHost]", self.remotes)[ref.host or ""]
+        name = ref.host_name or ""
+        host = self._hosts.get(name)
+        if host is None:
+            if ref.scheme == "ssh":
+                host = RemoteHost.ssh(ref.host or "", name=name)
+            else:
+                user, _, container = (ref.host or "").rpartition("@")
+                host = RemoteHost.docker(container, user=user or None, name=name)
+            self._hosts[name] = host
+        return host
+
+    def remote_workspace(
+        self, base: LocalWorkspace, ref: WorkspaceRef, mode: WorkspaceMode | None
+    ) -> RemoteWorkspace:
+        """The agent's workspace ``base`` as a chat at the remote ``ref``
+        gets it: the policy :meth:`workspace` would give a local chat in
+        ``mode`` — enforced over there — with ``base``'s limits and shell
+        timeout. Not its ``env``: that was written for this machine."""
+        # Built for the agent's own root (a path ``build`` may check exists
+        # here) and never opened: only what does not depend on the root is
+        # taken from it.
+        template = self.workspace(base, resolve_root(base.root), mode)
+        return RemoteWorkspace(
+            host=self.remote_host(ref),
+            root=ref.root,
+            policy=template.policy,
+            shell_timeout=template.shell_timeout,
+            limits=template.limits,
+        )
+
+    async def aclose(self) -> None:
+        """Close the hosts this switch built (``remotes="any"``). Declared
+        hosts are their owner's to close."""
+        hosts = list(self._hosts.values())
+        self._hosts.clear()
+        for host in hosts:
+            try:
+                await host.aclose()
+            except Exception as exc:  # noqa: BLE001 — shutdown goes on
+                log.warning("closing remote host %s failed: %s", host.name, exc)
 
 
 def _only_policy_differs(old: WorkspaceLike, new: WorkspaceLike) -> bool:

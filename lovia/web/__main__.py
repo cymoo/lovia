@@ -647,6 +647,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     build=config_runtime.workspace_for,
                     agent_for=config_runtime.agent_for,
                     general=GENERAL_WORKSPACE if roots == "any" else None,
+                    remotes=deployment.remotes(),
                 )
             if unconfigured:
                 agent_or_agents = {}

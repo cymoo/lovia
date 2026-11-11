@@ -416,6 +416,13 @@ class RemoteHost:
         self._facts[root] = opened["facts"]
         return RemoteWorkspaceSession(conn, opened["sid"], opened["root"], policy)
 
+    async def resolve_root(self, path: str) -> str:
+        """``path`` as a workspace root on this host: resolved there (``~``
+        and symlinks), and an existing directory — else :class:`UserError`."""
+        conn = await self._connection()
+        resolved: str = await conn.call("resolve_root", params={"path": path})
+        return resolved
+
     def facts(self, root: str) -> RootFacts | None:
         """What the last session opened at ``root`` reported about it."""
         return self._facts.get(root)

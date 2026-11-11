@@ -797,6 +797,32 @@ app = create_app(
 - `general` is a catch-all directory for chats that belong to no project:
   always listed and allowed, created on first use. `lovia web` uses
   `~/.lovia/workspace`.
+- `remotes` lets a chat work on [another machine](workspace.md#remote-workspaces),
+  the counterpart of `roots`: `None` (the default) for no; a mapping of names
+  to `RemoteHost`s for those hosts only; or `"any"` for any SSH destination
+  or running container the server's own account can reach.
+
+```python
+from lovia.workspace import RemoteHost
+
+app = create_app(agent, workspaces=WorkspaceSwitch(remotes={"box": RemoteHost.ssh("box")}))
+```
+
+A remote chat's `workspace` is spelled like a URL — `remote://box/srv/project`
+for a declared host, `ssh://box/srv/project` or `docker://dev@api/app` under
+`"any"` — and that string is its `workspace_root` everywhere: in the sidebar's
+grouping, in what an approval is remembered under. It runs with the chat
+mode's policy, enforced on the host. Three things it does not get yet: the
+project hook (`agent_for` reads this machine's files), and the Files panel,
+uploads and attachments, which answer 404 `feature_unavailable`. Adding a
+remote location to the list (`POST /api/workspaces`) looks the directory up
+on its host; opening a chat in one does not, so a directory that is gone
+shows up as the run's first error.
+
+`"any"` is the server account's whole reach — its SSH keys, its Docker — so
+it belongs on a server only its owner can use. `lovia web` turns it on when
+bound to loopback, and not otherwise: `--allow-workspace-switch` opens this
+server's directories to a token holder, not its keys to other hosts.
 
 A chat's directory is set when it is created — the first message's
 `workspace`, else the agent's own — and never changes; every run checks it

@@ -429,6 +429,11 @@ lookups work by default.
 API keys and proxy settings are not inherited; pass required variables via
 `Workspace.local(..., env={...})`.
 
+The workspace can also be a directory in a running container or on an SSH
+host — `Workspace.remote(RemoteHost.ssh("box"), "/srv/project")` — with the
+same tools and the same policy, enforced over there. The host needs
+`python3` ≥ 3.10 and nothing installed.
+
 → [Workspace](https://cymoo.github.io/lovia/workspace/)
 
 ### Plugins

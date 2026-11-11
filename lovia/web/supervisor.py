@@ -72,6 +72,7 @@ from .sse import (
     usage_dict,
 )
 from ..types import JsonObject
+from ..workspace.remote import RemoteWorkspace
 from ..workspace.workspace import LocalWorkspace, WorkspaceSessionBinding
 from .run_deps import RUN_CLIENT, RUN_SERVER
 from .store import RunRow, grant_context
@@ -100,10 +101,13 @@ def _span(seconds: float) -> str:
 
 def agent_grant_context(name: str, agent: "Agent[Any]") -> str:
     """The :func:`~lovia.web.store.grant_context` of an agent as served: its
-    name and its local workspace root (None without a local workspace)."""
+    name and where its workspace is — a local root, or a remote host and the
+    root on it (neither without one of those two)."""
     ws = agent.workspace
     if isinstance(ws, WorkspaceSessionBinding):
         ws = ws.workspace
+    if isinstance(ws, RemoteWorkspace):
+        return grant_context(name, ws.root, host=ws.host.name)
     root = ws.root if isinstance(ws, LocalWorkspace) else None
     return grant_context(name, root)
 

@@ -1027,9 +1027,6 @@ async def test_workspace_factory_guards() -> None:
     # Workspace is a factory facade, not a backend you instantiate.
     with pytest.raises(UserError):
         Workspace()
-    # docker backend is a documented placeholder for now.
-    with pytest.raises(NotImplementedError):
-        Workspace.docker()
 
 
 # ---------------------------------------------------------------------------

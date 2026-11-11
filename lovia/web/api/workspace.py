@@ -20,6 +20,7 @@ still opens when asked for by name.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import mimetypes
 import os
 import re
@@ -443,10 +444,13 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     # the one user-side control — "stop the dev server without asking the
     # model". The model's next status reminder shows the process as killed.
 
-    def _process_list(session_id: str) -> list[ProcessInfo]:
+    async def _process_list(session_id: str) -> list[ProcessInfo]:
         session = deps.workspaces.get(session_id)
         if session is None:
             return []
+        statuses = session.background_processes()
+        if inspect.isawaitable(statuses):  # a remote session asks its host
+            statuses = await statuses
         return [
             ProcessInfo(
                 process_id=s.process_id,
@@ -454,7 +458,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
                 status=s.status,
                 exit_code=s.exit_code,
             )
-            for s in session.background_processes()
+            for s in statuses
         ]
 
     @router.get(
@@ -466,7 +470,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         ``[]`` when the chat has no live session (nothing ran yet, or the
         server restarted — processes never survive a restart).
         """
-        return _process_list(session_id)
+        return await _process_list(session_id)
 
     @router.post(
         "/api/sessions/{session_id}/processes/{process_id}/kill",
@@ -481,7 +485,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             await session.kill_process(process_id)
         except WorkspaceError as exc:  # unknown id (or a closed session)
             raise WebError.from_exc(404, "process_not_found", exc) from exc
-        return _process_list(session_id)
+        return await _process_list(session_id)
 
     @router.post("/api/workspace/upload", response_model=UploadedFile)
     async def upload_file(

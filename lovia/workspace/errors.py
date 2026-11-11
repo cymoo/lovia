@@ -8,6 +8,7 @@ __all__ = [
     "FileTooLargeError",
     "PermissionDeniedError",
     "WorkspaceClosedError",
+    "WorkspaceDisconnectedError",
     "WorkspaceError",
 ]
 
@@ -22,6 +23,15 @@ class PermissionDeniedError(WorkspaceError):
 
 class WorkspaceClosedError(WorkspaceError):
     """Raised when a closed session is used."""
+
+
+class WorkspaceDisconnectedError(WorkspaceError):
+    """Raised when the connection to a remote workspace is lost.
+
+    An operation in flight when it happened has an **unknown outcome** — it
+    may have run. Nothing is retried or replayed; a later run reconnects and
+    opens a fresh session.
+    """
 
 
 class FileTooLargeError(WorkspaceError):

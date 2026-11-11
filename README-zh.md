@@ -394,6 +394,10 @@ Shell 命令继承最小环境，包括 Windows 系统、命令解释器、临�
 确保默认配置下 socket 和用户主目录查找可以正常工作。API key 和代理配置不会自动继承；需要的变量通过
 `Workspace.local(..., env={...})` 显式传入。
 
+工作区也可以是运行中的容器或 SSH 主机上的一个目录：
+`Workspace.remote(RemoteHost.ssh("box"), "/srv/project")`。工具和策略都一样，在那一端执行；
+主机只需要 `python3` ≥ 3.10，不用安装任何东西。
+
 → [工作区](https://cymoo.github.io/lovia/zh/workspace/)
 
 ### 插件

@@ -14,6 +14,7 @@ from .errors import (
     FileTooLargeError,
     PermissionDeniedError,
     WorkspaceClosedError,
+    WorkspaceDisconnectedError,
     WorkspaceError,
 )
 from .local import LocalWorkspaceSession
@@ -67,6 +68,9 @@ from .workspace import (  # noqa: F401
     WorkspaceSessionBinding,
 )
 
+# After ``.workspace``: the remote config renders its prompt with it.
+from .remote import RemoteHost, RemoteWorkspace  # noqa: E402
+
 __all__ = [
     "CREDENTIAL_PATHS",
     "CommandResult",
@@ -90,6 +94,8 @@ __all__ = [
     "PathRule",
     "PermissionDeniedError",
     "READ_ONLY",
+    "RemoteHost",
+    "RemoteWorkspace",
     "ProcessOutput",
     "ProcessStart",
     "ProcessStatus",
@@ -97,6 +103,7 @@ __all__ = [
     "Verdict",
     "Workspace",
     "WorkspaceClosedError",
+    "WorkspaceDisconnectedError",
     "WorkspaceError",
     "WorkspaceLimits",
     "WorkspaceMode",

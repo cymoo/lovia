@@ -435,10 +435,20 @@ class WorkspaceRow:
     last_used_at: float
 
 
-def grant_context(agent: str | None, root: str | Path | None) -> str:
+def grant_context(
+    agent: str | None, root: str | Path | None, host: str | None = None
+) -> str:
     """The unambiguous key for *where* an approval was given: agent name and
     resolved workspace root, JSON-encoded (an agent name may contain any
-    character, so no delimiter would be safe)."""
+    character, so no delimiter would be safe).
+
+    ``host`` names a remote host the root is on. Its root is then a path over
+    there — taken as given, never resolved against this machine — and the
+    host is part of the key: ``/srv/app`` on one box is not ``/srv/app`` on
+    another, nor the local directory of that name.
+    """
+    if host is not None:
+        return json.dumps([agent, str(root) if root else None, host])
     resolved = Path(root).expanduser().resolve().as_posix() if root else None
     return json.dumps([agent, resolved])
 

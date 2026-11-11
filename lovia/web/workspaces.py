@@ -244,6 +244,11 @@ class WorkspaceSessions:
             return agent
         async with self._lock:
             held = self._live.get(session_id)
+            if held is not None and getattr(held[1], "closed", False):
+                # The session ended under us — a remote one whose connection
+                # dropped, taking its processes along. This run starts over.
+                await _close_quietly(session_id, held[1])
+                held = None
             if held is not None and not (held[0] is cfg or held[0] == cfg):
                 set_policy = getattr(held[1], "set_policy", None)
                 if set_policy is not None and _only_policy_differs(held[0], cfg):

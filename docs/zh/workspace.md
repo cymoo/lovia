@@ -245,6 +245,54 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 默认每次运行都会打开一个新 session，并在运行结束时关闭；上面的 `.session()` context manager 可以把一个
 session 跨运行保持打开（`close_after_run=False`），适合启动成本重要的场景。
 
+## 远程工作区
+
+工作区可以不在本机：在一个运行中的容器里，或者在一台通过 SSH 访问的主机上。
+
+```python
+from lovia.workspace import RemoteHost, Workspace
+
+box = RemoteHost.ssh("box")                    # ~/.ssh/config 里的 Host，或 user@host
+api = RemoteHost.docker("my-api", user="dev")  # 运行中的容器
+
+agent = Agent(
+    name="coder",
+    model="<model>",
+    workspace=Workspace.remote(box, "/srv/project", mode="coding"),
+)
+...
+await box.aclose()
+```
+
+`Workspace.remote` 接受和 `Workspace.local` 相同的策略参数，智能体拿到的是同一组工具，决定它们能做什么的也是
+同一套规则。变的只是位置：session（策略、路径解析、命令执行）跑在主机上、文件旁边，本机只负责把每次调用转发过去。
+所以规则里的 `~` 和绝对路径指的是主机上的路径，符号链接在那边解析，`env=` / `inherit_env=` 说的是主机的环境。
+
+**主机只需要 `python3` 3.10 或更新版本，别的都不需要。**不用装 lovia，不用 `pip install`，也不往它的磁盘上写
+任何东西：每次建立连接时引擎随连接送过去，所以两端运行的永远是同一份代码。要换解释器，写
+`RemoteHost.ssh("box", python="/opt/py/bin/python3")`。
+
+- **SSH** 始终是非交互的（`BatchMode`）：先配好密钥或 agent 认证，密码提示只会让连接卡住。端口、密钥、跳板机
+  写在 `~/.ssh/config` 里。
+- **容器**默认以镜像的默认用户进入，通常是 root；传 `user=`，让智能体写出的文件有合适的属主。
+- **其他**任何能带着标准输入输出执行命令的东西也可以作为主机：
+  `RemoteHost("pod", command=("kubectl", "exec", "-i", "pod", "--"))`。如果这条命令会把参数交给一个 shell
+  （`ssh` 就是这样），设 `quote=True`。
+
+一个 `RemoteHost` 持有一条连接，上面可以开任意多个 session；建立连接要花一点时间，之后开 session 几乎不花时间。
+每次工具调用多一次网络往返。
+
+**连接断开时**，正在进行的操作以 `WorkspaceDisconnectedError` 失败：它的结果未知，也不会替你重试。主机一发现
+断线就关闭自己的 session，后台进程随之结束；下一次运行会重新连接并开一个新的 session。取消一次运行会杀掉它正在
+等待的命令，和本地一样。
+
+远程策略带不走两样东西，因为它们是 Python 可调用对象，而策略是在主机上判定的：`command_decider`（改用
+`command_rules`）和 shell 的 `executor`。自定义工具调用 `ctx.workspace.decide_path(...)`、
+`decide_command(...)` 或 `background_processes()` 时，远程 session 返回的是 awaitable：
+`inspect.isawaitable` 为真时 `await` 它。
+
+`lovia web` 对远程工作区同样按对话持有 session，也能列出它的后台进程。Files 面板、上传和附件目前仍需要本地工作区。
+
 ## 使用建议
 
 - **命令门禁不是 sandbox。** 它是尽力而为的词法门禁；解释器和命令替换可以绕过它。任何安全关键场景

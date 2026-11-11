@@ -185,6 +185,8 @@ process id —— 这是运行 dev server、watcher、长构建/长测试的方�
 `LocalWorkspace.bind(session)`（或 `.session()` 上下文管理器）绑定一个自管的 session 来拉长作用域：
 `lovia web` 给每个**聊天**绑定一个 session，所以某一轮启动的 dev server 在下一条消息到来时仍然活着，
 直到聊天被删除或服务停止（Ctrl+C 会收割全部进程；`kill -9` 跳过清理，进程会成为孤儿）。
+自定义后端的 session 用同样的方式绑定：`WorkspaceSessionBinding(config, session)`。
+两次运行之间可以用 `session.set_policy(policy)` 改变一个已持有 session 的权限，而不必关闭它。
 
 工作区根目录下的 virtualenv（优先 `.venv`，也识别 `venv`）会对每条命令**自动激活**：其 bin 目录被前置到
 `PATH`、并设置 `VIRTUAL_ENV`，于是 `python`/`pip` 解析到工作区自己的环境，而不是 lovia 运行所在的那个。
@@ -229,7 +231,8 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 ```
 
 自定义工具可以通过 `ctx.workspace` 访问当前运行的工作区 Session，所有操作仍会经过同一套权限检查：
-`read_text` / `write_text` / `edit_text` / `list_files` / `grep` / `run` / `spawn` /
+`read_text` / `read_bytes` / `write_text` / `write_bytes` / `edit_text` / `list_files` /
+`grep` / `run` / `spawn` /
 `read_process_output` / `kill_process`，以及
 `decide_path(path, write=...)` 和 `decide_command(command)`，供工具在行动前检查。两者都返回
 `Verdict`（`action`、`reason`、`scopes`）；文件和命令方法遇到 `deny` 会抛异常，你自己的

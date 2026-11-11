@@ -592,6 +592,13 @@ class LocalWorkspaceSession:
     async def write_text(
         self, path: str, content: str, *, create_only: bool = False
     ) -> FileChange:
+        return await self.write_bytes(
+            path, content.encode("utf-8"), create_only=create_only
+        )
+
+    async def write_bytes(
+        self, path: str, data: bytes, *, create_only: bool = False
+    ) -> FileChange:
         self._check_open()
         rp = self._resolve_checked(path, "write")
         if rp.rel == ".":
@@ -605,7 +612,6 @@ class LocalWorkspaceSession:
             def _write() -> FileChange:
                 if p.is_dir():
                     raise WorkspaceError(f"Is a directory: {rp.display()}")
-                data = content.encode("utf-8")
                 p.parent.mkdir(parents=True, exist_ok=True)
                 if create_only:
                     # O_EXCL makes create-or-fail atomic (no exists() race).

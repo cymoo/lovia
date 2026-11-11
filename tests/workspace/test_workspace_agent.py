@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from lovia import Agent, Runner, events, tool
-from lovia.workspace import CommandRule, Workspace
+from lovia.workspace import CommandRule, Workspace, WorkspaceSessionBinding
 
 from tests.scripted_provider import ScriptedProvider, call, text
 
@@ -445,6 +445,44 @@ async def test_user_owned_session_survives_runs(tmp_path) -> None:
         session = await binding.open()
         content = await session.read_text("one.txt")
         assert content.content == "one"
+
+
+@pytest.mark.asyncio
+async def test_a_custom_backend_binds_a_session_across_runs(tmp_path) -> None:
+    (tmp_path / "one.txt").write_text("one", encoding="utf-8")
+    local = Workspace.local(str(tmp_path), mode="trusted")
+
+    class Backend:
+        """A ``WorkspaceLike`` that is not a ``LocalWorkspace``."""
+
+        close_after_run = True
+        opened = 0
+
+        async def open(self):
+            Backend.opened += 1
+            return await local.open()
+
+        tools = staticmethod(local.tools)
+        instructions = staticmethod(local.instructions)
+        view_injectors = staticmethod(local.view_injectors)
+
+    backend = Backend()
+    session = await backend.open()
+    binding = WorkspaceSessionBinding(backend, session)
+    try:
+        for reply in ("first", "second"):
+            provider = ScriptedProvider(
+                [call("read_file", {"path": "one.txt"}, call_id="r"), text(reply)]
+            )
+            agent = Agent(name="coder", model=provider, workspace=binding)
+            result = await Runner.run(agent, "read")
+            assert result.output == reply
+        # Both runs used the bound session: the runner neither opened another
+        # nor closed this one.
+        assert Backend.opened == 1
+        assert (await session.read_text("one.txt")).content == "one"
+    finally:
+        await session.close()
 
 
 @pytest.mark.asyncio

@@ -627,6 +627,20 @@ function pathInput(onSubmit, host) {
     clearTimeout(timer);
     timer = setTimeout(fetchNow, 120);
   };
+  /**
+   * The place changed (another tab, another host): what is listed belongs
+   * to the old one. Drop it now — a folder clicked while the new list is on
+   * its way would be taken as a folder over there — then list again.
+   */
+  const reset = () => {
+    clearTimeout(timer);
+    inflight?.abort();
+    options = [];
+    loaded = false;
+    active = -1;
+    draw();
+    void fetchNow();
+  };
   /** Step into `path`: it becomes what's typed, and the list shows its folders. */
   const take = (/** @type {string} */ path) => {
     const sep = path.includes('\\') && !path.includes('/') ? '\\' : '/';
@@ -656,7 +670,7 @@ function pathInput(onSubmit, host) {
       else onSubmit(input.value.trim());
     }
   });
-  return { wrap, input, refresh: schedule };
+  return { wrap, input, refresh: reset };
 }
 
 /**

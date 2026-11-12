@@ -171,6 +171,8 @@ in Settings → Connections and shared; an agent refers to them.
   and recall for good; deleting chats never clears memory. A project is its
   directory, so renaming or moving it starts a fresh one. Notes saved by
   earlier versions all stay under "About me"; move project facts by hand.
+  Recall over chats from earlier versions stays at the top level, searched
+  only from "No project" chats.
 
 In `config.json` a missing field takes its default ([below](#settings-that-apply-without-a-restart)):
 

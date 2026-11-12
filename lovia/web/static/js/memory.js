@@ -45,7 +45,11 @@ const layerState = (where, data) => ({
   dreamedAt: data.dreamed_at,
 });
 
-/** The open chat's project layer, or null when it has none (General, no workspace). */
+/**
+ * The open chat's project layer, or null when it has none (General, no
+ * workspace) or can't be reached (a directory this server no longer allows,
+ * moved, …) — never an error: "About me" stays editable either way.
+ */
 async function loadProject() {
   const agent = store.agents.find((a) => a.name === store.agent);
   if (!agent?.memory_projects) return null;
@@ -61,8 +65,10 @@ async function loadProject() {
       name: workspaceName(data.scope_key),
     };
   } catch (err) {
-    if (err.status === 400 || err.status === 404) return null; // no project here
-    throw err;
+    // 400/404: no project here. Anything else (409 refused directory): the
+    // chat itself says why when it runs; the dialog just leaves the tab out.
+    if (err.status !== 400 && err.status !== 404) console.warn('memory: project layer', err);
+    return null;
   }
 }
 

@@ -290,6 +290,57 @@ def test_a_refused_directory_is_a_409(tmp_path: Path, proj: dict[str, Path]) -> 
         assert r.status_code == 409
 
 
+def test_a_chat_whose_directory_is_refused_keeps_about_me(
+    tmp_path: Path, proj: dict[str, Path]
+) -> None:
+    # A chat in a directory a narrower server no longer allows: its project
+    # is refused like its runs are, while the user's layer still serves.
+    db = tmp_path / "chat.db"
+    mem = _scoped(tmp_path)
+
+    def served(roots: Any) -> TestClient:
+        bot = Agent(
+            name="bot",
+            model=ScriptedProvider([text("hi")]),
+            workspace=Workspace.local(str(proj["launch"])),
+            plugins=[mem],
+        )
+        switch = WorkspaceSwitch(roots=roots, general=proj["general"])
+        return TestClient(
+            create_app(bot, store=ChatStore.sqlite(db), titles=False, workspaces=switch)
+        )
+
+    with served("any") as c:
+        sid = c.post(
+            "/api/chat", json={"message": "hi", "workspace": str(proj["other"])}
+        ).json()["session_id"]
+    with served(None) as c:
+        r = c.get("/api/memory", params={"layer": "project", "session": sid})
+        assert r.status_code == 409
+        assert c.get("/api/memory", params={"session": sid}).status_code == 200
+
+
+def test_without_a_switch_the_project_is_the_agent_directory(
+    tmp_path: Path, proj: dict[str, Path], monkeypatch
+) -> None:
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
+    mem = _scoped(tmp_path)
+    bot = Agent(
+        name="bot",
+        model=ScriptedProvider(
+            [_remember("ships on Fridays", about="project"), text("ok")]
+        ),
+        workspace=Workspace.local(str(proj["launch"])),
+        plugins=[mem],
+    )
+    with TestClient(create_app(bot, store=ChatStore.in_memory(), titles=False)) as c:
+        sid = c.post("/api/chat", json={"message": "hi"}).json()["session_id"]
+        data = c.get("/api/memory", params={"layer": "project", "session": sid}).json()
+        assert data["scope_key"] == _key(proj["launch"])
+        assert data["content"] == "- [2026-01] ships on Fridays"
+        assert c.get("/api/memory", params={"layer": "project"}).json() == data
+
+
 def test_without_a_workspace_there_is_no_project(tmp_path: Path) -> None:
     mem = _scoped(tmp_path)
     bot = Agent(name="bot", model=ScriptedProvider([text("hi")]), plugins=[mem])

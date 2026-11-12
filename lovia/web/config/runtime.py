@@ -133,13 +133,14 @@ class ConfigRuntime:
     def build(
         self, config: WebConfig | None = None
     ) -> tuple[dict[str, Agent[Any]], Provider | None]:
-        """Construct the served pieces for ``config`` (no side effects).
+        """Construct the served pieces for ``config`` (no side effects but
+        the one Memory plugin, built on first need and reused by every build).
 
         Returns ``(agents, aux_model)``: every configured agent by id, in
         order (the first is the default), and the aux model that serves
         titles and follow-ups, or ``None`` for "the agent's own". Agents on
-        one model share its provider; agents that keep memory share one
-        Memory plugin, the same one every build. The CLI boot and ``apply`` both build through here,
+        one model share its provider; agents that keep memory share the
+        Memory plugin. The CLI boot and ``apply`` both build through here,
         so a field can't reach one path and miss the other. Raises
         :class:`UserError` when the configuration cannot serve (naming the
         agent whose model is incomplete) and ``ValueError`` for an unknown

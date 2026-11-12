@@ -451,6 +451,7 @@ agent = Agent(name="assistant", model="glm-5.2",
 Memory("./memory")                             # 标准库关键词检索（FTS5 bm25）
 Memory("./memory", embedder=OpenAIEmbedder())  # + 语义检索 -> 混合召回
 Memory("./memory", index=None)                 # 只有 Notes，不建 Archive
+Memory("./memory", scope=lambda ctx: ctx.deps.project)  # + 按项目分开的 Notes 和召回
 ```
 
 → [记忆](https://cymoo.github.io/lovia/zh/memory/)

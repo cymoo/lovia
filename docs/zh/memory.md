@@ -31,7 +31,12 @@ agent = Agent(
 ├── MEMORY.md.bak  # 上一次实际重写前的 Notes，可撤销一层
 ├── .dreamed       # 周期标记，用于判断何时再次整理
 ├── archive.db     # 冷层：过往对话的关键词索引
-└── vectors.db     # 冷层：向量检索分支（只有 embedder= 时存在）
+├── vectors.db     # 冷层：向量检索分支（只有 embedder= 时存在）
+└── scopes/        # 只有 scope= 时存在：每个作用域键一个目录
+    └── lovia-3f9a1c2e/  # 键的末级名 + 键的短哈希
+        ├── scope.json   # 原始键
+        ├── MEMORY.md    # 该作用域的 Notes（另有各自的 .bak、.dreamed）
+        └── archive.db   # 该作用域的过往对话（以及 vectors.db）
 ```
 
 `MEMORY.md` 可直接编辑。写入采用原子替换，读取时会忽略不以 `- ` 开头的行。其他文件均按需
@@ -81,8 +86,8 @@ Notes 位于系统提示词中，而模型服务商缓存的是提示词前缀�
 会话闲置超过 `notes_refresh_after` 秒（默认 300，即 Anthropic 默认的缓存时长）后，下一次运行
 会重新读取 Notes；此时服务商缓存本来就已过期，刷新不带来额外开销。缓存时长更长时可以调大；
 设为 `0` 则每次运行都读取最新 Notes。没有 `session_id` 的运行总是读取最新 Notes；
-`replace_notes()` 属于主动编辑，会让所有会话的快照失效。快照只保存在进程内存中，进程重启后
-会重新读取。
+`replace_notes()` 和 `clear_scope()` 属于主动编辑，会让所有会话的快照失效。快照只保存在进程
+内存中，进程重启后会重新读取。
 
 ## 定期整理
 
@@ -111,6 +116,52 @@ Notes 长期追加后，容易积累重复说法、互相矛盾的旧记录和�
 都已处理完毕。长生命周期的服务可以设置 `curate_in_background=True`，避免模型调用拖延
 运行的最终事件。关闭服务前再 `await mem.drain()`，等待仍在后台执行的维护任务。内置 Web 服务采用的
 就是这种方式，关闭时最多等待 15 秒。
+
+## 作用域
+
+只在一个地方工作的助手，一份 Notes 就够了。跨多个项目工作的 Agent 需要两类记忆：关于
+**用户**的事实（在哪里都成立），和关于**这个项目**的事实（它的代码、约定、过往对话）。
+`scope=` 把每次运行映射到一个键，每个键在用户那一层旁边有自己的 Notes 和 Archive：
+
+```python
+Memory(
+    "~/.lovia/memory",
+    scope=lambda ctx: ctx.deps.project_path,  # (RunContext) -> str | None
+    scope_name="project",                     # 提示词里怎么称呼这个作用域
+)
+```
+
+这个函数在每次运行开始时调用一次，之后整次运行（工具、提示词、运行后提炼）都落在同一个
+作用域里。返回 `None` 表示这次运行不属于任何作用域，行为与不传 `scope=` 的 `Memory` 完全相同。
+属于作用域的运行：
+
+| | 不属于作用域的运行 | 属于作用域的运行 |
+| --- | --- | --- |
+| 提示词 | `NOTES` | `USER NOTES` + `PROJECT NOTES`，各有自己的计量和完整的 `notes_budget` |
+| `remember` | `remember(fact)` | `remember(fact, about)`，`about` 取 `"user"` 或 `scope_name` |
+| `forget` | 用户的 Notes | 两层都找（最接近的匹配胜出） |
+| `recall` | 顶层 Archive | 只搜该作用域的 Archive |
+| 运行后提炼 | 事实 → 用户 Notes，摘要 → 顶层 Archive | 关于用户的事实 → 用户 Notes，关于项目的事实 → 项目 Notes，摘要 → 项目 Archive |
+| 定期整理 | 用户的 Notes | 两层各自整理，各有自己的 `.dreamed` 周期 |
+
+一条事实归哪一层由模型判断，判据只有一条：说的是这个人（偏好、长期规矩、长期情况）→ 用户；
+说的是这个代码库或这件工作 → 作用域；拿不准时归作用域——项目事实误放到全局，会串到所有
+别的项目里；偏好误放在项目里，代价只是换个项目再说一遍。
+
+所有读写某一层的公开方法都接受 `scope=`：`None`（默认）是用户层，传键就是该作用域。
+`clear_scope(key)` 会同时删除一个作用域的 Notes **和** Archive——Archive 没有别的途径清除：
+
+```python
+await mem.remember("部署走 `make ship`。", scope="/srv/app")
+body = await mem.notes_body(scope="/srv/app")
+await mem.replace_notes(edited, scope="/srv/app")
+await mem.dream(scope="/srv/app")
+await mem.clear_scope("/srv/app")          # 不可撤销
+```
+
+任何字符串都可以作为键（`/srv/app`、`ssh://box/x`）：目录名是键的末级名加短哈希，
+`scope.json` 记下原始键。作用域只使用默认存储，所以 `scope=` 不能与 `notes=` 或自定义
+`index=` 同时传；`index=None` 和 `embedder=` 对每一层都生效。
 
 ## 提升召回质量
 
@@ -165,6 +216,8 @@ class Index(Protocol):
 | `notes` | `None` → `MEMORY.md` 文件存储 | 热层后端 |
 | `index` | 默认关键词索引 | 冷层后端；`None` 关闭这一层和 `recall` 工具 |
 | `embedder` | `None` | 给默认索引加向量分支 |
+| `scope` | `None` | `(RunContext) -> str \| None`：按每次运行的键拆分记忆（见[作用域](#作用域)） |
+| `scope_name` | `"project"` | 提示词里对作用域的称呼，也是 `about` 对应的取值 |
 | `auto_curate` | `True` | 运行结束时提取长期事实、删除已失效的 Notes，并将对话摘要写入 Archive |
 | `curate_in_background` | `False` | 在后台执行运行后维护，不阻塞运行完成；关闭前配合 `drain()` 使用 |
 | `expand_query` | `"auto"` | 用模型扩展检索词；`auto` 只为默认的纯关键词索引启用 |
@@ -197,6 +250,8 @@ class Index(Protocol):
   `drain()`。
 - **`recall` 的效果取决于已有归档。** 之前用 `index=None` 的对话，后来就是搜不到；
   Archive 从启用索引的那一刻才开始积累。
+- **作用域就是它的键。** 以路径为键时，项目目录改名或移动后键就变了，旧记忆留在旧键下。
+  一个作用域的历史不会出现在别的作用域的 `recall` 里，也不会出现在不属于作用域的运行里。
 
 ## 延伸阅读
 

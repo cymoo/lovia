@@ -43,6 +43,11 @@ is ever lost from the record, so end-of-run work is pure curation, and the
 plugin hooks only :class:`~lovia.events.RunCompleted` (``result.entries`` is
 the run's own complete transcript).
 
+Memory can also be split by *scope* (``scope=``): a function maps each run to
+a key — a project, say — and that key gets its own Notes and archive next to
+the user's. Facts about the user stay visible everywhere; facts about the
+project, and its past conversations, stay with the project.
+
 Backends are long-lived and shared by every run (held on the plugin, never
 rebuilt per run, never closed by the plugin); :meth:`Memory.setup` only
 assembles the per-run tools, instructions, and the ``RunCompleted`` hook.
@@ -51,12 +56,17 @@ assembles the per-run tools, instructions, and the ``RunCompleted`` hook.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
+import json
 import logging
 import os
 import re
+import shutil
 import time
 import uuid
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import EllipsisType
 from typing import (
@@ -96,6 +106,9 @@ _DEFAULT_DREAM_EVERY_DAYS = 3.0
 _DEFAULT_NOTES_REFRESH_AFTER = 300.0
 _DREAMED_FILENAME = ".dreamed"
 _BACKUP_FILENAME = "MEMORY.md.bak"
+_SCOPES_DIRNAME = "scopes"
+_SCOPE_META_FILENAME = "scope.json"
+_USER = "user"
 
 
 # ---------------------------------------------------------------------------
@@ -185,36 +198,57 @@ def _format_facts(facts: list[str]) -> str:
     return "\n".join(f"- {f}" for f in facts)
 
 
-def _drop_fact(facts: list[str], target: str) -> list[str]:
-    """Remove the best match for ``target`` (exact → keyed → substring).
+def _match(facts: list[str], target: str) -> tuple[int, int] | None:
+    """``(strength, position)`` of the best match for ``target``, if any.
 
+    Strength ranks the tiers, lower is better: 0 exact, 1 keyed, 2 substring.
     All fuzzy tiers compare via :func:`_fact_key`, so a date prefix on either
     side never blocks a match.
     """
     if target in facts:
-        out = list(facts)
-        out.remove(target)
-        return out
+        return 0, facts.index(target)
     key = _fact_key(target)
     if not key:
-        return list(facts)
+        return None
     for i, f in enumerate(facts):
         if _fact_key(f) == key:
-            return facts[:i] + facts[i + 1 :]
+            return 1, i
     for i, f in enumerate(facts):
         fk = _fact_key(f)
         if fk and (key in fk or fk in key):
-            return facts[:i] + facts[i + 1 :]
-    return list(facts)
+            return 2, i
+    return None
 
 
-def _merge_new(facts: list[str], new: list[str]) -> int:
+def _drop_fact(facts: list[str], target: str) -> list[str]:
+    """Remove the best match for ``target`` (exact → keyed → substring)."""
+    m = _match(facts, target)
+    return list(facts) if m is None else facts[: m[1]] + facts[m[1] + 1 :]
+
+
+def _best_match(lists: Sequence[list[str]], target: str) -> tuple[int, int] | None:
+    """``(list, position)`` of the best match for ``target`` across ``lists``.
+
+    The strongest match wins, so a substring hit in one tier never takes a
+    fact that another tier holds verbatim; a tie goes to the later list (the
+    scope tier, which callers pass last — the narrower guess).
+    """
+    best: tuple[int, int, int] | None = None
+    for which, facts in enumerate(lists):
+        m = _match(facts, target)
+        if m is not None and (best is None or m[0] <= best[0]):
+            best = (m[0], which, m[1])
+    return None if best is None else (best[1], best[2])
+
+
+def _merge_new(facts: list[str], new: list[str], elsewhere: Sequence[str] = ()) -> int:
     """Append the facts from ``new`` not already in ``facts``, stamped; in place.
 
     The shared write policy: normalize, drop blanks and keyed duplicates,
-    date-stamp anything undated. Returns the number appended.
+    date-stamp anything undated. Facts in ``elsewhere`` (the other tier's)
+    count as present too. Returns the number appended.
     """
-    seen = {_fact_key(f) for f in facts}
+    seen = {_fact_key(f) for f in (*facts, *elsewhere)}
     added = 0
     for fact in new:
         norm = _normalize_fact(fact)
@@ -289,6 +323,57 @@ class FileNotesStore:
 
 
 # ---------------------------------------------------------------------------
+# Tiers: one Notes store + one archive + dream state, under one directory
+# ---------------------------------------------------------------------------
+
+
+@dataclass(eq=False)
+class _Tier:
+    """One layer of memory: the user's (``key=None``), or one scope's.
+
+    Long-lived and shared by every run, like the stores it holds. Code reads
+    ``notes`` / ``index`` at use time rather than capturing them, because
+    :meth:`Memory.clear_scope` swaps in fresh stores under the lock.
+    """
+
+    root: Path
+    notes: NotesStore
+    index: "Index | None"
+    key: str | None = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    """Serializes this tier's Notes read-modify-write cycles (tools,
+    curation, dream). Code holding two takes the user tier's first."""
+
+
+def _scope_dirname(key: str) -> str:
+    """A scope's directory name: its key's last segment, slugged, plus a hash.
+
+    Any string is a valid key (``/srv/app``, ``ssh://box/x``); the slug keeps
+    the directory recognizable and the hash keeps it unique.
+    """
+    tail = re.split(r"[/\\:]+", key.rstrip("/\\:"))[-1]
+    slug = re.sub(r"[^\w.-]+", "-", tail).strip("-.")[:40].rstrip("-.") or "scope"
+    return f"{slug}-{hashlib.sha256(key.encode('utf-8')).hexdigest()[:8]}"
+
+
+def _default_index(root: Path, embedder: "Embedder | None") -> Index:
+    """The default archive under ``root``: keyword, or keyword|vector hybrid."""
+    keyword = KeywordIndex(root / _ARCHIVE_FILENAME)
+    if embedder is None:
+        return keyword
+    return keyword | VectorIndex(root / _VECTORS_FILENAME, embedder)
+
+
+@contextlib.asynccontextmanager
+async def _locked(tiers: Sequence[_Tier]) -> AsyncIterator[None]:
+    """Hold every tier's lock; callers list the user tier first."""
+    async with contextlib.AsyncExitStack() as stack:
+        for tier in tiers:
+            await stack.enter_async_context(tier.lock)
+        yield
+
+
+# ---------------------------------------------------------------------------
 # Transcript → docs (the only place the cold tier meets lovia's data model)
 # ---------------------------------------------------------------------------
 
@@ -355,6 +440,42 @@ class _RunDigest(BaseModel):
         ),
     )
 
+    def touches_notes(self) -> bool:
+        return bool(self.facts or self.stale)
+
+
+class _ScopedRunDigest(_RunDigest):
+    """The digest of a scoped run: user facts and scope facts kept apart.
+
+    A subclass rather than an optional field, so an unscoped run's output
+    schema — and its prompt — stay exactly what they were.
+    """
+
+    facts: list[str] = Field(
+        default_factory=list,
+        description=(
+            "New durable facts about the user that hold wherever they work: "
+            "stable preferences, standing rules, corrections, lasting details "
+            "about them — taken from what the user said or confirmed, never "
+            "from the assistant's own statements. Most runs have none — "
+            "prefer empty over marginal."
+        ),
+    )
+    scope_facts: list[str] = Field(
+        default_factory=list,
+        description=(
+            "New durable facts about the scope this conversation belongs to "
+            "(typically its project): its code, conventions, decisions, the "
+            "lasting state of the work — taken from what the user said or "
+            "confirmed. When unsure whether a fact is about the user or the "
+            "scope, put it here. Most runs have none — prefer empty over "
+            "marginal."
+        ),
+    )
+
+    def touches_notes(self) -> bool:
+        return super().touches_notes() or bool(self.scope_facts)
+
 
 class _DreamedNotes(BaseModel):
     facts: list[str] = Field(
@@ -370,13 +491,11 @@ class _ExpandedQuery(BaseModel):
     )
 
 
-_DIGEST_INSTRUCTIONS = (
-    "You curate an agent's long-term memory. From a conversation, produce "
-    "three things.\n"
-    "1. facts: new durable facts that will still matter in future, unrelated "
-    "sessions — the user's stable preferences and standing rules, corrections "
-    "they made, and lasting details about them, their environment, or their "
-    "projects. Only the user is a source: take facts from what the user said "
+# The digest prompt is assembled from shared pieces: an unscoped run gets the
+# original three-part prompt byte for byte, a scoped run a four-part one that
+# splits facts by whom they are about.
+_DIGEST_FACT_RULES = (
+    "Only the user is a source: take facts from what the user said "
     "or explicitly confirmed. The assistant's turns are context for reading "
     "the user's — its explanations, findings, and conclusions (including "
     "whatever it drew from tool output) can be wrong and never become facts "
@@ -393,17 +512,59 @@ _DIGEST_INSTRUCTIONS = (
     "finances) unless the user explicitly asked to remember them. Most "
     "conversations yield nothing — prefer an empty list over a marginal fact, "
     "and more than three facts is almost never right. Each fact is one short, "
-    "self-contained line in the conversation's dominant language.\n"
-    "2. stale: existing notes that this conversation showed to be wrong, "
+    "self-contained line in the conversation's dominant language."
+)
+
+_DIGEST_STALE = (
+    "existing notes that this conversation showed to be wrong, "
     "obsolete, or superseded by a new fact — quoted from the current notes "
-    "closely enough to identify them. Empty otherwise.\n"
-    "3. summary: a few sentences capturing what the conversation was about — "
+    "closely enough to identify them. Empty otherwise."
+)
+
+_DIGEST_SUMMARY = (
+    "a few sentences capturing what the conversation was about — "
     "topics, decisions, and outcomes — written to be found and understood on "
     "its own later, in the conversation's dominant language. Quote names, "
     "numbers, and identifiers exactly as they appeared: detail belongs here, "
     "not in facts. Empty if the conversation is trivial (greetings, tests, "
     "nothing worth recalling)."
 )
+
+_DIGEST_INSTRUCTIONS = (
+    "You curate an agent's long-term memory. From a conversation, produce "
+    "three things.\n"
+    "1. facts: new durable facts that will still matter in future, unrelated "
+    "sessions — the user's stable preferences and standing rules, corrections "
+    "they made, and lasting details about them, their environment, or their "
+    f"projects. {_DIGEST_FACT_RULES}\n"
+    f"2. stale: {_DIGEST_STALE}\n"
+    f"3. summary: {_DIGEST_SUMMARY}"
+)
+
+
+def _scoped_digest_instructions(name: str) -> str:
+    """The digest prompt for a run in a scope called ``name`` ("project")."""
+    return (
+        "You curate an agent's long-term memory, which has two layers: notes "
+        f"about the user, shown in every {name}, and notes about the current "
+        f"{name}, shown only there. From a conversation, produce four things.\n"
+        "1. facts: new durable facts about the user that will still matter in "
+        "future, unrelated sessions — their stable preferences and standing "
+        "rules, corrections they made, and lasting details about them or "
+        "their environment.\n"
+        f"2. scope_facts: new durable facts about this {name} — its code, "
+        "conventions, and decisions, and the lasting state of the work on it.\n"
+        "Which list: a fact about the person — how they like to work, a rule "
+        "they hold everywhere, their lasting circumstances — goes in facts; a "
+        f"fact about this {name} or this work goes in scope_facts. When "
+        f"unsure, choose scope_facts: a {name} fact made global leaks into "
+        f"every other {name}, while a preference kept here only has to be "
+        "said again elsewhere.\n"
+        f"For both lists: {_DIGEST_FACT_RULES}\n"
+        f"3. stale: {_DIGEST_STALE} Either layer may hold them.\n"
+        f"4. summary: {_DIGEST_SUMMARY}"
+    )
+
 
 _DREAM_INSTRUCTIONS = (
     "You maintain an agent's long-term notes while it sleeps. A note is one "
@@ -462,22 +623,47 @@ async def _digest(
     current_notes: str,
     model: "str | Provider",
 ) -> _RunDigest:
+    return await _run_digest(entries, current_notes, model, None)
+
+
+async def _scoped_digest(
+    entries: list[TranscriptEntry],
+    current_notes: str,
+    model: "str | Provider",
+    scope_name: str,
+) -> _ScopedRunDigest:
+    """The digest of a run in a scope: the two-layer prompt and output."""
+    digest = await _run_digest(entries, current_notes, model, scope_name)
+    return cast(_ScopedRunDigest, digest)
+
+
+async def _run_digest(
+    entries: list[TranscriptEntry],
+    current_notes: str,
+    model: "str | Provider",
+    scope_name: str | None,
+) -> _RunDigest:
     from ...agent import Agent
     from ...providers import ModelSettings
     from ...runner import Runner
 
     convo = _render_transcript(entries)
     if not convo.strip():
-        return _RunDigest()
+        return _RunDigest() if scope_name is None else _ScopedRunDigest()
     agent: Agent[Any] = Agent(
         name="memory-digest",
         model=model,
-        instructions=_DIGEST_INSTRUCTIONS,
-        output_type=_RunDigest,
+        instructions=(
+            _DIGEST_INSTRUCTIONS
+            if scope_name is None
+            else _scoped_digest_instructions(scope_name)
+        ),
+        output_type=_RunDigest if scope_name is None else _ScopedRunDigest,
         settings=ModelSettings(temperature=0),
     )
+    lists = "facts" if scope_name is None else "facts or scope_facts"
     prompt = (
-        f"## Current notes (the source for stale; do NOT repeat them in facts)\n"
+        f"## Current notes (the source for stale; do NOT repeat them in {lists})\n"
         f"{current_notes or '(empty)'}\n\n"
         f"## Conversation\n{convo}"
     )
@@ -488,6 +674,8 @@ async def _digest(
     # newer-wins. Stale entries keep their quotes — matching strips anyway.
     digest.facts = [n for f in digest.facts if (n := _shed_stamps(f))]
     digest.stale = [n for f in digest.stale if (n := _normalize_fact(f))]
+    if isinstance(digest, _ScopedRunDigest):
+        digest.scope_facts = [n for f in digest.scope_facts if (n := _shed_stamps(f))]
     return digest
 
 
@@ -583,23 +771,63 @@ _RECALL_DESCRIPTION = (
     "conversation, or you need context beyond your current notes."
 )
 
+_REMEMBER_SCOPED_DESCRIPTION = (
+    "Save a durable fact to long-term memory so you can recall it in future "
+    "sessions. Use it for stable preferences, corrections, or lasting details "
+    "that the user stated or confirmed — not transient task state, and not "
+    "your own explanations or conclusions. Pass one concise, self-contained "
+    'fact per call, and say whom it is about: "user" for the person (kept '
+    'in every {name}) or "{name}" for this {name} (kept only here).'
+)
 
-def _build_instructions(has_index: bool) -> str:
-    parts = [
-        "## Memory",
-        "You have long-term memory that persists across sessions.",
-        "- Your durable NOTES are shown below and are always in context — they "
-        "hold the user's stable preferences, facts about them, and context "
-        "worth keeping. They are a snapshot from when this conversation began: "
-        "anything remembered or forgotten since shows in the conversation, "
-        "not below.",
-        "- Call `remember(fact)` to save a new durable fact (a preference, a "
-        "correction, a stable detail). Keep each fact short and self-contained.",
-        "- Call `forget(fact)` to remove a note that is wrong or no longer true.",
-    ]
+_RECALL_SCOPED_DESCRIPTION = (
+    "Search long-term memory (the archive of this {name}'s past "
+    "conversations) for anything relevant to a query. Use it when the user "
+    "refers to an earlier conversation, or you need context beyond your "
+    "current notes."
+)
+
+
+def _build_instructions(has_index: bool, scope_name: str | None = None) -> str:
+    """The Memory guidance; ``scope_name`` set means a scoped run."""
+    if scope_name is None:
+        parts = [
+            "## Memory",
+            "You have long-term memory that persists across sessions.",
+            "- Your durable NOTES are shown below and are always in context — "
+            "they hold the user's stable preferences, facts about them, and "
+            "context worth keeping. They are a snapshot from when this "
+            "conversation began: anything remembered or forgotten since shows "
+            "in the conversation, not below.",
+            "- Call `remember(fact)` to save a new durable fact (a preference, a "
+            "correction, a stable detail). Keep each fact short and self-contained.",
+            "- Call `forget(fact)` to remove a note that is wrong or no longer true.",
+        ]
+        recall = "past conversations"
+    else:
+        name = scope_name
+        parts = [
+            "## Memory",
+            "You have long-term memory that persists across sessions, in two layers.",
+            "- USER NOTES hold what is true of the user wherever they work: "
+            f"their preferences, standing rules, and lasting circumstances. "
+            f"{name.upper()} NOTES hold what is true of this {name} only: its "
+            "code, conventions, decisions, and the state of the work. Both are "
+            "shown below and are always in context. They are a snapshot from "
+            "when this conversation began: anything remembered or forgotten "
+            "since shows in the conversation, not below.",
+            "- Call `remember(fact, about)` to save a new durable fact (a "
+            'preference, a correction, a stable detail): about="user" for a '
+            f'fact about the person, about="{name}" for a fact about this '
+            f'{name} or the work on it — when unsure, "{name}". Keep each fact '
+            "short and self-contained.",
+            "- Call `forget(fact)` to remove a note that is wrong or no longer "
+            "true, from either layer.",
+        ]
+        recall = f"this {name}'s past conversations"
     if has_index:
         parts.append(
-            "- Call `recall(query)` to search past conversations when the user "
+            f"- Call `recall(query)` to search {recall} when the user "
             "refers to something earlier or you need context not in your notes."
         )
     parts.append(
@@ -627,9 +855,13 @@ class Memory:
       :class:`~.index.Index`); ``index=None`` disables the cold tier and the
       ``recall`` tool.
     * ``notes=`` — replace the hot-tier persistence (any :class:`NotesStore`).
+    * ``scope=`` — split memory by a per-run key (a project): the key gets
+      its own Notes and archive under ``root/scopes/``, next to the user's.
 
     :meth:`remember` and :meth:`forget` are also public methods, so code can
-    seed or clean Notes without a model in the loop.
+    seed or clean Notes without a model in the loop. Every public method that
+    reads or writes one layer takes ``scope=``: ``None`` (default) is the
+    user's layer, a key is that scope's.
     """
 
     root: str | os.PathLike[str] = _DEFAULT_ROOT
@@ -647,6 +879,25 @@ class Memory:
     embedder: "Embedder | None" = None
     """Adds a semantic arm to the *default* index. Mutually exclusive with
     ``index=`` — a custom index embeds however it wants."""
+
+    scope: "Callable[[RunContext[Any]], str | None] | None" = None
+    """Maps a run to its scope key (a project path, say), or ``None`` for a
+    run outside any scope. Called once per run, when the run starts.
+
+    A run in a scope sees two sections of Notes — the user's and the
+    scope's, each with its own ``notes_budget`` — and its ``remember`` tool
+    takes ``about`` (``"user"`` or ``scope_name``); ``forget`` looks in both;
+    ``recall`` and the archive cover only the scope's own conversations; the
+    end-of-run digest sorts facts into the two layers; each layer dreams on
+    its own cadence. ``None`` (default) keeps one layer, exactly as without
+    scopes. Scopes live in the default stores under ``root/scopes/`` (one
+    directory per key, named from the key plus a hash), so ``scope=`` can't
+    be combined with ``notes=`` or a custom ``index=``; ``index=None`` and
+    ``embedder=`` apply to every layer."""
+
+    scope_name: str = "project"
+    """What the prompts call a scope, and the value of ``remember``'s
+    ``about`` for it: one word, not ``"user"``."""
 
     auto_curate: bool = True
     """When ``True`` (default), one model call at run end promotes durable
@@ -713,17 +964,36 @@ class Memory:
                 f"Memory: notes_refresh_after must be >= 0, got {self.notes_refresh_after}",
                 hint="use 0 to re-read Notes on every run",
             )
+        if not re.fullmatch(r"\w+", self.scope_name) or self.scope_name == _USER:
+            raise UserError(
+                f"Memory: scope_name must be one word other than 'user', got "
+                f"{self.scope_name!r}",
+                hint="it names the scope in the prompts and in remember's "
+                "`about` argument, next to 'user' — e.g. 'project'",
+            )
+        if self.scope is not None:
+            custom = [
+                arg
+                for arg, given in (
+                    ("notes=", self.notes is not None),
+                    ("index=", not isinstance(self.index, EllipsisType | None)),
+                )
+                if given
+            ]
+            if custom:
+                raise UserError(
+                    f"Memory: scope= can't be combined with {' or '.join(custom)}",
+                    hint=(
+                        "every scope keeps its Notes and archive in the default "
+                        "stores under root/scopes/; drop the custom store, or "
+                        "leave scope unset (index=None and embedder= are fine)"
+                    ),
+                )
         if self.notes is None:
             self.notes = FileNotesStore(Path(self.root) / _NOTES_FILENAME)
         if isinstance(self.index, EllipsisType):
-            keyword = KeywordIndex(Path(self.root) / _ARCHIVE_FILENAME)
-            if self.embedder is not None:
-                vector = VectorIndex(Path(self.root) / _VECTORS_FILENAME, self.embedder)
-                self.index = keyword | vector
-                self._lexical_only = False
-            else:
-                self.index = keyword
-                self._lexical_only = True
+            self.index = _default_index(Path(self.root), self.embedder)
+            self._lexical_only = self.embedder is None
         else:
             if self.embedder is not None:
                 raise UserError(
@@ -737,15 +1007,18 @@ class Memory:
             # A custom engine's strength is unknown; assume it doesn't need
             # lexical help unless the user forces expand_query=True.
             self._lexical_only = False
-        # Serializes read-modify-write cycles on Notes (tools + curation).
-        self._notes_lock = asyncio.Lock()
+        self._user = _Tier(Path(self.root), self.notes, self.index)
+        # Scope key -> its tier, created on first use and kept for good.
+        self._scopes: dict[str, _Tier] = {}
         # Strong refs to background curation tasks (curate_in_background):
         # without them the event loop may garbage-collect a task mid-flight.
         self._curation_tasks: set[asyncio.Task[None]] = set()
-        # session_id -> (rendered Notes block, last used, monotonic seconds).
-        self._snapshots: dict[str, tuple[str, float]] = {}
-        # Bumped by replace_notes: a snapshot rendered under an older epoch is
-        # never (re)pinned, so a deliberate edit can't be pinned over.
+        # Pinned Notes blocks -> (block, last used, monotonic seconds). Keyed
+        # by session id, or (session id, scope key) in a scoped run, so a
+        # session that moves to another scope never keeps the old one's notes.
+        self._snapshots: dict[str | tuple[str, str], tuple[str, float]] = {}
+        # Bumped by deliberate edits (replace_notes, clear_scope): a snapshot
+        # rendered under an older epoch is never (re)pinned over them.
         self._notes_epoch = 0
 
     def _resolve_model(self, ctx: RunContext[Any]) -> "str | Provider":
@@ -768,24 +1041,81 @@ class Memory:
             return self._lexical_only
         return bool(self.expand_query)
 
+    # -- tiers ------------------------------------------------------------------
+    # Internal helpers that act on one tier take ``tier=None`` for the user's.
+
+    def _tier(self, scope: str | None) -> _Tier:
+        """The tier a public method's ``scope=`` names."""
+        if scope is None:
+            return self._user
+        if self.scope is None:
+            raise UserError(
+                f"Memory: scope={scope!r} names a scope, but this Memory has none",
+                hint="construct Memory(scope=...) to split memory by scope",
+            )
+        return self._scope_tier(scope)
+
+    def _scope_tier(self, key: str) -> _Tier:
+        tier = self._scopes.get(key)
+        if tier is None:
+            root = Path(self.root) / _SCOPES_DIRNAME / _scope_dirname(key)
+            notes, index = self._scope_stores(root, key)
+            tier = self._scopes[key] = _Tier(root, notes, index, key)
+        return tier
+
+    def _scope_stores(self, root: Path, key: str) -> tuple[NotesStore, "Index | None"]:
+        """Open a scope's default stores, recording its key beside them —
+        the directory name alone can't be read back into the key."""
+        root.mkdir(parents=True, exist_ok=True)
+        (root / _SCOPE_META_FILENAME).write_text(
+            json.dumps({"key": key}, ensure_ascii=False), encoding="utf-8"
+        )
+        index = (
+            None if self._user.index is None else _default_index(root, self.embedder)
+        )
+        return FileNotesStore(root / _NOTES_FILENAME), index
+
     # -- notes policy (shared by tools and curation) --------------------------
 
     def _notes_store(self) -> NotesStore:
-        return cast(NotesStore, self.notes)
+        return self._user.notes
+
+    async def _render_tier(self, tier: _Tier, label: str, empty: str) -> str:
+        body = _format_facts(await tier.notes.load())
+        return f"{label} {_meter(len(body), self.notes_budget)}\n{body or empty}"
 
     async def _render_notes(self) -> str:
-        body = _format_facts(await self._notes_store().load())
-        meter = _meter(len(body), self.notes_budget)
-        if not body:
-            return f"NOTES {meter}\n(empty — use `remember` to save durable facts)"
-        return f"NOTES {meter}\n{body}"
+        """The Notes block of an unscoped run."""
+        return await self._render_tier(
+            self._user, "NOTES", "(empty — use `remember` to save durable facts)"
+        )
 
-    async def _session_notes(self, session_id: str | None) -> str:
+    async def _render_scoped(self, scope: _Tier) -> str:
+        """The Notes block of a scoped run: the user's section, then the scope's."""
+        user = await self._render_tier(self._user, "USER NOTES", "(empty)")
+        mine = await self._render_tier(
+            scope, f"{self.scope_name.upper()} NOTES", "(empty)"
+        )
+        return f"{user}\n\n{mine}"
+
+    async def _render(self, scope: _Tier | None) -> str:
+        return await (
+            self._render_notes() if scope is None else self._render_scoped(scope)
+        )
+
+    def _snapshot_key(
+        self, session_id: str, scope: _Tier | None
+    ) -> str | tuple[str, str]:
+        return session_id if scope is None else (session_id, cast(str, scope.key))
+
+    async def _session_notes(
+        self, session_id: str | None, scope: _Tier | None = None
+    ) -> str:
         """The Notes block for a run: the session's snapshot while it stays
         warm, else a fresh render (which the caller pins via :meth:`_pin`)."""
         if session_id is None or self.notes_refresh_after == 0:
             # No session means no cross-run prefix to keep stable.
-            return await self._render_notes()
+            return await self._render(scope)
         now = time.monotonic()
         # A snapshot idle past the window is useless — the provider cache is
         # cold by now too — so expiry doubles as the eviction rule.
@@ -794,90 +1124,133 @@ class Memory:
             for sid, snap in self._snapshots.items()
             if now - snap[1] < self.notes_refresh_after
         }
-        pinned = self._snapshots.get(session_id)
-        return pinned[0] if pinned else await self._render_notes()
+        pinned = self._snapshots.get(self._snapshot_key(session_id, scope))
+        return pinned[0] if pinned else await self._render(scope)
 
-    def _pin(self, session_id: str | None, text: str, epoch: int) -> None:
+    def _pin(
+        self, session_id: str | None, text: str, epoch: int, scope: _Tier | None = None
+    ) -> None:
         """Pin ``text`` as the session's snapshot and restart its idle clock —
-        unless :meth:`replace_notes` superseded it since ``epoch``."""
+        unless a deliberate edit superseded it since ``epoch``."""
         if session_id is None or self.notes_refresh_after == 0:
             return
         if epoch == self._notes_epoch:
-            self._snapshots[session_id] = (text, time.monotonic())
+            key = self._snapshot_key(session_id, scope)
+            self._snapshots[key] = (text, time.monotonic())
 
-    async def _add_facts(self, new: list[str]) -> int:
+    def _unpin_all(self) -> None:
+        """After a deliberate edit: every session's next run re-reads Notes
+        (at the price of one cache miss each)."""
+        self._notes_epoch += 1
+        self._snapshots.clear()
+
+    async def _add_facts(self, new: list[str], tier: _Tier | None = None) -> int:
         """Merge normalized facts into Notes (date-stamped, keyed dedup)."""
-        notes = self._notes_store()
-        async with self._notes_lock:
-            facts = await notes.load()
+        tier = tier or self._user
+        async with tier.lock:
+            facts = await tier.notes.load()
             added = _merge_new(facts, new)
             if added:
-                await notes.save(facts)
+                await tier.notes.save(facts)
         return added
 
-    async def _apply_digest(self, digest: _RunDigest) -> tuple[int, int]:
+    async def _drop(self, fact: str, tiers: Sequence[_Tier]) -> bool:
+        """Remove the best match for ``fact`` from whichever tier holds it."""
+        norm = _normalize_fact(fact)
+        if not norm:
+            return False
+        async with _locked(tiers):
+            lists = [await t.notes.load() for t in tiers]
+            hit = _best_match(lists, norm)
+            if hit is None:
+                return False
+            which, pos = hit
+            del lists[which][pos]
+            await tiers[which].notes.save(lists[which])
+        return True
+
+    async def _apply_digest(
+        self, digest: _RunDigest, scope: _Tier | None = None
+    ) -> tuple[int, int]:
         """Apply a run digest to Notes atomically: drop stale, then add facts.
 
-        One lock cycle, one save — a supersession (stale old + new fact) can
-        never be torn apart by a concurrent write landing in between.
+        One lock cycle, one save per changed tier — a supersession (stale old
+        + new fact) can never be torn apart by a concurrent write landing in
+        between, even when the two sit in different tiers.
         Returns ``(dropped, added)``.
         """
-        notes = self._notes_store()
-        async with self._notes_lock:
-            facts = await notes.load()
+        tiers = [self._user] if scope is None else [self._user, scope]
+        async with _locked(tiers):
+            lists = [await t.notes.load() for t in tiers]
+            changed = [False] * len(tiers)
             dropped = 0
             for target in digest.stale:
-                kept = _drop_fact(facts, target)
-                if len(kept) == len(facts):
+                hit = _best_match(lists, target)
+                if hit is None:
                     continue
-                # kept is facts minus one element with order preserved, so the
-                # dropped one sits at the first divergence (or at the tail).
-                # A membership scan would be wrong here: hand-edited Notes may
-                # hold identical duplicate lines.
-                gone = next((f for f, k in zip(facts, kept) if f != k), facts[-1])
-                logger.info("memory: dropped stale note: %s", gone)
-                facts = kept
+                which, pos = hit
+                logger.info("memory: dropped stale note: %s", lists[which].pop(pos))
+                changed[which] = True
                 dropped += 1
-            added = _merge_new(facts, digest.facts)
-            if dropped or added:
-                await notes.save(facts)
+            # A fact the other tier already holds isn't added again; one that
+            # moves tiers arrives as stale (dropped above) plus a new fact.
+            added = _merge_new(lists[0], digest.facts, lists[1] if scope else ())
+            changed[0] = changed[0] or bool(added)
+            if scope is not None and isinstance(digest, _ScopedRunDigest):
+                scoped = _merge_new(lists[1], digest.scope_facts, lists[0])
+                changed[1] = changed[1] or bool(scoped)
+                added += scoped
+            for tier, facts, dirty in zip(tiers, lists, changed):
+                if dirty:
+                    await tier.notes.save(facts)
         return dropped, added
 
-    async def remember(self, fact: str) -> bool:
+    async def remember(self, fact: str, *, scope: str | None = None) -> bool:
         """Add one durable fact to Notes; ``False`` if it was already there.
 
         Backs the model's ``remember`` tool; call it directly to seed memories
         programmatically (onboarding data, migrations, an admin UI).
+        ``scope`` picks the layer: ``None`` the user's, a key that scope's.
         """
-        return await self._add_facts([fact]) == 1
+        return await self._add_facts([fact], self._tier(scope)) == 1
 
-    async def forget(self, fact: str) -> bool:
+    async def forget(self, fact: str, *, scope: str | None = None) -> bool:
         """Remove the best-matching note; ``False`` if nothing matched.
 
         Matching is exact → case-insensitive → substring, same as the model's
-        ``forget`` tool, which this backs.
+        ``forget`` tool, which this backs. Looks only in the layer ``scope``
+        names (the tool, in a scoped run, looks in both).
         """
-        norm = _normalize_fact(fact)
-        if not norm:
-            return False
-        notes = self._notes_store()
-        async with self._notes_lock:
-            facts = await notes.load()
-            kept = _drop_fact(facts, norm)
-            if len(kept) == len(facts):
-                return False
-            await notes.save(kept)
-        return True
+        return await self._drop(fact, [self._tier(scope)])
 
-    async def notes_body(self) -> str:
+    async def notes_body(self, *, scope: str | None = None) -> str:
         """The current Notes as their canonical ``- fact`` body (may be ``""``).
 
         The read half of the editing seam; :meth:`replace_notes` is the write
         half. The web UI's memory editor is built on the pair.
         """
-        return _format_facts(await self._notes_store().load())
+        return _format_facts(await self._tier(scope).notes.load())
 
-    async def replace_notes(self, body: str) -> str:
+    async def clear_scope(self, scope: str) -> None:
+        """Delete everything one scope remembers: its Notes and its archive.
+
+        For "forget this project" flows — Notes can be emptied by hand, the
+        archive can't. Irreversible: the scope's directory, dream backup
+        included, is removed. A run still going in that scope keeps working
+        and starts the scope afresh with whatever it saves from then on.
+        """
+        tier = self._tier(scope)
+        async with tier.lock:
+            try:
+                with contextlib.suppress(FileNotFoundError):
+                    await asyncio.to_thread(shutil.rmtree, tier.root)
+            finally:
+                # Reopen even after a partial delete: the old index objects
+                # cache schema state for files that may no longer exist.
+                tier.notes, tier.index = self._scope_stores(tier.root, scope)
+                self._unpin_all()
+
+    async def replace_notes(self, body: str, *, scope: str | None = None) -> str:
         """Replace Notes wholesale with the facts parsed from ``body``.
 
         The bulk counterpart to :meth:`remember` / :meth:`forget`, for editor
@@ -890,75 +1263,108 @@ class Memory:
         Unlike model and curation writes, a wholesale replacement is a
         deliberate edit, so it also unpins every session's Notes snapshot:
         each session's next run sees it (at the price of one cache miss).
+        ``scope`` picks the layer, as everywhere.
         """
         facts: list[str] = []
         _merge_new(facts, _parse_facts(body))
-        async with self._notes_lock:
-            await self._notes_store().save(facts)
-            self._notes_epoch += 1
-            self._snapshots.clear()
+        tier = self._tier(scope)
+        async with tier.lock:
+            await tier.notes.save(facts)
+            self._unpin_all()
         return _format_facts(facts)
 
     # -- setup -----------------------------------------------------------------
 
     async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
-        index = cast("Index | None", self.index)
+        # Resolved once: the whole run — tools, prompt, curation — lands in
+        # the scope it started in.
+        key = self.scope(ctx) if self.scope is not None else None
+        scope = None if key is None else self._scope_tier(key)
+        archived = self._user.index is not None
 
-        tools: list[Tool] = [self._make_remember(), self._make_forget()]
-        if index is not None:
-            tools.append(self._make_recall(index))
+        tools: list[Tool] = [self._make_remember(scope), self._make_forget(scope)]
+        if archived:
+            tools.append(self._make_recall(scope or self._user))
 
         sid, epoch = ctx.session_id, self._notes_epoch
-        notes = await self._session_notes(sid)
-        self._pin(sid, notes, epoch)
+        notes = await self._session_notes(sid, scope)
+        self._pin(sid, notes, epoch, scope)
 
         async def repin() -> None:
             # Teardown runs on every outcome. The provider cache stays warm
             # from the run's last call, not its start, so restart the idle
             # clock here — re-pinning the snapshot if another session's sweep
             # evicted it while this run outlasted the window.
-            self._pin(sid, notes, epoch)
+            self._pin(sid, notes, epoch, scope)
 
-        guidance = _build_instructions(index is not None)
+        guidance = _build_instructions(
+            archived, None if scope is None else self.scope_name
+        )
         return PluginInstance(
             tools=tools,
             instructions=f"{guidance}\n\n{notes}",
-            hooks=self._make_hooks(index),
+            hooks=self._make_hooks(scope),
             aclose=repin,
         )
 
     # -- tools -------------------------------------------------------------------
 
-    def _make_remember(self) -> Tool:
+    def _make_remember(self, scope: _Tier | None = None) -> Tool:
         plugin = self
+        if scope is None:
 
-        @tool(name="remember", description=_REMEMBER_DESCRIPTION)
-        async def remember(
-            fact: Annotated[str, "The durable fact to remember."],
-        ) -> str:
-            if await plugin.remember(fact):
+            @tool(name="remember", description=_REMEMBER_DESCRIPTION)
+            async def remember(
+                fact: Annotated[str, "The durable fact to remember."],
+            ) -> str:
+                if await plugin.remember(fact):
+                    return "Remembered. It will be available in future sessions."
+                return "Already in your notes — nothing to add."
+
+            return remember
+
+        async def remember_about(fact: str, about: str) -> str:
+            tier = plugin._user if about == _USER else scope
+            if await plugin._add_facts([fact], tier):
                 return "Remembered. It will be available in future sessions."
             return "Already in your notes — nothing to add."
 
-        return remember
+        # The choices for `about` are only known per Memory, so its annotation
+        # is set here; @tool reads annotations objects and strings alike.
+        about = Literal[(_USER, self.scope_name)]  # type: ignore[valid-type]
+        remember_about.__annotations__.update(
+            fact=Annotated[str, "The durable fact to remember."],
+            about=Annotated[about, "Whom the fact is about."],
+        )
+        return tool(
+            remember_about,
+            name="remember",
+            description=_REMEMBER_SCOPED_DESCRIPTION.format(name=self.scope_name),
+        )
 
-    def _make_forget(self) -> Tool:
+    def _make_forget(self, scope: _Tier | None = None) -> Tool:
         plugin = self
+        tiers = [self._user] if scope is None else [self._user, scope]
 
         @tool(name="forget", description=_FORGET_DESCRIPTION)
         async def forget(
             fact: Annotated[str, "Text matching the note to remove."],
         ) -> str:
-            if await plugin.forget(fact):
+            if await plugin._drop(fact, tiers):
                 return "Forgotten."
             return "No matching note found to forget."
 
         return forget
 
-    def _make_recall(self, index: Index) -> Tool:
+    def _make_recall(self, tier: _Tier) -> Tool:
         plugin = self
+        description = (
+            _RECALL_DESCRIPTION
+            if tier.key is None
+            else _RECALL_SCOPED_DESCRIPTION.format(name=self.scope_name)
+        )
 
-        @tool(name="recall", description=_RECALL_DESCRIPTION)
+        @tool(name="recall", description=description)
         async def recall(
             ctx: RunContext[Any],
             query: Annotated[str, "What to look for in past conversations."],
@@ -977,6 +1383,7 @@ class Memory:
                         "memory: query expansion failed; searching the raw query",
                         exc_info=True,
                     )
+            index = cast(Index, tier.index)  # read now: clear_scope may reopen it
             hits = await index.search(search_query, plugin.recall_k)
             if not hits:
                 return "(nothing relevant found in long-term memory)"
@@ -996,7 +1403,7 @@ class Memory:
 
     # -- end-of-run curation -------------------------------------------------
 
-    def _make_hooks(self, index: "Index | None") -> AgentHooks:
+    def _make_hooks(self, scope: _Tier | None) -> AgentHooks:
         hooks = AgentHooks()
         finalized = False
 
@@ -1009,15 +1416,19 @@ class Memory:
             if finalized:
                 return
             finalized = True
+            # The archive is read now, not at setup: clear_scope may have
+            # reopened the scope's stores while the run was going.
+            index = (scope or self._user).index
+            curation = self._curate(index, ev.result.entries, ctx, scope)
             if self.curate_in_background:
                 # Off the hot path: the run's final event shouldn't wait for
                 # curation's model calls. _curate never raises (best-effort
                 # throughout), so the task can't die loudly.
-                task = asyncio.create_task(self._curate(index, ev.result.entries, ctx))
+                task = asyncio.create_task(curation)
                 self._curation_tasks.add(task)
                 task.add_done_callback(self._curation_tasks.discard)
             else:
-                await self._curate(index, ev.result.entries, ctx)
+                await curation
 
         return hooks
 
@@ -1031,14 +1442,22 @@ class Memory:
         index: "Index | None",
         entries: list[TranscriptEntry],
         ctx: RunContext[Any],
+        scope: _Tier | None = None,
     ) -> None:
-        """Post-run memory upkeep. Best-effort throughout: the run already
-        completed, so every failure here is a WARNING, never an error."""
+        """Post-run memory upkeep: ``index`` is the archive this run's
+        conversation goes to, ``scope`` the run's scope tier, if any.
+        Best-effort throughout: the run already completed, so every failure
+        here is a WARNING, never an error."""
         digest: _RunDigest | None = None
         if self.auto_curate:
             try:
-                current = _format_facts(await self._notes_store().load())
-                digest = await _digest(entries, current, self._resolve_model(ctx))
+                model = self._resolve_model(ctx)
+                current = await self._digest_notes(scope)
+                digest = await (
+                    _digest(entries, current, model)
+                    if scope is None
+                    else _scoped_digest(entries, current, model, self.scope_name)
+                )
             except Exception:
                 logger.warning("memory: run digest failed", exc_info=True)
 
@@ -1048,17 +1467,30 @@ class Memory:
             except Exception:
                 logger.warning("memory: archive ingest failed", exc_info=True)
 
-        if digest and (digest.facts or digest.stale):
+        if digest and digest.touches_notes():
             try:
-                await self._apply_digest(digest)
+                await self._apply_digest(digest, scope)
             except Exception:
                 logger.warning("memory: notes curation failed", exc_info=True)
         # Outside the digest guard on purpose: manual remember/forget traffic
-        # and hand edits deserve maintenance too, auto_curate or not.
-        try:
-            await self._dream_if_due(ctx)
-        except Exception:
-            logger.warning("memory: dream failed", exc_info=True)
+        # and hand edits deserve maintenance too, auto_curate or not. Each
+        # tier on its own, so one failing dream doesn't skip the other.
+        for tier in (self._user,) if scope is None else (self._user, scope):
+            try:
+                await self._dream_if_due(ctx, tier)
+            except Exception:
+                logger.warning("memory: dream failed", exc_info=True)
+
+    async def _digest_notes(self, scope: _Tier | None) -> str:
+        """The current Notes as the digest sees them (the source for stale)."""
+        user = _format_facts(await self._user.notes.load())
+        if scope is None:
+            return user
+        mine = _format_facts(await scope.notes.load())
+        return (
+            f"### About the user\n{user or '(empty)'}\n\n"
+            f"### About this {self.scope_name}\n{mine or '(empty)'}"
+        )
 
     def _run_docs(
         self,
@@ -1099,7 +1531,9 @@ class Memory:
 
     # -- dreaming: periodic notes maintenance --------------------------------
 
-    async def dream(self, model: "str | Provider | None" = None) -> tuple[int, int]:
+    async def dream(
+        self, model: "str | Provider | None" = None, *, scope: str | None = None
+    ) -> tuple[int, int]:
         """Tidy Notes now; returns ``(before, after)`` note counts.
 
         The dream pass merges near-duplicates into one well-phrased note,
@@ -1108,7 +1542,7 @@ class Memory:
         It runs by itself on the ``dream_every_days`` cadence and immediately
         when Notes overflow their budget; call it directly for on-demand
         tidying (a cleanup button, a one-off migration). ``model`` falls back
-        to ``Memory(model=...)``.
+        to ``Memory(model=...)``; ``scope`` picks the layer, as everywhere.
         """
         resolved = model if model is not None else self.model
         if resolved is None:
@@ -1116,26 +1550,28 @@ class Memory:
                 "Memory.dream() has no model to run on",
                 hint="pass dream(model=...) or construct Memory(model=...)",
             )
-        return await self._run_dream(resolved)
+        return await self._run_dream(resolved, self._tier(scope))
 
-    async def _dream_if_due(self, ctx: RunContext[Any]) -> None:
-        body = _format_facts(await self._notes_store().load())
+    async def _dream_if_due(
+        self, ctx: RunContext[Any], tier: _Tier | None = None
+    ) -> None:
+        tier = tier or self._user
+        body = _format_facts(await tier.notes.load())
         over = len(body) > self.notes_budget
-        if not over and not await asyncio.to_thread(self._dream_due):
+        if not over and not await asyncio.to_thread(self._dream_due, tier):
             return
-        await self._run_dream(self._resolve_model(ctx))
+        await self._run_dream(self._resolve_model(ctx), tier)
 
-    async def _run_dream(self, model: "str | Provider") -> tuple[int, int]:
-        notes = self._notes_store()
+    async def _run_dream(self, model: "str | Provider", tier: _Tier) -> tuple[int, int]:
         # Hold the lock across the model call: the dream rewrites the whole
         # list, so a remember/forget landing between read and save would be
         # silently overwritten. The contention is fine — dreams are rare and
         # a blocked tool just waits one out.
-        async with self._notes_lock:
-            facts = await notes.load()
+        async with tier.lock:
+            facts = await tier.notes.load()
             before = len(facts)
             if not facts:
-                await asyncio.to_thread(self._touch_marker)
+                await asyncio.to_thread(self._touch_marker, tier)
                 return (0, 0)
             body = _format_facts(facts)
             rewritten = await _dream(body, self.notes_budget, model)
@@ -1144,42 +1580,43 @@ class Memory:
                 # One-generation undo for the only wholesale-rewrite path.
                 # Deeper history belongs to git and to the archive, which
                 # keeps the conversations every note came from.
-                await asyncio.to_thread(self._write_backup, body)
-                await notes.save(rewritten)
+                await asyncio.to_thread(self._write_backup, tier, body)
+                await tier.notes.save(rewritten)
                 after = len(rewritten)
-            await asyncio.to_thread(self._touch_marker)
+            await asyncio.to_thread(self._touch_marker, tier)
         logger.info("memory: dream rewrote notes, %d → %d", before, after)
         return (before, after)
 
-    def dreamed_at(self) -> float | None:
+    def dreamed_at(self, *, scope: str | None = None) -> float | None:
         """Epoch mtime of the last dream, or ``None`` before the first one.
 
-        Reads the ``.dreamed`` marker; the web UI shows this next to its
-        tidy-up button.
+        Reads the layer's ``.dreamed`` marker; the web UI shows this next to
+        its tidy-up button.
         """
+        return self._dreamed_at(self._tier(scope))
+
+    def _dreamed_at(self, tier: _Tier) -> float | None:
         try:
-            return self._marker().stat().st_mtime
+            return (tier.root / _DREAMED_FILENAME).stat().st_mtime
         except FileNotFoundError:
             return None
 
-    def _marker(self) -> Path:
-        return Path(self.root) / _DREAMED_FILENAME
-
-    def _dream_due(self) -> bool:
+    def _dream_due(self, tier: _Tier) -> bool:
         """Cadence check: ``dream_every_days`` elapsed and Notes changed since."""
         if self.dream_every_days is None:
             return False
-        last = self.dreamed_at()
+        last = self._dreamed_at(tier)
         if last is None:
             # First contact starts the clock; don't dream over a newborn file.
-            self._touch_marker()
+            self._touch_marker(tier)
             return False
         if time.time() - last < self.dream_every_days * 86400.0:
             return False
-        return self._notes_changed_since(last)
+        return self._notes_changed_since(tier, last)
 
-    def _notes_changed_since(self, when: float) -> bool:
-        notes = self.notes
+    @staticmethod
+    def _notes_changed_since(tier: _Tier, when: float) -> bool:
+        notes = tier.notes
         if isinstance(notes, FileNotesStore):
             try:
                 return notes._path.stat().st_mtime > when
@@ -1189,13 +1626,14 @@ class Memory:
         # decides, at worst re-dreaming an unchanged list.
         return True
 
-    def _touch_marker(self) -> None:
-        marker = self._marker()
+    def _touch_marker(self, tier: _Tier | None = None) -> None:
+        marker = (tier or self._user).root / _DREAMED_FILENAME
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
 
-    def _write_backup(self, body: str) -> None:
-        bak = Path(self.root) / _BACKUP_FILENAME
+    @staticmethod
+    def _write_backup(tier: _Tier, body: str) -> None:
+        bak = tier.root / _BACKUP_FILENAME
         bak.parent.mkdir(parents=True, exist_ok=True)
         bak.write_text(body, encoding="utf-8")
 

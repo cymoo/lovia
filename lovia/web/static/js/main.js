@@ -18,7 +18,6 @@ import {
   initSessions,
   initEventStream,
   loadSessions,
-  clearChat,
   startNewChat,
   switchSession,
 } from './sessions.js';
@@ -28,6 +27,7 @@ import { initMemory } from './memory.js';
 import { initModelConfig } from './model-config.js';
 import { initWorkspaceMode } from './workspace-mode.js';
 import { initWorkspaces } from './workspaces.js';
+import { initAgentChip } from './agent-chip.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 import { loadExtensions } from './extensions.js';
@@ -100,49 +100,14 @@ function onUnauthorized(err) {
 }
 
 // ---- Agent loading ------------------------------------------------------
-// First instruction line as a hover hint — the switcher shows bare names, so
-// this is the only in-UI answer to "which agent does what".
-function agentHint(agent) {
-  const line = (agent?.instructions || '').split('\n', 1)[0].trim();
-  return line.length > 160 ? `${line.slice(0, 159)}…` : line;
-}
-
-function syncAgentTooltip(select) {
-  select.title = agentHint(store.agents.find((a) => a.name === store.agent));
-}
+// Which agent the composer is on, and changing it, is agent-chip.js's: a new
+// chat picks one there, an opened chat syncs to its own ('sync-agent').
 
 /** @returns {Promise<boolean>} false when signed out (onUnauthorized took over). */
 async function loadAgents() {
-  const select = /** @type {HTMLSelectElement | null} */ (
-    document.getElementById('agent-select')
-  );
-  const switcher = document.getElementById('agent-switcher');
   try {
     store.agents = await api.listAgents();
-    store.agent = store.agents[0]?.name ?? null;
-
-    if (select && store.agents.length > 1) {
-      select.style.display = '';
-      select.replaceChildren(...store.agents.map((a) => {
-        const opt = document.createElement('option');
-        opt.value = a.name;
-        opt.textContent = a.name;
-        opt.title = agentHint(a);
-        return opt;
-      }));
-      select.value = store.agent;
-      syncAgentTooltip(select);
-      if (switcher) switcher.classList.remove('lv-hidden');
-      select.addEventListener('change', () => {
-        store.agent = select.value;
-        syncAgentTooltip(select);
-        clearChat();
-        store.emit('agent-changed', store.agent);
-        document.getElementById('prompt')?.focus();
-      });
-    } else if (select) {
-      if (switcher) switcher.classList.add('lv-hidden');
-    }
+    store.agent = store.agents[0]?.name ?? null; // the default
     store.emit('agents-loaded', store.agents);
   } catch (err) {
     if (err.status === 401) return false;
@@ -151,23 +116,6 @@ async function loadAgents() {
   }
   return true;
 }
-
-// A chat opened from the sidebar belongs to the agent it was created with —
-// reflect that in the switcher (without the clearChat a manual switch does)
-// so follow-up messages run on, and the panels reflect, the right agent.
-store.on('sync-agent', (name) => {
-  if (!name || name === store.agent) return;
-  if (!store.agents.some((a) => a.name === name)) return; // no longer served
-  store.agent = name;
-  const select = /** @type {HTMLSelectElement | null} */ (
-    document.getElementById('agent-select')
-  );
-  if (select) {
-    select.value = name;
-    syncAgentTooltip(select);
-  }
-  store.emit('agent-changed', name);
-});
 
 // ---- Cross-module events ------------------------------------------------
 store.on('render-history', (entries) => renderHistory(entries));
@@ -367,14 +315,17 @@ window.lovia = lovia;
     store.configured = info.configured !== false;
     // The model chip + first-run setup; a no-op on embedder servers.
     initModelConfig();
-    // The permission-mode chip, where chats may pick one.
+    // The permission-mode chip, where chats may pick one, then the agent's.
     initWorkspaceMode();
+    initAgentChip();
     // Directories: the composer's workspace chip and the sidebar's groups,
     // before the first session list so it draws grouped from the start.
     await initWorkspaces();
     // The welcome view rendered before /api/info resolved; an unconfigured
     // server replaces it with the setup hero (no session exists yet).
     if (store.canConfigureModels && !store.configured) renderEmptyState();
+  } else {
+    initAgentChip(); // an opened chat still syncs to its own agent
   }
   // Push instead of poll: the lifecycle stream replaces the sidebar's run
   // polling wherever the server (and browser) support it.

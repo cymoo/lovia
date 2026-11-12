@@ -28,9 +28,9 @@ run the app under another ASGI server, skip `serve()`.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `agent_or_agents` | required | One Agent or a `{name: agent}` mapping |
+| `agent_or_agents` | required | One Agent or a `{name: agent}` mapping; the first is the default, for a request that names none |
 | `db_path` / `store` / `session` | `./.lovia/<agent>.db` | Transcript and chat metadata storage |
-| `max_turns` / `budget` / `retry` / `context_policy` | — | Settings applied to every served Run |
+| `max_turns` / `budget` / `retry` / `context_policy` | — | Settings applied to every served Run; `max_turns` may also be a `{name: n}` mapping, one per agent (`50` for any left out) |
 | `tracer` | `None` | Span recorder for served Runs |
 | `titles` / `title_model` | `True` / Agent model | Generate conversation titles in the background |
 | `followups` / `followup_model` | `False` / Agent model | Suggest follow-up questions after a reply (see below) |
@@ -248,11 +248,11 @@ internal; select regions by `data-part`.
 
 | Region | `data-part` |
 | --- | --- |
-| Sidebar | `sidebar`, `sidebar-header`, `sidebar-toggle`, `agent-switcher`, `sidebar-nav`, `new-chat`, `memory`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
+| Sidebar | `sidebar`, `sidebar-header`, `sidebar-toggle`, `sidebar-nav`, `new-chat`, `memory`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
 | Top bar | `topbar`, `chat-title`, `topbar-actions`, `tasks`, `chat-menu` (the open chat's pin / rename / branch / export / delete), `files-toggle` |
 | Views | `view` (the container an open [view](#views) draws in) |
 | Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"` and `data-status`: `running`, `awaiting` the user — a question — then `done` or `error`), `activity` (two or more consecutive reasoning / tool steps folded under one summary line; it closes once the reply's text starts), `message-actions` (a message's [actions](#message-actions); each button has `data-action="<id>"`) |
-| Composer | `composer`, `attach`, `context-ring` |
+| Composer | `composer`, `attach`, `agent-chip` (which agent a new chat uses; shown with more than one), `context-ring` |
 | Elsewhere | `files-panel`; in Settings, `language` (the language row) |
 
 Hiding a tool's cards never hides an approval request: those render apart from
@@ -786,10 +786,12 @@ app = create_app(
 - `default_mode` is what the page preselects for a new chat. A chat that
   never picked one keeps the agent's own policy, custom rules and all, moved
   to its directory.
-- `build(root, mode)` returns the `LocalWorkspace` for a directory and mode.
-  The default is the `Workspace.local` preset, keeping the agent workspace's
-  `env`, `limits`, `executor`, `inherit_env` and shell timeout — not a custom
-  policy's rules; pass `build` to carry those across modes.
+- `build(agent, root, mode)` returns the `LocalWorkspace` for a served
+  agent's chat in a directory and mode. The default is the `Workspace.local`
+  preset, keeping the agent workspace's `env`, `limits`, `executor`,
+  `inherit_env` and shell timeout — not a custom policy's rules; pass `build`
+  to carry those across modes. `agent` says whose rules apply, when the
+  served agents differ.
 - `agent_for(agent, root)` returns the agent for a chat in `root` — the
   project-specific rest, such as instructions from that directory's
   `AGENTS.md`, or its skills. It runs on every run, before the workspace is
@@ -873,7 +875,7 @@ create_app(agent, followups=True, followup_model="<small-model>")
 Off by default: unlike a title, this costs one model call per *run*, so the
 serving layer doesn't presume it. `followup_model` points that call at a
 cheaper model than the Agent's own. The bundled `lovia web` CLI opts in on its
-own behalf — turn it off in Settings → Agent, and point
+own behalf — turn it off per agent in Settings → Agents, and point
 it at a small model by assigning that model the
 [aux role](web-ui.md#models-and-switching).
 

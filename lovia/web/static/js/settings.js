@@ -1,5 +1,5 @@
-// settings.js — the Settings dialog: a left-rail shell (General / Models /
-// Search / Skills / Workspace / Agent / About) in a wide dialog. General holds
+// settings.js — the Settings dialog: a left-rail shell (General / Connections
+// / Skills / Agents / About) in a wide dialog. General holds
 // the client-side preferences (localStorage: language, theme, text size,
 // Enter behavior, notifications, sound); the server panes edit config.json
 // through model-config.js and agent-config.js and appear only when the
@@ -8,8 +8,8 @@ import { segmented, showDialog, setThemePref, themePref } from './ui.js';
 import { t, languages, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
-import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
-import { buildAgentPane, buildWorkspacePane } from './agent-config.js';
+import { buildAboutPane, buildConnectionsPane, buildSkillsPane } from './model-config.js';
+import { buildAgentsPane } from './agent-config.js';
 
 const NOTIF_KEY = 'lovia-notify';
 const SOUND_KEY = 'lovia-sound';
@@ -269,7 +269,7 @@ function buildGeneralPane() {
 
 /**
  * Open the Settings dialog on a given tab.
- * @param {'general' | 'models' | 'search' | 'skills' | 'workspace' | 'agent' | 'about'} [initialTab]
+ * @param {'general' | 'connections' | 'skills' | 'agents' | 'about'} [initialTab]
  */
 export function openSettings(initialTab = 'general') {
   const tabs = [
@@ -277,13 +277,10 @@ export function openSettings(initialTab = 'general') {
   ];
   if (store.canConfigureModels) {
     tabs.push(
-      // Most visited first: models, then how the agent works, then the
-      // set-once integrations.
-      { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
-      { id: 'workspace', label: t('settings.tabWorkspace'), build: buildWorkspacePane },
-      { id: 'agent', label: t('settings.tabAgent'), build: buildAgentPane },
+      // What the agents connect to, what they can know, then who they are.
+      { id: 'connections', label: t('settings.tabConnections'), build: buildConnectionsPane },
       { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
-      { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
+      { id: 'agents', label: t('settings.tabAgents'), build: buildAgentsPane },
     );
   }
   tabs.push({ id: 'about', label: t('settings.tabAbout'), build: buildAboutPane });

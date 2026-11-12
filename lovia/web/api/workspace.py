@@ -302,11 +302,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             meta = await deps.store.get(session)
             if meta is None:
                 raise WebError(404, "session_not_found", "session not found")
-            agent = (
-                deps.agents[meta.agent]
-                if meta.agent in deps.agents
-                else deps.pick(agent_name)
-            )
+            agent = deps.pick(deps.agent_of(meta))
             root = meta.workspace_root
         else:
             agent = deps.pick(agent_name)

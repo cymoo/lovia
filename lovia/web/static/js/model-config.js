@@ -18,9 +18,6 @@ import { icon } from './icons.js';
 /** Fetch (or refresh) the masked config document into store.modelConfig. */
 export async function loadConfig() {
   store.modelConfig = await api.getConfig();
-  // The server's follow-ups switch lives in Settings → Agent now; keep the
-  // capability flag the composer reads in step with it.
-  if (store.modelConfig?.run) store.canSuggest = !!store.modelConfig.run.followups;
   store.emit('config-loaded', store.modelConfig);
   return store.modelConfig;
 }
@@ -29,10 +26,18 @@ export function cfg() {
   return store.modelConfig;
 }
 
+/** The settings of the agent the composer is on (the default before any). */
+function activeAgent() {
+  const c = cfg();
+  return c?.agents?.find((a) => a.id === store.agent) || c?.agents?.[0] || null;
+}
+
+/** The model the composer's agent runs on: its own, else the default chat one. */
 function activeProfile() {
   const c = cfg();
   if (!c) return null;
-  return c.models.find((m) => m.id === c.roles.chat) || null;
+  const id = activeAgent()?.model || c.roles.chat;
+  return c.models.find((m) => m.id === id) || null;
 }
 
 function profileName(p) {
@@ -120,7 +125,7 @@ export function positiveInt(raw) {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
-function ghostBtn(label, onClick) {
+export function ghostBtn(label, onClick) {
   const btn = el('button', 'lv-btn lv-btn-ghost lv-btn-sm', label);
   btn.setAttribute('type', 'button');
   btn.addEventListener('click', onClick);
@@ -248,12 +253,32 @@ function extraBodyEditor(initial, flavor) {
  * The Settings → Models pane: profile list ⇄ edit form, plus role assignment.
  * Owns its internal rerenders; safe to rebuild wholesale on tab switches.
  */
-export function buildModelsPane() {
+/**
+ * Settings → Connections: what the agents connect to — the models, then the
+ * web-search service. The search section steps aside while a model's form
+ * is open, so the form's Save is the last thing on the page.
+ */
+export function buildConnectionsPane() {
+  const pane = el('div', 'lv-cfg-stack');
+  const search = buildSearchPane();
+  search.classList.add('lv-cfg-section');
+  pane.append(
+    buildModelsPane((name) => {
+      search.hidden = name !== 'list';
+    }),
+    search,
+  );
+  return pane;
+}
+
+/** @param {(view: 'list' | 'form') => void} [onView] */
+function buildModelsPane(onView) {
   const pane = el('div', 'lv-cfg-pane');
   /** @type {{ name: 'list' } | { name: 'form', id: string | null }} */
   let view = { name: 'list' };
 
   async function render() {
+    onView?.(view.name);
     if (!cfg()) {
       pane.replaceChildren(el('div', 'lv-cfg-hint', '…'));
       try {
@@ -321,7 +346,11 @@ export function buildModelsPane() {
         actions.appendChild(
           ghostBtn(t('cfg.makeDefault'), async (e) => {
             e.stopPropagation();
-            await switchModel(p.id);
+            try {
+              await makeDefaultModel(p.id);
+            } catch (err) {
+              toast(String(err.message || err), { type: 'error' });
+            }
             render();
           }),
         );
@@ -689,7 +718,7 @@ export function buildModelsPane() {
 
 // ---- Search pane ----------------------------------------------------------
 
-export function buildSearchPane() {
+function buildSearchPane() {
   const pane = el('div', 'lv-cfg-pane');
 
   (async () => {
@@ -1031,20 +1060,43 @@ function updateChip() {
   _chip.title = p ? t('cfg.chip', { name: p.model }) : t('cfg.chipSetup');
 }
 
+/**
+ * Switch the model the composer's agent runs on: its own, when it has one;
+ * else the default chat model, which every agent without one follows.
+ * @param {string} id
+ */
 async function switchModel(id) {
-  const before = cfg()?.roles?.chat;
-  if (id === before) return;
+  if (id === activeProfile()?.id) return;
+  const agent = activeAgent();
+  if (agent?.model) await api.updateAgent(agent.id, { model: id });
+  else await api.setRoles({ chat: id });
+  await afterModelChange(id);
+}
+
+/**
+ * Settings → Connections' "Make default": the default chat model itself
+ * (roles.chat), whichever agent the composer is on.
+ * @param {string} id
+ */
+async function makeDefaultModel(id) {
   await api.setRoles({ chat: id });
+  await afterModelChange(id, 'cfg.madeDefault');
+}
+
+/**
+ * @param {string} id The model switched to.
+ * @param {string} [message] What the toast says about it.
+ */
+async function afterModelChange(id, message = 'cfg.switched') {
   await loadConfig();
-  const p = activeProfile();
-  toast(t('cfg.switched', { name: profileName(p) }));
+  toast(t(message, { name: profileName(cfg()?.models.find((m) => m.id === id)) }));
   updateChip();
   await refreshAgents();
 }
 
 // The agent list carries the model id + workspace/vision capabilities the
 // composer reads (context popover row, attach button) — refetch after a swap.
-async function refreshAgents() {
+export async function refreshAgents() {
   try {
     store.agents = await api.listAgents();
     store.emit('agents-loaded', store.agents);
@@ -1077,14 +1129,15 @@ async function openChipMenu() {
   const menu = el('div', 'lv-model-chip-menu');
   menu.setAttribute('role', 'menu');
   menu.appendChild(el('div', 'lv-model-chip-menu-title', t('cfg.switchTitle')));
+  const current = activeProfile()?.id;
   for (const p of c.models) {
     const item = el('button', 'lv-model-chip-item');
     item.setAttribute('type', 'button');
     item.setAttribute('role', 'menuitemradio');
-    item.setAttribute('aria-checked', String(p.id === c.roles.chat));
+    item.setAttribute('aria-checked', String(p.id === current));
     item.appendChild(el('span', 'lv-model-chip-item-name', profileName(p)));
     if (p.vision === 'on') item.appendChild(el('span', 'lv-model-chip-item-sub', t('cfg.visionBadge')));
-    if (p.id === c.roles.chat) item.insertAdjacentHTML('beforeend', icon('check', { size: 15 }));
+    if (p.id === current) item.insertAdjacentHTML('beforeend', icon('check', { size: 15 }));
     item.addEventListener('click', async () => {
       closeChipMenu();
       try {
@@ -1102,7 +1155,7 @@ async function openChipMenu() {
   manage.addEventListener('click', async () => {
     closeChipMenu();
     const { openSettings } = await import('./settings.js');
-    openSettings('models');
+    openSettings('connections');
   });
   menu.appendChild(manage);
 
@@ -1129,7 +1182,7 @@ function initModelChip() {
     e.stopPropagation();
     if (!store.configured) {
       const { openSettings } = await import('./settings.js');
-      openSettings('models');
+      openSettings('connections');
       return;
     }
     openChipMenu();
@@ -1175,8 +1228,10 @@ export function initModelConfig() {
   if (!store.canConfigureModels) return;
   initModelChip();
   store.on('config-changed', _onConfigChanged);
+  // Agents may run on different models: the chip names the composer's.
+  store.on('agent-changed', updateChip);
   store.on('open-model-settings', async () => {
     const { openSettings } = await import('./settings.js');
-    openSettings('models');
+    openSettings('connections');
   });
 }

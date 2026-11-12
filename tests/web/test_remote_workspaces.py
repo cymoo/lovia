@@ -710,14 +710,15 @@ async def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
     )
     (launch / "AGENTS.md").write_text("LAUNCH DIRECTORY RULES", encoding="utf-8")
     config = WebConfig.model_validate({"skills": {"dirs": []}})
-    served = project_agent(Agent(name="bot", model=None), launch, config)
+    spec = config.default_agent
+    served = project_agent(Agent(name="bot", model=None), launch, config, spec)
     assert "LAUNCH DIRECTORY RULES" in served.instructions
     assert any(isinstance(p, Skills) for p in served.plugins)
 
     # No workspace to read a project file from: what is left is not the
     # launch directory's.
     nowhere = RunContext(deps=None, entries=[], agent=served)
-    remote = remote_agent(served, config)
+    remote = remote_agent(served, config, spec)
     assert await remote.render_system_prompt(nowhere) == GENERIC_INSTRUCTIONS
     assert not any(isinstance(p, Skills) for p in remote.plugins)
     # The global skill directories are this server's own: they still load.
@@ -725,12 +726,15 @@ async def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
     shared.mkdir()
     everywhere = WebConfig.model_validate({"skills": {"dirs": [str(shared)]}})
     (skills,) = [
-        p for p in remote_agent(served, everywhere).plugins if isinstance(p, Skills)
+        p
+        for p in remote_agent(served, everywhere, spec).plugins
+        if isinstance(p, Skills)
     ]
     assert skills is not None
-    # The server-wide prompt (Settings → Agent) still applies everywhere.
-    custom = WebConfig.model_validate({"agent": {"instructions": "be terse"}})
-    terse = remote_agent(served, custom)
+    # The agent's own prompt still applies everywhere.
+    terse = remote_agent(
+        served, config, spec.model_copy(update={"instructions": "be terse"})
+    )
     assert await terse.render_system_prompt(nowhere) == "be terse"
 
 
@@ -743,7 +747,9 @@ def test_a_remote_chat_reads_its_own_projects_instructions(places) -> None:
     here, there = places
     (here / "AGENTS.md").write_text("LOCAL PROJECT RULES", encoding="utf-8")
     (there / "AGENTS.md").write_text("REMOTE PROJECT RULES", encoding="utf-8")
-    config = WebConfig.model_validate({"agent": {"instructions": "be terse"}})
+    config = WebConfig.model_validate(
+        {"agents": [{"id": "bot", "instructions": "be terse"}]}
+    )
     far = _far()
     provider = ScriptedProvider(
         [call("read_file", {"path": "AGENTS.md"}), text("x"), text("y")]
@@ -751,7 +757,9 @@ def test_a_remote_chat_reads_its_own_projects_instructions(places) -> None:
     agent = Agent(name="bot", model=provider, workspace=Workspace.local(str(here)))
     switch = WorkspaceSwitch(
         remotes={"far": far},
-        agent_for_remote=lambda agent, ref: remote_agent(agent, config),
+        agent_for_remote=lambda agent, ref: remote_agent(
+            agent, config, config.default_agent
+        ),
     )
     with _client(agent, switch) as c:
         try:
@@ -828,9 +836,8 @@ def test_a_sandboxed_agent_is_not_quietly_unsandboxed_on_a_remote(places) -> Non
         assert c.get("/api/sessions").json() == []
     assert not (there / "out.txt").exists()
     # The builder itself refuses too, whatever path leads to it.
-    base = agent.workspace
     with pytest.raises(UserError, match="executor"):
-        switch.remote_workspace(base, WorkspaceRef.parse(key), None)
+        switch.remote_workspace(agent, WorkspaceRef.parse(key), None)
 
 
 def test_a_sandbox_that_comes_with_a_mode_is_caught_for_that_mode(places) -> None:
@@ -845,7 +852,7 @@ def test_a_sandbox_that_comes_with_a_mode_is_caught_for_that_mode(places) -> Non
         async def run(self, command, *, cwd, env, timeout, policy, root):
             raise AssertionError("never runs here")
 
-    def build(root: Path, mode: str):
+    def build(agent: Agent, root: Path, mode: str):
         return Workspace.local(str(root), mode=mode, executor=Sandbox())  # type: ignore[arg-type]
 
     agent = _agent(here, [text("one"), text("two")])

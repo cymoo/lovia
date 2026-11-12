@@ -122,10 +122,12 @@ def format_summary(
     config_desc: str,
     workspace_desc: str,
     db_desc: str,
+    agents_desc: str | None = None,
 ) -> str:
     """The startup block: the connection in play, and where it came from."""
     rows = _connection_rows(conn) + [
         ("config", config_desc),
+        *([("agents", agents_desc)] if agents_desc else []),
         ("workspace", workspace_desc),
         ("db", db_desc),
     ]

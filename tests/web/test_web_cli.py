@@ -19,13 +19,11 @@ from lovia.web import __main__ as cli  # noqa: E402
 from lovia.web import builder  # noqa: E402
 from lovia.workspace import Workspace  # noqa: E402
 from lovia.web.config import (  # noqa: E402
-    AgentSettings,
+    AgentConfig,
     ModelProfile,
-    RunSettings,
     SearchConfig,
     SkillsConfig,
     WebConfig,
-    WorkspaceSettings,
     resolve_skills_dirs,
 )
 
@@ -110,7 +108,7 @@ def test_default_agent_memory_lives_in_the_home(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     home = tmp_path / "home"
-    agent = builder.build_default_agent(
+    agent = builder.build_agent(
         builder.Deployment(workspace=str(tmp_path), home=home),
         ChatStore.in_memory(),
         _provider(),
@@ -224,8 +222,8 @@ def test_resolve_instructions_generic_fallback(
 # ------------------------------------------------------------- workspace -
 
 
-def _ws_config(**fields: object) -> WebConfig:
-    return WebConfig(workspace=WorkspaceSettings.model_validate(fields))
+def _ws_config(**fields: object) -> AgentConfig:
+    return AgentConfig.model_validate({"id": "lovia", **fields})
 
 
 def test_resolve_workspace_disabled() -> None:
@@ -246,7 +244,7 @@ def test_resolve_workspace_default_mode_is_coding(tmp_path: Path) -> None:
 def test_resolve_workspace_mode_from_config(tmp_path: Path) -> None:
     ws = builder.resolve_workspace(
         builder.Deployment(workspace=str(tmp_path)),
-        _ws_config(default_mode="readonly"),
+        _ws_config(mode="readonly"),
     )
     assert ws is not None
     assert ws.policy.write == "deny"
@@ -283,8 +281,8 @@ def test_auto_allow_rejects_unknown_bundles(bad: str) -> None:
 
 
 def test_resolve_workspace_invalid_mode() -> None:
-    with pytest.raises(ValueError, match="default_mode"):
-        _ws_config(default_mode="bogus")
+    with pytest.raises(ValueError, match="mode"):
+        _ws_config(mode="bogus")
 
 
 def test_resolve_workspace_missing_dir(tmp_path: Path) -> None:
@@ -294,7 +292,7 @@ def test_resolve_workspace_missing_dir(tmp_path: Path) -> None:
 
 def test_readonly_flag_beats_the_configured_mode(tmp_path: Path) -> None:
     deployment = builder.Deployment(workspace=str(tmp_path), readonly=True)
-    ws = builder.resolve_workspace(deployment, _ws_config(default_mode="trusted"))
+    ws = builder.resolve_workspace(deployment, _ws_config(mode="trusted"))
     assert ws is not None
     assert ws.policy.write == "deny"
     assert ws.policy.allow_shell is False
@@ -387,8 +385,8 @@ def test_main_launched_from_home_works_in_the_general_workspace(
     seen = _capture_serving(monkeypatch)
     # DIR given — even the home directory itself — is taken as it is.
     assert cli.main([] if where == "home" else [str(fake_home)]) == 0
-    agent = seen["agent"]
-    root = Path(agent.workspace.root).resolve()  # type: ignore[attr-defined]
+    agent = seen["agent"]["lovia"]  # type: ignore[index]
+    root = Path(agent.workspace.root).resolve()
     general = fake_home / ".lovia" / "workspace"
     if where == "home":
         assert root == general.resolve() and general.is_dir()
@@ -412,7 +410,7 @@ def test_project_agent_reads_the_chat_directory(
     (proj / "AGENTS.md").write_text("proj rules", encoding="utf-8")
     monkeypatch.chdir(launch)
     config = _agent_config(memory=False, instructions="custom")
-    agent = builder.build_default_agent(
+    agent = builder.build_agent(
         builder.Deployment(workspace=str(launch)),
         ChatStore.in_memory(),
         _provider(),
@@ -420,12 +418,13 @@ def test_project_agent_reads_the_chat_directory(
     )
     assert "launch rules" in str(agent.instructions)
     assert not any(isinstance(p, Skills) for p in agent.plugins)
-    moved = builder.project_agent(agent, proj, config)
+    spec = config.default_agent
+    moved = builder.project_agent(agent, proj, config, spec)
     assert moved.instructions == "custom\n\nproj rules"
     (skills,) = [p for p in moved.plugins if isinstance(p, Skills)]
     assert moved.plugins[0] is skills
     # Back in a directory with no skills: none.
-    back = builder.project_agent(moved, launch, config)
+    back = builder.project_agent(moved, launch, config, spec)
     assert not any(isinstance(p, Skills) for p in back.plugins)
     assert back.instructions == "custom\n\nlaunch rules"
 
@@ -642,16 +641,16 @@ def test_help_defaults_render_from_core_constants() -> None:
 @pytest.mark.parametrize(
     ("argv", "where"),
     [
-        (["--max-turns", "20"], "run.max_turns"),
-        (["--max-retries=3"], "run.max_retries"),
-        (["--no-followups"], "run.followups"),
-        (["--trusted"], "workspace.default_mode"),
-        (["--auto-allow", "none"], "workspace.auto_allow"),
-        (["--no-memory"], "agent.memory"),
+        (["--max-turns", "20"], "agents[].max_turns"),
+        (["--max-retries=3"], "agents[].max_retries"),
+        (["--no-followups"], "agents[].followups"),
+        (["--trusted"], "agents[].mode"),
+        (["--auto-allow", "none"], "agents[].auto_allow"),
+        (["--no-memory"], "agents[].memory"),
         (["--memory-dir", "m"], "--home DIR"),
-        (["--no-subagents"], "agent.subagents"),
-        (["--instructions", "x"], "agent.instructions"),
-        (["--instructions-file", "x"], "agent.instructions"),
+        (["--no-subagents"], "agents[].subagents"),
+        (["--instructions", "x"], "agents[].instructions"),
+        (["--instructions-file", "x"], "agents[].instructions"),
         (["--max-tokens", "9"], "models[].max_tokens"),
     ],
 )
@@ -676,7 +675,7 @@ def test_main_points_removed_env_vars_at_settings(
     assert cli.main([]) == 2
     err = capsys.readouterr().err
     # Every hit at once, each with its new home.
-    assert "LOVIA_MAX_TURNS → Settings → Agent (config.json run.max_turns)" in err
+    assert "LOVIA_MAX_TURNS → Settings → Agents (config.json agents[].max_turns)" in err
     assert "LOVIA_WORKSPACE_MODE → --readonly" in err
 
 
@@ -714,7 +713,7 @@ def test_parser_error_points_at_help(capsys: pytest.CaptureFixture[str]) -> None
     assert "try 'lovia web --help'" in err
 
 
-# --------------------------------------------------- build_default_agent -
+# --------------------------------------------------- build_agent -
 
 
 def _provider(model: str = "test-model") -> object:
@@ -727,14 +726,14 @@ _DEPLOY = builder.Deployment()
 
 
 def _agent_config(**agent: object) -> WebConfig:
-    return WebConfig(agent=AgentSettings.model_validate(agent))
+    return WebConfig(agents=[AgentConfig.model_validate({"id": "lovia", **agent})])
 
 
-def test_build_default_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".agents" / "skills").mkdir(parents=True)
     provider = _provider()
-    agent = builder.build_default_agent(_DEPLOY, ChatStore.in_memory(), provider)
+    agent = builder.build_agent(_DEPLOY, ChatStore.in_memory(), provider)
     assert agent.name == "lovia"
     assert agent.model is provider
     assert agent.instructions == builder.GENERIC_INSTRUCTIONS
@@ -752,24 +751,22 @@ def test_build_default_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert agent.workspace is not None
 
 
-def test_build_default_agent_no_memory(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_build_agent_no_memory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
-    agent = builder.build_default_agent(
+    agent = builder.build_agent(
         _DEPLOY, ChatStore.in_memory(), _provider(), config=_agent_config(memory=False)
     )
     assert all(not isinstance(p, Memory) for p in agent.plugins)
 
 
-def test_build_default_agent_subagents_child_composition(
+def test_build_agent_subagents_child_composition(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from lovia import Subagents
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".agents" / "skills").mkdir(parents=True)
-    agent = builder.build_default_agent(_DEPLOY, ChatStore.in_memory(), _provider())
+    agent = builder.build_agent(_DEPLOY, ChatStore.in_memory(), _provider())
     (plugin,) = [p for p in agent.plugins if isinstance(p, Subagents)]
     (child,) = plugin._catalog.values()
     # The child keeps the basic capabilities (Skills, Todo) and sheds the
@@ -780,13 +777,13 @@ def test_build_default_agent_subagents_child_composition(
     assert child.tools == [t for t in agent.tools if t.name not in parent_only]
 
 
-def test_build_default_agent_no_subagents(
+def test_build_agent_no_subagents(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from lovia import Subagents
 
     monkeypatch.chdir(tmp_path)
-    agent = builder.build_default_agent(
+    agent = builder.build_agent(
         _DEPLOY,
         ChatStore.in_memory(),
         _provider(),
@@ -795,13 +792,13 @@ def test_build_default_agent_no_subagents(
     assert all(not isinstance(p, Subagents) for p in agent.plugins)
 
 
-def test_build_default_agent_shows_ui_components_parent_only(
+def test_build_agent_shows_ui_components_parent_only(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from lovia import Subagents
 
     monkeypatch.chdir(tmp_path)
-    agent = builder.build_default_agent(
+    agent = builder.build_agent(
         _DEPLOY, ChatStore.in_memory(), _provider(), config=_agent_config(memory=False)
     )
     ui_tools = {"show_chart", "show_table", "show_html"}
@@ -811,7 +808,7 @@ def test_build_default_agent_shows_ui_components_parent_only(
     assert not ui_tools & {t.name for t in child.tools}
 
 
-def test_build_default_agent_wires_the_vision_role(
+def test_build_agent_wires_the_vision_role(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -829,13 +826,11 @@ def test_build_default_agent_wires_the_vision_role(
 
     # The main model must be text-only, or images would go inline instead.
     blind = provider_from_string("text-model", supports_vision=False)
-    agent = builder.build_default_agent(
-        _DEPLOY, ChatStore.in_memory(), blind, config=config
-    )
+    agent = builder.build_agent(_DEPLOY, ChatStore.in_memory(), blind, config=config)
     assert "describe_image" in {t.name for t in agent.tools}
 
 
-def test_build_default_agent_injects_current_date(
+def test_build_agent_injects_current_date(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # The default agent should know today's date — rendered into its system
@@ -846,14 +841,14 @@ def test_build_default_agent_injects_current_date(
     from lovia.run_context import RunContext
 
     monkeypatch.chdir(tmp_path)
-    agent = builder.build_default_agent(_DEPLOY, ChatStore.in_memory(), _provider())
+    agent = builder.build_agent(_DEPLOY, ChatStore.in_memory(), _provider())
 
     ctx = RunContext(deps=None, entries=[], agent=agent)
     system_prompt = asyncio.run(agent.render_system_prompt(ctx))
     assert datetime.now().astimezone().strftime("%Y-%m-%d") in system_prompt
 
 
-def test_build_default_agent_declares_render_surface(
+def test_build_agent_declares_render_surface(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # The default agent only ever runs in the bundled UI — its system prompt
@@ -864,21 +859,21 @@ def test_build_default_agent_declares_render_surface(
     from lovia.web import SURFACE_NOTE
 
     monkeypatch.chdir(tmp_path)
-    agent = builder.build_default_agent(_DEPLOY, ChatStore.in_memory(), _provider())
+    agent = builder.build_agent(_DEPLOY, ChatStore.in_memory(), _provider())
 
     ctx = RunContext(deps=None, entries=[], agent=agent)
     system_prompt = asyncio.run(agent.render_system_prompt(ctx))
     assert SURFACE_NOTE in system_prompt
 
 
-def test_build_default_agent_max_tokens(
+def test_build_agent_max_tokens(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
     config = WebConfig.model_validate(
         {"models": [{"id": "m", "model": "test-model", "max_tokens": 1234}]}
     )
-    agent = builder.build_default_agent(
+    agent = builder.build_agent(
         _DEPLOY, ChatStore.in_memory(), _provider(), config=config
     )
     assert agent.settings.max_tokens == 1234
@@ -1067,17 +1062,36 @@ def test_no_warn_without_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_resolve_retry() -> None:
-    # None: the agent's own retry posture applies.
-    assert builder.resolve_retry(RunSettings()) is None
-    policy = builder.resolve_retry(RunSettings(max_retries=0))
-    assert policy is not None and policy.max_attempts == 1  # 0 disables retries
+    # None: the core default posture.
+    assert builder.resolve_retry(None).max_attempts == 5
+    assert builder.resolve_retry(0).max_attempts == 1  # 0 disables retries
 
 
 def test_run_settings_reject_out_of_range() -> None:
     with pytest.raises(ValueError):
-        RunSettings(max_turns=0)
+        AgentConfig(id="a", max_turns=0)
     with pytest.raises(ValueError):
-        RunSettings(max_retries=-1)
+        AgentConfig(id="a", max_retries=-1)
+
+
+def test_an_agent_carries_its_own_run_posture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = WebConfig.model_validate(
+        {
+            "models": [{"id": "m", "model": "test-model", "context_window": 12_345}],
+            "agents": [{"id": "lovia", "memory": False, "max_retries": 1}],
+        }
+    )
+    agent = builder.build_agent(
+        _DEPLOY, ChatStore.in_memory(), _provider(), config=config
+    )
+    assert agent.name == "lovia"
+    assert agent.retry.max_attempts == 2
+    # Compaction is the agent's own, sized to the model it runs on.
+    assert isinstance(agent.context_policy, Compaction)
+    assert agent.context_policy.context_window == 12_345
 
 
 def test_parser_reliability_flags() -> None:
@@ -1308,7 +1322,7 @@ def test_main_injects_profile_endpoint_into_the_provider(
     captured = _capture_serving(monkeypatch)
     rc = cli.main([])
     assert rc == 0
-    agent = captured["agent"]
+    agent = captured["agent"]["lovia"]  # type: ignore[index]
     assert isinstance(agent, Agent)
     provider = agent.model
     assert isinstance(provider, OpenAIChatProvider)
@@ -1330,7 +1344,7 @@ def test_main_injects_anthropic_profile_endpoint(
     captured = _capture_serving(monkeypatch)
     rc = cli.main([])
     assert rc == 0
-    agent = captured["agent"]
+    agent = captured["agent"]["lovia"]  # type: ignore[index]
     assert isinstance(agent, Agent)
     provider = agent.model
     assert isinstance(provider, AnthropicProvider)
@@ -1352,21 +1366,26 @@ def test_main_reports_unknown_vendor_at_startup(
     assert "Unknown model spec" in capsys.readouterr().err
 
 
-def test_main_passes_retry_and_context_policy(
+def test_main_gives_each_agent_its_retry_and_context_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    write_config(context_window=111_111, run={"max_retries": 1, "max_turns": 7})
+    write_config(
+        context_window=111_111,
+        agents=[{"id": "lovia", "max_retries": 1, "max_turns": 7}],
+    )
     captured = _capture_serving(monkeypatch)
     rc = cli.main([])
     assert rc == 0
-    retry = captured["retry"]
-    assert isinstance(retry, RetryPolicy)
-    assert retry.max_attempts == 2  # first attempt + 1 retry
-    policy = captured["context_policy"]
-    assert isinstance(policy, Compaction)
-    assert policy.context_window == 111_111
-    assert captured["max_turns"] == 7
+    # On the agent, not a server-wide override.
+    assert "retry" not in captured and "context_policy" not in captured
+    agent = captured["agent"]["lovia"]  # type: ignore[index]
+    assert isinstance(agent.retry, RetryPolicy)
+    assert agent.retry.max_attempts == 2  # first attempt + 1 retry
+    assert isinstance(agent.context_policy, Compaction)
+    assert agent.context_policy.context_window == 111_111
+    # Its background child runs under its own name, on the same limit.
+    assert captured["max_turns"] == {"lovia": 7, "lovia.sub": 7}
 
 
 def test_main_provider_timeout_and_trust_env_set_env(
@@ -1444,7 +1463,7 @@ def test_main_home_holds_config_history_memory_and_general_workspace(
     monkeypatch.chdir(tmp_path)
     seen = _capture_serving(monkeypatch)
     assert cli.main(["--home", str(home)]) == 0
-    agent = seen["agent"]
+    agent = seen["agent"]["lovia"]  # type: ignore[index]
     assert getattr(agent.model, "model", None) == "in-home"
     assert (home / "lovia.db").is_file()
     assert (home / ".gitignore").is_file()
@@ -1513,12 +1532,12 @@ def test_main_names_an_unread_launch_dir_config(
     monkeypatch.setattr(cli.log, "warning", lambda msg, *a, **k: warned.append(msg % a))
     seen = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
-    assert getattr(seen["agent"].model, "model", None) == "gpt-x"
+    assert getattr(seen["agent"]["lovia"].model, "model", None) == "gpt-x"  # type: ignore[index]
     assert any("--home ./.lovia" in w for w in warned)
     # Asked for it by name: no line.
     warned.clear()
     assert cli.main(["--home", ".lovia"]) == 0
-    assert getattr(seen["agent"].model, "model", None) == "old-project"
+    assert getattr(seen["agent"]["lovia"].model, "model", None) == "old-project"  # type: ignore[index]
     assert not any("--home ./.lovia" in w for w in warned)
 
 
@@ -1575,7 +1594,7 @@ def test_main_boots_with_the_saved_extra_body(
     )
     seen = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
-    assert seen["agent"].model._extra_body == {"reasoning_effort": "medium"}
+    assert seen["agent"]["lovia"].model._extra_body == {"reasoning_effort": "medium"}  # type: ignore[index]
 
 
 # ------------------------------------------------------------- followups -
@@ -1615,13 +1634,21 @@ def test_main_passes_followups_to_serve(
     write_config()
     seen = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
-    assert seen["followups"] is True
+    # The runtime's suggester: each agent's own switch decides.
+    assert seen["followups"] == seen["config_runtime"].followups  # type: ignore[union-attr]
     assert seen["followup_model"] is None
+    assert seen["max_turns"] == {"lovia": 100, "lovia.sub": 100}
 
     seen.clear()
-    write_config(run={"followups": False})
+    write_config(agents=[{"id": "lovia", "max_turns": 7}, {"id": "two"}])
     assert cli.main([]) == 0
-    assert seen["followups"] is False
+    assert seen["max_turns"] == {
+        "lovia": 7,
+        "lovia.sub": 7,
+        "two": 100,
+        "two.sub": 100,
+    }
+    assert list(seen["agent"]) == ["lovia", "two"]  # type: ignore[call-overload]
 
 
 # ------------------------------------------------- per-chat modes (CLI) -
@@ -1631,15 +1658,16 @@ def test_main_lets_chats_pick_a_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    write_config(workspace={"default_mode": "coding", "auto_allow": []})
+    write_config(agents=[{"id": "lovia", "mode": "coding", "auto_allow": []}])
     captured = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
     switch = captured["workspaces"]
+    agent = captured["agent"]["lovia"]  # type: ignore[index]
     assert switch.modes == ("readonly", "coding", "trusted")  # type: ignore[attr-defined]
     # Built from the live configuration: coding with its auto-allow bundles.
-    ws = switch.build(tmp_path, "coding")  # type: ignore[attr-defined]
+    ws = switch.build(agent, tmp_path, "coding")  # type: ignore[attr-defined]
     assert ws.policy.decide_command("ls").action == "ask"
-    assert switch.build(tmp_path, "readonly").policy.write == "deny"  # type: ignore[attr-defined]
+    assert switch.build(agent, tmp_path, "readonly").policy.write == "deny"  # type: ignore[attr-defined]
 
     captured.clear()
     assert cli.main(["--no-workspace"]) == 0

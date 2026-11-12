@@ -40,10 +40,12 @@ from ..workspace import (
 from ..workspace.policy import CommandRule
 from ..workspace.protocol import WorkspaceSession
 from .charts import show_chart
+from ..context import Compaction
 from .config import (
+    DEFAULT_AGENT_ID,
     DEFAULT_HOME,
+    AgentConfig,
     ModelProfile,
-    RunSettings,
     SearchConfig,
     WebConfig,
     resolve_skills_dirs,
@@ -59,9 +61,11 @@ log = logging.getLogger("lovia.web.builder")
 
 WORKSPACE_MODES: tuple[str, ...] = get_args(WorkspaceMode)
 INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
-DEFAULT_AGENT_NAME = "lovia"
+# A configured agent's background child is ``<id>.sub``: ids have no dots,
+# so the part before one always names the agent whose settings apply.
+SUBAGENT_SUFFIX = ".sub"
 # The command bundles a ``coding`` workspace runs without asking, by name
-# (Settings → Permissions; ``workspace.auto_allow`` in config.json). Core opts
+# (Settings → Agents; ``agents[].auto_allow`` in config.json). Core opts
 # into none; `lovia web` is a coding agent the person running it launched, so
 # inspection that prints no file contents and the project's own
 # test/lint/build tools need no card — a prompt for `ls` or `pytest` is noise
@@ -166,16 +170,21 @@ def resolve_memory(enabled: bool, root: str | Path) -> Memory | None:
     return Memory(str(path), curate_in_background=True)
 
 
-def resolve_tools(search: SearchConfig | None = None) -> list[Tool]:
-    """The always-on built-in tools for the default agent.
+def resolve_tools(
+    search: SearchConfig | None = None, *, web_search: bool = True
+) -> list[Tool]:
+    """The built-in tools every configured agent gets.
 
     ``now`` and ``web_fetch`` have no extra dependencies.
-    Web search follows the configured backend: ``auto`` uses Tavily when a
-    key is configured and the keyless ``ddgs`` backend otherwise. When the
-    chosen backend can't run we load the rest and log how to enable it
-    rather than failing.
+    Web search, unless the agent turned it off (``web_search=False``),
+    follows the configured backend: ``auto`` uses Tavily when a key is
+    configured and the keyless ``ddgs`` backend otherwise. When the chosen
+    backend can't run we load the rest and log how to enable it rather
+    than failing.
     """
     tools: list[Tool] = [now, web_fetch()]
+    if not web_search:
+        return tools
     search = search or SearchConfig()
     backend = search.backend
     if backend == "auto":
@@ -270,18 +279,18 @@ def resolve_aux_model(profile: ModelProfile | None) -> Provider | None:
         return None
 
 
-def resolve_retry(run: RunSettings) -> RetryPolicy | None:
-    """The server's retry override for ``run.max_retries`` (``None``: the
-    agent's own posture applies)."""
-    if run.max_retries is None:
-        return None
-    return RetryPolicy(max_attempts=run.max_retries + 1)
+def resolve_retry(max_retries: int | None) -> RetryPolicy:
+    """An agent's retry policy: ``max_retries`` attempts after the first,
+    or the core default for ``None``."""
+    if max_retries is None:
+        return RetryPolicy()
+    return RetryPolicy(max_attempts=max_retries + 1)
 
 
 def resolve_instructions(custom: str = "", root: str | Path = ".") -> str:
-    """The default agent's system prompt for a chat working in ``root``.
+    """An agent's system prompt for a chat working in ``root``.
 
-    ``custom`` (Settings → Agent) is the server-wide prompt; the directory's
+    ``custom`` (the agent's own, from Settings → Agents) comes first; the directory's
     ``AGENTS.md`` (the cross-agent convention) is appended to it. Without
     one the file alone serves, and without either a generic prompt. Read on
     every build — and, with chats in several directories, on every run — so
@@ -350,79 +359,101 @@ async def _remote_project_file(session: WorkspaceSession | None) -> str:
     return ""
 
 
-def project_agent(agent: Agent[Any], root: Path, config: WebConfig) -> Agent[Any]:
+def spec_id(name: str) -> str:
+    """The id of the configured agent whose settings the agent named
+    ``name`` runs on — its own, or the one a ``<id>.sub`` child belongs to."""
+    return name.partition(".")[0]
+
+
+def project_agent(
+    agent: Agent[Any], root: Path, config: WebConfig, spec: AgentConfig
+) -> Agent[Any]:
     """``agent`` for a chat working in ``root`` — ``WorkspaceSwitch.agent_for``
     for the CLI: that directory's ``AGENTS.md`` and ``.agents/skills`` (ahead
-    of the global skill directories) in place of the launch directory's.
+    of ``spec``'s skill directories) in place of the launch directory's.
     Read on every run; nothing is cached."""
     plugins: list[Plugin] = [p for p in agent.plugins if not isinstance(p, Skills)]
-    dirs = resolve_skills_dirs(config.skills, root, quiet=True)
+    dirs = resolve_skills_dirs(config.agent_skills(spec), root, quiet=True)
     if dirs:
         plugins.insert(0, Skills(*dirs))
     return agent.clone(
-        instructions=resolve_instructions(config.agent.instructions, root),
+        instructions=resolve_instructions(spec.instructions, root),
         plugins=plugins,
     )
 
 
-def remote_agent(agent: Agent[Any], config: WebConfig) -> Agent[Any]:
+def remote_agent(agent: Agent[Any], config: WebConfig, spec: AgentConfig) -> Agent[Any]:
     """``agent`` for a chat on a remote host — ``WorkspaceSwitch.agent_for_remote``
     for the CLI. The served agent was built for the launch directory; a
     project on another machine gets neither that directory's ``AGENTS.md``
-    nor its skills. It gets the server-wide prompt with its own ``AGENTS.md``
-    (:func:`remote_instructions`), and the global skill directories — the
-    skills plugin reads this machine's disk, so the project's own stay
+    nor its skills. It gets ``spec``'s prompt with its own ``AGENTS.md``
+    (:func:`remote_instructions`), and ``spec``'s global skill directories —
+    the skills plugin reads this machine's disk, so the project's own stay
     unloaded (#405)."""
     plugins: list[Plugin] = [p for p in agent.plugins if not isinstance(p, Skills)]
-    dirs = resolve_skills_dirs(config.skills, quiet=True)
+    dirs = resolve_skills_dirs(config.agent_skills(spec), quiet=True)
     if dirs:
         plugins.insert(0, Skills(*dirs))
     return agent.clone(
-        instructions=remote_instructions(config.agent.instructions),
+        instructions=remote_instructions(spec.instructions),
         plugins=plugins,
     )
 
 
 def resolve_workspace(
-    deployment: Deployment, config: WebConfig | None = None
+    deployment: Deployment,
+    spec: AgentConfig | None = None,
+    *,
+    root: str | Path | None = None,
+    mode: str | None = None,
 ) -> LocalWorkspace | None:
-    """The default agent's workspace: the deployment's root, in the
-    configured mode as the deployment allows it."""
-    settings = (config or WebConfig()).workspace
-    mode = deployment.effective_mode(settings.default_mode)
+    """``spec``'s workspace: in ``root`` (default: the deployment's) and
+    ``mode`` (default: ``spec``'s), as the deployment allows it, with
+    ``spec``'s auto-allowed commands when that mode is ``coding``."""
+    spec = spec or AgentConfig(id=DEFAULT_AGENT_ID)
+    mode = deployment.effective_mode(mode or spec.mode)
     if mode is None or deployment.workspace is None:
         return None
-    path = Path(deployment.workspace)
+    path = Path(root if root is not None else deployment.workspace)
     if not path.is_dir():
         raise UserError(f"workspace directory not found: {path}")
     if mode != "coding":
         return Workspace.local(str(path), mode=cast(WorkspaceMode, mode))
-    rules = tuple(
-        rule for name in settings.auto_allow for rule in AUTO_ALLOW_BUNDLES[name]
-    )
+    rules = tuple(rule for name in spec.auto_allow for rule in AUTO_ALLOW_BUNDLES[name])
     return Workspace.local(str(path), mode="coding", command_rules=rules)
 
 
-def build_default_agent(
+def build_agent(
     deployment: Deployment,
     store: ChatStore,
     provider: Provider,
     question_channel: HumanChannel | None = None,
     *,
     config: WebConfig | None = None,
+    spec: AgentConfig | None = None,
+    memory: Memory | None = None,
 ) -> Agent[Any]:
-    """The ready-made agent ``lovia web`` serves.
+    """One agent ``lovia web`` serves, from ``spec`` (default: the
+    configuration's default agent) on ``provider``.
 
-    ``config`` supplies everything Settings manages (search backend, vision
-    role, skill directories, workspace mode, memory, subagents, the prompt);
-    ``deployment`` bounds the workspace and names the home memory lives in.
+    ``config`` supplies what is global (search backend, vision role, the
+    skill directories ``spec`` inherits); ``deployment`` bounds the
+    workspace and names the home memory lives in. ``memory`` is the plugin
+    to share when ``spec`` keeps memory — every agent of one configuration
+    must share one, it owns the notes file's lock — and ``None`` builds one.
+    The core ``Agent.name`` is ``spec.id``: what chats store.
     """
     config = config or WebConfig()
-    profile = config.default_profile()
+    spec = spec or config.default_agent
+    profile = config.agent_profile(spec)
     settings = ModelSettings(max_tokens=profile.max_tokens if profile else None)
+    # Compaction sizes itself to the window the profile states, else the
+    # provider's advertised one; per agent, since each may run another model.
+    policy = Compaction(context_window=profile.context_window if profile else None)
+    retry = resolve_retry(spec.max_retries)
     root = Path(deployment.workspace or ".")
-    instructions = resolve_instructions(config.agent.instructions, root)
-    skills_dirs = resolve_skills_dirs(config.skills, root)
+    instructions = resolve_instructions(spec.instructions, root)
+    skills_dirs = resolve_skills_dirs(config.agent_skills(spec), root)
     plugins: list[Plugin] = []
     if skills_dirs:
         plugins.append(Skills(*skills_dirs))
@@ -431,15 +462,16 @@ def build_default_agent(
     # Let the model create Scheduled runs from chat (gated by approval). Closes
     # over the app's store so it writes the rows the scheduler polls.
     plugins.append(Scheduling(store))
-    memory = resolve_memory(config.agent.memory, deployment.home / "memory")
-    if memory is not None:
-        plugins.append(memory)
-    workspace = resolve_workspace(deployment, config)
-    tools = resolve_tools(config.search)
+    if spec.memory:
+        if memory is None:
+            memory = resolve_memory(True, deployment.home / "memory")
+        plugins.append(cast(Memory, memory))
+    workspace = resolve_workspace(deployment, spec)
+    tools = resolve_tools(config.search, web_search=spec.search)
     vision_tool = resolve_vision_tool(provider, workspace, config.vision_profile())
     if vision_tool is not None:
         tools.append(vision_tool)
-    if config.agent.subagents:
+    if spec.subagents:
         # Background subagents, on by default. The child is the same
         # assistant minus the plugins that must not ride along: Subagents
         # itself (no recursive spawning), Scheduling (a child schedules
@@ -448,10 +480,12 @@ def build_default_agent(
         # ask_human is likewise parent-only (added below): a delegated
         # background task has no operator watching to answer it.
         child: Agent[Any] = Agent(
-            name=f"{DEFAULT_AGENT_NAME}-sub",
+            name=f"{spec.id}{SUBAGENT_SUFFIX}",
             instructions=instructions,
             model=provider,
             settings=settings,
+            retry=retry,
+            context_policy=policy,
             plugins=[p for p in plugins if isinstance(p, (Skills, Todo))],
             tools=tools,
             workspace=workspace,
@@ -465,10 +499,12 @@ def build_default_agent(
     # Parent-only too: a background child's transcript has no one watching.
     tools = [*tools, show_chart, show_table, show_html]
     agent: Agent[Any] = Agent(
-        name=DEFAULT_AGENT_NAME,
+        name=spec.id,
         instructions=instructions,
         model=provider,
         settings=settings,
+        retry=retry,
+        context_policy=policy,
         plugins=plugins,
         tools=tools,
         workspace=workspace,

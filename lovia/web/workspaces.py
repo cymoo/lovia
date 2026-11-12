@@ -187,10 +187,13 @@ class WorkspaceSwitch:
       runs as the widest offered mode below it: only ever narrower.
     * ``default_mode`` — what the page preselects for a new chat; ``None``
       runs new chats on the agent's own policy until one is picked.
-    * ``build`` — ``(root, mode) -> LocalWorkspace``. The default is the
-      ``Workspace.local`` preset for the mode, keeping the agent workspace's
-      env, limits, executor, ``inherit_env`` and shell timeout — but not a
-      custom policy's rules. Pass ``build`` to carry those across modes.
+    * ``build`` — ``(agent, root, mode) -> LocalWorkspace``. The default is
+      the ``Workspace.local`` preset for the mode, keeping the agent
+      workspace's env, limits, executor, ``inherit_env`` and shell timeout —
+      but not a custom policy's rules. Pass ``build`` to carry those across
+      modes; ``agent`` is the served agent the workspace is for (a handoff
+      target gets its own call), so agents with rules of their own each
+      keep theirs.
     * ``agent_for`` — ``(agent, root) -> agent``: the project-specific rest
       (instructions, plugins — say, the directory's ``AGENTS.md`` and
       skills). Called on every run, before the workspace is set; whatever
@@ -219,7 +222,7 @@ class WorkspaceSwitch:
     roots: Literal["any"] | Sequence[str | Path] | None = "any"
     modes: Sequence[WorkspaceMode] = ("readonly", "coding")
     default_mode: WorkspaceMode | None = None
-    build: Callable[[Path, WorkspaceMode], LocalWorkspace] | None = None
+    build: Callable[[Agent[Any], Path, WorkspaceMode], LocalWorkspace] | None = None
     agent_for: Callable[[Agent[Any], Path], Agent[Any]] | None = None
     general: str | Path | None = None
     remotes: Literal["any"] | Mapping[str, RemoteHost] | None = None
@@ -286,14 +289,17 @@ class WorkspaceSwitch:
         return f"only directories under {listed} are allowed"
 
     def workspace(
-        self, base: LocalWorkspace, root: Path, mode: WorkspaceMode | None
+        self, agent: Agent[Any], root: Path, mode: WorkspaceMode | None
     ) -> LocalWorkspace:
-        """The agent's workspace ``base`` rebuilt for a chat in ``root`` with
-        ``mode`` — ``None`` keeps ``base``'s own policy, moved to ``root``."""
+        """``agent``'s local workspace rebuilt for a chat in ``root`` with
+        ``mode`` — ``None`` keeps its own policy, moved to ``root``."""
+        base = workspace_config(agent)
+        if base is None:
+            raise UserError(f"agent {agent.name!r} has no local workspace to move")
         if mode is None:
             return replace(base, root=str(root))
         if self.build is not None:
-            return self.build(root, mode)
+            return self.build(agent, root, mode)
         return Workspace.local(
             str(root),
             mode=mode,
@@ -337,21 +343,24 @@ class WorkspaceSwitch:
         return host
 
     def remote_workspace(
-        self, base: LocalWorkspace, ref: WorkspaceRef, mode: WorkspaceMode | None
+        self, agent: Agent[Any], ref: WorkspaceRef, mode: WorkspaceMode | None
     ) -> RemoteWorkspace:
-        """The agent's workspace ``base`` as a chat at the remote ``ref``
-        gets it: the policy :meth:`workspace` would give a local chat in
-        ``mode`` — enforced over there — with ``base``'s limits and shell
-        timeout. Not its ``env``: that was written for this machine.
+        """``agent``'s local workspace as a chat at the remote ``ref`` gets
+        it: the policy :meth:`workspace` would give a local chat in ``mode``
+        — enforced over there — with its limits and shell timeout. Not its
+        ``env``: that was written for this machine.
 
         Raises :class:`UserError` for a workspace with a shell ``executor``:
         it confines commands on this machine and cannot go to the host, and
         leaving it behind would run them there unconfined.
         """
+        base = workspace_config(agent)
+        if base is None:
+            raise UserError(f"agent {agent.name!r} has no local workspace to move")
         # Built for the agent's own root (a path ``build`` may check exists
         # here) and never opened: only what does not depend on the root is
         # taken from it.
-        template = self.workspace(base, resolve_root(base.root), mode)
+        template = self.workspace(agent, resolve_root(base.root), mode)
         if template.executor is not None:
             raise UserError(
                 "A workspace with a shell executor cannot be opened on a remote host.",

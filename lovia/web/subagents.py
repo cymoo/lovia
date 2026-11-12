@@ -95,12 +95,11 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                 )
                 return
             try:
-                agent = deps.pick(row.agent)
+                agent = deps.pick(deps.agent_of(row))
             except WebError:
                 log.warning(
-                    "subagent %s: agent %r is not served anymore; report dropped",
+                    "subagent %s: no agent is served anymore; report dropped",
                     report.id,
-                    row.agent,
                 )
                 return
             # The chat's own directory, checked before the hook sees it.

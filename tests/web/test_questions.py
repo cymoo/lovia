@@ -15,7 +15,7 @@ from lovia.plugins import Subagents
 from lovia.tools.human import HumanChannel
 from lovia.web import QuestionRegistry, RouterDeps, build_api_router, create_app
 from lovia.web.approvals import ApprovalRegistry
-from lovia.web.builder import Deployment, build_default_agent
+from lovia.web.builder import Deployment, build_agent
 from lovia.web.store import ChatStore
 
 from ..scripted_provider import ScriptedProvider
@@ -183,14 +183,14 @@ async def test_answer_endpoint_404_without_question_channel() -> None:
 
 
 # ------------------------------------------------------------ CLI wiring ---
-def test_build_default_agent_wires_ask_human_parent_only(
+def test_build_agent_wires_ask_human_parent_only(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from lovia.providers import provider_from_string
 
     monkeypatch.chdir(tmp_path)
     channel = HumanChannel()
-    agent = build_default_agent(
+    agent = build_agent(
         Deployment(),
         ChatStore.in_memory(),
         provider_from_string("test-model"),
@@ -204,13 +204,13 @@ def test_build_default_agent_wires_ask_human_parent_only(
     assert "ask_human" not in {t.name for t in child.tools}
 
 
-def test_build_default_agent_without_channel_has_no_ask_human(
+def test_build_agent_without_channel_has_no_ask_human(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from lovia.providers import provider_from_string
 
     monkeypatch.chdir(tmp_path)
-    agent = build_default_agent(
+    agent = build_agent(
         Deployment(), ChatStore.in_memory(), provider_from_string("test-model")
     )
     assert "ask_human" not in {t.name for t in agent.tools}

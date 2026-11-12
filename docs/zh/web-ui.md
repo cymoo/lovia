@@ -17,7 +17,7 @@ lovia web
 
 | home 里的 | 内容 |
 | --- | --- |
-| `config.json` | 模型、Web 搜索、全局技能目录，以及下文的各项设置 |
+| `config.json` | 模型、Web 搜索、全局技能目录，以及各个 [Agent](#agent) |
 | `lovia.db` | 聊天记录（`--db FILE` 可放到别处） |
 | `memory/` | 长期记忆 |
 | `workspace/` | 不属于任何项目的对话的工作区 |
@@ -42,7 +42,7 @@ CLI 创建的默认 Agent 包含 Todo、Memory、时间与 HTTP Tool、Web 搜�
 使用 Tavily，否则尝试可选的 DuckDuckGo 后端。
 
 默认功能会产生主 Run 之外的模型调用：Memory 默认在每个已完成 Run 后提炼一次，定期整理时
-再调用一次；标题和追问建议也各自独立调用。可以在**设置 → 智能体**里关闭长期记忆或追问建议，
+再调用一次；标题和追问建议也各自独立调用。可以在**设置 → Agent** 里给某个 Agent 关闭长期记忆或追问建议，
 或把辅助任务指派给更便宜的模型。Memory 的完整成本边界见[记忆](memory.md#使用建议)。
 
 !!! danger "默认仅供本机使用"
@@ -55,14 +55,15 @@ CLI 创建的默认 Agent 包含 Todo、Memory、时间与 HTTP Tool、Web 搜�
 
 ## 模型配置与切换
 
-模型档案保存在 `config.json` 中。连接测试会真实检查端点可达性、认证、模型列表和上下文窗口；
+模型档案保存在 `config.json` 中，在**设置 → 连接**里编辑，Web 搜索服务也在这一页。连接测试会真实检查端点可达性、认证、模型列表和上下文窗口；
 端点未列出的模型 ID 仍可手动填写。
 
 API Key 只写不读：服务端只返回是否已设置及脱敏提示，不会把完整密钥传回浏览器。配置更新会
 整体校验、原子写入并立即生效，无需重启。
 
 切换模型从**下一条消息**开始生效，包括旧对话的后续消息、定时任务和后台子 Agent；已经开始的
-回复仍使用原模型。视觉理解以及标题、追问建议等辅助任务，可以分别指派给其他模型档案。
+回复仍使用原模型。输入框里的模型按钮切换的是这个对话的 [Agent](#agent) 所用的模型：Agent 指定了模型就换它的，
+否则换默认模型，所有没指定模型的 Agent 都跟着换。视觉理解以及标题、追问建议等辅助任务，可以分别指派给其他模型档案。
 
 **额外请求参数**（高级）是一个 JSON 对象，原样合并进发给该端点的每个请求——即 provider 的
 [`extra_body`](providers.md#extra_body连接级的请求字段)。推理相关的配置就靠它，按端点自己的
@@ -98,7 +99,40 @@ API Key 只写不读：服务端只返回是否已设置及脱敏提示，不会
 
 面板只列全局目录，并展示每个目录的贡献——发现的 skills、解析问题、被遮蔽的重名项；
 不存在的目录会被直接跳过，过期条目不会阻止服务启动。列表变更立即生效；向已配置的目录里
-新增 skill 则无需任何操作。
+新增 skill 则无需任何操作。某个 Agent 也可以改用自己的一组目录（见下文）；项目自己的技能照常加载。
+
+## Agent
+
+`lovia web` 起初只有一个 Agent `lovia`，在**设置 → Agent** 里可以再建。每个 Agent 是一种工作方式：有自己的名称和说明、
+提示词、模型、权限模式和免确认命令、技能目录、开关（网页搜索、长期记忆、后台子任务、追问建议）和运行上限。
+连接——模型、密钥、搜索服务——在设置 → 连接里配一次，各个 Agent 共用，Agent 只是引用它们。
+
+- 新对话在输入框下方选 Agent（目录、权限模式两个按钮旁边，多于一个 Agent 时才显示）。默认是这个目录最近一个对话用的
+  Agent，没有就用默认 Agent——列表第一个（**设为默认**会把它挪到第一位）；权限模式取这个 Agent 的设置。
+- 对话一直用创建时的 Agent，按钮只显示、不能换。对话的 Agent 被删除后，它由默认 Agent 继续，打开时页面会提示。
+  定时任务的 Agent 被删除后，任务会失败并说明是哪个 Agent，直到改用别的 Agent。
+- 对话和定时任务存的是 Agent 的 `id`。它在新建时由名称生成，之后不变，所以改名不影响已有对话。
+- 长期记忆只有一份，所有开启记忆的 Agent 共用。
+
+`config.json` 里没写的字段取默认值（见[下文](#不用重启的设置)）：
+
+```json
+{
+  "version": 2,
+  "agents": [
+    {"id": "lovia"},
+    {"id": "review", "name": "代码审查", "description": "只读代码，不改文件",
+     "instructions": "审查改动，不要编辑文件。",
+     "mode": "readonly", "model": "fast"}
+  ]
+}
+```
+
+!!! note "从 0.9.179 及更早版本升级"
+
+    `config.json` 第 1 版把唯一那个 Agent 的设置放在 `agent`、`run`、`workspace` 三段里。这三段不会折算：
+    默认 Agent 从默认值开始（提示词、权限模式、免确认命令、开关和上限），下次保存时写成第 2 版。
+    模型、角色、搜索和技能照常保留。
 
 ## 加载自定义 Agent
 
@@ -237,19 +271,22 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 
 ## 不用重启的设置
 
-默认 Agent 的设置都保存在 home 的 `config.json` 里，在设置页修改。保存后从下次运行起生效；正在进行的
+各个 Agent 的设置都保存在 home 的 `config.json` 里，在设置页修改。保存后从下次运行起生效；正在进行的
 回复仍按开始时的设置完成。
 
 | 设置页 | `config.json` | 默认值 |
 | --- | --- | --- |
-| **模型** → 档案的高级选项 | `models[].max_tokens` | 沿用 Provider 的默认值 |
-| **工作区** → 新对话的权限模式 | `workspace.default_mode` | `coding`，见[模式](workspace.md#模式)和[下文](#每个对话的权限模式) |
-| **工作区** → 不询问直接运行的命令（选“工作区内修改”时显示） | `workspace.auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
-| **智能体** → 自定义指令 | `agent.instructions` | 空：使用对话所在目录的 `AGENTS.md`，没有就用通用提示；填写后 `AGENTS.md` 接在后面 |
-| **智能体** → 最大轮数 / 重试次数 | `run.max_turns` / `run.max_retries` | `100` / Agent 自己的设置（`4`） |
-| **智能体** → 生成追问建议 | `run.followups` | 开启 |
-| **智能体** → 后台子任务 | `agent.subagents` | 开启 |
-| **智能体** → 长期记忆 | `agent.memory` | 开启，保存在 `<home>/memory` |
+| **连接** → 模型的高级选项 | `models[].max_tokens` | 沿用 Provider 的默认值 |
+| **Agent** → 模型 | `agents[].model` | `null`：默认聊天模型 |
+| **Agent** → 自定义指令 | `agents[].instructions` | 空：使用对话所在目录的 `AGENTS.md`，没有就用通用提示；填写后 `AGENTS.md` 接在后面 |
+| **Agent** → 新对话的权限模式 | `agents[].mode` | `coding`，见[模式](workspace.md#模式)和[下文](#每个对话的权限模式) |
+| **Agent** → 不询问直接运行的命令（选“工作区内修改”时显示） | `agents[].auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
+| **Agent** → 技能 | `agents[].skills` | `null`：全局技能目录；填列表则改用这些目录 |
+| **Agent** → 网页搜索 | `agents[].search` | 开启；关闭后去掉 `web_search`（`web_fetch` 保留） |
+| **Agent** → 长期记忆 | `agents[].memory` | 开启，保存在 `<home>/memory` |
+| **Agent** → 后台子任务 | `agents[].subagents` | 开启 |
+| **Agent** → 生成追问建议 | `agents[].followups` | 开启 |
+| **Agent** → 最大轮数 / 重试次数 | `agents[].max_turns` / `agents[].max_retries` | `100` / core 的默认值（`4`） |
 
 `config.json` 不可写时（比如只读挂载），服务照常启动，设置页里这些设置只能查看。
 
@@ -285,7 +322,7 @@ Agent 会读取主机上这个目录的 `AGENTS.md`（每次运行读一次）�
 ## 每个对话的权限模式
 
 每个对话有自己的权限模式——**仅可查看**、**工作区内修改**或**完全权限**（`config.json` 和 API 里分别是 `readonly`、`coding`、`trusted`，见[模式](workspace.md#模式)），在输入框里目录按钮旁边切换。
-新对话默认使用设置页里的模式，发送前也可以先改。切换已有对话从下次运行起生效：正在进行的回复仍按开始时的
+新对话默认使用所选 Agent 的模式，发送前也可以先改。切换已有对话从下次运行起生效：正在进行的回复仍按开始时的
 模式完成，对话的后台进程（比如开发服务器）也不受影响。运行中创建的对话——后台子任务、用 `start_session`
 启动的对话、在这个对话里设置的定时任务新开的对话——沿用这次运行的模式。
 
@@ -367,7 +404,7 @@ serve(create_app(agent, question_channel=channel, question_timeout=600))
 ## 追问建议
 
 追问建议来自一次独立模型调用，不会写入 Transcript。关闭它可以避免这次额外调用：在**设置 →
-智能体**里关闭，也可以把辅助任务角色指派给更便宜的模型（见[模型配置与切换](#模型配置与切换)）。
+Agent** 里给某个 Agent 关闭，也可以把辅助任务角色指派给更便宜的模型（见[模型配置与切换](#模型配置与切换)）。
 通过 `create_app()` 托管自定义 Agent 时，该功能默认关闭，需要显式开启，见
 [Web 服务端](web-server.md#追问建议)。
 
@@ -405,7 +442,7 @@ Run 执行期间也可以添加附件，它们随消息一起发送，无论排�
 
 ## 后台子 Agent
 
-`lovia web` 默认启用[后台子 Agent](multi-agent.md#后台子-agent)，可在**设置 → 智能体**里关闭。
+`lovia web` 默认启用[后台子 Agent](multi-agent.md#后台子-agent)，可在**设置 → Agent** 里给某个 Agent 关闭。
 默认子 Agent 保留 Skills、Todo、Tool 和 Workspace，但不加载 Scheduling、Memory 或 Subagents，
 因此不会递归派生。
 

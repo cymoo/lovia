@@ -1,6 +1,6 @@
 # 多工作区之后：每份状态归谁，以及自定义 Agent
 
-> 状态：评审通过，作为实现基线；第 1 期（§1、§2、§6、§8）已实现（v0.9.179），第 2–4 期未开始 · 2026-11-12 · 范围：`lovia/web`（配置、CLI、构建、设置页、composer、记忆对话框）、core 的 `plugins/memory`（加作用域）
+> 状态：评审通过，作为实现基线；第 1 期（§1、§2、§6、§8）已实现（v0.9.179），第 2 期（§3–§5）已实现（v0.9.180，实现时定下的接缝见文末），第 3–4 期未开始 · 2026-11-12 · 范围：`lovia/web`（配置、CLI、构建、设置页、composer、记忆对话框）、core 的 `plugins/memory`（加作用域）
 >
 > 行号指向 `main`（`0422800`，v0.9.178）。
 
@@ -285,6 +285,22 @@ memory/
 | `scope` 与自定义存储 | 同时传就报错（§7） | 范围层悄悄用默认存储：行为出人意料 |
 | Agent 的工具开关 | 只有搜索、记忆、子代理（§3） | 每个内置工具一个开关：没有明确用处；要限制能力，权限模式更有效 |
 | 清空项目记忆 | 对话框里给入口；删对话不联动（§7） | 删对话时顺带清：两个不同的意图 |
+
+## 第 2 期实现时定下的接缝
+
+设计没写到实现层、第 2 期动手时定下的几处：
+
+| 问题 | 定论 |
+| --- | --- |
+| 注册表的键与 `Agent.name` | 都是 `id`（不含点）；显示名、说明、默认模式由 `ConfigRuntime.agent_config(id)` 提供，`AgentInfo` 多了 `label`、`description`、`mode`，嵌入方得到的是 `None` |
+| 后台子代理归谁 | 子代理叫 `<id>.sub`，点前面就是它所属 Agent 的 `id`（`builder.spec_id`） |
+| 库里的"默认 Agent" | 注册的第一个；`pick(None)` 不再因为有多个 Agent 而报 400。`RouterDeps.agent_of(meta)` 是"对话的 Agent，不在了就用默认"这一条规则的唯一实现 |
+| 运行上限 | `retry`、`context_policy` 放在各自的 `Agent` 上；`max_turns` 是 `create_app(max_turns=int \| Mapping[str, int])`；追问开关由 CLI 传入的 `FollowupFn` 按 Agent 判断 |
+| 工作区的 `build` 钩子 | 签名改为 `(agent, root, mode)`，CLI 用它取该 Agent 的免确认命令 |
+| 共享的东西 | 同一个模型配置只建一个 provider；同一次构建只建一个 `Memory`（它持有笔记文件的锁） |
+| Agent 被删除后的定时任务 | 失败并写明是哪个 Agent，不回落到默认：定时运行无人值守，换成另一个提示词和默认模式不该悄悄发生 |
+| 删除模型 | 用它的 Agent 改为跟随默认模型；默认聊天模型照旧不能删 |
+| composer 的模型 chip | 改的是当前 Agent 用的模型：Agent 指定了模型就改它的，否则改 `roles.chat` |
 
 ## 参考
 

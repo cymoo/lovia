@@ -410,7 +410,7 @@ def _make_start_tool() -> Tool:
         try:
             # This chat's agent, as served now (a settings change may have
             # swapped it since this run started).
-            agent = deps.pick(row.agent if row is not None else None)
+            agent = deps.pick(deps.agent_of(row))
         except WebError as exc:
             raise ToolError(f"Couldn't start a chat: {exc}") from exc
         agent_key = deps.name_of(agent)

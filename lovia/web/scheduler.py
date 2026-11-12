@@ -214,10 +214,13 @@ class Scheduler:
                 agent_name,
             )
         if agent_name is None or agent_name not in self.deps.agents:
+            # Unlike a chat's, a schedule's next run is unattended: running it
+            # on another agent (another prompt, another default mode) is not
+            # a quiet fallback. It fails, naming the agent, until re-pointed.
             detail = (
                 f"agent {sched.agent!r} is not served anymore"
                 if sched.agent
-                else "no agent specified and no default is available"
+                else "no agent is served"
             )
             await self._miss(sched, now, agent_name, detail)
             return None

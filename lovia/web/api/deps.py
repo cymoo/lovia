@@ -85,7 +85,8 @@ class RouterDeps:
     # presume it — the bundled ``lovia web`` CLI opts in on its own behalf.
     followups: bool | FollowupFn = False
     followup_model: str | Provider | None = None
-    max_turns: int = 50
+    # One limit for every agent, or one per registry key (see max_turns_for).
+    max_turns: int | Mapping[str, int] = 50
     # Per-run limits. Used as a template: ``fresh_budget`` copies it per run so a
     # ``RunBudget``'s wall-clock/tool-call state never bleeds across runs.
     # ``None`` (default) leaves runs unbounded, like the core ``Runner``.
@@ -466,12 +467,12 @@ class RouterDeps:
         elif ref is not None and ref.remote:
             if hooks and switch.agent_for_remote is not None:
                 agent = switch.agent_for_remote(agent, ref)
-            workspace = switch.remote_workspace(base, ref, mode)
+            workspace = switch.remote_workspace(source, ref, mode)
         else:
             where = Path(ref.root) if ref is not None else resolve_root(base.root)
             if hooks and switch.agent_for is not None:
                 agent = switch.agent_for(agent, where)
-            workspace = switch.workspace(base, where, mode)
+            workspace = switch.workspace(source, where, mode)
         # A fresh handoffs list, filled after registering the copy so a cycle
         # resolves to it.
         copy = agent.clone(workspace=workspace, handoffs=[])
@@ -499,7 +500,7 @@ class RouterDeps:
         switch = self.workspace_switch
         if switch is None or switch.remote_refusal(ref) is not None:
             return agent  # not a place this server opens; the run says so
-        return agent.clone(workspace=switch.remote_workspace(base, ref, None))
+        return agent.clone(workspace=switch.remote_workspace(agent, ref, None))
 
     def run_snapshot(self, session_id: str | None) -> ChatBinding | None:
         """The binding of the run live in ``session_id``, read now; None when
@@ -544,7 +545,7 @@ class RouterDeps:
             raise WebError(404, "session_not_found", "session not found")
         resolved = ""
         for meta in metas:
-            agent = self.agents.get(meta.agent or "") or self.pick(None)
+            agent = self.pick(self.agent_of(meta))
             resolved = self.admit(agent, root)
         async with AsyncExitStack() as locks:
             # One order for every caller: two overlapping batches can't
@@ -583,23 +584,30 @@ class RouterDeps:
 
     @property
     def default_agent(self) -> str | None:
-        """The implied agent when none is named — only when exactly one exists."""
-        return next(iter(self.agents)) if len(self.agents) == 1 else None
+        """The agent a request that names none gets: the first served."""
+        return next(iter(self.agents), None)
 
     def pick(self, name: str | None) -> Agent[Any]:
-        """Resolve an agent by name, defaulting to the sole agent if unambiguous."""
+        """Resolve an agent by name; ``None`` is the default agent."""
         if name is None:
-            if len(self.agents) == 1:
-                return next(iter(self.agents.values()))
-            raise WebError(
-                400,
-                "invalid_request",
-                "agent must be specified",
-                hint=f"available: {list(self.agents)}",
-            )
+            name = self.default_agent
+            if name is None:
+                raise WebError(404, "agent_not_found", "no agent is served")
         if name not in self.agents:
             raise WebError(404, "agent_not_found", f"unknown agent {name!r}")
         return self.agents[name]
+
+    def agent_of(self, meta: ChatMeta | None) -> str | None:
+        """The agent a stored chat runs on: the one it was created with,
+        else — that one no longer served — the default."""
+        if meta is not None and meta.agent in self.agents:
+            return meta.agent
+        return self.default_agent
+
+    def max_turns_for(self, agent: str) -> int:
+        """The turn limit for a run of the agent served as ``agent``."""
+        limit = self.max_turns
+        return limit if isinstance(limit, int) else limit.get(agent, 50)
 
     def name_of(self, agent: Agent[Any]) -> str:
         """The registry key an agent is served under — the API-facing identity.

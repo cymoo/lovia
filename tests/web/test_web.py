@@ -570,13 +570,15 @@ def test_session_persists_across_calls() -> None:
     c = TestClient(_app(agent))
     sid = c.post("/api/chat", json={"message": "one"}).json()["session_id"]
     c.post("/api/chat", json={"message": "two", "session_id": sid})
-    transcript = c.get(f"/api/sessions/{sid}").json()["entries"]
-    roles = [m["role"] for m in transcript]
+    detail = c.get(f"/api/sessions/{sid}").json()
+    assert detail["exists"] is True
+    roles = [m["role"] for m in detail["entries"]]
     assert roles.count("user") == 2
     assert roles.count("assistant") == 2
 
     c.delete(f"/api/sessions/{sid}")
-    assert c.get(f"/api/sessions/{sid}").json()["entries"] == []
+    gone = c.get(f"/api/sessions/{sid}").json()
+    assert gone["entries"] == [] and gone["exists"] is False
 
 
 # -------------------------------------------------------------- streaming -

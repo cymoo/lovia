@@ -1206,6 +1206,12 @@ export async function switchSession(id) {
   try {
     const data = await api.getSession(id);
     if (store.sessionId !== id) return; // a newer switch superseded this one
+    if (data.exists === false && !data.active_run_id && !data.entries?.length) {
+      // A chat the server doesn't have — a URL from another database or a
+      // deleted chat: a new one, not one from before directories to link.
+      startNewChat();
+      return;
+    }
     store.currentParentId = data.parent_id || null;
     store.emit('session-meta', data);
     renderTasksButton();

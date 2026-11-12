@@ -252,6 +252,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             workspace_mode=meta.workspace_mode if meta else None,
             workspace_mode_rev=meta.workspace_mode_rev if meta else 0,
             workspace_root=meta.workspace_root if meta else None,
+            exists=meta is not None,
         )
 
     @router.get("/api/sessions/{session_id}/ui-data/{ref}")

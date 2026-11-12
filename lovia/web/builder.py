@@ -330,9 +330,12 @@ def remote_instructions(custom: str = "") -> InstructionsFn:
     """:func:`resolve_instructions` for a chat on a remote host: the same
     composition, with the project's ``AGENTS.md`` read where the project is.
 
-    It is read through the run's own workspace session, so under the chat's
-    policy (a denied file is no instructions), and once per run — the caller
-    builds one of these per run. Every later render in that run returns the
+    It is read through the run's own workspace session, so a file the chat's
+    policy denies is no instructions. One it would *ask* about is read: this
+    is the server loading the project's own file, as :func:`resolve_instructions`
+    does off the local disk with no policy at all, and an ``AGENTS.md`` that
+    links to a shared one above the root is ordinary. Once per run — the
+    caller builds one of these per run. Every later render in that run returns the
     same text, which keeps the prompt prefix stable. A file that cannot be
     read is treated as absent: the run then says what is wrong with the host
     far better than a prompt could.

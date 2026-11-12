@@ -48,6 +48,7 @@ from .config import (
     ModelProfile,
     SearchConfig,
     WebConfig,
+    config_path,
     resolve_skills_dirs,
 )
 from .html import show_html
@@ -425,10 +426,24 @@ def resolve_workspace(
     path = Path(root if root is not None else deployment.workspace)
     if not path.is_dir():
         raise UserError(f"workspace directory not found: {path}")
+    denied = _home_secrets(deployment)
     if mode != "coding":
-        return Workspace.local(str(path), mode=cast(WorkspaceMode, mode))
+        return Workspace.local(
+            str(path), mode=cast(WorkspaceMode, mode), denied_paths=denied
+        )
     rules = tuple(rule for name in spec.auto_allow for rule in AUTO_ALLOW_BUNDLES[name])
-    return Workspace.local(str(path), mode="coding", command_rules=rules)
+    return Workspace.local(
+        str(path), mode="coding", command_rules=rules, denied_paths=denied
+    )
+
+
+def _home_secrets(deployment: Deployment) -> tuple[str, ...]:
+    """``config.json`` holds the model API keys, so no agent tool may open
+    it. The workspace baseline names it in the default home; a ``--home``
+    elsewhere — inside the workspace, even — is named here."""
+    if deployment.home.expanduser() == DEFAULT_HOME.expanduser():
+        return ()
+    return (config_path(deployment.home).resolve().with_suffix(".*").as_posix(),)
 
 
 def build_agent(

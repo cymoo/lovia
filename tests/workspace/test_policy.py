@@ -687,6 +687,52 @@ def test_trusted_preset_interrupts_only_for_the_baseline() -> None:
         "sort -o x y",
     ):
         assert policy.decide_command(cmd).action == "allow", cmd
+    # Outside the root too — "full access" asks nothing a baseline rule
+    # doesn't name.
+    for op in ("read", "write"):
+        assert (
+            policy.decide_path(rel=None, abs_posix="/etc/pip.conf", op=op).action
+            == "allow"
+        )
+    git = policy.decide_path(rel=None, abs_posix="/srv/x/.git/config", op="write")
+    assert git.action == "ask"
+
+
+def test_baseline_keeps_lovias_own_keys_and_process_environments() -> None:
+    home = Path.home().resolve().as_posix()
+    for policy in (WorkspacePolicy.coding(), WorkspacePolicy.trusted()):
+        for path in (f"{home}/.lovia/config.json", "/proc/4242/environ"):
+            verdict = policy.decide_path(rel=None, abs_posix=path, op="read")
+            assert verdict.action == "deny" and "Credential" in verdict.reason, path
+    # The rest of the home is not a secret: the general workspace lives there.
+    trusted = WorkspacePolicy.trusted()
+    for path in (f"{home}/.lovia/workspace/notes.md", "/proc/cpuinfo"):
+        assert trusted.decide_path(rel=None, abs_posix=path, op="read").action == (
+            "allow"
+        )
+
+
+def test_rules_ignore_case_where_the_file_system_does(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lovia.workspace import paths
+
+    home = Path.home().resolve().as_posix()
+    policy = WorkspacePolicy.trusted()
+    respelled = (
+        (None, f"{home}/.SSH/config", "read", "deny"),
+        (".ENV", "/ws/.ENV", "read", "ask"),
+        ("Sub/KEY.PEM", "/ws/Sub/KEY.PEM", "read", "deny"),
+        (".GIT/config", "/ws/.GIT/config", "write", "ask"),
+    )
+    monkeypatch.setattr(paths, "FOLD_CASE", True)  # macOS
+    for rel, abs_posix, op, action in respelled:
+        got = policy.decide_path(rel=rel, abs_posix=abs_posix, op=op)  # type: ignore[arg-type]
+        assert got.action == action, abs_posix
+    monkeypatch.setattr(paths, "FOLD_CASE", False)  # Linux: another file
+    for rel, abs_posix, op, _ in respelled:
+        got = policy.decide_path(rel=rel, abs_posix=abs_posix, op=op)  # type: ignore[arg-type]
+        assert got.action == "allow", abs_posix
 
 
 def test_bundles_exist_for_both_host_shells() -> None:
@@ -912,7 +958,7 @@ def test_presets() -> None:
 
     trusted = WorkspacePolicy.trusted(command_rules=(CommandRule("rm", "deny"),))
     assert trusted.shell_default == "allow"
-    assert trusted.read_outside == "allow" and trusted.write_outside == "ask"
+    assert trusted.read_outside == "allow" and trusted.write_outside == "allow"
     assert trusted.decide_command("rm -rf x").action == "deny"
     assert trusted.decide_command("echo ok").action == "allow"
 

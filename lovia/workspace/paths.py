@@ -10,10 +10,19 @@ question (:meth:`WorkspacePolicy.decide_path`), not a path-syntax one.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["ResolvedPath", "complete_dirs", "resolve_path"]
+__all__ = ["FOLD_CASE", "ResolvedPath", "complete_dirs", "resolve_path"]
+
+# macOS volumes ignore case by default while ``Path.resolve`` keeps a name
+# as typed: ``~/.SSH/config`` opens ``~/.ssh/config`` and still reads
+# ``.SSH``. Paths and rule patterns are therefore compared case-folded
+# there, or respelling a name would step around every rule. (Windows needs
+# nothing: ``pathlib`` and ``fnmatch`` already ignore case on it.) On a
+# case-sensitive macOS volume a rule then also covers its other spellings.
+FOLD_CASE = sys.platform == "darwin"
 
 # A completion lists this many directories at most, from at most this many
 # entries read (a huge directory must not stall the request).
@@ -116,8 +125,18 @@ def resolve_path(root: Path, path: str, *, base: Path | None = None) -> Resolved
     if not p.is_absolute():
         p = (base if base is not None else root) / p
     resolved = p.resolve()
+    rel: str | None
     try:
         rel = resolved.relative_to(root).as_posix()
     except ValueError:
-        rel = None
+        rel = _folded_rel(resolved, root) if FOLD_CASE else None
     return ResolvedPath(raw=raw, abs=resolved, rel=rel)
+
+
+def _folded_rel(resolved: Path, root: Path) -> str | None:
+    """``resolved`` relative to ``root`` when only the case of the root's
+    part differs (see :data:`FOLD_CASE`), else ``None``."""
+    parts, base = resolved.parts, root.parts
+    if [p.lower() for p in parts[: len(base)]] != [p.lower() for p in base]:
+        return None
+    return "/".join(parts[len(base) :]) or "."

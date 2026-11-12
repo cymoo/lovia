@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from ..approvals import Decision, Verdict, as_verdict, merge_verdicts
+from . import paths
 
 FileOp = Literal["read", "write"]
 
@@ -74,6 +75,13 @@ _COMMAND_SPLIT = re.compile(
 )
 
 
+def _glob(name: str, pattern: str) -> bool:
+    """``fnmatch``, ignoring case where the file system does."""
+    if paths.FOLD_CASE:
+        name, pattern = name.lower(), pattern.lower()
+    return fnmatch(name, pattern)
+
+
 def _path_matches(rel_path: str, pattern: str) -> bool:
     """Best-effort gitignore-style match of a workspace-relative POSIX path.
 
@@ -93,8 +101,8 @@ def _path_matches(rel_path: str, pattern: str) -> bool:
         pat = pat[3:]
         return _path_matches(rel_path, pat) or _path_matches(rel_path, "*/" + pat)
     if "/" in pat:
-        return fnmatch(rel_path, pat) or fnmatch(rel_path, pat + "/*")
-    return any(fnmatch(segment, pat) for segment in rel_path.split("/"))
+        return _glob(rel_path, pat) or _glob(rel_path, pat + "/*")
+    return any(_glob(segment, pat) for segment in rel_path.split("/"))
 
 
 @lru_cache(maxsize=1024)
@@ -132,7 +140,7 @@ def _abs_matches(abs_posix: str, pattern: str) -> bool:
     pat = _canonical_pattern(pattern)
     if pat is None:
         return False
-    return fnmatch(abs_posix, pat) or fnmatch(abs_posix, pat + "/*")
+    return _glob(abs_posix, pat) or _glob(abs_posix, pat + "/*")
 
 
 def _pattern_matches(pattern: str, *, rel: str | None, abs_posix: str) -> bool:
@@ -588,16 +596,18 @@ class WorkspacePolicy:
         baseline: tuple["PathRule | CommandRule", ...] | None = None,
         shell_default: Decision = "allow",
     ) -> "WorkspacePolicy":
-        """Read anywhere, write the workspace; shell runs without approval.
+        """Read and write anywhere; shell runs without approval.
 
-        Writes outside the root still ask — a cheap safety valve, since the
-        approval channel exists anyway. Only the baseline interrupts here
-        (the "all automatic" posture).
+        Only the baseline interrupts here (the "all automatic" posture).
+        Writes outside the root are allowed like everything else: an ask
+        there stopped the file tools and the shell's own redirections
+        (``> /tmp/out``), while ``tee``, ``cp`` or any program wrote the
+        same file unasked — a prompt that protected nothing.
         """
         return cls(
             write="allow",
             read_outside="allow",
-            write_outside="ask",
+            write_outside="allow",
             path_rules=path_rules,
             denied_paths=denied_paths,
             shell_default=shell_default,

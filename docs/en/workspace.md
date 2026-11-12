@@ -42,11 +42,12 @@ model sees them and adapts).
 | --- | --- | --- | --- | --- |
 | `readonly` | deny | deny | deny | none |
 | `coding` (default) | allow | **ask** | deny | the irreversible asks with a reason, the rest **asks** (rememberable per chat) |
-| `trusted` | allow | allow | **ask** | allow |
+| `trusted` | allow | allow | allow | allow |
 
 Under every mode the **baseline** holds: dangerous commands are denied
 (`git push --force`, `rm -rf /`, `mkfs`, …), credential stores are off-limits
-(`~/.ssh`, `~/.aws`, `*.pem`, …), and writes to `.git`, `.github/workflows`,
+(`~/.ssh`, `~/.aws`, `*.pem`, lovia's own `~/.lovia/config.*`,
+`/proc/*/environ`, …), and writes to `.git`, `.github/workflows`,
 `.vscode`, `.husky`, `.lovia` ask every time, and `.env*` files inside the
 workspace ask before being read. Every *protection* is baseline — it only
 ever tightens, so nothing in the user layer can undo one by accident; inside
@@ -155,7 +156,20 @@ inside it is still skipped.
 followed, `~` expanded, relative anchored at the root) and judged by where
 it *lands* — so a `.venv/bin/python` pointing at the system interpreter
 just works when the policy allows that target, and a symlink escaping the
-root is treated as the outside path it is.
+root is treated as the outside path it is. Where the file system ignores
+case (macOS, Windows) so do the rules: `~/.SSH/config` is `~/.ssh/config`.
+
+**`ask` is answered by whoever is chatting.** That is the point on your own
+machine, and no protection at all where the person chatting is not the one
+the files belong to — a hosted, multi-user service. There, make the boundary
+a `deny` and keep secrets off the agent's file system (or run it in a
+container):
+
+```python
+from dataclasses import replace
+
+policy = replace(WorkspacePolicy.coding(), read_outside="deny", allow_shell=False)
+```
 
 ## The tools
 

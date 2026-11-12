@@ -197,6 +197,11 @@ CREDENTIAL_PATHS: tuple[PathRule, ...] = tuple(
         "~/.gnupg",
         "~/.netrc",
         "~/.config/gh",
+        # lovia's own settings hold the model API keys (`lovia web`).
+        "~/.lovia/config.*",
+        # A process's environment, the host's included: the keys the shell
+        # tool's scrubbed environment keeps from the model.
+        "/proc/*/environ",
         "*.pem",
         "id_rsa*",
     )

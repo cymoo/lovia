@@ -219,12 +219,12 @@ def encode_error(exc: BaseException) -> dict[str, Any]:
     hint = getattr(exc, "hint", None)
     message = str(exc.args[0]) if hint is not None and exc.args else str(exc)
     out: dict[str, Any] = {"type": type(exc).__name__, "message": message, "hint": hint}
-    if isinstance(exc, OSError) and exc.errno in errno.errorcode:
+    if isinstance(exc, OSError) and (code := errno.errorcode.get(exc.errno or 0)):
         # What the system said, kept apart so the near side can raise the
         # same error (disk full, no permission) instead of a nameless one.
         # By name ("ENOSPC"): the numbers differ from one platform to the next.
         name = exc.filename if isinstance(exc.filename, str) else None
-        out["os"] = [errno.errorcode[exc.errno], exc.strerror, name]
+        out["os"] = [code, exc.strerror, name]
     return out
 
 

@@ -38,10 +38,10 @@ agent = Agent(
 | --- | --- | --- | --- | --- |
 | `readonly` | deny | deny | deny | none |
 | `coding`（默认） | allow | **ask** | deny | 不可撤回的带理由问，其余**问**（可按对话记住） |
-| `trusted` | allow | allow | **ask** | allow |
+| `trusted` | allow | allow | allow | allow |
 
 每种模式之下都有一条**底线**（baseline）：危险命令拒绝（`git push --force`、`rm -rf /`、`mkfs` 等），
-凭据库禁止读写（`~/.ssh`、`~/.aws`、`*.pem` 等），写 `.git`、`.github/workflows`、`.vscode`、`.husky`、
+凭据库禁止读写（`~/.ssh`、`~/.aws`、`*.pem`、lovia 自己的 `~/.lovia/config.*`、`/proc/*/environ` 等），写 `.git`、`.github/workflows`、`.vscode`、`.husky`、
 `.lovia` 每次都问，工作区内的 `.env*` 读取前会问。所有*保护*都在底线里——它只会加严，用户层的
 任何规则都不会无意间撤掉一条；底线内部也是集合而非顺序表，命中的每条规则都算、最严者胜，所以
 规则包怎么拼都不会互相遮蔽——去掉某一条就是不带它重新拼底线：
@@ -109,7 +109,18 @@ allow 降为 ask，deny 照样生效（`env git push --force`）；这种 ask �
 
 **符号链接不作特殊处理**：每个路径都会先完成解析（跟随符号链接、展开 `~`，并将相对路径定位到根目录），
 再根据最终指向的位置应用策略。因此，当 `.venv/bin/python` 指向系统解释器时，只要策略允许访问目标
-即可执行；指向根目录之外的符号链接会按工作区外路径处理。
+即可执行；指向根目录之外的符号链接会按工作区外路径处理。文件系统不区分大小写的地方（macOS、
+Windows），规则也不区分：`~/.SSH/config` 就是 `~/.ssh/config`。
+
+**`ask` 由正在聊天的人回答。** 在你自己的机器上这正是它的用意；但如果聊天的人并不是这些文件的
+主人——托管的多用户服务——它就不构成任何保护。这种场景请把边界设成 `deny`，并且不要把密钥放在
+agent 够得着的文件系统上（或者让它跑在容器里）：
+
+```python
+from dataclasses import replace
+
+policy = replace(WorkspacePolicy.coding(), read_outside="deny", allow_shell=False)
+```
 
 ## 工具
 

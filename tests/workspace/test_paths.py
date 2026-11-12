@@ -10,6 +10,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
+from lovia.workspace import paths
 from lovia.workspace.paths import resolve_path
 
 
@@ -82,6 +85,21 @@ def test_missing_tail_resolves_lexically(tmp_path: Path) -> None:
     rp = resolve_path(tmp_path, "new/deep/file.txt")
     assert rp.rel == "new/deep/file.txt"
     assert not rp.abs.exists()
+
+
+def test_respelled_root_is_inside_where_the_file_system_ignores_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = (tmp_path / "proj").resolve()
+    root.mkdir()
+    shouted = str(root.parent / "PROJ" / "sub" / ".env")
+    monkeypatch.setattr(paths, "FOLD_CASE", True)  # macOS
+    assert resolve_path(root, shouted).rel == "sub/.env"
+    assert resolve_path(root, str(root.parent / "PROJ")).rel == "."
+    assert resolve_path(root, str(root.parent / "PROJ2" / "x")).rel is None
+    monkeypatch.setattr(paths, "FOLD_CASE", False)  # Linux: another directory
+    if not (root.parent / "PROJ").exists():
+        assert resolve_path(root, shouted).rel is None
 
 
 def test_base_overrides_root_for_relative_paths(tmp_path: Path) -> None:

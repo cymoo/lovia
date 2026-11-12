@@ -1156,6 +1156,10 @@ leaves no chat behind.
 - Use one worker and back up the SQLite database.
 - For real multi-user exposure add TLS, per-user auth (`auth=`), and rate
   limiting — a shared token is single-user security.
+- An approval card is answered by whoever is chatting, so on a service for
+  other people `ask` means `allow`: make access outside the workspace a
+  `deny` and keep secrets off the file system the agent can reach (see
+  [Workspace](workspace.md#modes)).
 - The chat page sets no Content-Security-Policy, so your blocks and extension
   scripts may embed iframes from other sites. Untrusted content lovia renders
   (`html` pages, the Files panel's HTML preview) runs in frames that carry

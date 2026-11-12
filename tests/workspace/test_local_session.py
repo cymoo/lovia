@@ -91,6 +91,22 @@ async def test_session_decide_path_reports_ask_for_outside_reads(tmp_path) -> No
     assert result.content == "ok"
 
 
+async def test_trusted_runs_commands_that_write_outside_the_root(tmp_path) -> None:
+    # "Full access" used to stop at every `> /outside/file` while `tee` wrote
+    # the same file unasked.
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    for command in (
+        "mkdir -p /etc/docker.d && printf 'x' > /etc/docker.d/proxy.conf",
+        "openssl s_client </dev/null 2>/dev/null > /tmp/chain.txt; ls /tmp",
+        "tee /etc/pip.conf",
+    ):
+        assert session.decide_command(command).action == "allow", command
+    assert session.decide_path("/etc/pip.conf", write=True).action == "allow"
+    # The baseline still holds out there.
+    assert session.decide_command("echo k > ~/.ssh/authorized_keys").action == "deny"
+    assert session.decide_command("cat ~/.lovia/config.json").action == "deny"
+
+
 async def test_closed_session_refuses_operations(tmp_path) -> None:
     session = await _session(tmp_path)
     await session.close()

@@ -241,6 +241,23 @@ def test_resolve_workspace_default_mode_is_coding(tmp_path: Path) -> None:
     assert ws.policy.write == "allow"
 
 
+async def test_no_mode_reads_the_api_keys_of_a_home_inside_the_workspace(
+    tmp_path: Path,
+) -> None:
+    # `lovia web --home ./.lovia`: config.json sits inside the root, where
+    # reads are otherwise always allowed.
+    deployment = builder.Deployment(workspace=str(tmp_path), home=tmp_path / ".lovia")
+    for mode in ("readonly", "coding", "trusted"):
+        ws = builder.resolve_workspace(deployment, _ws_config(mode=mode))
+        assert ws is not None
+        session = await ws.open()
+        assert session.decide_path(".lovia/config.json").action == "deny", mode
+        assert session.decide_path(".lovia/workspace/a.md").action == "allow", mode
+        await session.close()
+    # The default home is the workspace baseline's to name.
+    assert builder._home_secrets(builder.Deployment()) == ()
+
+
 def test_resolve_workspace_mode_from_config(tmp_path: Path) -> None:
     ws = builder.resolve_workspace(
         builder.Deployment(workspace=str(tmp_path)),

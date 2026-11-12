@@ -255,6 +255,41 @@ def test_save_config_is_owner_only_and_gitignored(tmp_path: Path) -> None:
     assert not list(path.parent.glob("*.tmp"))  # the atomic temp file is gone
 
 
+@pytest.mark.parametrize(
+    ("setup", "match"),
+    [
+        # A project's own .gitignore would leave the key committable.
+        (lambda d: (d / ".gitignore").write_text(".venv/\n"), "ignore everything"),
+        # A repository's root is a project, not lovia's own directory.
+        (lambda d: (d / ".git").mkdir(), "repository's root"),
+    ],
+)
+def test_save_config_refuses_a_home_that_is_not_lovias_own(
+    tmp_path: Path, setup: object, match: str
+) -> None:
+    home = tmp_path / "project"
+    home.mkdir()
+    setup(home)  # type: ignore[operator]
+    before = home.stat().st_mode
+    cfg = WebConfig(models=[ModelProfile(id="a", model="m", api_key="sk-secret")])
+    with pytest.raises(UserError, match=match) as info:
+        storage.save_config(cfg, storage.config_path(home))
+    assert "--home ./.lovia" in str(info.value)
+    # Refused before anything changed.
+    assert not (home / "config.json").exists()
+    assert home.stat().st_mode == before
+
+
+def test_save_config_accepts_a_home_whose_gitignore_ignores_everything(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "h"
+    home.mkdir()
+    (home / ".gitignore").write_text("# mine\n *\n", encoding="utf-8")
+    storage.save_config(WebConfig(), storage.config_path(home))
+    assert (home / ".gitignore").read_text(encoding="utf-8") == "# mine\n *\n"
+
+
 def test_save_config_omits_null_fields(tmp_path: Path) -> None:
     cfg = WebConfig(models=[ModelProfile(id="a", model="m")])
     path = storage.save_config(cfg, tmp_path / "config.json")

@@ -140,17 +140,41 @@ def save_config(config: WebConfig, path: Path | None = None) -> Path:
     return path
 
 
+_OWN_HOME_HINT = (
+    "give lovia a directory of its own, e.g. --home ./.lovia (it writes the "
+    "protections itself), or add a line `*` to that directory's .gitignore"
+)
+
+
 def protect_home(directory: Path) -> None:
     """Create lovia's home, make it owner-only, and drop a ``*`` .gitignore.
 
     The home holds saved secrets and the chat DB, so it's ``0700`` where the OS
     honours it (Windows ignores mode bits) and its whole contents are
     git-ignored — never committed inside someone's repo.
+
+    It must be lovia's own directory: one whose ``.gitignore`` already says
+    something else, or a repository's root, is refused before anything is
+    changed — writing the key there would leave it committable, and taking
+    the directory over (``0700``, ignore everything) would break the project.
     """
+    if (directory / ".git").exists():
+        raise UserError(
+            f"lovia's home can't be a Git repository's root: {directory}",
+            hint=_OWN_HOME_HINT,
+        )
+    gitignore = directory / ".gitignore"
+    if gitignore.is_file():
+        lines = gitignore.read_text(encoding="utf-8", errors="replace").splitlines()
+        if "*" not in (line.strip() for line in lines):
+            raise UserError(
+                f"{gitignore} doesn't ignore everything, so the API keys in "
+                "config.json and the chat history could be committed",
+                hint=_OWN_HOME_HINT,
+            )
     directory.mkdir(parents=True, exist_ok=True)
     with suppress(OSError):  # best-effort; Windows ignores mode bits
         directory.chmod(0o700)
-    gitignore = directory / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(
             "# lovia data — secrets and chat history; never commit.\n*\n",

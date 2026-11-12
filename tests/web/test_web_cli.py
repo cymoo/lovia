@@ -1466,6 +1466,41 @@ def test_main_home_must_be_a_directory(
     assert "--home is not a directory" in capsys.readouterr().err
 
 
+def test_main_refuses_a_project_directory_as_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
+) -> None:
+    # `--home .` in a project whose .gitignore says something else: the key
+    # and the history would be committable, so nothing is served or written.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    write_config(home=tmp_path)
+    monkeypatch.setattr(cli, "serve", _unexpected_create_app)
+    assert cli.main(["--home", "."]) == 2
+    assert "doesn't ignore everything" in capsys.readouterr().err
+    assert not (tmp_path / "lovia.db").exists()
+
+
+def test_main_keeps_serving_an_old_launch_dir_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    write_config: Callable[..., Path],
+) -> None:
+    # The migration path: a ./.lovia that older versions wrote, `*` and all.
+    monkeypatch.chdir(tmp_path)
+    old = tmp_path / ".lovia"
+    write_config(home=old)
+    (old / ".gitignore").write_text(
+        "# lovia data — secrets and chat history; never commit.\n*\n",
+        encoding="utf-8",
+    )
+    _capture_serving(monkeypatch)
+    assert cli.main(["--home", "./.lovia"]) == 0
+    assert (old / "lovia.db").is_file()
+
+
 def test_main_names_an_unread_launch_dir_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

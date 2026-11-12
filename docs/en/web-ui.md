@@ -27,7 +27,9 @@ directory the server was started in, which only decides where new chats work:
 
 Separate setups — a test instance, unrelated clients — each take their own
 `--home`. The home is owner-only on platforms with Unix permissions and holds
-a `*` `.gitignore`, so a home inside a repository is never committed.
+a `*` `.gitignore`, so a home inside a repository is never committed. It must
+be lovia's own directory: a repository's root, or a directory whose
+`.gitignore` doesn't ignore everything, is refused before anything is written.
 
 Before 0.9.179 a `./.lovia/config.json` in the launch directory replaced the
 user's file, a `./.lovia/lovia.db` there was kept in use, and memory defaulted

@@ -16,7 +16,7 @@ from ...providers.base import context_window as provider_context_window
 from ..errors import WebError
 from ..schemas import AgentInfo
 from .deps import RouterDeps
-from .memory import memory_plugin
+from .memory import memory_plugin, splits_by_project
 from ..workspaces import files_config
 
 
@@ -52,6 +52,7 @@ def agent_info(
     name: str, agent: Agent[Any], *, context_window: int | None = None
 ) -> AgentInfo:
     """Public, JSON-safe view of an agent (name, static instructions, tools)."""
+    memory = memory_plugin(agent)
     return AgentInfo(
         name=name,
         instructions=agent.instructions
@@ -59,7 +60,8 @@ def agent_info(
         else None,
         tools=[t.name for t in (agent.tools or [])],
         workspace=files_config(agent) is not None,
-        memory=memory_plugin(agent) is not None,
+        memory=memory is not None,
+        memory_projects=memory is not None and splits_by_project(memory),
         context_window=context_window,
         model=model_name(agent),
     )

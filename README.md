@@ -508,7 +508,8 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 
 - **Full chat out of the box** — SSE streaming, sessions you can branch from
   any reply, messages that steer a running run or queue until it completes,
-  approvals, schedules, a memory editor and file attachments; runs survive
+  approvals, schedules, a memory editor (notes about you, and per project)
+  and file attachments; runs survive
   browser disconnects.
 - **Settings without restarts** — `lovia web` keeps models and its agents in
   Settings: each agent has its own prompt, model, permission mode, switches

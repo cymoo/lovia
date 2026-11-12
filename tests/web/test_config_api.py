@@ -737,6 +737,11 @@ def test_agents_are_served_side_by_side(
     with client:
         _add_model(client)
         client.put("/api/config/agents/lovia", json={"memory": True})
+        (first,) = [
+            p
+            for p in client.app.state.deps.agents["lovia"].plugins
+            if isinstance(p, Memory)
+        ]
         new = _add_agent(
             client,
             name="Code Review",
@@ -754,7 +759,11 @@ def test_agents_are_served_side_by_side(
         assert lovia.model is review.model
         mems = [p for a in (lovia, review) for p in a.plugins if isinstance(p, Memory)]
         assert len(mems) == 2 and mems[0] is mems[1]
+        # ...and the same one across applies: a run still on the old agents
+        # and the editor on the new ones share its locks.
+        assert mems[0] is first
         info = {a["name"]: a for a in client.get("/api/agents").json()}
+        assert info["lovia"]["memory_projects"] is True
         assert info["code-review"]["label"] == "Code Review"
         assert info["code-review"]["description"] == "Reads, never writes"
         assert info["code-review"]["mode"] == "readonly"

@@ -22,7 +22,7 @@ directory the server was started in, which only decides where new chats work:
 | --- | --- |
 | `config.json` | Models, web search, global skill directories, and the [agents](#agents) |
 | `lovia.db` | Chat history (`--db FILE` puts it elsewhere) |
-| `memory/` | Long-term memory |
+| `memory/` | Long-term memory: notes about you, and per-project notes and history under `scopes/` |
 | `workspace/` | Where chats that belong to no project work |
 
 Separate setups — a test instance, unrelated clients — each take their own
@@ -161,7 +161,16 @@ in Settings → Connections and shared; an agent refers to them.
 - An agent's `id` is what chats and schedules store. It is derived from the
   name when the agent is created and never changes, so renaming keeps every
   chat.
-- Memory is one, shared by every agent that keeps it.
+- Memory is shared by every agent that keeps it, and split by project (see
+  [Memory scopes](memory.md#scopes)): notes about you are one list, carried
+  into chats in every project; notes about a project, and recall over its
+  past chats, are kept per chat directory. A chat in "No project" has only
+  the first. The sidebar's **Memory** dialog has two tabs, "About me" and
+  "This project (name)" — the second only in a chat that belongs to a
+  project — and **Clear project memory** there deletes that project's notes
+  and recall for good; deleting chats never clears memory. A project is its
+  directory, so renaming or moving it starts a fresh one. Notes saved by
+  earlier versions all stay under "About me"; move project facts by hand.
 
 In `config.json` a missing field takes its default ([below](#settings-that-apply-without-a-restart)):
 

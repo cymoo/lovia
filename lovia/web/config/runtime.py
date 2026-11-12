@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...agent import Agent
 from ...exceptions import UserError
+from ...plugins import Memory
 from ...providers import Provider, provider_from_string
 from ...providers._windows import clear_endpoint_cache
 from ...tools import HumanChannel
@@ -79,6 +80,10 @@ class ConfigRuntime:
         self._deps: RouterDeps | None = None
         self._lock = asyncio.Lock()
         self._retire_tasks: set[asyncio.Task[None]] = set()
+        # Built on first need and kept across ``apply``: it holds the notes
+        # files' locks, so a run still on the old agents and the editor (or
+        # clear_scope) on the new ones must share the one instance.
+        self._memory: Memory | None = None
 
     # ------------------------------------------------------------- state -
 
@@ -134,7 +139,7 @@ class ConfigRuntime:
         order (the first is the default), and the aux model that serves
         titles and follow-ups, or ``None`` for "the agent's own". Agents on
         one model share its provider; agents that keep memory share one
-        Memory plugin. The CLI boot and ``apply`` both build through here,
+        Memory plugin, the same one every build. The CLI boot and ``apply`` both build through here,
         so a field can't reach one path and miss the other. Raises
         :class:`UserError` when the configuration cannot serve (naming the
         agent whose model is incomplete) and ``ValueError`` for an unknown
@@ -147,11 +152,11 @@ class ConfigRuntime:
         if missing:
             raise UserError(f"no {' or '.join(missing)} configured")
         providers: dict[str, Provider] = {}
-        memory = (
-            resolve_memory(True, self.deployment.home / "memory")
-            if any(spec.memory for spec in config.agents)
-            else None
-        )
+        memory = None
+        if any(spec.memory for spec in config.agents):
+            if self._memory is None:
+                self._memory = resolve_memory(True, self.deployment.home / "memory")
+            memory = self._memory
         agents: dict[str, Agent[Any]] = {}
         for spec in config.agents:
             profile = config.agent_profile(spec)

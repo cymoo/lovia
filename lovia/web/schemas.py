@@ -32,6 +32,9 @@ class AgentInfo(BaseModel):
     # True when the agent carries a Memory plugin (the sidebar's Memory
     # editor shows itself only for such agents).
     memory: bool = False
+    # True when that Memory is split by the chat's project
+    # (``Memory(scope=chat_project)``): the editor adds a per-project tab.
+    memory_projects: bool = False
     # The model's context window in tokens (server override > agent policy >
     # provider-advertised), or None when unknown — the UI's context ring
     # shows itself only when this is set.
@@ -47,13 +50,17 @@ class MemoryNotes(BaseModel):
     ``content`` is the canonical ``- fact`` per line markdown body; ``used`` is
     its length in chars against the plugin's ``budget`` (the meter the agent
     itself sees in its prompt). ``dreamed_at`` is the epoch time of the last
-    dream pass, ``None`` before the first one.
+    dream pass, ``None`` before the first one. ``layer`` is which Notes these
+    are: the user's, or a project's — ``scope_key`` names it (the chat's
+    workspace key; ``None`` for the user's).
     """
 
     content: str
     used: int
     budget: int
     dreamed_at: float | None = None
+    layer: Literal["user", "project"] = "user"
+    scope_key: str | None = None
 
 
 class MemoryDreamResult(MemoryNotes):

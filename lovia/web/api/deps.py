@@ -262,11 +262,13 @@ class RouterDeps:
                 await self.workspace_switch.aclose()
             if self._bus is not None:
                 self._bus.close()
-            for agent in self.agents.values():
-                plugin = memory_plugin(agent)
-                if plugin is not None:
-                    with suppress(asyncio.TimeoutError):
-                        await asyncio.wait_for(plugin.drain(), timeout=15.0)
+            # Agents usually share one Memory: drain each once.
+            plugins = {
+                id(p): p for a in self.agents.values() if (p := memory_plugin(a))
+            }
+            for plugin in plugins.values():
+                with suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(plugin.drain(), timeout=15.0)
 
     def fresh_budget(self) -> RunBudget | None:
         """A per-run copy of ``budget`` (``None`` when unset), so a ``RunBudget``'s
@@ -418,6 +420,19 @@ class RouterDeps:
         mode = self.effective_mode(meta.workspace_mode if meta is not None else None)
         where = own.as_posix() if stored is None else self.admit(agent, stored, mode)
         return ChatBinding(where, mode)
+
+    def project_of(self, binding: ChatBinding) -> str | None:
+        """The project a chat with ``binding`` belongs to — its directory's
+        key — or ``None``: no workspace, or the switch's "General" catch-all.
+        What a run's memory is scoped by (:func:`~lovia.web.run_deps.chat_project`)."""
+        root = binding.root
+        if root is None:
+            return None
+        switch = self.workspace_switch
+        if switch is not None and switch.general is not None:
+            if not WorkspaceRef.parse(root).remote and Path(root) == switch.general:
+                return None
+        return root
 
     def effective_agent(
         self, agent: Agent[Any], binding: ChatBinding, *, hooks: bool = True

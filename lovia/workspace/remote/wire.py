@@ -217,13 +217,23 @@ def encode_error(exc: BaseException) -> dict[str, Any]:
     # LoviaError renders its hint into str(); send the two apart.
     hint = getattr(exc, "hint", None)
     message = str(exc.args[0]) if hint is not None and exc.args else str(exc)
-    return {"type": type(exc).__name__, "message": message, "hint": hint}
+    out: dict[str, Any] = {"type": type(exc).__name__, "message": message, "hint": hint}
+    if isinstance(exc, OSError) and exc.errno is not None:
+        # What the system said, kept apart so the near side can raise the
+        # same error (disk full, no permission) instead of a nameless one.
+        name = exc.filename if isinstance(exc.filename, str) else None
+        out["os"] = [exc.errno, exc.strerror, name]
+    return out
 
 
 def decode_error(error: dict[str, Any]) -> Exception:
     """The far side's exception as the same class here, where there is one;
     otherwise a :class:`WorkspaceError` that names what it was."""
     name, message, hint = error.get("type"), error.get("message", ""), error.get("hint")
+    if error.get("os"):
+        errno, strerror, filename = error["os"]
+        # OSError picks the subclass for the errno: PermissionError, …
+        return OSError(errno, strerror, *([filename] if filename else []))
     cls = _ERRORS.get(name or "")
     if cls is None:
         return WorkspaceError(f"{name}: {message}", hint=hint)

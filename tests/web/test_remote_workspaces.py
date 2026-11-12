@@ -8,6 +8,7 @@ merely happens to be on the same disk, which is how the tests can look.
 from __future__ import annotations
 
 import base64
+import os
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent  # noqa: E402
 from lovia.parts import ImagePart  # noqa: E402
+from lovia.run_context import RunContext  # noqa: E402
 from lovia.web import WorkspaceSwitch, create_app  # noqa: E402
 from lovia.web.builder import Deployment  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
@@ -303,6 +305,29 @@ def test_raw_refuses_a_remote_file_over_the_read_limit(places) -> None:
             )
         finally:
             c.portal.call(far.aclose)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+    reason="needs a directory the account cannot write to",
+)
+def test_a_write_the_host_refuses_is_not_a_missing_file(remote_chat) -> None:
+    # The host's own "no" (here: no permission on uploads/) comes back as
+    # what it is, with what the system said — not as 404 file_not_found.
+    c, sid, there = remote_chat
+    (there / "uploads").mkdir()
+    (there / "uploads").chmod(0o555)
+    try:
+        res = c.post(
+            "/api/workspace/upload",
+            params={"session": sid},
+            files={"file": ("a.txt", b"data")},
+        )
+    finally:
+        (there / "uploads").chmod(0o755)
+    detail = res.json()["detail"]
+    assert (res.status_code, detail["code"]) == (403, "path_denied"), res.text
+    assert "Permission denied" in detail["message"]
 
 
 def test_an_upload_lands_in_the_remote_chats_directory(remote_chat) -> None:
@@ -665,7 +690,7 @@ def test_a_remote_chat_gets_the_remote_hook_not_the_local_one(places) -> None:
     assert "REMOTE RULES" in prompt and "LOCAL PROJECT RULES" not in prompt
 
 
-def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
+async def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
     tmp_path: Path,
 ) -> None:
     # The served agent is built for the launch directory: its AGENTS.md is in
@@ -690,12 +715,82 @@ def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
     assert "LAUNCH DIRECTORY RULES" in served.instructions
     assert any(isinstance(p, Skills) for p in served.plugins)
 
+    # No workspace to read a project file from: what is left is not the
+    # launch directory's.
+    nowhere = RunContext(deps=None, entries=[], agent=served)
     remote = remote_agent(served, config)
-    assert remote.instructions == GENERIC_INSTRUCTIONS
+    assert await remote.render_system_prompt(nowhere) == GENERIC_INSTRUCTIONS
     assert not any(isinstance(p, Skills) for p in remote.plugins)
     # The server-wide prompt (Settings → Agent) still applies everywhere.
     custom = WebConfig.model_validate({"agent": {"instructions": "be terse"}})
-    assert remote_agent(served, custom).instructions == "be terse"
+    terse = remote_agent(served, custom)
+    assert await terse.render_system_prompt(nowhere) == "be terse"
+
+
+def test_a_remote_chat_reads_its_own_projects_instructions(places) -> None:
+    # The project lives on the host, and so does its AGENTS.md: it is read
+    # over there, once per run, and this machine's is not used.
+    from lovia.web.builder import remote_agent
+    from lovia.web.config.schema import WebConfig
+
+    here, there = places
+    (here / "AGENTS.md").write_text("LOCAL PROJECT RULES", encoding="utf-8")
+    (there / "AGENTS.md").write_text("REMOTE PROJECT RULES", encoding="utf-8")
+    config = WebConfig.model_validate({"agent": {"instructions": "be terse"}})
+    far = _far()
+    provider = ScriptedProvider(
+        [call("read_file", {"path": "AGENTS.md"}), text("x"), text("y")]
+    )
+    agent = Agent(name="bot", model=provider, workspace=Workspace.local(str(here)))
+    switch = WorkspaceSwitch(
+        remotes={"far": far},
+        agent_for_remote=lambda agent, ref: remote_agent(agent, config),
+    )
+    with _client(agent, switch) as c:
+        try:
+            res = c.post(
+                "/api/chat",
+                json={"message": "go", "workspace": f"remote://far{there}"},
+            )
+            assert res.status_code == 200, res.text
+            # Edited between runs: the next run sees the new text, while both
+            # calls of the first run saw the same one.
+            (there / "AGENTS.md").write_text("NEWER RULES", encoding="utf-8")
+            again = c.post(
+                "/api/chat",
+                json={"message": "more", "session_id": res.json()["session_id"]},
+            )
+            assert again.status_code == 200, again.text
+        finally:
+            c.portal.call(far.aclose)
+    first, second, third = (str(sent[0]) for sent in provider.calls)
+    assert "be terse" in first and "REMOTE PROJECT RULES" in first
+    assert "LOCAL PROJECT RULES" not in first
+    assert second == first
+    assert "NEWER RULES" in third and "REMOTE PROJECT RULES" not in third
+
+
+async def test_a_remote_project_file_that_cannot_be_read_is_left_out(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Hidden by the chat's policy, or far too large to be instructions: the
+    # run goes on with the server-wide prompt alone.
+    from lovia.web.builder import GENERIC_INSTRUCTIONS, remote_instructions
+
+    (tmp_path / "AGENTS.md").write_text("x" * 300_000, encoding="utf-8")
+    for workspace in (
+        Workspace.local(str(tmp_path), mode="readonly"),
+        Workspace.local(str(tmp_path), mode="readonly", denied_paths=("AGENTS.md",)),
+    ):
+        session = await workspace.open()
+        try:
+            ctx = RunContext(
+                deps=None, entries=[], agent=Agent(name="bot"), workspace=session
+            )
+            assert await remote_instructions()(ctx) == GENERIC_INSTRUCTIONS
+        finally:
+            await session.close()
+    assert caplog.text.count("not using the remote AGENTS.md") == 2
 
 
 def test_a_sandboxed_agent_is_not_quietly_unsandboxed_on_a_remote(places) -> None:

@@ -149,6 +149,7 @@ normalizes all three.
 | `workspace_fixed` | 409 | the chat already works in a directory, which never changes |
 | `workspace_not_found` | 404 | no such entry in the workspace list (the fixed ones can't be removed) |
 | `workspace_unreachable` | 502 | a remote location's host could not be reached — to look the directory up, or to read or write its files (`hint` carries what it said) |
+| `workspace_io_error` | 500 | the workspace's system could not do a read or write — a full disk, say; the message is what it said. A missing OS permission is 403 `path_denied` |
 | `file_too_large` | 413 | over the workspace read or upload limit |
 | `unsupported_file_type` | 415 | not previewable inline, or an extension uploads don't allow |
 | `too_many_runs` | 429 | at the concurrent-run cap |

@@ -216,7 +216,7 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
                 return []
             try:
                 return await switch.remote_host(ref).complete_dirs(path or "~/")
-            except (UserError, WorkspaceError):
+            except (UserError, WorkspaceError, OSError):
                 return []
         if switch.roots is None:
             return []

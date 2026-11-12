@@ -96,6 +96,15 @@ _RECENT_SKIPS: tuple[str, ...] = (
 )
 
 
+def _io_error(exc: OSError) -> WebError:
+    """What the system itself refused or could not do (no permission, a full
+    disk) — raised here for a local workspace, sent back by the host for a
+    remote one."""
+    if isinstance(exc, PermissionError):
+        return WebError.from_exc(403, "path_denied", exc)
+    return WebError.from_exc(500, "workspace_io_error", exc)
+
+
 @asynccontextmanager
 async def _view(
     cfg: FilesConfig, *, skip: tuple[str, ...] = (), write: bool = False
@@ -112,6 +121,8 @@ async def _view(
         raise WebError.from_exc(404, "file_not_found", exc) from exc
     except WorkspaceError as exc:  # no way through to the host
         raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
+    except OSError as exc:
+        raise _io_error(exc) from exc
     try:
         yield session
     except PermissionDeniedError as exc:
@@ -133,6 +144,8 @@ async def _view(
         UserError,
     ) as exc:
         raise WebError.from_exc(404, "file_not_found", exc) from exc
+    except OSError as exc:
+        raise _io_error(exc) from exc
     finally:
         await session.close()
 

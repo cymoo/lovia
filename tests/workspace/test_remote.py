@@ -82,6 +82,13 @@ def test_a_system_error_survives_the_wire_as_itself() -> None:
         encode_error(PermissionError(errno.EACCES, "Permission denied"))
     )
     assert type(denied) is PermissionError
+    # It travels by name: errno numbers differ between platforms (Linux's
+    # ENAMETOOLONG is another error's number on macOS), and one this side
+    # has no name for stays a WorkspaceError rather than a wrong class.
+    sent = encode_error(OSError(errno.ENAMETOOLONG, "File name too long"))
+    assert sent["os"][0] == "ENAMETOOLONG"
+    sent["os"][0] = "ENOSUCHERRNO"
+    assert type(decode_error(sent)) is WorkspaceError
     # One the engine raised by hand has no errno and keeps its message.
     plain = decode_error(encode_error(FileNotFoundError("Not a file: a.txt")))
     assert type(plain) is FileNotFoundError and str(plain) == "Not a file: a.txt"

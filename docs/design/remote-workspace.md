@@ -233,7 +233,7 @@ WorkspaceSwitch()                                        # remotes=None：没有
 - **发送端的大小保护**：单条请求超过 `MAX_LINE`（64 MiB）时本地直接抛 `FileTooLargeError`，不发出去。否则远端读到超长行会断开整条连接，连带那台主机上所有对话的会话。
 - **Agent 自己的工作区就是远程的**（没有 `WorkspaceSwitch`，`create_app(Agent(workspace=Workspace.remote(...)))`）现在也有 Files 面板、上传和附件。
 - **远程项目的 `AGENTS.md`**（7c 之后补上）：`lovia web` 的 `agent_for_remote` 把指令换成一个异步函数（`builder.remote_instructions`），第一次渲染提示词时经本次运行自己的工作区 session 读主机上的 `AGENTS.md`，之后同一次运行里返回同一份文本。钩子保持同步、不加缓存层；读不到（不存在、被 policy 隐藏、超过 256 KiB、主机报错）就当没有。
-- **远端的系统错误原样传回**：`OSError` 带着 `errno`、`strerror`、`filename` 过线，本地用 `OSError(errno, …)` 重建，子类由 errno 决定。之前它会变成一个无名的 `WorkspaceError`，在页面上被报成 404。页面接口把权限不足映射成 403 `path_denied`，其余映射成 500 `workspace_io_error`。
+- **远端的系统错误原样传回**：`OSError` 带着 errno 的符号名（`"ENOSPC"`，数字在各平台不一样）、`strerror`、`filename` 过线，本地换算成自己的编号后用 `OSError(errno, …)` 重建，子类由 errno 决定；本地没有这个名字时仍是 `WorkspaceError`。之前它会变成一个无名的 `WorkspaceError`，在页面上被报成 404。页面接口把权限不足映射成 403 `path_denied`，其余映射成 500 `workspace_io_error`。
 - 没做：远程项目的技能（技能插件只读本机磁盘，见 #405）；请求被取消在 `open` 途中时，远端可能留下一个没有进程的空会话，到连接关闭时才回收。
 
 ## 注意事项

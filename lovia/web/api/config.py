@@ -133,7 +133,6 @@ class AgentIn(BaseModel):
     name on creation and fixed after."""
 
     name: str | None = None
-    description: str | None = None
     instructions: str | None = None
     model: str | None = None
     mode: WorkspaceModeName | None = None

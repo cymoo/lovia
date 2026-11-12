@@ -432,7 +432,6 @@ def test_list_agents_single() -> None:
             "name": "writer",
             # Set only by the CLI's configured agents.
             "label": None,
-            "description": None,
             "mode": None,
             "instructions": "be helpful",
             "tools": [],
@@ -1264,7 +1263,6 @@ def test_get_agent_by_name() -> None:
     assert c.get("/api/agents/writer").json() == {
         "name": "writer",
         "label": None,
-        "description": None,
         "mode": None,
         "instructions": "be helpful",
         "tools": [],
@@ -1470,7 +1468,6 @@ def test_build_api_router_is_embeddable() -> None:
         {
             "name": "bot",
             "label": None,
-            "description": None,
             "mode": None,
             "instructions": "",
             "tools": [],

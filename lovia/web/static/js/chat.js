@@ -1631,7 +1631,7 @@ function appendRetry() {
     settings.type = 'button';
     settings.className = 'lv-btn lv-btn-ghost lv-btn-sm';
     settings.textContent = t('chat.openModelSettings');
-    settings.addEventListener('click', () => openSettings('connections'));
+    settings.addEventListener('click', () => openSettings('models'));
     node.appendChild(settings);
   }
   appendBubbleContent(store.bubble, node);

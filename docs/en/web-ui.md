@@ -70,7 +70,7 @@ cheaper model. See [Memory](memory.md#sharp-edges) for the full cost boundary.
 ## Models and switching
 
 Model profiles are stored in `config.json` and edited in **Settings →
-Connections**, with the web-search service below them. Connection testing makes a real
+Models**; the web-search service has its own page, **Settings → Web search**. Connection testing makes a real
 request to check reachability, authentication, the model list, and the reported
 context window. A model ID can still be entered when the endpoint does not
 advertise it.
@@ -81,9 +81,10 @@ a whole, written atomically, and applied without a restart.
 
 A model switch applies from the **next message**, including later messages in
 an existing chat, scheduled runs, and background subagents. An in-flight reply
-continues on its original model. The model chip in the composer switches the
-model of the chat's [agent](#agents): its own, when it has one, else the
-default model, which every agent without one follows. Vision and auxiliary
+continues on its original model. The model chip in the composer sets the
+model of the chat's [agent](#agents), and that agent's alone — or puts it back
+on the default model. The default, which every agent without a model of its
+own follows, changes only in Settings → Models (**Make default**). Vision and auxiliary
 work such as titles and follow-up suggestions can be assigned to separate
 profiles.
 
@@ -145,11 +146,12 @@ list of directories instead (below); the project's own skills load either way.
 ## Agents
 
 `lovia web` serves one agent, `lovia`, until you add more in **Settings →
-Agents**. Each agent is a way of working: its own name and description,
-prompt, model, permission mode and auto-allowed commands, skill directories,
-switches (web search, memory, background subagents, follow-ups) and run
-limits. Connections — models, keys, the search service — are configured once
-in Settings → Connections and shared; an agent refers to them.
+Agents**. Each agent is a way of working: its own name, prompt, model,
+default permission mode and auto-allowed commands, switches (web search,
+memory, background subagents, follow-ups) and, under Advanced, skill
+directories and run limits. Models, keys and the search service are configured
+once (Settings → Models, Settings → Web search) and shared; an agent refers to them.
+The agent menu shows each agent's model and permission mode under its name.
 
 - A new chat picks its agent on the chip beside the folder and mode chips,
   shown when there is more than one. It starts with the agent the folder's
@@ -182,7 +184,7 @@ In `config.json` a missing field takes its default ([below](#settings-that-apply
   "version": 2,
   "agents": [
     {"id": "lovia"},
-    {"id": "review", "name": "Code review", "description": "Reads, never writes",
+    {"id": "review", "name": "Code review",
      "instructions": "Review the change; don't edit files.",
      "mode": "readonly", "model": "fast"}
   ]
@@ -383,17 +385,17 @@ finishes with what it started with.
 
 | Settings pane | `config.json` | Default |
 | --- | --- | --- |
-| **Connections** → a model's advanced fields | `models[].max_tokens` | The provider's |
+| **Models** → a model's advanced fields | `models[].max_tokens` | The provider's |
 | **Agents** → Model | `agents[].model` | `null`: the default chat model |
 | **Agents** → Custom instructions | `agents[].instructions` | Empty: the chat directory's `AGENTS.md`, else a generic prompt; set, `AGENTS.md` is appended |
-| **Agents** → Permission mode for new chats | `agents[].mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
+| **Agents** → Default permission mode | `agents[].mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
 | **Agents** → Commands that run without asking (shown for Edit in workspace) | `agents[].auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
-| **Agents** → Skills | `agents[].skills` | `null`: the global directories; a list replaces them |
+| **Agents** → Advanced → Skills | `agents[].skills` | `null`: the global directories; a list replaces them |
 | **Agents** → Web search | `agents[].search` | On; off leaves out `web_search` (`web_fetch` stays) |
 | **Agents** → Long-term memory | `agents[].memory` | On, kept in `<home>/memory` |
 | **Agents** → Background tasks | `agents[].subagents` | On |
 | **Agents** → Suggest follow-up questions | `agents[].followups` | On |
-| **Agents** → Max turns / Retries | `agents[].max_turns` / `agents[].max_retries` | `100` / the core default (`4`) |
+| **Agents** → Advanced → Max turns / Retries | `agents[].max_turns` / `agents[].max_retries` | `100` / the core default (`4`) |
 
 When `config.json` isn't writable (a read-only mount, say), the server still
 starts and Settings shows these as view-only.

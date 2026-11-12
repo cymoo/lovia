@@ -745,7 +745,6 @@ def test_agents_are_served_side_by_side(
         new = _add_agent(
             client,
             name="Code Review",
-            description="Reads, never writes",
             mode="readonly",
         )
         assert new == "code-review"
@@ -765,7 +764,6 @@ def test_agents_are_served_side_by_side(
         info = {a["name"]: a for a in client.get("/api/agents").json()}
         assert info["lovia"]["memory_projects"] is True
         assert info["code-review"]["label"] == "Code Review"
-        assert info["code-review"]["description"] == "Reads, never writes"
         assert info["code-review"]["mode"] == "readonly"
         assert info["lovia"]["mode"] == "coding"
         # A name with nothing to slug gets a generic id, kept unique.

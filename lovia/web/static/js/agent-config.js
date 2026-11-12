@@ -1,6 +1,6 @@
 // agent-config.js — the Settings "Agents" pane: the agents people pick for a
 // chat, each with its own prompt, model, permissions, skills, switches and
-// run limits. Like the Connections pane it edits the server's config.json
+// run limits. Like the Models pane it edits the server's config.json
 // and exists only with features.model_config.
 //
 // The list's first agent is the default: a new chat starts with it (unless
@@ -24,7 +24,11 @@ import {
   positiveInt,
   readOnlyNotice,
   refreshAgents,
+  scopeFootnote,
 } from './model-config.js';
+
+// AgentConfig.max_turns's default (DEFAULT_MAX_TURNS in web/config/schema.py).
+const DEFAULT_MAX_TURNS = 100;
 
 /**
  * An on/off switch for a form row; `value()` reads it back.
@@ -61,7 +65,7 @@ export function modeLabel(mode) {
 }
 
 /** The model an agent runs on, by name: its own, else the default chat one. */
-function modelName(c, agent) {
+export function modelName(/** @type {any} */ c, /** @type {any} */ agent) {
   const id = agent.model || c.roles.chat;
   const p = c.models.find((/** @type {any} */ m) => m.id === id);
   return p ? p.display_name || p.model : '';
@@ -70,6 +74,8 @@ function modelName(c, agent) {
 /** @param {HTMLInputElement | HTMLTextAreaElement} node */
 function invalid(node) {
   node.classList.add('lv-invalid');
+  const fold = node.closest('details');
+  if (fold) fold.open = true; // a closed Advanced can't show what's wrong
   node.focus();
   node.addEventListener('input', () => node.classList.remove('lv-invalid'), { once: true });
   return null;
@@ -137,10 +143,7 @@ export function buildAgentsPane() {
       const name = el('div', 'lv-model-row-name', a.display_name);
       if (i === 0) name.appendChild(el('span', 'lv-badge lv-badge-default', t('cfg.default')));
       const facts = [modelName(c, a), a.effective_mode && modeLabel(a.effective_mode)];
-      info.append(
-        name,
-        el('div', 'lv-model-row-meta', a.description || facts.filter(Boolean).join(' · ')),
-      );
+      info.append(name, el('div', 'lv-model-row-meta', facts.filter(Boolean).join(' · ')));
       row.appendChild(info);
 
       const actions = el('div', 'lv-model-row-actions');
@@ -186,11 +189,7 @@ export function buildAgentsPane() {
       });
       list.appendChild(row);
     });
-    box.appendChild(list);
-    const note = el('div', 'lv-cfg-footnote');
-    note.textContent = t('cfg.scopeNote', { label: c.scope.label });
-    if (!c.scope.exists) note.textContent += ` ${t('cfg.scopeUnsaved')}`;
-    box.appendChild(note);
+    box.append(list, scopeFootnote());
     return box;
   }
 
@@ -201,7 +200,6 @@ export function buildAgentsPane() {
     // A new agent starts from the defaults the server would give it.
     const a = c.agents.find((/** @type {any} */ x) => x.id === id) || {
       name: null,
-      description: '',
       instructions: '',
       model: null,
       mode: perms.modes.includes('coding') ? 'coding' : perms.modes[perms.modes.length - 1],
@@ -210,7 +208,7 @@ export function buildAgentsPane() {
       search: true,
       memory: true,
       subagents: true,
-      max_turns: 100,
+      max_turns: DEFAULT_MAX_TURNS,
       max_retries: null,
       followups: true,
     };
@@ -231,8 +229,6 @@ export function buildAgentsPane() {
     // ---- who it is
     const nameIn = input(a.name || '', { placeholder: id || t('agent.namePlaceholder') });
     form.appendChild(field(t('agent.name'), nameIn));
-    const descIn = input(a.description || '', { placeholder: t('agent.descriptionPlaceholder') });
-    form.appendChild(field(t('agent.description'), descIn, t('agent.descriptionHint')));
     const prompt = /** @type {HTMLTextAreaElement} */ (el('textarea', 'lv-dialog-input lv-cfg-input'));
     prompt.rows = 5;
     prompt.value = a.instructions || '';
@@ -273,7 +269,7 @@ export function buildAgentsPane() {
           sync();
         },
       );
-      const modeField = field(t('cfg.defaultMode'), modeCtl);
+      const modeField = field(t('agent.mode'), modeCtl);
       modeField.appendChild(modeHint);
       form.appendChild(modeField);
       const rows = el('div', 'lv-cfg-switches');
@@ -289,13 +285,34 @@ export function buildAgentsPane() {
       // not greyed — a dimmed list reads as a setting that still applies.
       // Its choices are kept, and saved, either way.
       const sync = () => {
-        modeHint.textContent = t(`cfg.modeHint_${mode}`);
+        modeHint.textContent = t('agent.modeHint', { mode: t(`cfg.modeHint_${mode}`) });
         bundleField.hidden = mode !== 'coding';
       };
       sync();
     }
 
-    // ---- skills: the global directories, or its own list
+    // ---- switches
+    const search = switchControl(a.search);
+    const memory = switchControl(a.memory);
+    const subagents = switchControl(a.subagents);
+    const followups = switchControl(a.followups);
+    const switches = el('div', 'lv-cfg-switches');
+    switches.append(
+      switchRow(t('agent.search'), search.node, t('agent.searchHint')),
+      switchRow(t('cfg.memory'), memory.node, t('cfg.memoryHint')),
+      switchRow(t('cfg.subagents'), subagents.node, t('cfg.subagentsHint')),
+      switchRow(t('cfg.followups'), followups.node, t('cfg.followupsHint')),
+    );
+    form.appendChild(field(t('agent.abilities'), switches));
+
+    // ---- Advanced: what few change. Open when it holds a change already,
+    // so a setting never hides behind a closed fold.
+    const adv = /** @type {HTMLDetailsElement} */ (el('details', 'lv-cfg-advanced'));
+    adv.appendChild(el('summary', '', t('cfg.advanced')));
+    adv.open = a.skills != null || a.max_turns !== DEFAULT_MAX_TURNS || a.max_retries != null;
+    form.appendChild(adv);
+
+    // skills: the global directories, or its own list
     let ownSkills = a.skills !== null && a.skills !== undefined;
     const dirsIn = /** @type {HTMLTextAreaElement} */ (el('textarea', 'lv-dialog-input lv-cfg-input lv-mono'));
     dirsIn.rows = 3;
@@ -315,32 +332,18 @@ export function buildAgentsPane() {
     dirsIn.hidden = !ownSkills;
     const skillsField = field(t('settings.tabSkills'), skillsSeg, t('agent.skillsHint'));
     skillsField.appendChild(dirsIn);
-    form.appendChild(skillsField);
+    adv.appendChild(skillsField);
 
-    // ---- switches
-    const search = switchControl(a.search);
-    const memory = switchControl(a.memory);
-    const subagents = switchControl(a.subagents);
-    const followups = switchControl(a.followups);
-    const switches = el('div', 'lv-cfg-switches');
-    switches.append(
-      switchRow(t('agent.search'), search.node, t('agent.searchHint')),
-      switchRow(t('cfg.memory'), memory.node, t('cfg.memoryHint')),
-      switchRow(t('cfg.subagents'), subagents.node, t('cfg.subagentsHint')),
-      switchRow(t('cfg.followups'), followups.node, t('cfg.followupsHint')),
-    );
-    form.appendChild(field(t('agent.abilities'), switches));
-
-    // ---- run limits
+    // run limits
     const turns = input(String(a.max_turns));
     turns.inputMode = 'numeric';
-    form.appendChild(field(t('cfg.maxTurns'), turns, t('cfg.maxTurnsHint')));
+    adv.appendChild(field(t('cfg.maxTurns'), turns, t('cfg.maxTurnsHint')));
     // Empty means the core default: say how many that is.
     const retries = input(a.max_retries == null ? '' : String(a.max_retries), {
       placeholder: t('cfg.maxRetriesAuto', { n: c.defaults?.max_retries ?? 4 }),
     });
     retries.inputMode = 'numeric';
-    form.appendChild(field(t('cfg.maxRetries'), retries, t('cfg.maxRetriesHint')));
+    adv.appendChild(field(t('cfg.maxRetries'), retries, t('cfg.maxRetriesHint')));
 
     if (!c.writable) {
       for (const ctl of form.querySelectorAll('input, textarea, select, button')) {
@@ -362,7 +365,6 @@ export function buildAgentsPane() {
       /** @type {Record<string, unknown>} */
       const body = {
         name: nameIn.value.trim() || null,
-        description: descIn.value.trim(),
         instructions: prompt.value,
         model: model.value || null,
         skills: ownSkills ? dirs : null,

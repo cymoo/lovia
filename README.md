@@ -487,6 +487,7 @@ agent = Agent(name="assistant", model="glm-5.2",
 Memory("./memory")                             # stdlib keyword search (FTS5 bm25)
 Memory("./memory", embedder=OpenAIEmbedder())  # + semantic arm -> hybrid recall
 Memory("./memory", index=None)                 # notes only, no archive
+Memory("./memory", scope=lambda ctx: ctx.deps.project)  # + per-project notes & recall
 ```
 
 → [Memory](https://cymoo.github.io/lovia/memory/)

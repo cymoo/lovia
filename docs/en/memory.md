@@ -35,7 +35,12 @@ covers the lexical gaps (below).
 ├── MEMORY.md.bak  # the previous Notes, written before each dream (one-level undo)
 ├── .dreamed       # mtime marker: when the last dream ran
 ├── archive.db     # cold tier: keyword index of past conversations
-└── vectors.db     # cold tier: vector arm (only with embedder=)
+├── vectors.db     # cold tier: vector arm (only with embedder=)
+└── scopes/        # only with scope= — one directory per scope key
+    └── lovia-3f9a1c2e/  # the key's last segment + a short hash of it
+        ├── scope.json   # the original key
+        ├── MEMORY.md    # the scope's Notes (plus its own .bak, .dreamed)
+        └── archive.db   # the scope's past conversations (and vectors.db)
 ```
 
 `MEMORY.md` is directly editable. Writes are atomic, and non-bullet lines are
@@ -96,8 +101,8 @@ Anthropic's default cache lifetime), its next run re-reads Notes; by then
 the provider cache has expired anyway, so the refresh is free. Raise it to
 match a longer cache lifetime, or set `0` to re-read Notes on every run.
 Runs without a `session_id` always read live Notes, and
-`replace_notes()` — a deliberate edit — unpins every session. Snapshots
-live in process memory: a restart simply re-reads.
+`replace_notes()` or `clear_scope()` — a deliberate edit — unpins every
+session. Snapshots live in process memory: a restart simply re-reads.
 
 ## Dreaming
 
@@ -128,6 +133,60 @@ settled. A long-lived host passes `curate_in_background=True` so the run's
 final event isn't held back by curation's model calls, and awaits
 `mem.drain()` on shutdown to settle anything in flight (the bundled web
 server does exactly this, with a 15s bound).
+
+## Scopes
+
+One Notes file for everything works for an assistant in one place. An agent
+that works across projects needs two kinds of memory: what is true of the
+*user* (wherever they work), and what is true of *this project* (its code,
+its conventions, its past conversations). `scope=` maps each run to a key,
+and each key gets its own Notes and archive next to the user's:
+
+```python
+Memory(
+    "~/.lovia/memory",
+    scope=lambda ctx: ctx.deps.project_path,  # (RunContext) -> str | None
+    scope_name="project",                     # what the prompts call it
+)
+```
+
+The function runs once when a run starts; the whole run — tools, prompt,
+curation — then stays in that scope. Returning `None` puts the run in no
+scope: it behaves exactly like a `Memory` without `scope=`. In a scope:
+
+| | Unscoped run | Run in a scope |
+| --- | --- | --- |
+| Prompt | `NOTES` | `USER NOTES` + `PROJECT NOTES`, each with its own meter and full `notes_budget` |
+| `remember` | `remember(fact)` | `remember(fact, about)`, `about` is `"user"` or `scope_name` |
+| `forget` | the user's Notes | both layers (the closest match wins) |
+| `recall` | the top-level archive | only this scope's archive |
+| Run-end digest | facts → user Notes, summary → top-level archive | facts about the user → user Notes, facts about the project → its Notes, summary → its archive |
+| Dream | the user's Notes | each layer on its own `.dreamed` cadence |
+
+The model decides which layer a fact belongs to, with one rule: about the
+person (a preference, a standing rule, their lasting circumstances) → user;
+about this codebase or this work → the scope; unsure → the scope, because a
+project fact made global leaks into every other project, while a
+preference kept in one project only has to be said again elsewhere.
+
+Every public method that reads or writes a layer takes `scope=`: `None`
+(default) is the user's layer, a key is that scope's. `clear_scope(key)`
+deletes a scope's Notes *and* archive — the archive is otherwise out of
+reach:
+
+```python
+await mem.remember("Deploys go through `make ship`.", scope="/srv/app")
+body = await mem.notes_body(scope="/srv/app")
+await mem.replace_notes(edited, scope="/srv/app")
+await mem.dream(scope="/srv/app")
+await mem.clear_scope("/srv/app")          # irreversible
+```
+
+Any string is a valid key (`/srv/app`, `ssh://box/x`): the directory name is
+the key's last segment plus a short hash, and `scope.json` records the key
+itself. Scopes live only in the default stores, so `scope=` can't be
+combined with `notes=` or a custom `index=`; `index=None` and `embedder=`
+apply to every layer.
 
 ## Recall quality, one argument at a time
 
@@ -190,6 +249,8 @@ a Redis- or DB-backed store is a dozen lines (`FileNotesStore` — the
 | `notes` | `None` → `MEMORY.md` file store | hot-tier backend |
 | `index` | default keyword index | cold-tier backend; `None` disables the tier and the `recall` tool |
 | `embedder` | `None` | adds the vector arm to the default index |
+| `scope` | `None` | `(RunContext) -> str \| None`: splits memory by a per-run key (see [Scopes](#scopes)) |
+| `scope_name` | `"project"` | what the prompts call a scope, and `about`'s value for it |
 | `auto_curate` | `True` | run-end digest: facts → Notes (disproved notes retired), episode summary → archive |
 | `curate_in_background` | `False` | don't hold the run's completion for curation; pair with `drain()` |
 | `expand_query` | `"auto"` | LLM query expansion; auto = only for the lexical-only default index |
@@ -229,6 +290,9 @@ Memory plugin). Because lovia's transcript is durable and
 - **`recall` is only as good as what was archived.** `index=None` earlier
   means those conversations are simply not findable later; the archive
   starts when you turn it on.
+- **A scope is its key.** Rename or move a project directory and a path key
+  changes, so the old memory stays under the old key. A scope's history
+  never shows up in another scope's `recall`, nor in unscoped runs.
 
 ## See also
 

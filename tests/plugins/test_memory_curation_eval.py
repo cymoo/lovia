@@ -21,7 +21,15 @@ import re
 
 import pytest
 
-from lovia.plugins.memory.plugin import _digest, _dream, _RunDigest
+from lovia import Agent, ModelSettings, Runner
+from lovia.plugins.memory.plugin import (
+    Memory,
+    _digest,
+    _dream,
+    _RunDigest,
+    _scoped_digest,
+    _strip_date,
+)
 
 from .test_memory import _live_model, _msgs
 
@@ -284,6 +292,132 @@ DIGEST_CASES = [
 
 
 # ---------------------------------------------------------------------------
+# Scoped digest: does each fact land in the right layer? Same shape as
+# DIGEST_CASES; the current notes mirror Memory._digest_notes.
+# ---------------------------------------------------------------------------
+
+
+def _layers(user: str = "", project: str = "") -> str:
+    return (
+        f"### About the user\n{user or '(empty)'}\n\n"
+        f"### About this project\n{project or '(empty)'}"
+    )
+
+
+def _any(facts: list[str], pattern: str) -> bool:
+    return any(re.search(pattern, f, re.IGNORECASE) for f in facts)
+
+
+SCOPED_DIGEST_CASES = [
+    (
+        "user-preference-said-in-a-project",
+        _layers(),
+        [
+            (
+                "user",
+                "From now on, always write commit messages in English, even "
+                "when we chat in Chinese.",
+            ),
+            ("assistant", "Got it — English commit messages from here on."),
+        ],
+        lambda d: (
+            _any(d.facts, r"commit|english") and not _any(d.scope_facts, r"commit")
+        ),
+    ),
+    (
+        "project-convention",
+        _layers(),
+        [
+            (
+                "user",
+                "Note that this repo uses pnpm, not npm — never run npm install here.",
+            ),
+            ("assistant", "Understood: pnpm only in this repo."),
+        ],
+        lambda d: _any(d.scope_facts, r"pnpm") and not _any(d.facts, r"pnpm"),
+    ),
+    (
+        "project-convention-zh",
+        _layers(),
+        [
+            (
+                "user",
+                "记一下：这个项目的数据库迁移都放在 migrations/ 目录，用 alembic 管理。",
+            ),
+            ("assistant", "好的，迁移在 migrations/，用 alembic。"),
+        ],
+        lambda d: (
+            _any(d.scope_facts, r"alembic|migrations") and not _any(d.facts, r"alembic")
+        ),
+    ),
+    (
+        "mixed-person-and-project",
+        _layers(),
+        [
+            (
+                "user",
+                "I'm colorblind, so never rely on red versus green alone in "
+                "any chart you make for me. And for this dashboard project, "
+                "all charts go in src/charts and use ECharts.",
+            ),
+            ("assistant", "Noted on both."),
+        ],
+        lambda d: (
+            _any(d.facts, r"colou?rblind|red|green")
+            and not _any(d.facts, r"echarts|src/charts")
+            and _any(d.scope_facts, r"echarts|src/charts")
+            and not _any(d.scope_facts, r"colou?rblind")
+        ),
+    ),
+    (
+        "unsure-goes-to-project",
+        _layers(),
+        [
+            ("user", "Let's keep lines under 100 characters here."),
+            ("assistant", "Will do — 100-character lines."),
+        ],
+        lambda d: _any(d.scope_facts, r"100") and not _any(d.facts, r"100"),
+    ),
+    (
+        "project-correction-supersedes",
+        _layers(
+            project="- [2026-01] The staging database lives at ./staging.db in the repo root."
+        ),
+        [
+            (
+                "user",
+                "Heads up — we moved the staging database to .data/staging.db "
+                "last week. Please update your notes.",
+            ),
+            ("assistant", "Noted: the staging database is at .data/staging.db now."),
+        ],
+        lambda d: (
+            _any(d.scope_facts, r"\.data/staging\.db")
+            and not _any(d.facts, r"staging")
+            and _any(d.stale, r"staging")
+        ),
+    ),
+    (
+        "user-correction-supersedes",
+        _layers(user="- [2026-01] The user wants replies in English."),
+        [
+            (
+                "user",
+                "Actually, reply to me in Chinese from now on — everywhere, "
+                "not just in this project.",
+            ),
+            ("assistant", "好的，之后都用中文回复。"),
+        ],
+        lambda d: (
+            _any(d.facts, r"chinese|中文")
+            and not _any(d.scope_facts, r"chinese|中文")
+            and _any(d.stale, r"english")
+        ),
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
 # Dream regression fixture — a fictional bloated notes file reproducing the
 # observed pathologies: duplicated rules, an interest split across three
 # lines, install logs with counts and sizes, task deliverables, a superseded
@@ -419,3 +553,47 @@ async def test_dream_eval() -> None:
     # unrelated gh-CLI or date-check rules.
     assert not re.search(r"\([1-9]\)|（[1-9]）", joined)
     assert not any(re.search(r"\bgh\b|日期", f) for f in deletion_rules)
+
+
+@pytest.mark.live_provider
+async def test_scoped_digest_eval() -> None:
+    model = f"openai:{_live_model()}"
+    rows: list[tuple[str, bool, str]] = []
+    failures: list[str] = []
+    for name, current, convo, verdict in SCOPED_DIGEST_CASES:
+        digest = await _scoped_digest(_msgs(*convo), current, model, "project")
+        ok = verdict(digest)
+        if not ok:  # one retry, as in test_digest_admission_eval
+            digest = await _scoped_digest(_msgs(*convo), current, model, "project")
+            ok = verdict(digest)
+            name = f"{name} (retry)"
+        note = f"facts={digest.facts!r} scope_facts={digest.scope_facts!r} stale={digest.stale!r}"
+        rows.append((name, ok, note))
+        if not ok:
+            failures.append(name)
+    _print_rows("scoped digest", rows)
+    assert not failures, f"scoped cases failed: {failures}"
+
+
+@pytest.mark.live_provider
+async def test_scoped_remember_eval(tmp_path) -> None:
+    # The in-run half: with the two-layer prompt, does the model pick the
+    # right `about` for an explicit "remember"?
+    mem = Memory(tmp_path, scope=lambda ctx: "/work/petshop", auto_curate=False)
+    agent = Agent(
+        name="assistant",
+        model=f"openai:{_live_model()}",
+        instructions="You are concise and helpful.",
+        settings=ModelSettings(temperature=0),
+        plugins=[mem],
+    )
+    await Runner.run(
+        agent,
+        "Please remember two things: I always want answers short and to the "
+        "point, and this repo's API server is started with `make dev`.",
+    )
+    user = [_strip_date(f) for f in await mem._tier(None).notes.load()]
+    project = [_strip_date(f) for f in await mem._tier("/work/petshop").notes.load()]
+    print(f"\nscoped remember: user={user!r} project={project!r}")
+    assert _any(user, r"short|concise|point") and not _any(user, r"make dev")
+    assert _any(project, r"make dev") and not _any(project, r"short|concise")

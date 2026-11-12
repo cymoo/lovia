@@ -254,16 +254,19 @@ jobs:
       - name: Verify on PyPI
         if: steps.gate.outputs.publish == 'true'
         run: |
-          for i in $(seq 1 10); do
+          for i in $(seq 1 30); do
             curl -sfS --max-time 15 \
               "https://pypi.org/pypi/lovia/${{ steps.ver.outputs.version }}/json" >/dev/null && exit 0
-            sleep 5
+            sleep 10
           done
-          echo "v${{ steps.ver.outputs.version }} not visible on PyPI after 50s" && exit 1
+          echo "v${{ steps.ver.outputs.version }} not visible on PyPI after 5 min" && exit 1
       - name: Tag + GitHub Release
         if: steps.gate.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+        # --target pins the tag to the commit this job built: without it GitHub
+        # tags main's current tip, which is a later commit on a delayed rerun.
         run: |
           gh release create "v${{ steps.ver.outputs.version }}" dist/* \
+            --target "${{ github.sha }}" \
             --title "v${{ steps.ver.outputs.version }}" --generate-notes

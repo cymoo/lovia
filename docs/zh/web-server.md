@@ -714,7 +714,9 @@ app = create_app(agent, workspaces=WorkspaceSwitch(remotes={"box": RemoteHost.ss
 `ssh://box/srv/project` 或 `docker://dev@api/app`。这个字符串就是它的 `workspace_root`，侧栏按它分组，
 记住的授权也挂在它下面。它按对话模式对应的 policy 运行，在主机那一端执行。`agent_for` 拿到的是本机上的一个目录，
 所以远程对话不调用它，而是调用 `agent_for_remote(agent, ref)`，`ref` 带有位置的 `host_name` 和 `root`；
-如果你提供的 Agent 本身已经带着某个本地项目的指令或技能，就在这里去掉（`lovia web` 是这样做的）。
+如果你提供的 Agent 本身已经带着某个本地项目的指令或技能，就在这里去掉。`lovia web` 是这样做的，并换上主机上的
+`AGENTS.md`：钩子本身什么都不读，只把 `instructions` 设成一个异步函数，由它在本次运行第一次渲染提示词时经
+`ctx.workspace` 读取。
 文件面板、上传和附件读写的也是主机上的文件：页面在同一条连接上另开一个只读 session（上传则只允许写根目录之内），
 主机连不上时返回 502 `workspace_unreachable`，带附件的消息不会被去掉附件发出去。
 工作区带有 shell `executor` 的 Agent 则完全不能开远程对话（409 `workspace_not_allowed`）：沙箱留在本机，

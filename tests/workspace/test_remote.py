@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import os
 import signal
 import sys
@@ -30,7 +31,7 @@ from lovia.workspace import (
     WorkspacePolicy,
 )
 from lovia.workspace.remote import host as host_module
-from lovia.workspace.remote.wire import decode, encode
+from lovia.workspace.remote.wire import decode, decode_error, encode, encode_error
 
 from ..scripted_provider import ScriptedProvider, call, text
 
@@ -68,6 +69,29 @@ async def _dead(pid: int, timeout: float = 5.0) -> bool:
 # ---------------------------------------------------------------------------
 # The wire
 # ---------------------------------------------------------------------------
+
+
+def test_a_system_error_survives_the_wire_as_itself() -> None:
+    # What the far side's system said arrives as the same error: its class
+    # (picked by errno), errno and text — not a nameless WorkspaceError.
+    full = decode_error(encode_error(OSError(errno.ENOSPC, "No space left", "/x/a")))
+    assert type(full) is OSError
+    assert (full.errno, full.filename) == (errno.ENOSPC, "/x/a")
+    assert str(full) == str(OSError(errno.ENOSPC, "No space left", "/x/a"))
+    denied = decode_error(
+        encode_error(PermissionError(errno.EACCES, "Permission denied"))
+    )
+    assert type(denied) is PermissionError
+    # It travels by name: errno numbers differ between platforms (Linux's
+    # ENAMETOOLONG is another error's number on macOS), and one this side
+    # has no name for stays a WorkspaceError rather than a wrong class.
+    sent = encode_error(OSError(errno.ENAMETOOLONG, "File name too long"))
+    assert sent["os"][0] == "ENAMETOOLONG"
+    sent["os"][0] = "ENOSUCHERRNO"
+    assert type(decode_error(sent)) is WorkspaceError
+    # One the engine raised by hand has no errno and keeps its message.
+    plain = decode_error(encode_error(FileNotFoundError("Not a file: a.txt")))
+    assert type(plain) is FileNotFoundError and str(plain) == "Not a file: a.txt"
 
 
 def test_policy_survives_the_wire_unchanged() -> None:

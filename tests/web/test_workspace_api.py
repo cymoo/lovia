@@ -8,6 +8,7 @@ must handle — nested dirs, dotfiles, a binary, an oversized text, a
 
 from __future__ import annotations
 
+import errno
 import time
 from pathlib import Path
 
@@ -536,6 +537,27 @@ def test_upload_lands_whatever_the_agents_mode(tmp_path: Path) -> None:
         r = c.post("/api/workspace/upload", files={"file": ("a.txt", b"data")})
         assert r.status_code == 200, r.text
     assert (tmp_path / "uploads" / "a.txt").read_bytes() == b"data"
+
+
+def test_upload_that_the_disk_refuses_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A write the system could not do is a coded error carrying its reason,
+    # not a bare 500 and not "file not found".
+    from lovia.workspace.local import LocalWorkspaceSession
+
+    async def full(self, path, data, *, create_only=False):
+        raise OSError(errno.ENOSPC, "No space left on device", path)
+
+    monkeypatch.setattr(LocalWorkspaceSession, "write_bytes", full)
+    r = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("a.txt", b"data", "text/plain")},
+    )
+    detail = r.json()["detail"]
+    assert (r.status_code, detail["code"]) == (500, "workspace_io_error"), r.text
+    assert "No space left on device" in detail["message"]
 
 
 def test_upload_never_leaves_the_workspace(

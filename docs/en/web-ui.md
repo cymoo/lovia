@@ -350,8 +350,10 @@ sidebar marks the folder with a server icon. The host needs `python3` 3.10
 or newer and nothing installed, and SSH must work without a password prompt
 (keys or an agent). The Files panel shows the host's folder, and uploads
 and attachments are saved there (under `uploads/`, as in a local one); a
-large file takes as long as the link to the host does. What a remote chat
-doesn't have yet: the folder's `AGENTS.md` and skills. If the
+large file takes as long as the link to the host does. The agent reads the
+folder's `AGENTS.md` on the host, once per run. The folder's own skills are
+not loaded yet: only skill directories that belong to no project
+(`~/.lovia/skills`) apply. If the
 connection drops, the run in progress fails and says so; the next message
 reconnects. See [Remote workspaces](workspace.md#remote-workspaces).
 

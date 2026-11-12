@@ -385,3 +385,15 @@ export const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', '
 export function isImagePath(path) {
   return IMAGE_EXT.has((String(path).split('.').pop() || '').toLowerCase());
 }
+
+/**
+ * The toast for a failed upload: which file, and the server's reason when it
+ * gave one (too large, a type it doesn't take, a full disk).
+ * @param {string} name
+ * @param {any} err
+ * @returns {string}
+ */
+export function uploadFailedText(name, err) {
+  const base = t('composer.uploadFailed', { name });
+  return err?.message ? `${base} — ${err.message}` : base;
+}

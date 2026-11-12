@@ -374,7 +374,7 @@ class RouterDeps:
         host = self.workspace_switch.remote_host(ref)
         try:
             resolved = await host.resolve_root(ref.root)
-        except UserError as exc:
+        except (UserError, OSError) as exc:  # not there, or not ours to look at
             raise WebError.from_exc(404, "file_not_found", exc) from exc
         except WorkspaceError as exc:
             raise WebError.from_exc(502, "workspace_unreachable", exc) from exc

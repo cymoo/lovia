@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import errno
 from collections.abc import AsyncIterator, Callable
 from dataclasses import fields, is_dataclass
 from typing import Any
@@ -217,13 +218,25 @@ def encode_error(exc: BaseException) -> dict[str, Any]:
     # LoviaError renders its hint into str(); send the two apart.
     hint = getattr(exc, "hint", None)
     message = str(exc.args[0]) if hint is not None and exc.args else str(exc)
-    return {"type": type(exc).__name__, "message": message, "hint": hint}
+    out: dict[str, Any] = {"type": type(exc).__name__, "message": message, "hint": hint}
+    if isinstance(exc, OSError) and (code := errno.errorcode.get(exc.errno or 0)):
+        # What the system said, kept apart so the near side can raise the
+        # same error (disk full, no permission) instead of a nameless one.
+        # By name ("ENOSPC"): the numbers differ from one platform to the next.
+        name = exc.filename if isinstance(exc.filename, str) else None
+        out["os"] = [code, exc.strerror, name]
+    return out
 
 
 def decode_error(error: dict[str, Any]) -> Exception:
     """The far side's exception as the same class here, where there is one;
     otherwise a :class:`WorkspaceError` that names what it was."""
     name, message, hint = error.get("type"), error.get("message", ""), error.get("hint")
+    code, strerror, filename = error.get("os") or (None, None, None)
+    number = getattr(errno, code, None) if code else None
+    if number is not None:  # else: an errno this platform has no name for
+        # OSError picks the subclass for the errno: PermissionError, …
+        return OSError(number, strerror, *([filename] if filename else []))
     cls = _ERRORS.get(name or "")
     if cls is None:
         return WorkspaceError(f"{name}: {message}", hint=hint)

@@ -13,11 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
-from ..agent import Agent
+from ..agent import Agent, InstructionsFn
 from ..exceptions import UserError
 from ..plugins import Memory, Plugin, Skills, Subagents, Todo
 from ..providers import ModelSettings, Provider, provider_from_string, supports_vision
 from ..reliability import RetryPolicy
+from ..run_context import RunContext
 from ..tools import (
     HumanChannel,
     Tool,
@@ -28,8 +29,16 @@ from ..tools import (
     tavily_search,
     web_fetch,
 )
-from ..workspace import DEV_TOOLS, READ_ONLY, LocalWorkspace, Workspace, WorkspaceMode
+from ..workspace import (
+    DEV_TOOLS,
+    READ_ONLY,
+    LocalWorkspace,
+    Workspace,
+    WorkspaceError,
+    WorkspaceMode,
+)
 from ..workspace.policy import CommandRule
+from ..workspace.protocol import WorkspaceSession
 from .charts import show_chart
 from .config import (
     ModelProfile,
@@ -303,10 +312,60 @@ def resolve_instructions(custom: str = "", root: str | Path = ".") -> str:
             log.debug("using instructions from %s", path)
             project = path.read_text(encoding="utf-8")
             break
+    return _compose(custom, project)
+
+
+def _compose(custom: str, project: str) -> str:
     custom = custom.strip()
     if custom and project:
         return f"{custom}\n\n{project}"
     return custom or project or GENERIC_INSTRUCTIONS
+
+
+# A project file larger than this is not instructions; it is left out.
+_REMOTE_INSTRUCTIONS_MAX_BYTES = 256 * 1024
+
+
+def remote_instructions(custom: str = "") -> InstructionsFn:
+    """:func:`resolve_instructions` for a chat on a remote host: the same
+    composition, with the project's ``AGENTS.md`` read where the project is.
+
+    It is read through the run's own workspace session, so a file the chat's
+    policy denies is no instructions. One it would *ask* about is read: this
+    is the server loading the project's own file, as :func:`resolve_instructions`
+    does off the local disk with no policy at all, and an ``AGENTS.md`` that
+    links to a shared one above the root is ordinary. Once per run — the
+    caller builds one of these per run. Every later render in that run returns the
+    same text, which keeps the prompt prefix stable. A file that cannot be
+    read is treated as absent: the run then says what is wrong with the host
+    far better than a prompt could.
+    """
+    rendered: str | None = None
+
+    async def instructions(ctx: RunContext[Any]) -> str:
+        nonlocal rendered
+        if rendered is None:
+            rendered = _compose(custom, await _remote_project_file(ctx.workspace))
+        return rendered
+
+    return instructions
+
+
+async def _remote_project_file(session: WorkspaceSession | None) -> str:
+    if session is None:
+        return ""
+    for name in INSTRUCTIONS_FILES:
+        try:
+            got = await session.read_bytes(
+                name, max_bytes=_REMOTE_INSTRUCTIONS_MAX_BYTES
+            )
+        except FileNotFoundError:
+            continue
+        except (OSError, UserError, WorkspaceError) as exc:
+            log.warning("not using the remote %s: %s", name, exc)
+            continue
+        return got.data.decode("utf-8", errors="replace")
+    return ""
 
 
 def project_agent(agent: Agent[Any], root: Path, config: WebConfig) -> Agent[Any]:
@@ -328,8 +387,10 @@ def remote_agent(agent: Agent[Any], config: WebConfig) -> Agent[Any]:
     """``agent`` for a chat on a remote host — ``WorkspaceSwitch.agent_for_remote``
     for the CLI. The served agent was built for the launch directory; a
     project on another machine gets neither that directory's ``AGENTS.md``
-    nor its skills: just the server-wide prompt, and the skill directories
-    that are not relative to a project (``~/.lovia/skills`` and the like)."""
+    nor its skills. It gets the server-wide prompt with its own ``AGENTS.md``
+    (:func:`remote_instructions`), and the skill directories that are not
+    relative to a project (``~/.lovia/skills`` and the like) — the skills
+    plugin reads this machine's disk, so the project's own stay unloaded."""
     plugins: list[Plugin] = [p for p in agent.plugins if not isinstance(p, Skills)]
     anywhere = config.skills.model_copy(
         update={
@@ -342,7 +403,7 @@ def remote_agent(agent: Agent[Any], config: WebConfig) -> Agent[Any]:
     if dirs:
         plugins.insert(0, Skills(*dirs))
     return agent.clone(
-        instructions=config.agent.instructions.strip() or GENERIC_INSTRUCTIONS,
+        instructions=remote_instructions(config.agent.instructions),
         plugins=plugins,
     )
 

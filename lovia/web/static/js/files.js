@@ -35,6 +35,7 @@ import {
   IMAGE_EXT,
   normalizeRel,
   renderMarkdownInto,
+  uploadFailedText,
   workspaceImageUrl,
 } from './util.js';
 
@@ -1214,8 +1215,8 @@ async function uploadToWorkspace(files) {
     try {
       await api.uploadFile(file, { agent: store.agent });
       ok += 1;
-    } catch {
-      toast(t('composer.uploadFailed', { name: file.name }), { type: 'error' });
+    } catch (err) {
+      toast(uploadFailedText(file.name, err), { type: 'error' });
     }
   }
   if (ok) {

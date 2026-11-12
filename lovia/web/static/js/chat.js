@@ -21,6 +21,7 @@ import {
   renderMarkdownInto,
   sanitizedFragment,
   toDate,
+  uploadFailedText,
 } from './util.js';
 import {
   STALE_TOOLS,
@@ -3903,10 +3904,10 @@ async function uploadFiles(files) {
       Object.assign(chip, await api.uploadFile(file, { agent: store.agent }), {
         uploading: false,
       });
-    } catch {
+    } catch (err) {
       const i = _pendingAttachments.indexOf(chip);
       if (i >= 0) _pendingAttachments.splice(i, 1);
-      toast(t('composer.uploadFailed', { name: file.name }), { type: 'error' });
+      toast(uploadFailedText(file.name, err), { type: 'error' });
     }
     renderAttachTray();
   }

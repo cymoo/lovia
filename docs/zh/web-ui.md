@@ -30,7 +30,8 @@ home 只允许当前用户访问，里面还放了一个内容为 `*` 的 `.giti
 0.9.179 之前，启动目录里的 `./.lovia/config.json` 会整体取代用户的配置，那里已有的
 `./.lovia/lovia.db` 会被沿用，记忆默认放在 `./.lovia/memory`。这些现在都不再读取；
 `lovia web --home ./.lovia` 与以前在那个目录启动的行为完全一样。没有传 `--home` 而启动目录里有
-`./.lovia/config.json` 时，服务会打一行日志说明这一点。
+`./.lovia/config.json` 或 `./.lovia/lovia.db` 时，服务会打一行日志说明这一点（后者还会说明如何把那些对话移到
+home 里）。
 
 CLI 创建的默认 Agent 包含 Todo、Memory、时间与 HTTP Tool、Web 搜索、定时任务，以及以
 当前目录为根的 coding 模式 Workspace。它每次运行都从对话所在的目录读取：

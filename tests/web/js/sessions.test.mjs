@@ -147,3 +147,52 @@ test('the open chat gets no notice for a run this page streamed, but does for on
   f.tick();
   assert.deepEqual(f.shown.map((m) => m.key), ['toast.runFinished']);
 });
+
+// Opening a chat by id (a reload's ?session=…) with the server's detail.
+function opener(detail) {
+  const events = [];
+  const urls = [];
+  const transcript = { replaceChildren: () => {} };
+  const elements = {
+    transcript,
+    'tmpl-skeleton': { content: { cloneNode: () => ({}) } },
+  };
+  const store = {
+    sessionId: null, sessions: [], activeRuns: new Set(), runsBySession: new Map(), shownRuns: new Set(),
+    emit: (name) => events.push(name),
+    syncURL: (id) => urls.push(id),
+  };
+  const context = {
+    document: { title: 'Lovia', hidden: false, getElementById: (id) => elements[id] ?? null },
+    localStorage: { getItem: () => null, setItem: () => {} },
+    store, createRunNotices, console, setTimeout, clearTimeout,
+    icon: () => '',
+    t: (key) => key,
+    toast: () => {},
+    playCompletionSound: () => {},
+    closeView: () => {},
+    closeSidebar: () => {},
+    currentView: () => null,
+    canAddWorkspace: () => false,
+    api: { getSession: async () => detail },
+  };
+  runInNewContext(`${source}\nglobalThis.open = switchSession;`, context);
+  return { store, events, urls, open: context.open };
+}
+
+test('a chat id the server has no row for opens a new chat, not one to link', async () => {
+  const f = opener({ id: 'stale', exists: false, entries: [], active_run_id: null, workspace_root: null });
+  await f.open('stale');
+  assert.equal(f.store.sessionId, null);
+  assert.deepEqual(f.urls, ['stale', null]);
+  assert.ok(f.events.includes('new-chat'));
+  assert.ok(!f.events.includes('session-meta'));
+});
+
+test('a stored chat opens as itself', async () => {
+  const f = opener({ id: 'old', exists: true, entries: [], active_run_id: null, workspace_root: null });
+  await f.open('old');
+  assert.equal(f.store.sessionId, 'old');
+  assert.ok(f.events.includes('session-meta'));
+  assert.ok(!f.events.includes('new-chat'));
+});

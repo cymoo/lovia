@@ -419,6 +419,9 @@ class SessionDetail(BaseModel):
     # The directory the chat works in (resolved, absolute); None: the agent
     # has no local workspace, or the chat predates directories (unassociated).
     workspace_root: str | None = None
+    # False: the store has no such chat (an id from another database, or one
+    # deleted) — the rest is a placeholder; a first message starts it anew.
+    exists: bool = True
 
 
 class ChatSessionInfo(BaseModel):

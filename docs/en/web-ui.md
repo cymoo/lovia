@@ -35,7 +35,8 @@ Before 0.9.179 a `./.lovia/config.json` in the launch directory replaced the
 user's file, a `./.lovia/lovia.db` there was kept in use, and memory defaulted
 to `./.lovia/memory`. None of that is read now; `lovia web --home ./.lovia`
 runs exactly as such a launch did, and the server logs this when it finds a
-`./.lovia/config.json` without `--home`.
+`./.lovia/config.json` or `./.lovia/lovia.db` without `--home` (the latter
+also with how to move those chats into the home instead).
 
 The default Agent includes Todo, Memory, time and HTTP Tools, web search,
 scheduling, and a coding-mode Workspace rooted at the current directory. From

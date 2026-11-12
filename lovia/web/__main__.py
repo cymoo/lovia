@@ -376,9 +376,10 @@ def _launch_dir(args: argparse.Namespace, general: Path) -> str:
 def _home(args: argparse.Namespace) -> Path:
     """lovia's home, from ``--home`` (default ``~/.lovia``), expanded.
 
-    Without ``--home``, a ``./.lovia/config.json`` here is what older
-    versions read first; it is not read now, and silently ignoring it would
-    leave the server on another configuration, so say how to keep it.
+    Without ``--home``, a ``./.lovia/config.json`` or ``./.lovia/lovia.db``
+    here is what older versions used; neither is read now, and silently
+    ignoring them would leave the server on another configuration or an
+    empty chat list, so say how to keep them.
     """
     if args.home:
         # Absolute, so the banner, the db path and memory name one place
@@ -389,13 +390,28 @@ def _home(args: argparse.Namespace) -> Path:
         return home
     home = webconfig.DEFAULT_HOME.expanduser()
     legacy = Path(".lovia")
-    if (legacy / "config.json").is_file() and (legacy.resolve() != home.resolve()):
-        log.warning(
-            "./.lovia/config.json is not read: lovia keeps its configuration, "
-            "chat history and memory in %s — start with --home ./.lovia to "
-            "use that directory instead",
-            webconfig.display_path(home),
-        )
+    if legacy.is_dir() and legacy.resolve() != home.resolve():
+        names = ["config.json"]
+        if not _first(args.db, os.getenv("LOVIA_DB")):  # else that names the history
+            names.append("lovia.db")
+        unread = [f"./.lovia/{n}" for n in names if (legacy / n).is_file()]
+        if unread:
+            shown = webconfig.display_path(home)
+            moving = (
+                f" (or move ./.lovia/lovia.db and ./.lovia/memory/ into {shown} "
+                "to keep its chats there)"
+                if "./.lovia/lovia.db" in unread
+                else ""
+            )
+            log.warning(
+                "%s %s not read: lovia keeps its configuration, chat history "
+                "and memory in %s — start with --home ./.lovia to use that "
+                "directory instead%s",
+                " and ".join(unread),
+                "is" if len(unread) == 1 else "are",
+                shown,
+                moving,
+            )
     return home
 
 

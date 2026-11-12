@@ -1445,9 +1445,20 @@ def test_main_ignores_a_launch_dir_db(
     monkeypatch.chdir(tmp_path)
     write_config()
     ChatStore.sqlite(tmp_path / ".lovia" / "lovia.db")  # from before 0.9.148
+    assert (tmp_path / ".lovia" / "lovia.db").is_file()
+    warned: list[str] = []
+    monkeypatch.setattr(cli.log, "warning", lambda msg, *a, **k: warned.append(msg % a))
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     assert cli.main([]) == 0
     assert (fake_home / ".lovia" / "lovia.db").is_file()
+    # No ./.lovia/config.json here — the old chats are still named.
+    (line,) = [w for w in warned if "--home ./.lovia" in w]
+    assert line.startswith("./.lovia/lovia.db is not read")
+    assert "move ./.lovia/lovia.db and ./.lovia/memory/" in line
+    # A --db of its own: that history is the one served, no line.
+    warned.clear()
+    assert cli.main(["--db", str(tmp_path / "other.db")]) == 0
+    assert not any("--home ./.lovia" in w for w in warned)
 
 
 def test_main_home_holds_config_history_memory_and_general_workspace(

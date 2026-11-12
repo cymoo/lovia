@@ -41,6 +41,7 @@ from ..workspace.policy import CommandRule
 from ..workspace.protocol import WorkspaceSession
 from .charts import show_chart
 from .config import (
+    DEFAULT_HOME,
     ModelProfile,
     RunSettings,
     SearchConfig,
@@ -59,10 +60,6 @@ log = logging.getLogger("lovia.web.builder")
 WORKSPACE_MODES: tuple[str, ...] = get_args(WorkspaceMode)
 INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
 DEFAULT_AGENT_NAME = "lovia"
-# The general workspace: where chats that belong to no project work (and
-# where `lovia web` works when launched from the home or root directory, so
-# its files never land loose in either). Created on first use.
-GENERAL_WORKSPACE = Path("~/.lovia/workspace")
 # The command bundles a ``coding`` workspace runs without asking, by name
 # (Settings → Permissions; ``workspace.auto_allow`` in config.json). Core opts
 # into none; `lovia web` is a coding agent the person running it launched, so
@@ -86,45 +83,45 @@ class Deployment:
     """The launch flags that bound what Settings can change.
 
     Everything else about the default agent lives in ``config.json``; these
-    stay flags because they protect the deployment *from* the browser:
+    stay flags because they protect the deployment *from* the browser. They
+    are the only bounds: the address the server binds changes nothing (it
+    says nothing about who sits at the browser — a container must bind
+    ``0.0.0.0`` for its own deployer), so tightening is always explicit.
 
     * ``workspace`` — the root (``None`` for ``--no-workspace``).
     * ``readonly`` — ``--readonly``: every run is read-only, whatever the
       configured default mode says.
-    * ``loopback`` — the server binds a loopback address. Off it, the
-      browser (anyone holding the token) must not widen permissions, and
-      ``trusted`` is never offered.
-    * ``allow_workspace_edit`` — ``--allow-workspace-switch``: a non-loopback
-      deployment opts into editing the workspace settings, and opening other
-      directories, from the browser anyway (``trusted`` stays loopback-only).
     * ``lock_workspace`` — ``--lock-workspace``: every chat works in
-      ``workspace``; it wins over ``allow_workspace_edit``.
+      ``workspace``, on this machine.
+    * ``home`` — ``--home``: lovia's home, holding memory and the general
+      workspace (and ``config.json`` and the chat history, which the CLI
+      opens itself).
     """
 
     workspace: str | None = "."
     readonly: bool = False
-    loopback: bool = True
-    allow_workspace_edit: bool = False
     lock_workspace: bool = False
+    home: Path = DEFAULT_HOME
+
+    def general_workspace(self) -> Path:
+        """Where chats that belong to no project work (and where ``lovia
+        web`` works when launched from the home or root directory, so its
+        files never land loose in either). Created on first use."""
+        return self.home.expanduser() / "workspace"
 
     def roots(self) -> Literal["any"] | None:
         """Which directories a chat may open: ``"any"`` (plus the general
-        workspace), or ``None`` — only ``workspace``. Off loopback, unless
-        ``--allow-workspace-switch``, a token holder must not reach beyond
-        the directory the deployer launched in."""
+        workspace), or ``None`` — only ``workspace``."""
         if self.workspace is None or self.lock_workspace:
-            return None
-        if not self.loopback and not self.allow_workspace_edit:
             return None
         return "any"
 
     def remotes(self) -> Literal["any"] | None:
         """Whether a chat may open a workspace on another machine — an SSH
-        destination, a running container: only on loopback, and only where
-        chats may pick a directory at all. Not with
-        ``--allow-workspace-switch``: that opens this server's directories to
-        a token holder, where this would lend them its keys to other hosts."""
-        return "any" if self.loopback and self.roots() == "any" else None
+        destination, a running container: wherever chats may pick a
+        directory at all. It adds no reach: an agent that can run a shell
+        here can already run ``ssh``."""
+        return "any" if self.roots() == "any" else None
 
     def modes(self) -> tuple[str, ...]:
         """The workspace modes this deployment allows, narrowest first."""
@@ -132,7 +129,7 @@ class Deployment:
             return ()
         if self.readonly:
             return ("readonly",)
-        return WORKSPACE_MODES if self.loopback else ("readonly", "coding")
+        return WORKSPACE_MODES
 
     def effective_mode(self, configured: str) -> str | None:
         """The mode a run gets for the configured default (``None``: no
@@ -143,32 +140,17 @@ class Deployment:
             return None
         return configured if configured in allowed else allowed[-1]
 
-    def chat_modes(self, default_mode: str) -> tuple[str, ...]:
-        """The modes a chat may pick. Off loopback, unless
-        ``--allow-workspace-switch``, nothing wider than the mode the server
-        started with: a token holder must not widen what the deployer set."""
-        allowed = self.modes()
-        if self.loopback or self.allow_workspace_edit or not allowed:
-            return allowed
-        ceiling = self.effective_mode(default_mode)
-        return allowed[: allowed.index(ceiling) + 1] if ceiling else allowed
-
     def workspace_lock(self) -> str | None:
-        """Why the browser can't edit the workspace settings, or ``None``.
-
-        ``"no_workspace"`` / ``"readonly"`` name the flag; ``"remote"`` is a
-        non-loopback bind without ``--allow-workspace-switch``.
-        """
+        """Why the browser can't edit the workspace settings, or ``None``:
+        ``"no_workspace"`` / ``"readonly"``, naming the flag."""
         if self.workspace is None:
             return "no_workspace"
         if self.readonly:
             return "readonly"
-        if not self.loopback and not self.allow_workspace_edit:
-            return "remote"
         return None
 
 
-def resolve_memory(enabled: bool, root: str) -> Memory | None:
+def resolve_memory(enabled: bool, root: str | Path) -> Memory | None:
     """The default :class:`Memory` plugin, rooted at ``root``, unless disabled.
 
     The directory need not exist yet — the notes file and archive db are
@@ -370,11 +352,11 @@ async def _remote_project_file(session: WorkspaceSession | None) -> str:
 
 def project_agent(agent: Agent[Any], root: Path, config: WebConfig) -> Agent[Any]:
     """``agent`` for a chat working in ``root`` — ``WorkspaceSwitch.agent_for``
-    for the CLI: that directory's ``AGENTS.md`` and skills (the configured
-    skill directories, relative ones resolved against ``root``) in place of
-    the launch directory's. Read on every run; nothing is cached."""
+    for the CLI: that directory's ``AGENTS.md`` and ``.agents/skills`` (ahead
+    of the global skill directories) in place of the launch directory's.
+    Read on every run; nothing is cached."""
     plugins: list[Plugin] = [p for p in agent.plugins if not isinstance(p, Skills)]
-    dirs = resolve_skills_dirs(config.skills, base=root, quiet=True)
+    dirs = resolve_skills_dirs(config.skills, root, quiet=True)
     if dirs:
         plugins.insert(0, Skills(*dirs))
     return agent.clone(
@@ -388,18 +370,11 @@ def remote_agent(agent: Agent[Any], config: WebConfig) -> Agent[Any]:
     for the CLI. The served agent was built for the launch directory; a
     project on another machine gets neither that directory's ``AGENTS.md``
     nor its skills. It gets the server-wide prompt with its own ``AGENTS.md``
-    (:func:`remote_instructions`), and the skill directories that are not
-    relative to a project (``~/.lovia/skills`` and the like) — the skills
-    plugin reads this machine's disk, so the project's own stay unloaded."""
+    (:func:`remote_instructions`), and the global skill directories — the
+    skills plugin reads this machine's disk, so the project's own stay
+    unloaded (#405)."""
     plugins: list[Plugin] = [p for p in agent.plugins if not isinstance(p, Skills)]
-    anywhere = config.skills.model_copy(
-        update={
-            "dirs": [
-                d for d in config.skills.dirs if Path(d).expanduser().is_absolute()
-            ]
-        }
-    )
-    dirs = resolve_skills_dirs(anywhere, quiet=True)
+    dirs = resolve_skills_dirs(config.skills, quiet=True)
     if dirs:
         plugins.insert(0, Skills(*dirs))
     return agent.clone(
@@ -440,14 +415,14 @@ def build_default_agent(
 
     ``config`` supplies everything Settings manages (search backend, vision
     role, skill directories, workspace mode, memory, subagents, the prompt);
-    ``deployment`` bounds the workspace.
+    ``deployment`` bounds the workspace and names the home memory lives in.
     """
     config = config or WebConfig()
     profile = config.default_profile()
     settings = ModelSettings(max_tokens=profile.max_tokens if profile else None)
     root = Path(deployment.workspace or ".")
     instructions = resolve_instructions(config.agent.instructions, root)
-    skills_dirs = resolve_skills_dirs(config.skills, base=root)
+    skills_dirs = resolve_skills_dirs(config.skills, root)
     plugins: list[Plugin] = []
     if skills_dirs:
         plugins.append(Skills(*skills_dirs))
@@ -456,7 +431,7 @@ def build_default_agent(
     # Let the model create Scheduled runs from chat (gated by approval). Closes
     # over the app's store so it writes the rows the scheduler polls.
     plugins.append(Scheduling(store))
-    memory = resolve_memory(config.agent.memory, config.agent.memory_dir)
+    memory = resolve_memory(config.agent.memory, deployment.home / "memory")
     if memory is not None:
         plugins.append(memory)
     workspace = resolve_workspace(deployment, config)

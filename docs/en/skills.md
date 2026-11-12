@@ -150,8 +150,9 @@ agent = Agent(..., plugins=[Skills(catalog)])
 
 ## See also
 
-- [Web UI § Skills](web-ui.md#skills) — how `lovia web` picks up
-  `./.agents/skills` and `~/.agents/skills` by default, managed in Settings
+- [Web UI § Skills](web-ui.md#skills) — how `lovia web` loads each project's
+  `.agents/skills` in its chats, plus the global directories managed in
+  Settings (`~/.agents/skills` by default)
 - [Plugins](plugins.md) — the mechanism skills are built on
 - [Memory](memory.md) — for knowledge the *agent* accumulates, rather than
   knowledge you author

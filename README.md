@@ -511,7 +511,10 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   browser disconnects.
 - **Settings without restarts** — `lovia web` keeps models, the workspace
   mode, run limits, memory and the system prompt in Settings; a change
-  applies from the next run. Each chat works in a folder of its own — the
+  applies from the next run. Settings, chat history and memory live in one
+  home (`~/.lovia`, or `--home DIR`), never in the launch directory; a
+  project's own `AGENTS.md` and `.agents/skills` load in every chat working
+  there. Each chat works in a folder of its own — the
   sidebar groups chats by folder, and each picks its permission mode
   (`create_app(workspaces=WorkspaceSwitch())` in your own app). The folder
   can be on an SSH host or in a running container: pick it in the add

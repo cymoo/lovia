@@ -833,9 +833,10 @@ on its host; opening a chat in one does not, so a directory that is gone
 shows up as the run's first error.
 
 `"any"` is the server account's whole reach — its SSH keys, its Docker — so
-it belongs on a server only its owner can use. `lovia web` turns it on when
-bound to loopback, and not otherwise: `--allow-workspace-switch` opens this
-server's directories to a token holder, not its keys to other hosts.
+it belongs on a server only its owner can use. `lovia web` turns it on
+wherever chats may pick a directory, on any bind address: a token holder who
+can run a shell there can already run `ssh`. `--lock-workspace` and
+`--no-workspace` turn it off.
 
 A chat's directory is set when it is created — the first message's
 `workspace`, else the agent's own — and never changes; every run checks it

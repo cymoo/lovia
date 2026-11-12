@@ -104,13 +104,12 @@ def test_any_remote_builds_one_host_per_destination() -> None:
     assert WorkspaceSwitch().remote_refusal(WorkspaceRef.parse("ssh://box/x"))
 
 
-def test_lovia_web_opens_remotes_on_loopback_only() -> None:
+def test_lovia_web_opens_remotes_wherever_chats_pick_a_directory() -> None:
+    # Whatever the bind address: only the explicit flags close it.
     assert Deployment(workspace="/w").remotes() == "any"
+    assert Deployment(workspace="/w", readonly=True).remotes() == "any"
     assert Deployment(workspace="/w", lock_workspace=True).remotes() is None
     assert Deployment(workspace=None).remotes() is None
-    exposed = Deployment(workspace="/w", loopback=False, allow_workspace_edit=True)
-    # --allow-workspace-switch opens this server's directories, not its keys.
-    assert exposed.roots() == "any" and exposed.remotes() is None
 
 
 # ----------------------------------------------------------- end to end --
@@ -705,12 +704,12 @@ async def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
     from lovia.web.config.schema import WebConfig
 
     launch = tmp_path / "launch"
-    (launch / "proj-skills" / "deploy").mkdir(parents=True)
-    (launch / "proj-skills" / "deploy" / "SKILL.md").write_text(
+    (launch / ".agents" / "skills" / "deploy").mkdir(parents=True)
+    (launch / ".agents" / "skills" / "deploy" / "SKILL.md").write_text(
         "---\nname: deploy\ndescription: ship it\n---\nsteps", encoding="utf-8"
     )
     (launch / "AGENTS.md").write_text("LAUNCH DIRECTORY RULES", encoding="utf-8")
-    config = WebConfig.model_validate({"skills": {"dirs": ["proj-skills"]}})
+    config = WebConfig.model_validate({"skills": {"dirs": []}})
     served = project_agent(Agent(name="bot", model=None), launch, config)
     assert "LAUNCH DIRECTORY RULES" in served.instructions
     assert any(isinstance(p, Skills) for p in served.plugins)
@@ -721,6 +720,14 @@ async def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
     remote = remote_agent(served, config)
     assert await remote.render_system_prompt(nowhere) == GENERIC_INSTRUCTIONS
     assert not any(isinstance(p, Skills) for p in remote.plugins)
+    # The global skill directories are this server's own: they still load.
+    shared = tmp_path / "shared-skills"
+    shared.mkdir()
+    everywhere = WebConfig.model_validate({"skills": {"dirs": [str(shared)]}})
+    (skills,) = [
+        p for p in remote_agent(served, everywhere).plugins if isinstance(p, Skills)
+    ]
+    assert skills is not None
     # The server-wide prompt (Settings → Agent) still applies everywhere.
     custom = WebConfig.model_validate({"agent": {"instructions": "be terse"}})
     terse = remote_agent(served, custom)

@@ -1,8 +1,8 @@
 """Configuration schema for the ``lovia web`` CLI.
 
 The model connection, web-search backend, role assignments and skill
-directories live in one JSON document — ``./.lovia/config.json`` (project
-scope) or ``~/.lovia/config.json`` (user scope) — managed in the web UI's
+directories live in one JSON document — ``config.json`` in lovia's home
+(``~/.lovia``, or ``lovia web --home DIR``) — managed in the web UI's
 Settings. The file is the single source of truth: there are no
 model-connection flags or environment variables. (:mod:`.storage` owns where
 the file lives; this module owns what it says.)
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -158,27 +159,41 @@ class SearchConfig(BaseModel):
     tavily_api_key: str | None = None
 
 
-# The cross-agent convention (shared with Claude Code, Codex, OpenCode),
-# pairing with the AGENTS.md instructions default. Project scope first.
-DEFAULT_SKILLS_DIR = ".agents/skills"
+# The cross-agent conventions (shared with Claude Code, Codex, OpenCode). A
+# project's own skills live in its workspace root, beside AGENTS.md, and
+# load in every chat there — a convention, not a setting.
+PROJECT_SKILLS_DIR = ".agents/skills"
 USER_SKILLS_DIR = "~/.agents/skills"
+# How the project directory was spelled when it was a configurable entry
+# (the default before 0.9.179, so most saved files carry it): it now loads
+# anyway, so a saved one is dropped rather than refused.
+_LEGACY_PROJECT_ENTRIES = frozenset({PROJECT_SKILLS_DIR, f"./{PROJECT_SKILLS_DIR}"})
+GLOBAL_SKILLS_HINT = (
+    "skills.dirs takes absolute or ~ paths; a project's own .agents/skills "
+    "loads by itself in every chat working there"
+)
+
+
+def is_global_dir(raw: str) -> bool:
+    """Whether a skill-directory entry names one directory for every chat."""
+    return Path(raw).expanduser().is_absolute()
 
 
 class SkillsConfig(BaseModel):
-    """Skill directories for the default agent's Skills plugin.
+    """The global skill directories, for every chat the server runs.
 
     ``dirs`` is precedence-ordered — on a duplicate skill name the first
-    root wins. The default value carries the two conventional roots;
-    removing one from the list is how a default gets disabled. A listed
-    directory that doesn't exist is skipped at build time, never an error:
-    a stale path in ``config.json`` must not make the server unbootable.
+    root wins, and a project's own ``.agents/skills`` comes before all of
+    them. Entries are absolute or ``~`` paths: a relative one would name a
+    different directory in every chat. Removing the default from the list
+    is how it gets disabled. A listed directory that doesn't exist is
+    skipped at build time, never an error: a stale path in ``config.json``
+    must not make the server unbootable.
     """
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
-    dirs: list[str] = Field(
-        default_factory=lambda: [DEFAULT_SKILLS_DIR, USER_SKILLS_DIR]
-    )
+    dirs: list[str] = Field(default_factory=lambda: [USER_SKILLS_DIR])
 
     @model_validator(mode="after")
     def _normalise(self) -> "SkillsConfig":
@@ -188,8 +203,12 @@ class SkillsConfig(BaseModel):
             value = raw.strip()
             if not value:
                 raise ValueError("directory entries must be non-empty paths")
-            if value in seen:
+            if value in seen or value in _LEGACY_PROJECT_ENTRIES:
                 continue
+            if not is_global_dir(value):
+                raise ValueError(
+                    f"{value!r} is not a global path: {GLOBAL_SKILLS_HINT}"
+                )
             seen.add(value)
             cleaned.append(value)
         # __dict__ assignment sidesteps validate_assignment re-entrancy.
@@ -202,16 +221,16 @@ WorkspaceModeName = Literal["readonly", "coding", "trusted"]
 # behind each name live in :mod:`lovia.web.builder`.
 AutoAllowBundle = Literal["read-only", "dev-tools"]
 DEFAULT_AUTO_ALLOW: tuple[AutoAllowBundle, ...] = ("read-only", "dev-tools")
-DEFAULT_MAX_TURNS = 50
-DEFAULT_MEMORY_DIR = "./.lovia/memory"
+# The web's own default, for an agent the person works with in a browser;
+# core's Runner keeps its library default.
+DEFAULT_MAX_TURNS = 100
 
 
 class WorkspaceSettings(BaseModel):
     """How the default agent's workspace behaves.
 
-    Deployment flags (``--readonly``, a non-loopback bind) may narrow what
-    actually applies — see :class:`lovia.web.builder.Deployment`; the file
-    keeps what the user chose.
+    ``--readonly`` may narrow what actually applies — see
+    :class:`lovia.web.builder.Deployment`; the file keeps what the user chose.
     """
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
@@ -244,10 +263,10 @@ class AgentSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
+    # Long-term memory, kept in <home>/memory.
     memory: bool = True
-    memory_dir: str = Field(default=DEFAULT_MEMORY_DIR, min_length=1)
     subagents: bool = True
-    # Server-wide system prompt. Empty means the launch directory's AGENTS.md,
+    # Server-wide system prompt. Empty means the chat's project's AGENTS.md,
     # or a generic prompt when there is none; set, AGENTS.md is appended.
     instructions: str = ""
 

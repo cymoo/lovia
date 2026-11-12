@@ -6,7 +6,7 @@ through this package. Hand-editing the file stays possible — it is
 validated wholesale on load.
 
 - :mod:`.schema` — what the file says (profiles, roles, search, skills).
-- :mod:`.storage` — where it lives, and atomic owner-only writes.
+- :mod:`.storage` — where it lives (lovia's home), and atomic owner-only writes.
 - :mod:`.probe` — endpoint validation shared by every front-end.
 - :mod:`.runtime` — building and hot-swapping the served agent.
 - :mod:`.check` — read-only diagnosis and the startup summary.
@@ -32,8 +32,8 @@ from .probe import (
 from .runtime import ConfigRuntime
 from .schema import (
     ANTHROPIC_FLAVOR,
-    DEFAULT_SKILLS_DIR,
     OPENAI_FLAVOR,
+    PROJECT_SKILLS_DIR,
     USER_SKILLS_DIR,
     AgentSettings,
     Connection,
@@ -55,24 +55,23 @@ from .skills import (
 )
 from .storage import (
     CONFIG_HINT,
-    PROJECT_CONFIG_LABEL,
-    USER_CONFIG_LABEL,
+    DEFAULT_HOME,
     LoadedConfig,
+    config_path,
+    config_writable,
+    display_path,
     load_active,
     load_config,
-    project_config_path,
-    config_writable,
+    protect_home,
     save_config,
-    user_config_path,
 )
 
 __all__ = [
     "ANTHROPIC_FLAVOR",
     "CONFIG_HINT",
-    "DEFAULT_SKILLS_DIR",
+    "DEFAULT_HOME",
     "OPENAI_FLAVOR",
-    "PROJECT_CONFIG_LABEL",
-    "USER_CONFIG_LABEL",
+    "PROJECT_SKILLS_DIR",
     "USER_SKILLS_DIR",
     "AgentSettings",
     "ConfigRuntime",
@@ -89,7 +88,9 @@ __all__ = [
     "WebConfig",
     "WorkspaceSettings",
     "build_provider",
+    "config_path",
     "config_writable",
+    "display_path",
     "flavor_for_model",
     "format_app_summary",
     "format_summary",
@@ -98,13 +99,12 @@ __all__ = [
     "load_active",
     "load_config",
     "mask_key",
-    "project_config_path",
+    "protect_home",
     "resolve_skills_dirs",
     "run_check",
     "save_config",
     "scan_skills_status",
     "slugify",
     "unlisted_model_note",
-    "user_config_path",
     "validate_connection",
 ]

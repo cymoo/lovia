@@ -1,10 +1,9 @@
 """Shared isolation for the web test suite.
 
 The providers fall back to the credential env vars, so a developer's real
-configuration must never leak into (or be touched by) tests. Tests that
-exercise project-scope config files isolate the filesystem with
-``monkeypatch.chdir(tmp_path)`` themselves; ``~`` is redirected for every
-test below, since the CLI reads and writes ``~/.lovia/config.json``.
+configuration must never leak into (or be touched by) tests. ``~`` is
+redirected for every test below, since the CLI reads and writes lovia's
+default home, ``~/.lovia``.
 """
 
 from __future__ import annotations
@@ -42,8 +41,8 @@ def fake_home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> Path:
     """Point ``~`` at a fresh per-test dir — never the developer's real one.
 
     Deliberately *outside* ``tmp_path`` (many tests chdir there and use it as
-    a workspace root), so the project scope (``./.lovia``), the user scope
-    (``~/.lovia``) and workspace listings never bleed into each other.
+    a workspace root), so lovia's home (``~/.lovia``) and workspace listings
+    never bleed into each other.
     """
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
@@ -53,11 +52,11 @@ def fake_home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> Path:
 
 @pytest.fixture
 def write_config(fake_home: Path):
-    """Write a ``config.json`` the CLI will pick up (user scope by default).
+    """Write a ``config.json`` the CLI will pick up (the default home's, or
+    ``home=``'s for a ``--home`` launch).
 
     The single-profile shortcut covers most tests; pass ``models=``/``roles=``
-    for multi-profile shapes. ``scope="project"`` writes ``./.lovia`` relative
-    to the current directory — call after ``monkeypatch.chdir(tmp_path)``.
+    for multi-profile shapes.
     """
 
     def _write(
@@ -67,7 +66,7 @@ def write_config(fake_home: Path):
         base_url: str | None = None,
         context_window: int | None = None,
         vision: str = "auto",
-        scope: str = "user",
+        home: Path | None = None,
         models: list[dict] | None = None,
         roles: dict | None = None,
         search: dict | None = None,
@@ -88,8 +87,7 @@ def write_config(fake_home: Path):
         if search is not None:
             doc["search"] = search
         doc.update(sections)  # workspace= / run= / agent=
-        root = fake_home if scope == "user" else Path.cwd()
-        target = root / ".lovia" / "config.json"
+        target = (home or fake_home / ".lovia") / "config.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(doc), encoding="utf-8")
         return target

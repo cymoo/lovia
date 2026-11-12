@@ -49,9 +49,8 @@ def test_run_check_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     text = out.getvalue()
     assert "configuration check" in text
     assert "✓ endpoint reachable" in text
-    assert "config files" in text
-    assert "./.lovia/config.json (absent)" in text
     assert "~/.lovia/config.json (absent)" in text
+    assert "./.lovia" not in text
 
 
 def test_run_check_auth_failure_is_exit_2(

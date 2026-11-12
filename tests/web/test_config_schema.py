@@ -215,7 +215,7 @@ def test_skills_relative_entry_in_a_file_says_why(tmp_path: Path) -> None:
 
 def test_web_runs_default_to_a_hundred_turns() -> None:
     # The web's own default; core's Runner keeps its library one.
-    assert WebConfig().run.max_turns == 100
+    assert WebConfig().default_agent.max_turns == 100
 
 
 def test_skills_explicit_empty_list_stays_empty() -> None:
@@ -296,7 +296,7 @@ def test_save_config_omits_null_fields(tmp_path: Path) -> None:
     payload = json.loads(path.read_text())
     assert "api_key" not in payload["models"][0]
     assert "base_url" not in payload["models"][0]
-    assert payload["version"] == 1
+    assert payload["version"] == 2
 
 
 def test_load_config_roundtrip(tmp_path: Path) -> None:
@@ -388,3 +388,64 @@ def test_load_active_warns_once_about_legacy_env_files(
     with caplog.at_level("WARNING", logger="lovia.web.config"):
         storage.load_active()
     assert "no longer read" not in caplog.text
+
+
+# ----------------------------------------------------------------- agents -
+
+
+def test_a_config_without_agents_gets_the_default_one() -> None:
+    for doc in ({}, {"agents": []}):
+        (agent,) = WebConfig.model_validate(doc).agents
+        assert agent.id == "lovia" and agent.display_name == "lovia"
+        assert (agent.mode, agent.max_turns, agent.model, agent.skills) == (
+            "coding",
+            100,
+            None,
+            None,
+        )
+
+
+def test_version_1_sections_are_ignored_not_converted() -> None:
+    cfg = WebConfig.model_validate(
+        {
+            "version": 1,
+            "models": [{"id": "m", "model": "x"}],
+            "agent": {"instructions": "old prompt"},
+            "run": {"max_turns": 7},
+            "workspace": {"default_mode": "trusted"},
+        }
+    )
+    assert cfg.version == 2
+    assert cfg.roles.chat == "m"  # the unchanged sections still read
+    agent = cfg.default_agent
+    assert (agent.instructions, agent.max_turns, agent.mode) == ("", 100, "coding")
+
+
+def test_agents_refer_to_configured_models_by_id() -> None:
+    models = [{"id": "a", "model": "x"}, {"id": "b", "model": "y"}]
+    cfg = WebConfig.model_validate(
+        {"models": models, "agents": [{"id": "one"}, {"id": "two", "model": "b"}]}
+    )
+    assert [cfg.agent_profile(a).id for a in cfg.agents] == ["a", "b"]
+    with pytest.raises(ValidationError, match="unknown model id 'c'"):
+        WebConfig.model_validate(
+            {"models": models, "agents": [{"id": "x", "model": "c"}]}
+        )
+    with pytest.raises(ValidationError, match="duplicate agent ids"):
+        WebConfig.model_validate({"agents": [{"id": "x"}, {"id": "x"}]})
+
+
+@pytest.mark.parametrize("bad", ["Upper", "has.dot", "-lead", ""])
+def test_agent_ids_are_slugs_without_dots(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        WebConfig.model_validate({"agents": [{"id": bad}]})
+
+
+def test_an_agents_skills_are_global_paths_or_inherited() -> None:
+    cfg = WebConfig.model_validate(
+        {"skills": {"dirs": ["/g"]}, "agents": [{"id": "a"}, {"id": "b", "skills": []}]}
+    )
+    assert cfg.agent_skills(cfg.agents[0]).dirs == ["/g"]
+    assert cfg.agent_skills(cfg.agents[1]).dirs == []
+    with pytest.raises(ValidationError, match="global path"):
+        WebConfig.model_validate({"agents": [{"id": "a", "skills": ["rel/dir"]}]})

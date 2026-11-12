@@ -659,22 +659,19 @@ def test_api_create_rejects_bad_input() -> None:
     )
 
 
-def test_api_create_requires_agent_when_ambiguous() -> None:
+def test_api_create_defaults_to_the_first_agent() -> None:
     agents = {
         "alpha": _agent([text("a")], name="alpha"),
         "beta": _agent([text("b")], name="beta"),
     }
     app = create_app(agents, store=ChatStore.in_memory(), titles=False)
-    # Omitting `agent` with >1 agent (no default) → 400 with a clear message,
-    # not a confusing "unknown agent None".
+    # Omitting `agent` with several agents → the default: the first served.
     r = TestClient(app).post(
         "/api/schedules",
         json={"input": "x", "trigger_kind": "every", "trigger_expr": "60"},
     )
-    assert r.status_code == 400
-    detail = r.json()["detail"]
-    assert detail["code"] == "invalid_request"
-    assert "no agent specified" in detail["message"]
+    assert r.status_code == 200, r.text
+    assert r.json()["agent"] == "alpha"
 
 
 # --------------------------------------------------------------------------- #

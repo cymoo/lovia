@@ -141,6 +141,7 @@ normalizes all three.
 | `schedule_not_fired` | 409 | the schedule couldn't fire right now |
 | `model_exists` | 409 | a model profile with that id exists |
 | `model_in_use` | 409 | the default chat model can't be deleted |
+| `agent_in_use` | 409 | the only agent can't be deleted |
 | `config_read_only` | 409 | `config.json` is not writable (e.g. a read-only mount) |
 | `workspace_locked` | 403 | the workspace settings are fixed by how `lovia web` was started |
 | `workspace_not_allowed` | 409 | this server doesn't let a chat work in that directory (`hint` names the constraint); a chat is refused, never moved |
@@ -192,7 +193,7 @@ normalizes all three.
 | `POST /api/sessions/associate` | `{session_ids, root}` → `{associated, root}`: bind chats from before chats had a directory (`workspace_root: null`) to one, for good — one at a time is `PATCH /api/sessions/{id}` with `workspace_root`. A chat whose run is live in another directory (a schedule fire in the agent's own) is refused with `run_active` until it ends |
 | `GET` / `PUT /api/memory?agent=` | read / replace the [Memory notes](memory.md#how-memories-get-written) (`{content, used, budget, dreamed_at}`) |
 | `POST /api/memory/dream?agent=` | [dream](memory.md#dreaming) the notes now → `{content, used, budget, dreamed_at, before, after}` |
-| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `PUT /api/config/workspace` · `PUT /api/config/run` · `PUT /api/config/agent` · `POST /api/config/test` | **UI-internal**, serving the CLI's built-in settings UI and not part of the [stable API](stability.md): the CLI default agent's [model configuration](web-ui.md#models-and-switching) and [skill directories](web-ui.md#skills) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); writes validate the whole document, persist it, and hot-swap the served agent. `GET /api/config/skills` reports per-directory discovery |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/agents` · `PUT`/`DELETE /api/config/agents/{id}` · `POST /api/config/agents/{id}/duplicate` · `POST /api/config/agents/{id}/default` · `POST /api/config/test` | **UI-internal**, serving the CLI's built-in settings UI and not part of the [stable API](stability.md): the CLI's [model configuration](web-ui.md#models-and-switching), [skill directories](web-ui.md#skills) and [agents](web-ui.md#agents) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); writes validate the whole document, persist it, and hot-swap the served agents. `GET /api/config/skills` reports per-directory discovery |
 
 `POST /api/chat` and `/api/chat/stream` take
 `{message, session_id?, agent?, attachments?, context?}`, and `POST /api/schedules`

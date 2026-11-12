@@ -133,6 +133,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `schedule_not_fired` | 409 | 定时任务暂时无法触发 |
 | `model_exists` | 409 | 该 id 的模型配置已存在 |
 | `model_in_use` | 409 | 默认聊天模型不能删除 |
+| `agent_in_use` | 409 | 唯一的 Agent 不能删除 |
 | `config_read_only` | 409 | `config.json` 不可写（比如只读挂载） |
 | `workspace_locked` | 403 | 工作区设置由 `lovia web` 的启动方式固定 |
 | `workspace_not_allowed` | 409 | 服务端不允许对话在这个目录里工作（`hint` 写明是哪条约束）；只拒绝，不换目录 |
@@ -184,7 +185,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/sessions/associate` | `{session_ids, root}` → `{associated, root}`：把还没有目录的旧对话（`workspace_root: null`）关联到一个目录，关联后不能再改；单个对话也可以用 `PATCH /api/sessions/{id}` 的 `workspace_root`。对话里正有运行在另一个目录进行（比如定时任务在 Agent 自己的目录里跑）时，返回 `run_active`，等它结束后再关联 |
 | `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget, dreamed_at}`） |
 | `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
-| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `PUT /api/config/workspace` · `PUT /api/config/run` · `PUT /api/config/agent` · `POST /api/config/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 默认 Agent 的[模型配置](web-ui.md#模型配置与切换)与 [Skill 目录](web-ui.md#skills)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/agents` · `PUT`/`DELETE /api/config/agents/{id}` · `POST /api/config/agents/{id}/duplicate` · `POST /api/config/agents/{id}/default` · `POST /api/config/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 的[模型配置](web-ui.md#模型配置与切换)、[Skill 目录](web-ui.md#skills)与 [Agent](web-ui.md#agent)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
 
 `POST /api/chat` 和 `/api/chat/stream` 的请求体为 `{message, session_id?, agent?, attachments?, context?}`，
 `POST /api/schedules` 同样接受 `context`。`context` 是一个不超过 64 KB 的 JSON 对象，即

@@ -69,10 +69,25 @@ def build_agents_router(deps: RouterDeps) -> APIRouter:
     router = APIRouter()
 
     def info(name: str, agent: Agent[Any]) -> AgentInfo:
-        return agent_info(
+        out = agent_info(
             name,
             agent,
             context_window=resolve_context_window(agent, deps.context_policy),
+        )
+        runtime = deps.config_runtime
+        spec = runtime.agent_config(name) if runtime is not None else None
+        if runtime is None or spec is None:
+            return out
+        mode = runtime.deployment.effective_mode(spec.mode)
+        switch = deps.workspace_switch
+        if mode is not None and switch is not None:
+            mode = switch.effective(mode)
+        return out.model_copy(
+            update={
+                "label": spec.display_name,
+                "description": spec.description or None,
+                "mode": mode,
+            }
         )
 
     @router.get("/api/agents", response_model=list[AgentInfo])

@@ -74,9 +74,11 @@ RESERVED_BODY_FIELDS = frozenset({"model", "messages", "system", "stream", "tool
 _SLUG = re.compile(r"[^a-z0-9._-]+")
 
 
-def slugify(text: str, taken: set[str] | None = None) -> str:
-    """A profile id from a display name or model spec, unique among ``taken``."""
-    base = _SLUG.sub("-", text.lower()).strip("-.") or "model"
+def slugify(
+    text: str, taken: set[str] | None = None, *, fallback: str = "model"
+) -> str:
+    """An id from a display name or model spec, unique among ``taken``."""
+    base = _SLUG.sub("-", text.lower()).strip("-.") or fallback
     taken = taken or set()
     if base not in taken:
         return base
@@ -179,16 +181,32 @@ def is_global_dir(raw: str) -> bool:
     return Path(raw).expanduser().is_absolute()
 
 
+def global_dirs(dirs: list[str]) -> list[str]:
+    """``dirs`` stripped and deduplicated; raises on an entry that is not a
+    global path (a relative one would name a different directory in every
+    chat). The old project entry is dropped: it loads by itself now."""
+    cleaned: list[str] = []
+    for raw in dirs:
+        value = raw.strip()
+        if not value:
+            raise ValueError("directory entries must be non-empty paths")
+        if value in cleaned or value in _LEGACY_PROJECT_ENTRIES:
+            continue
+        if not is_global_dir(value):
+            raise ValueError(f"{value!r} is not a global path: {GLOBAL_SKILLS_HINT}")
+        cleaned.append(value)
+    return cleaned
+
+
 class SkillsConfig(BaseModel):
     """The global skill directories, for every chat the server runs.
 
     ``dirs`` is precedence-ordered — on a duplicate skill name the first
     root wins, and a project's own ``.agents/skills`` comes before all of
-    them. Entries are absolute or ``~`` paths: a relative one would name a
-    different directory in every chat. Removing the default from the list
-    is how it gets disabled. A listed directory that doesn't exist is
-    skipped at build time, never an error: a stale path in ``config.json``
-    must not make the server unbootable.
+    them. Entries are absolute or ``~`` paths (:func:`global_dirs`).
+    Removing the default from the list is how it gets disabled. A listed
+    directory that doesn't exist is skipped at build time, never an error:
+    a stale path in ``config.json`` must not make the server unbootable.
     """
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
@@ -197,22 +215,8 @@ class SkillsConfig(BaseModel):
 
     @model_validator(mode="after")
     def _normalise(self) -> "SkillsConfig":
-        cleaned: list[str] = []
-        seen: set[str] = set()
-        for raw in self.dirs:
-            value = raw.strip()
-            if not value:
-                raise ValueError("directory entries must be non-empty paths")
-            if value in seen or value in _LEGACY_PROJECT_ENTRIES:
-                continue
-            if not is_global_dir(value):
-                raise ValueError(
-                    f"{value!r} is not a global path: {GLOBAL_SKILLS_HINT}"
-                )
-            seen.add(value)
-            cleaned.append(value)
         # __dict__ assignment sidesteps validate_assignment re-entrancy.
-        self.__dict__["dirs"] = cleaned
+        self.__dict__["dirs"] = global_dirs(self.dirs)
         return self
 
 
@@ -224,82 +228,117 @@ DEFAULT_AUTO_ALLOW: tuple[AutoAllowBundle, ...] = ("read-only", "dev-tools")
 # The web's own default, for an agent the person works with in a browser;
 # core's Runner keeps its library default.
 DEFAULT_MAX_TURNS = 100
+# The agent a config without any gets — and the one every chat from before
+# custom agents was stored under.
+DEFAULT_AGENT_ID = "lovia"
+CONFIG_VERSION = 2
 
 
-class WorkspaceSettings(BaseModel):
-    """How the default agent's workspace behaves.
+class AgentConfig(BaseModel):
+    """One agent people pick for a chat: who does the work, and how.
 
-    ``--readonly`` may narrow what actually applies — see
-    :class:`lovia.web.builder.Deployment`; the file keeps what the user chose.
+    Connections (models, keys, the search backend) are global; an agent
+    refers to them and decides whether to use them. ``id`` is what chats
+    and schedules store, so it never changes; ``name`` is free to.
+    ``--readonly`` may narrow ``mode`` — see
+    :class:`lovia.web.builder.Deployment`; the file keeps what was chosen.
     """
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
-    default_mode: WorkspaceModeName = "coding"
+    # No dots: it doubles as the core ``Agent.name``, which names tools.
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$", max_length=64)
+    name: str | None = None
+    description: str = ""
+    # Prepended to the chat's project's AGENTS.md; empty: AGENTS.md alone,
+    # or a generic prompt when there is none.
+    instructions: str = ""
+    # A model id; None: whichever ``roles.chat`` names.
+    model: str | None = None
+    mode: WorkspaceModeName = "coding"
     auto_allow: list[AutoAllowBundle] = Field(
         default_factory=lambda: list(DEFAULT_AUTO_ALLOW)
     )
-
-    @model_validator(mode="after")
-    def _dedupe(self) -> "WorkspaceSettings":
-        self.__dict__["auto_allow"] = list(dict.fromkeys(self.auto_allow))
-        return self
-
-
-class RunSettings(BaseModel):
-    """Per-run limits and extras for every chat turn the server drives."""
-
-    model_config = ConfigDict(extra="ignore", validate_assignment=True)
-
+    # Skill directories; None: the global ones. A project's own load anyway.
+    skills: list[str] | None = None
+    search: bool = True
+    # Long-term memory, kept in <home>/memory and shared by every agent.
+    memory: bool = True
+    subagents: bool = True
     max_turns: int = Field(default=DEFAULT_MAX_TURNS, ge=1)
     # Attempts after the first on transient provider errors; None keeps the
-    # agent's own retry posture.
+    # core default posture.
     max_retries: int | None = Field(default=None, ge=0)
     followups: bool = True
 
+    @model_validator(mode="after")
+    def _normalise(self) -> "AgentConfig":
+        name = (self.name or "").strip()
+        self.__dict__["name"] = name or None
+        self.__dict__["auto_allow"] = list(dict.fromkeys(self.auto_allow))
+        if self.skills is not None:
+            self.__dict__["skills"] = global_dirs(self.skills)
+        return self
 
-class AgentSettings(BaseModel):
-    """What the default agent carries besides its model and tools."""
+    @property
+    def display_name(self) -> str:
+        return self.name or self.id
 
-    model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
-    # Long-term memory, kept in <home>/memory.
-    memory: bool = True
-    subagents: bool = True
-    # Server-wide system prompt. Empty means the chat's project's AGENTS.md,
-    # or a generic prompt when there is none; set, AGENTS.md is appended.
-    instructions: str = ""
+def agent_slug(name: str, taken: set[str]) -> str:
+    """A new agent's id from its name (``agent`` when nothing survives)."""
+    return slugify(name.replace(".", "-"), taken, fallback="agent")
 
 
 class WebConfig(BaseModel):
-    """The whole ``config.json`` document."""
+    """The whole ``config.json`` document.
+
+    Version 1 kept one agent's settings in ``agent``, ``run`` and
+    ``workspace`` sections; those are ignored (not converted) and the file
+    is rewritten as version 2 on the next save.
+    """
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
-    version: int = 1
+    version: int = CONFIG_VERSION
     models: list[ModelProfile] = Field(default_factory=list)
     roles: Roles = Field(default_factory=Roles)
     search: SearchConfig = Field(default_factory=SearchConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
-    workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
-    run: RunSettings = Field(default_factory=RunSettings)
-    agent: AgentSettings = Field(default_factory=AgentSettings)
+    # The first is the default: what a new chat starts with, and what a chat
+    # whose agent was deleted runs on.
+    agents: list[AgentConfig] = Field(
+        default_factory=lambda: [AgentConfig(id=DEFAULT_AGENT_ID)]
+    )
 
     @model_validator(mode="after")
     def _check_references(self) -> "WebConfig":
+        self.__dict__["version"] = CONFIG_VERSION
         ids = [p.id for p in self.models]
         dupes = sorted({i for i in ids if ids.count(i) > 1})
         if dupes:
             raise ValueError(f"duplicate model ids: {', '.join(dupes)}")
         known = set(ids)
         # An absent chat role heals to the first profile; a *wrong* reference
-        # (in any role) is a hand-edit typo and must be said out loud.
+        # (in any role, or an agent's model) is a hand-edit typo and must be
+        # said out loud.
         if self.roles.chat is None and ids:
             self.roles.__dict__["chat"] = ids[0]
         for role in ("chat", "vision", "aux"):
             ref = getattr(self.roles, role)
             if ref is not None and ref not in known:
                 raise ValueError(f"roles.{role} references unknown model id {ref!r}")
+        if not self.agents:
+            self.__dict__["agents"] = [AgentConfig(id=DEFAULT_AGENT_ID)]
+        agent_ids = [a.id for a in self.agents]
+        dupes = sorted({i for i in agent_ids if agent_ids.count(i) > 1})
+        if dupes:
+            raise ValueError(f"duplicate agent ids: {', '.join(dupes)}")
+        for agent in self.agents:
+            if agent.model is not None and agent.model not in known:
+                raise ValueError(
+                    f"agent {agent.id!r} references unknown model id {agent.model!r}"
+                )
         return self
 
     def profile(self, profile_id: str | None) -> ModelProfile | None:
@@ -315,6 +354,23 @@ class WebConfig(BaseModel):
 
     def aux_profile(self) -> ModelProfile | None:
         return self.profile(self.roles.aux)
+
+    @property
+    def default_agent(self) -> AgentConfig:
+        return self.agents[0]
+
+    def agent(self, agent_id: str) -> AgentConfig | None:
+        return next((a for a in self.agents if a.id == agent_id), None)
+
+    def agent_profile(self, agent: AgentConfig) -> ModelProfile | None:
+        """The model ``agent`` runs on: its own, else the default chat one."""
+        return self.profile(agent.model or self.roles.chat)
+
+    def agent_skills(self, agent: AgentConfig) -> SkillsConfig:
+        """The global skill directories ``agent`` loads."""
+        if agent.skills is None:
+            return self.skills
+        return SkillsConfig(dirs=agent.skills)
 
 
 @dataclass

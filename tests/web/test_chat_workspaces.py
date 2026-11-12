@@ -93,7 +93,7 @@ def test_a_none_mode_keeps_the_agent_policy_moved_to_the_chat_dir(
 ) -> None:
     launch, other = dirs
     base = Workspace.local(str(launch), mode="readonly", denied_paths=("secret/**",))
-    moved = WorkspaceSwitch().workspace(base, other, None)
+    moved = WorkspaceSwitch().workspace(Agent(name="a", workspace=base), other, None)
     assert moved.root == str(other)
     assert moved.policy == base.policy
 

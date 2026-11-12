@@ -66,8 +66,8 @@ def test_agent_without_memory_404s(client: TestClient) -> None:
     assert client.get("/api/memory", params={"agent": "plain"}).status_code == 404
     r = client.put("/api/memory", params={"agent": "plain"}, json={"content": "- x"})
     assert r.status_code == 404
-    # Multiple agents registered → the agent must be named.
-    assert client.get("/api/memory").status_code == 400
+    # None named → the default (first) agent, which keeps memory here.
+    assert client.get("/api/memory").status_code == 200
     assert client.get("/api/memory", params={"agent": "nope"}).status_code == 404
 
 

@@ -661,7 +661,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             raise WebError(404, "session_not_found", f"unknown session {session_id}")
         request = FollowupRequest(
             session_id=session_id,
-            agent=meta.agent or deps.default_agent or "",
+            agent=deps.agent_of(meta) or "",
             messages=entries_to_messages(await session.load(session_id)),
         )
         return FollowupsResponse(followups=await deps.suggest_followups(request))

@@ -27,9 +27,10 @@ from ..config.runtime import ConfigRuntime
 from ..config.schema import (
     ANTHROPIC_FLAVOR,
     GLOBAL_SKILLS_HINT,
-    AutoAllowBundle,
     OPENAI_FLAVOR,
     USER_SKILLS_DIR,
+    AgentConfig,
+    AutoAllowBundle,
     Connection,
     FlavorName,
     ModelProfile,
@@ -37,6 +38,7 @@ from ..config.schema import (
     VisionMode,
     WebConfig,
     WorkspaceModeName,
+    agent_slug,
     is_global_dir,
     slugify,
 )
@@ -122,28 +124,33 @@ class SkillsIn(BaseModel):
     dirs: list[str]
 
 
-class WorkspaceIn(BaseModel):
-    """Workspace-settings updates; only the fields present change."""
+class AgentIn(BaseModel):
+    """An agent's settings, as created or edited; only the fields present
+    change. ``null`` means "inherit" where a field has that meaning —
+    ``name`` (show the id), ``model`` (the default chat model), ``skills``
+    (the global directories), ``max_retries`` (the core default) — and is
+    refused elsewhere. The id is never written: it is derived from the
+    name on creation and fixed after."""
 
-    default_mode: WorkspaceModeName | None = None
+    name: str | None = None
+    description: str | None = None
+    instructions: str | None = None
+    model: str | None = None
+    mode: WorkspaceModeName | None = None
     auto_allow: list[AutoAllowBundle] | None = None
-
-
-class RunIn(BaseModel):
-    """Run-limit updates; only the fields present change (an explicit
-    ``max_retries: null`` restores the agent's own retry posture)."""
-
+    skills: list[str] | None = None
+    search: bool | None = None
+    memory: bool | None = None
+    subagents: bool | None = None
     max_turns: int | None = Field(default=None, ge=1)
     max_retries: int | None = Field(default=None, ge=0)
     followups: bool | None = None
 
 
-class AgentIn(BaseModel):
-    """Agent-settings updates; only the fields present change."""
-
-    memory: bool | None = None
-    subagents: bool | None = None
-    instructions: str | None = None
+# What an explicit null means "inherit" for; anywhere else it is refused.
+_INHERITABLE = frozenset({"name", "model", "skills", "max_retries"})
+# Fixed by --readonly / --no-workspace: the browser can't change them then.
+_PERMISSION_FIELDS = frozenset({"mode", "auto_allow"})
 
 
 class TestIn(BaseModel):
@@ -170,6 +177,20 @@ class TestOut(BaseModel):
     window_from_endpoint: bool = False
     models: list[str] | None = None
     note: str | None = None
+
+
+def _refuse_relative(dirs: list[str]) -> None:
+    """A written skill directory must be global — even the project entry a
+    saved file may still carry: adding one could only be a misunderstanding,
+    since a project's skills load by themselves."""
+    relative = [d.strip() for d in dirs if d.strip() and not is_global_dir(d.strip())]
+    if relative:
+        raise WebError(
+            400,
+            "invalid_request",
+            f"{relative[0]!r} is not a global path",
+            hint=GLOBAL_SKILLS_HINT,
+        )
 
 
 def build_config_router(runtime: ConfigRuntime) -> APIRouter:
@@ -210,20 +231,23 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                 hint="edit the file directly, then restart lovia web",
             )
 
-    def _workspace_out() -> dict[str, object]:
+    def _permissions_out() -> dict[str, object]:
         from ..builder import AUTO_ALLOW_BUNDLES
 
-        settings = runtime.config.workspace
         deployment = runtime.deployment
         return {
-            "default_mode": settings.default_mode,
-            "auto_allow": list(settings.auto_allow),
-            # What runs actually get, once the deployment had its say.
-            "effective_mode": deployment.effective_mode(settings.default_mode),
             "modes": list(deployment.modes()),
             "bundles": list(AUTO_ALLOW_BUNDLES),
-            # None, or why the browser can't change this section.
+            # None, or why the browser can't change an agent's permissions.
             "lock": deployment.workspace_lock(),
+        }
+
+    def _agent_out(agent: AgentConfig) -> dict[str, object]:
+        return {
+            **agent.model_dump(),
+            "display_name": agent.display_name,
+            # What its runs actually get, once the deployment had its say.
+            "effective_mode": runtime.deployment.effective_mode(agent.mode),
         }
 
     def _config_out() -> dict[str, object]:
@@ -239,8 +263,8 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             "defaults": {
                 "openai_base_url": OPENAI_FLAVOR.default_base_url,
                 "anthropic_base_url": ANTHROPIC_FLAVOR.default_base_url,
-                # Retries when run.max_retries is unset: the agent's own
-                # posture (the core RetryPolicy default).
+                # Retries when an agent's max_retries is unset: the core
+                # RetryPolicy default.
                 "max_retries": RetryPolicy().max_attempts - 1,
             },
             "models": [
@@ -265,9 +289,9 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                 "tavily_api_key": _mask(cfg.search.tavily_api_key),
             },
             "skills": cfg.skills.model_dump(),
-            "workspace": _workspace_out(),
-            "run": cfg.run.model_dump(),
-            "agent": cfg.agent.model_dump(),
+            # The first is the default agent.
+            "agents": [_agent_out(a) for a in cfg.agents],
+            "permissions": _permissions_out(),
         }
 
     async def _apply(config: WebConfig, *, settings_only: bool = False) -> None:
@@ -373,7 +397,12 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             role: (None if ref == profile_id else ref)
             for role, ref in cfg.roles.model_dump().items()
         }
-        await _apply(_copy(models=models, roles=roles))
+        # An agent on it follows the default chat model from now on.
+        agents = [
+            {**a.model_dump(), "model": None if a.model == profile_id else a.model}
+            for a in cfg.agents
+        ]
+        await _apply(_copy(models=models, roles=roles, agents=agents))
         return {"config": _config_out()}
 
     @router.put("/roles")
@@ -403,73 +432,116 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
     @router.put("/skills")
     async def update_skills(body: SkillsIn, request: Request) -> dict[str, object]:
         _guard_write(request)
-        relative = [
-            d.strip() for d in body.dirs if d.strip() and not is_global_dir(d.strip())
-        ]
-        if relative:
-            raise WebError(
-                400,
-                "invalid_request",
-                f"{relative[0]!r} is not a global path",
-                hint=GLOBAL_SKILLS_HINT,
-            )
+        _refuse_relative(body.dirs)
         await _apply(_copy(skills={"dirs": body.dirs}))
         return {"config": _config_out()}
 
-    @router.put("/workspace")
-    async def update_workspace(
-        body: WorkspaceIn, request: Request
-    ) -> dict[str, object]:
-        _guard_write(request)
+    # ---- agents ----------------------------------------------------------
+    # Every agent write is ``settings_only``: an agent names no new model
+    # (only one already configured), so before any is, it is just saved.
+
+    def _stored_agent(agent_id: str) -> AgentConfig:
+        agent = runtime.config.agent(agent_id)
+        if agent is None:
+            raise WebError(404, "agent_not_found", f"unknown agent {agent_id!r}")
+        return agent
+
+    def _edited(stored: dict[str, Any], body: AgentIn) -> dict[str, Any]:
+        """``stored`` with ``body``'s fields applied, checked against what
+        this deployment lets the browser change."""
         deployment = runtime.deployment
         lock = deployment.workspace_lock()
-        if lock is not None:
-            raise WebError(
-                403,
-                "workspace_locked",
-                "workspace settings are fixed by how lovia web was started",
-                hint={
-                    "no_workspace": "started with --no-workspace",
-                    "readonly": "started with --readonly",
-                }[lock],
-            )
-        workspace = runtime.config.workspace.model_dump()
-        if body.default_mode is not None:
-            if body.default_mode not in deployment.modes():
+        edited = dict(stored)
+        for name in body.model_fields_set:
+            value = getattr(body, name)
+            if value is None and name not in _INHERITABLE:
+                raise WebError(400, "invalid_request", f"{name} cannot be null")
+            if value == stored.get(name):
+                continue  # a whole-form save sends back what it didn't touch
+            if name in _PERMISSION_FIELDS and lock:
+                raise WebError(
+                    403,
+                    "workspace_locked",
+                    "permissions are fixed by how lovia web was started",
+                    hint={
+                        "no_workspace": "started with --no-workspace",
+                        "readonly": "started with --readonly",
+                    }[lock],
+                )
+            if name == "mode" and value not in deployment.modes():
                 raise WebError(
                     400,
                     "invalid_request",
-                    f"mode {body.default_mode!r} is not available on this server",
+                    f"mode {value!r} is not available on this server",
                     hint=f"choose one of: {', '.join(deployment.modes())}",
                 )
-            workspace["default_mode"] = body.default_mode
-        if body.auto_allow is not None:
-            workspace["auto_allow"] = body.auto_allow
-        await _apply(_copy(workspace=workspace), settings_only=True)
+            if name == "skills" and value is not None:
+                _refuse_relative(value)
+            edited[name] = value
+        return edited
+
+    async def _apply_agents(agents: list[dict[str, Any]]) -> None:
+        await _apply(_copy(agents=agents), settings_only=True)
+
+    @router.post("/agents", status_code=201)
+    async def create_agent(body: AgentIn, request: Request) -> dict[str, object]:
+        _guard_write(request)
+        cfg = runtime.config
+        new_id = agent_slug(body.name or "", {a.id for a in cfg.agents})
+        fields = _edited(AgentConfig(id=new_id).model_dump(), body)
+        await _apply_agents([a.model_dump() for a in cfg.agents] + [fields])
+        return {"id": new_id, "config": _config_out()}
+
+    @router.put("/agents/{agent_id}")
+    async def update_agent(
+        agent_id: str, body: AgentIn, request: Request
+    ) -> dict[str, object]:
+        _guard_write(request)
+        _stored_agent(agent_id)
+        agents = [
+            _edited(a.model_dump(), body) if a.id == agent_id else a.model_dump()
+            for a in runtime.config.agents
+        ]
+        await _apply_agents(agents)
+        return {"id": agent_id, "config": _config_out()}
+
+    @router.post("/agents/{agent_id}/duplicate", status_code=201)
+    async def duplicate_agent(agent_id: str, request: Request) -> dict[str, object]:
+        _guard_write(request)
+        cfg = runtime.config
+        stored = _stored_agent(agent_id)
+        copy = stored.model_copy(
+            update={
+                "id": slugify(f"{agent_id}-copy", {a.id for a in cfg.agents}),
+                "name": f"{stored.display_name} copy",
+            }
+        )
+        await _apply_agents([a.model_dump() for a in cfg.agents] + [copy.model_dump()])
+        return {"id": copy.id, "config": _config_out()}
+
+    @router.post("/agents/{agent_id}/default")
+    async def make_default_agent(agent_id: str, request: Request) -> dict[str, object]:
+        """Make it the default: the first in the list."""
+        _guard_write(request)
+        stored = _stored_agent(agent_id)
+        rest = [a.model_dump() for a in runtime.config.agents if a.id != agent_id]
+        await _apply_agents([stored.model_dump(), *rest])
         return {"config": _config_out()}
 
-    @router.put("/run")
-    async def update_run(body: RunIn, request: Request) -> dict[str, object]:
+    @router.delete("/agents/{agent_id}")
+    async def delete_agent(agent_id: str, request: Request) -> dict[str, object]:
+        """Chats and schedules that ran on it run on the default from now on."""
         _guard_write(request)
-        run = runtime.config.run.model_dump()
-        for name in body.model_fields_set:
-            value = getattr(body, name)
-            if value is None and name != "max_retries":
-                raise WebError(400, "invalid_request", f"run.{name} cannot be null")
-            run[name] = value
-        await _apply(_copy(run=run), settings_only=True)
-        return {"config": _config_out()}
-
-    @router.put("/agent")
-    async def update_agent(body: AgentIn, request: Request) -> dict[str, object]:
-        _guard_write(request)
-        agent = runtime.config.agent.model_dump()
-        for name in body.model_fields_set:
-            value = getattr(body, name)
-            if value is None:
-                raise WebError(400, "invalid_request", f"agent.{name} cannot be null")
-            agent[name] = value
-        await _apply(_copy(agent=agent), settings_only=True)
+        _stored_agent(agent_id)
+        rest = [a.model_dump() for a in runtime.config.agents if a.id != agent_id]
+        if not rest:
+            raise WebError(
+                409,
+                "agent_in_use",
+                "this is the only agent",
+                hint="add another agent first",
+            )
+        await _apply_agents(rest)
         return {"config": _config_out()}
 
     @router.get("/skills")

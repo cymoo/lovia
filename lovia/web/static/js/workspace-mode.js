@@ -24,11 +24,9 @@ import { icon } from './icons.js';
 let _chip = null;
 /** @type {HTMLElement | null} */
 let _menu = null;
-/** The mode a new (unsaved) chat starts in unless one is picked: the server's default. */
-let _default = /** @type {string | null} */ (null);
 /** The mode the new (unsaved) chat on screen will start in. */
 let _draft = /** @type {string | null} */ (null);
-/** Whether the person picked the draft (a Settings default change then leaves it be). */
+/** Whether the person picked the draft (a Settings change then leaves it be). */
 let _draftPicked = false;
 /** The open chat's stored mode, once known (undefined: not loaded yet). */
 let _current = /** @type {string | null | undefined} */ (undefined);
@@ -49,19 +47,37 @@ function offer() {
   return store.serverInfo?.workspace_modes || null;
 }
 
+/** The mode the composer's agent starts chats in, where the server says. */
+function agentMode() {
+  return store.agents.find((/** @type {any} */ a) => a.name === store.agent)?.mode ?? null;
+}
+
+/**
+ * The mode a chat with none stored runs in — its agent's own workspace —
+ * where the server names it (the CLI's), else null.
+ */
+function own() {
+  return agentMode() || offer()?.own || null;
+}
+
+/** What a new chat starts in unless one is picked: its agent's mode, else the server's. */
+function defaultMode() {
+  return effective(agentMode() || offer()?.default);
+}
+
 /**
  * A mode's name. None stored means the agent's own workspace: named by the
- * mode it runs in where the server says (the CLI's), else "Default".
+ * mode it runs in where the server says, else "Default".
  * @param {string | null | undefined} mode
  */
 function label(mode) {
-  const named = mode || offer()?.own;
+  const named = mode || own();
   return named ? t(`cfg.mode${named[0].toUpperCase()}${named.slice(1)}`) : t('mode.default');
 }
 
 /** @param {string | null | undefined} mode */
 function glyph(mode) {
-  return icon(GLYPH[mode || offer()?.own || ''] || 'shield-check', { size: 14 });
+  return icon(GLYPH[mode || own() || ''] || 'shield-check', { size: 14 });
 }
 
 /**
@@ -164,8 +180,8 @@ function openMenu() {
   title.className = 'lv-model-chip-menu-title';
   title.textContent = t(store.sessionId ? 'mode.menuTitle' : 'mode.newChatTitle');
   menu.appendChild(title);
-  // No stored mode runs in the server's own, which the chip names too.
-  const current = effective(shown()) || info.own;
+  // No stored mode runs in the agent's own, which the chip names too.
+  const current = effective(shown()) || own();
   for (const mode of info.modes) {
     const item = document.createElement('button');
     item.type = 'button';
@@ -204,7 +220,7 @@ function openMenu() {
 
 /** A new chat starts from the default: a pick was for the chat it started. */
 function resetDraft() {
-  _draft = _default;
+  _draft = defaultMode();
   _draftPicked = false;
 }
 
@@ -230,18 +246,12 @@ function onSessionId(id) {
 }
 
 /**
- * A Settings change of the default mode. It reaches a new chat's draft
- * nobody picked yet — and, where the server names it (`own`), the mode of
+ * A Settings change of an agent's mode (the agent list was refetched). It
+ * reaches a new chat's draft nobody picked yet — and the mode named for
  * every chat with none of its own: the agent they run on was rebuilt in it.
- * @param {any} cfg
  */
-function onConfig(cfg) {
-  const mode = cfg?.workspace?.effective_mode;
-  if (!mode) return;
-  const info = offer();
-  if (info?.own) info.own = effective(mode);
-  _default = effective(mode);
-  if (!_draftPicked) _draft = _default;
+function onAgents() {
+  if (!_draftPicked) _draft = defaultMode();
   render();
 }
 
@@ -254,7 +264,7 @@ export function initWorkspaceMode() {
   // The composer bar's left side, with what else shapes the next message.
   const tools = document.querySelector('.lv-composer-tools');
   if (!info || !tools || _chip) return;
-  _default = _draft = info.default ?? null;
+  _draft = defaultMode();
   const chip = document.createElement('button');
   chip.type = 'button';
   chip.id = 'mode-chip';
@@ -332,6 +342,12 @@ export function initWorkspaceMode() {
     }
     if (data?.session_id === store.sessionId) apply(data);
   });
-  store.on('config-loaded', onConfig);
+  store.on('agents-loaded', onAgents);
+  // A new chat's agent decides the mode it starts in; an open chat's names
+  // the mode it runs in when it stores none.
+  store.on('agent-changed', () => {
+    if (!store.sessionId) resetDraft();
+    render();
+  });
   onSessionId(store.sessionId);
 }

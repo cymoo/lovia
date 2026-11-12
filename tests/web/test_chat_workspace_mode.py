@@ -77,7 +77,9 @@ def test_default_build_keeps_the_agent_workspace_settings(tmp_path: Path) -> Non
     base = Workspace.local(
         str(tmp_path), env={"A": "1"}, shell_timeout=9.0, limits=limits
     )
-    built = WorkspaceSwitch().workspace(base, tmp_path, "readonly")
+    built = WorkspaceSwitch().workspace(
+        Agent(name="a", workspace=base), tmp_path, "readonly"
+    )
     assert built.policy.write == "deny"
     assert (built.root, built.env, built.shell_timeout, built.limits) == (
         str(tmp_path),

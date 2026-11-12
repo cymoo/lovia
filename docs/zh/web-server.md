@@ -27,9 +27,9 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `agent_or_agents` | 必填 | 一个 Agent 或 `{name: agent}` 映射 |
+| `agent_or_agents` | 必填 | 一个 Agent 或 `{name: agent}` 映射；第一个是默认 Agent，请求没指明时用它 |
 | `db_path` / `store` / `session` | `./.lovia/<agent>.db` | Transcript 和聊天元数据存储 |
-| `max_turns` / `budget` / `retry` / `context_policy` | — | 应用于每个托管 Run 的设置 |
+| `max_turns` / `budget` / `retry` / `context_policy` | — | 应用于每个托管 Run 的设置；`max_turns` 也可以是 `{name: n}` 映射，每个 Agent 一个（没列出的用 `50`） |
 | `tracer` | `None` | 托管 Run 的 Span 记录器 |
 | `titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
 | `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后生成追问建议（见下文） |
@@ -230,11 +230,11 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 
 | 区域 | `data-part` |
 | --- | --- |
-| 侧栏 | `sidebar`、`sidebar-header`、`sidebar-toggle`、`agent-switcher`、`sidebar-nav`、`new-chat`、`memory`、`schedules`、`settings`、`sessions-label`、`sessions-search`、`sessions` |
+| 侧栏 | `sidebar`、`sidebar-header`、`sidebar-toggle`、`sidebar-nav`、`new-chat`、`memory`、`schedules`、`settings`、`sessions-label`、`sessions-search`、`sessions` |
 | 顶栏 | `topbar`、`chat-title`、`topbar-actions`、`tasks`、`chat-menu`（当前对话的置顶 / 重命名 / 分支 / 导出 / 删除）、`files-toggle` |
 | 视图 | `view`（打开的[视图](#视图)画在这个容器里） |
 | 对话区 | `transcript`、`welcome`、`todo-panel`、`turn`（带 `data-role="user"` 或 `"assistant"`）、`tool`（带 `data-tool="<工具名>"` 和 `data-status`：`running`、`awaiting`（等待用户，比如在提问），之后是 `done` 或 `error`）、`activity`（连续两个及以上的思考 / 工具步骤折叠成的一行摘要；回复正文开始后自动收起）、`message-actions`（一条消息的[操作](#消息操作)；每个按钮带 `data-action="<id>"`） |
-| 输入框 | `composer`、`attach`、`context-ring` |
+| 输入框 | `composer`、`attach`、`agent-chip`（新对话用哪个 Agent；多于一个时才显示）、`context-ring` |
 | 其他 | `files-panel`；设置面板里的 `language`（语言那一行） |
 
 隐藏某个工具的卡片不会连带隐藏它的审批请求：审批卡片是单独渲染的。
@@ -695,8 +695,9 @@ app = create_app(
 - `modes` 是对话可选的模式，必须包含 `"readonly"`。对话保存的模式不在其中时，按它下方最宽的可用模式运行——
   只收紧，不放宽。
 - `default_mode` 是页面给新对话预选的模式。从未选过模式的对话沿用 Agent 自带的 policy（自定义规则原样保留），只是换到对话的目录。
-- `build(root, mode)` 返回某个目录和模式的 `LocalWorkspace`。默认用 `Workspace.local` 的预设，沿用 Agent 工作区的
+- `build(agent, root, mode)` 返回某个 Agent 的对话在某个目录和模式下的 `LocalWorkspace`。默认用 `Workspace.local` 的预设，沿用 Agent 工作区的
   `env`、`limits`、`executor`、`inherit_env` 和 shell 超时，但不带自定义 policy 的规则；要在切换后保留它们，就传入 `build`。
+  `agent` 用来区分各个 Agent 自己的规则。
 - `agent_for(agent, root)` 返回在 `root` 里工作时的 Agent，负责项目相关的其余部分，比如读该目录的 `AGENTS.md`
   作为指令、加载它的技能。每次运行都调用，在设置工作区之前（它设置的工作区会被替换），不做缓存。
 - `general` 是不属于任何项目的对话用的通用目录：始终在列表里、始终允许，第一次用到时才创建。`lovia web` 用的是
@@ -750,7 +751,7 @@ create_app(agent, followups=True, followup_model="<small-model>")
 
 `create_app()` 默认关闭该功能，因为每次生成建议都可能增加一次模型调用。
 `followup_model` 可改用比 Agent 主模型更便宜的模型；不设置时沿用 Agent 的模型。
-`lovia web` CLI 默认开启，可在设置 → 智能体里关闭，
+`lovia web` CLI 默认开启，可在设置 → Agent 里按 Agent 关闭，
 也可以把[辅助任务角色](web-ui.md#模型配置与切换)指派给一个更便宜的模型。
 
 如果建议来自 FAQ、向量库或自定义提示词，可以把异步函数直接传给 `followups`，

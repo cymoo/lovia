@@ -192,7 +192,7 @@ def create_app(
     followups: bool | FollowupFn = False,
     followup_model: str | Provider | None = None,
     title: str = "lovia",
-    max_turns: int = 50,
+    max_turns: int | Mapping[str, int] = 50,
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
@@ -237,7 +237,9 @@ def create_app(
     to disable compaction server-wide.
 
     Run limits apply to every chat turn the server drives: ``max_turns`` caps
-    the agent loop per request and ``budget`` (a :class:`RunBudget`) caps token
+    the agent loop per request — one number for every agent, or one per
+    agent by registry key (an agent left out gets 50) — and ``budget`` (a
+    :class:`RunBudget`) caps token
     spend, wall-clock, and tool calls. ``budget`` is a template — copied per run
     — so its clock and counters never carry across runs. ``retry`` (a
     :class:`RetryPolicy`) overrides the agent's own provider-retry posture for

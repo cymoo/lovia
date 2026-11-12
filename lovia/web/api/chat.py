@@ -140,12 +140,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
 
         An existing session keeps the agent it was created with — a stale tab
         (or a switcher left on another agent) must not silently swap a chat's
-        brain mid-conversation. ``requested`` applies to new sessions, and as
-        the fallback when the stored agent is no longer served. Side benefit:
-        continuing an existing session needs no ``agent`` field at all.
+        brain mid-conversation — and runs on the default one once that agent
+        is no longer served. ``requested`` applies to new sessions. Side
+        benefit: continuing an existing session needs no ``agent`` field.
         """
-        if meta is not None and meta.agent and meta.agent in deps.agents:
-            return deps.agents[meta.agent]
+        if meta is not None:
+            return deps.pick(deps.agent_of(meta))
         return deps.pick(requested)
 
     @router.post("/api/chat", response_model=ChatResponse)

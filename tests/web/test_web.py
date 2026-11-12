@@ -265,7 +265,7 @@ def test_index_at_the_root_has_no_base_path() -> None:
 # The public styling contract: deployer CSS may target these (docs list them
 # in web-server.md); renaming one is a breaking change.
 _PUBLIC_PARTS = (
-    "sidebar", "sidebar-header", "sidebar-toggle", "agent-switcher",
+    "sidebar", "sidebar-header", "sidebar-toggle",
     "sidebar-nav", "new-chat", "memory", "schedules", "settings",
     "sessions-label", "sessions-search", "sessions", "topbar", "chat-title",
     "topbar-actions", "tasks", "chat-menu",
@@ -430,6 +430,10 @@ def test_list_agents_single() -> None:
     assert data == [
         {
             "name": "writer",
+            # Set only by the CLI's configured agents.
+            "label": None,
+            "description": None,
+            "mode": None,
             "instructions": "be helpful",
             "tools": [],
             "workspace": False,
@@ -447,12 +451,12 @@ def test_list_agents_multi_and_pick() -> None:
     c = TestClient(app)
     names = sorted(x["name"] for x in c.get("/api/agents").json())
     assert names == ["alpha", "beta"]
-    # No agent specified → 400 because multiple are registered.
-    bad = c.post("/api/chat", json={"message": "hi"})
-    assert bad.status_code == 400
+    # No agent specified → the default: the first registered.
+    first = c.post("/api/chat", json={"message": "hi"})
+    assert first.json()["output"] == "a"
     # Picking by name works.
-    ok = c.post("/api/chat", json={"message": "hi", "agent": "alpha"})
-    assert ok.json()["output"] == "a"
+    ok = c.post("/api/chat", json={"message": "hi", "agent": "beta"})
+    assert ok.json()["output"] == "b"
 
 
 def test_agent_info_context_window_resolution() -> None:
@@ -1233,11 +1237,11 @@ def test_info_single_agent_capabilities() -> None:
     assert data["features"]["titles"] is False
 
 
-def test_info_multi_agent_has_no_default() -> None:
+def test_info_multi_agent_default_is_the_first() -> None:
     app = _app({"alpha": _make_agent([text("a")]), "beta": _make_agent([text("b")])})
     data = TestClient(app).get("/api/info").json()
-    assert sorted(data["agents"]) == ["alpha", "beta"]
-    assert data["default_agent"] is None
+    assert data["agents"] == ["alpha", "beta"]
+    assert data["default_agent"] == "alpha"
 
 
 def test_info_reflects_custom_title_and_title_flag() -> None:
@@ -1256,6 +1260,9 @@ def test_get_agent_by_name() -> None:
     c = TestClient(_app(agent))
     assert c.get("/api/agents/writer").json() == {
         "name": "writer",
+        "label": None,
+        "description": None,
+        "mode": None,
         "instructions": "be helpful",
         "tools": [],
         "workspace": False,
@@ -1458,6 +1465,9 @@ def test_build_api_router_is_embeddable() -> None:
     assert c.get("/api/agents").json() == [
         {
             "name": "bot",
+            "label": None,
+            "description": None,
+            "mode": None,
             "instructions": "",
             "tools": [],
             "workspace": False,

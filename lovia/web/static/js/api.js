@@ -411,7 +411,7 @@ export const api = {
     }).then(_json);
   },
 
-  // ---- model configuration (Settings → Models/Search; CLI default agent) ----
+  // ---- configuration (Settings → Connections/Skills/Agents; the CLI's) ----
   // Only served when /api/info reports features.model_config. API keys never
   // round-trip: reads carry { set, hint }; writes use null=keep, ''=clear.
   getConfig: () => request('/api/config').then(_json),
@@ -460,28 +460,38 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
-  // Settings → Permissions / Agent. Each sends only the fields to change;
-  // all apply from the next run. resolve to { config }.
-  /** @param {{ default_mode?: string, auto_allow?: string[] }} body */
-  setWorkspaceSettings: (body) =>
-    request('/api/config/workspace', {
+  // Settings → Agents. A body sends the fields to set (null = inherit, for
+  // name/model/skills/max_retries); every write applies from the next run.
+  // create/duplicate resolve to { id, config }, the rest to { config }.
+  /** @param {object} body */
+  createAgent: (body) =>
+    request('/api/config/agents', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
+  /** @param {string} id @param {object} body */
+  updateAgent: (id, body) =>
+    request(`/api/config/agents/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
-  /** @param {{ max_turns?: number, max_retries?: number | null, followups?: boolean }} body */
-  setRunSettings: (body) =>
-    request('/api/config/run', {
-      method: 'PUT',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(body),
+  /** @param {string} id */
+  deleteAgent: (id) =>
+    request(`/api/config/agents/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
     }).then(_json),
-  /** @param {{ memory?: boolean, subagents?: boolean, instructions?: string }} body */
-  setAgentSettings: (body) =>
-    request('/api/config/agent', {
-      method: 'PUT',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(body),
+  /** @param {string} id */
+  duplicateAgent: (id) =>
+    request(`/api/config/agents/${encodeURIComponent(id)}/duplicate`, {
+      method: 'POST',
+    }).then(_json),
+  // The default agent is the first: this moves it there.
+  /** @param {string} id */
+  makeDefaultAgent: (id) =>
+    request(`/api/config/agents/${encodeURIComponent(id)}/default`, {
+      method: 'POST',
     }).then(_json),
   // Per-directory discovery report (live filesystem scan) for the pane.
   getSkills: () => request('/api/config/skills').then(_json),

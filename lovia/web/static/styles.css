@@ -481,18 +481,6 @@ body.lv-sidebar-resizing {
 .lv-sidebar-search {
   padding: 0 12px 10px;
 }
-.lv-agent-switcher {
-  padding: 0 12px 10px;
-}
-.lv-agent-label {
-  display: block;
-  margin: 0 4px 5px;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--lv-muted-2);
-}
 .lv-search-input {
   width: 100%;
   padding: 8px 12px;
@@ -1269,32 +1257,6 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   height: 1px;
   margin: 4px 6px;
   background: var(--lv-border);
-}
-
-.lv-agent-select {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--lv-border);
-  border-radius: var(--lv-radius-sm);
-  background: var(--lv-surface);
-  color: var(--lv-ink);
-  font-size: 13px;
-  outline: none;
-  cursor: pointer;
-  transition:
-    border-color var(--lv-t-fast),
-    box-shadow var(--lv-t-fast);
-}
-.lv-agent-select:hover {
-  border-color: var(--lv-border-strong);
-}
-/* A focused field says where typing goes, in neutral: a firmer border, a
-   faint ring. The accent is for what the page wants done (the primary
-   button, a selection) and for the keyboard's focus ring (:focus-visible),
-   not for the field a dialog happens to open on. */
-.lv-agent-select:focus {
-  border-color: var(--lv-muted);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lv-ink) 8%, transparent);
 }
 
 /* ---- Main page ---------------------------------------------------------- */
@@ -3186,6 +3148,11 @@ button.lv-question-option:hover {
 }
 .lv-composer-tools .lv-model-chip {
   max-width: min(200px, 32vw);
+}
+/* The chips' own display would beat the [hidden] default (the agent chip
+   with one agent served). */
+.lv-model-chip[hidden] {
+  display: none;
 }
 .lv-composer-end {
   flex: 1 1 auto;
@@ -6588,6 +6555,12 @@ body.lv-files-resizing {
 .lv-cfg-pane > .lv-cfg-pane-title {
   margin-bottom: 12px;
 }
+/* A second section on one page (Connections: models, then search). */
+.lv-cfg-section {
+  margin-top: 22px;
+  border-top: 1px solid var(--lv-border);
+  padding-top: 16px;
+}
 .lv-model-list {
   display: flex;
   flex-direction: column;
@@ -7131,6 +7104,18 @@ body.lv-files-resizing {
 }
 .lv-mode-chip {
   gap: 5px;
+}
+/* A chip that only names what is fixed (an open chat's agent): no menu, so
+   no caret and no hover. */
+.lv-model-chip.lv-chip-fixed {
+  cursor: default;
+}
+.lv-model-chip.lv-chip-fixed:hover {
+  background: transparent;
+  color: var(--lv-muted);
+}
+.lv-model-chip.lv-chip-fixed::after {
+  display: none;
 }
 .lv-mode-chip-icon,
 .lv-mode-item-icon {

@@ -52,11 +52,9 @@ def _workspace_modes(deps: RouterDeps) -> WorkspaceModesInfo | None:
     default: str | None = switch.default_mode
     runtime = deps.config_runtime
     if runtime is not None:
-        # The CLI's default follows Settings → Permissions, as this server
-        # runs it.
-        default = runtime.deployment.effective_mode(
-            runtime.config.workspace.default_mode
-        )
+        # The CLI's follows the default agent's (each agent's own is on its
+        # AgentInfo), as this server runs it.
+        default = runtime.deployment.effective_mode(runtime.config.default_agent.mode)
     if default is not None:
         default = switch.effective(default)
     # A chat with no mode stored runs on the agent's own workspace. The CLI

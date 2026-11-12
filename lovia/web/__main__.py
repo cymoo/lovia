@@ -29,7 +29,6 @@ from typing import Any, NoReturn, cast
 from .. import __version__
 from .._fdlimit import raise_soft_limit
 from ..agent import Agent
-from ..context import ContextPolicy
 from ..exceptions import UserError
 from ..http_config import DEFAULT_TIMEOUT
 from ..log_config import enable_logging
@@ -47,7 +46,8 @@ from fastapi import FastAPI  # after .app: its import names a missing [web] extr
 
 from .api import RouterDeps
 from .auth import is_loopback
-from .builder import Deployment, resolve_retry
+from .builder import Deployment
+from .followups import FollowupFn
 from .store import ChatStore
 from .workspaces import WorkspaceSwitch
 
@@ -58,11 +58,12 @@ LOG_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 DESCRIPTION = """\
 Launch the lovia chat UI in your browser.
 
-Serves a ready-made agent — skills, long-term memory, todos, web search,
+Serves ready-made agents — skills, long-term memory, todos, web search,
 scheduled runs, and a workspace rooted at DIR (default: the current
-directory). Everything about the agent — models, workspace mode, run limits,
-memory, the system prompt — is set in the browser (Settings) and saved to
-config.json in lovia's home, applying from the next run without a restart.
+directory). Everything about them — models, the agents themselves and each
+one's prompt, permissions and run limits — is set in the browser (Settings)
+and saved to config.json in lovia's home, applying from the next run
+without a restart.
 """
 
 EPILOG = """\
@@ -76,9 +77,9 @@ examples:
   lovia web init-ui ui                     # scaffold a UI directory for ChatUI(assets=)
 
 configuration:
-  Models, web search, global skill directories, the workspace mode and
-  auto-allowed commands, run limits, memory, subagents and the system prompt
-  live in config.json in lovia's home (~/.lovia, or --home DIR), beside the
+  Models, web search, global skill directories and the agents (each with its
+  prompt, model, permission mode, auto-allowed commands, switches and run
+  limits) live in config.json in lovia's home (~/.lovia, or --home DIR), beside the
   chat history and memory. Managed in the web UI's Settings; inspect with
   --check. A project's own AGENTS.md and .agents/skills load in every chat
   working there. The flags above are the server's own, plus the workspace
@@ -90,17 +91,17 @@ configuration:
 # arguments" — kept through the 0.9 series, dropped at 0.10.
 _SETTINGS = "Settings → {pane} (config.json {key})"
 REMOVED_OPTIONS: dict[str, str] = {
-    "--trusted": _SETTINGS.format(pane="Workspace", key="workspace.default_mode"),
-    "--auto-allow": _SETTINGS.format(pane="Workspace", key="workspace.auto_allow"),
-    "--max-turns": _SETTINGS.format(pane="Agent", key="run.max_turns"),
-    "--max-retries": _SETTINGS.format(pane="Agent", key="run.max_retries"),
-    "--no-followups": _SETTINGS.format(pane="Agent", key="run.followups"),
+    "--trusted": _SETTINGS.format(pane="Agents", key="agents[].mode"),
+    "--auto-allow": _SETTINGS.format(pane="Agents", key="agents[].auto_allow"),
+    "--max-turns": _SETTINGS.format(pane="Agents", key="agents[].max_turns"),
+    "--max-retries": _SETTINGS.format(pane="Agents", key="agents[].max_retries"),
+    "--no-followups": _SETTINGS.format(pane="Agents", key="agents[].followups"),
     "--memory-dir": "--home DIR (memory lives in <home>/memory)",
-    "--no-memory": _SETTINGS.format(pane="Agent", key="agent.memory"),
-    "--no-subagents": _SETTINGS.format(pane="Agent", key="agent.subagents"),
-    "--instructions": _SETTINGS.format(pane="Agent", key="agent.instructions"),
-    "--instructions-file": _SETTINGS.format(pane="Agent", key="agent.instructions"),
-    "--max-tokens": _SETTINGS.format(pane="Models", key="models[].max_tokens"),
+    "--no-memory": _SETTINGS.format(pane="Agents", key="agents[].memory"),
+    "--no-subagents": _SETTINGS.format(pane="Agents", key="agents[].subagents"),
+    "--instructions": _SETTINGS.format(pane="Agents", key="agents[].instructions"),
+    "--instructions-file": _SETTINGS.format(pane="Agents", key="agents[].instructions"),
+    "--max-tokens": _SETTINGS.format(pane="Connections", key="models[].max_tokens"),
 }
 REMOVED_ENV: dict[str, str] = {
     "LOVIA_WORKSPACE_MODE": "--readonly to lock read-only; otherwise "
@@ -451,17 +452,24 @@ def _warn_if_remote_capable(host: str, deployment: Deployment) -> None:
     )
 
 
+def _agents_desc(config: webconfig.WebConfig) -> str:
+    """Human line for the startup summary: the default agent first."""
+    first, *rest = [a.display_name for a in config.agents]
+    return ", ".join([f"{first} (default)" if rest else first, *rest])
+
+
 def _workspace_desc(deployment: Deployment, config: webconfig.WebConfig) -> str:
-    """Human line for the startup summary, e.g. ``/path/to/dir (coding)``."""
+    """Human line for the startup summary, e.g. ``/path/to/dir (coding)``:
+    how the default agent works there."""
     if deployment.workspace is None:
         return "(none)"
-    settings = config.workspace
-    mode = deployment.effective_mode(settings.default_mode) or "none"
+    agent = config.default_agent
+    mode = deployment.effective_mode(agent.mode) or "none"
     desc = mode
     if mode == "coding":
-        desc = f"coding, auto-allow: {', '.join(settings.auto_allow) or 'none'}"
-    if mode != settings.default_mode:
-        desc += f"; {settings.default_mode} in config.json, capped by --readonly"
+        desc = f"coding, auto-allow: {', '.join(agent.auto_allow) or 'none'}"
+    if mode != agent.mode:
+        desc += f"; {agent.mode} in config.json, capped by --readonly"
     elif deployment.readonly:
         desc += ", locked by --readonly"
     if deployment.lock_workspace:
@@ -540,24 +548,22 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # create_app build it) so the schedule_run tool can close over the same
         # ChatStore the scheduler polls. Custom --app agents keep using db_path.
         store: ChatStore | None = None
-        # Compaction policy for the default agent; None lets create_app pick its
-        # own default for a custom --app agent.
-        context_policy: ContextPolicy | None = None
-        # ask_human bridge for the default agent. A custom --app brings its own
-        # agents; wiring their channel is the library API's job (create_app's
-        # question_channel=), so it stays None here.
+        # ask_human bridge for the configured agents. A custom --app brings
+        # its own agents; wiring their channel is the library API's job
+        # (create_app's question_channel=), so it stays None here.
         question_channel: HumanChannel | None = None
         # The aux-role model (titles + follow-ups); None means the agent's own.
         aux_model: Provider | None = None
         # The runtime-reconfiguration surface behind /api/config — built for
-        # the default agent only (a custom --app configures itself in code).
+        # the configured agents only (a custom --app configures itself in code).
         config_runtime: webconfig.ConfigRuntime | None = None
-        # Run limits: the default agent's come from config.json (and follow
-        # Settings live); a custom --app agent gets the CLI defaults —
+        # Run limits: each configured agent's come from config.json (and
+        # follow Settings live); a custom --app agent gets the CLI defaults —
         # anything else is create_app()'s job in its own code.
-        run = webconfig.RunSettings()
-        # Per-chat permission modes — the default agent's, when it has a
-        # workspace; a custom --app opts in through create_app(workspaces=).
+        max_turns: int | Mapping[str, int] = webconfig.DEFAULT_MAX_TURNS
+        followups: bool | FollowupFn = True
+        # Per-chat permission modes, when the agents have a workspace; a
+        # custom --app opts in through create_app(workspaces=).
         workspaces: WorkspaceSwitch | None = None
         app_target = _first(args.app, os.getenv("LOVIA_APP"))
         if app_target:
@@ -593,7 +599,9 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         else:
             home = _home(args)
             loaded = webconfig.load_active(home)
-            profile = loaded.config.default_profile()
+            # The connection the default agent runs on — what --check probes
+            # and the summary shows.
+            profile = loaded.config.agent_profile(loaded.config.default_agent)
             conn = (
                 webconfig.Connection.from_profile(profile)
                 if profile is not None
@@ -609,8 +617,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             # Anything missing (no model, a keyless official host) means
             # "serve the setup screen": the browser's Settings is the one
             # write path, on a TTY exactly like everywhere else.
-            unconfigured = bool(conn.missing())
-            run = loaded.config.run
+            unconfigured = bool(webconfig.ConfigRuntime.serveable(loaded.config))
             general = Deployment(home=home).general_workspace()
             deployment = Deployment(
                 workspace=None if args.no_workspace else _launch_dir(args, general),
@@ -648,7 +655,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 # drift. Eager construction also surfaces vendor-prefix typos
                 # at startup instead of on the first chat message.
                 try:
-                    agent, _provider, context_policy, aux_model = config_runtime.build()
+                    agent_or_agents, aux_model = config_runtime.build()
                 except (UserError, ValueError) as exc:
                     raise CliError(str(exc)) from exc
                 summary = webconfig.format_summary(
@@ -658,10 +665,12 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     config_desc=(
                         loaded.label if loaded.exists else "(not saved — session only)"
                     ),
+                    agents_desc=_agents_desc(loaded.config),
                     workspace_desc=_workspace_desc(deployment, loaded.config),
                     db_desc=db_desc,
                 )
-                agent_or_agents = agent
+            max_turns = config_runtime.max_turns()
+            followups = config_runtime.followups
 
         # stdout, not the logger: the summary must be visible at every log
         # level, while log lines keep flowing to stderr.
@@ -674,14 +683,12 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 # builds one from db_path (the custom --app path).
                 store=store,
                 db_path=db_path,
-                context_policy=context_policy,
-                max_turns=run.max_turns,
-                # None = no override: the agent's own retry posture applies.
-                retry=resolve_retry(run),
+                max_turns=max_turns,
                 token=token or _generated_token(host),
                 # On, unlike create_app's default: the bundled CLI is a
-                # finished chat app where the chips are part of it.
-                followups=run.followups,
+                # finished chat app where the chips are part of it (each
+                # configured agent may turn them off).
+                followups=followups,
                 title_model=aux_model,
                 followup_model=aux_model,
                 # Deny an unanswered tool approval after 10 minutes. Without it

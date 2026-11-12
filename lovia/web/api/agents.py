@@ -87,7 +87,6 @@ def build_agents_router(deps: RouterDeps) -> APIRouter:
         return out.model_copy(
             update={
                 "label": spec.display_name,
-                "description": spec.description or None,
                 "mode": mode,
             }
         )

@@ -254,7 +254,6 @@ class AgentConfig(BaseModel):
     # No dots: it doubles as the core ``Agent.name``, which names tools.
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$", max_length=64)
     name: str | None = None
-    description: str = ""
     # Prepended to the chat's project's AGENTS.md; empty: AGENTS.md alone,
     # or a generic prompt when there is none.
     instructions: str = ""

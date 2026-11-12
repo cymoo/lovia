@@ -86,6 +86,13 @@ export function readOnlyNotice() {
   return c && c.writable === false ? notice(t('cfg.readOnly', { file: c.scope.label })) : null;
 }
 
+/** A settings page's last line: the file its changes are saved in. */
+export function scopeFootnote() {
+  const { scope } = cfg();
+  const text = t('cfg.scopeNote', { label: scope.label });
+  return el('div', 'lv-cfg-footnote', scope.exists ? text : `${text} ${t('cfg.scopeUnsaved')}`);
+}
+
 let _fieldIds = 0;
 
 export function field(labelText, control, hintText) {
@@ -253,32 +260,12 @@ function extraBodyEditor(initial, flavor) {
  * The Settings → Models pane: profile list ⇄ edit form, plus role assignment.
  * Owns its internal rerenders; safe to rebuild wholesale on tab switches.
  */
-/**
- * Settings → Connections: what the agents connect to — the models, then the
- * web-search service. The search section steps aside while a model's form
- * is open, so the form's Save is the last thing on the page.
- */
-export function buildConnectionsPane() {
-  const pane = el('div', 'lv-cfg-stack');
-  const search = buildSearchPane();
-  search.classList.add('lv-cfg-section');
-  pane.append(
-    buildModelsPane((name) => {
-      search.hidden = name !== 'list';
-    }),
-    search,
-  );
-  return pane;
-}
-
-/** @param {(view: 'list' | 'form') => void} [onView] */
-function buildModelsPane(onView) {
+export function buildModelsPane() {
   const pane = el('div', 'lv-cfg-pane');
   /** @type {{ name: 'list' } | { name: 'form', id: string | null }} */
   let view = { name: 'list' };
 
   async function render() {
-    onView?.(view.name);
     if (!cfg()) {
       pane.replaceChildren(el('div', 'lv-cfg-hint', '…'));
       try {
@@ -386,12 +373,7 @@ function buildModelsPane(onView) {
     box.appendChild(list);
 
     if (c.models.length) box.appendChild(renderRoles());
-
-    const note = el('div', 'lv-cfg-footnote');
-    note.textContent = c.scope.exists
-      ? t('cfg.scopeNote', { label: c.scope.label })
-      : t('cfg.scopeNote', { label: c.scope.label }) + ' ' + t('cfg.scopeUnsaved');
-    box.appendChild(note);
+    box.appendChild(scopeFootnote());
     return box;
   }
 
@@ -718,7 +700,8 @@ function buildModelsPane(onView) {
 
 // ---- Search pane ----------------------------------------------------------
 
-function buildSearchPane() {
+/** Settings → Web search: the backend agents with web search on use, and its key. */
+export function buildSearchPane() {
   const pane = el('div', 'lv-cfg-pane');
 
   (async () => {
@@ -826,7 +809,7 @@ function buildSearchPane() {
       }
     });
     actions.appendChild(save);
-    pane.append(form, errBox, actions);
+    pane.append(form, errBox, actions, scopeFootnote());
   })();
 
   return pane;
@@ -994,12 +977,7 @@ export function buildSkillsPane() {
         ),
       );
     }
-
-    const note = el('div', 'lv-cfg-footnote');
-    note.textContent = c.scope.exists
-      ? t('cfg.scopeNote', { label: c.scope.label })
-      : t('cfg.scopeNote', { label: c.scope.label }) + ' ' + t('cfg.scopeUnsaved');
-    pane.appendChild(note);
+    pane.appendChild(scopeFootnote());
   }
 
   render();
@@ -1061,20 +1039,20 @@ function updateChip() {
 }
 
 /**
- * Switch the model the composer's agent runs on: its own, when it has one;
- * else the default chat model, which every agent without one follows.
- * @param {string} id
+ * Switch the model the composer's agent runs on — that agent's alone; `null`
+ * puts it back on the default chat model. The default itself changes only in
+ * Settings → Models, so picking a model here never moves other agents.
+ * @param {string | null} id
  */
 async function switchModel(id) {
-  if (id === activeProfile()?.id) return;
   const agent = activeAgent();
-  if (agent?.model) await api.updateAgent(agent.id, { model: id });
-  else await api.setRoles({ chat: id });
-  await afterModelChange(id);
+  if (!agent || (agent.model ?? null) === id) return;
+  await api.updateAgent(agent.id, { model: id });
+  await afterModelChange(id ?? cfg().roles.chat, id ? 'cfg.switched' : 'cfg.followsDefault');
 }
 
 /**
- * Settings → Connections' "Make default": the default chat model itself
+ * Settings → Models' "Make default": the default chat model itself
  * (roles.chat), whichever agent the composer is on.
  * @param {string} id
  */
@@ -1126,27 +1104,45 @@ async function openChipMenu() {
     }
   }
   const c = cfg();
+  const agent = activeAgent();
+  if (!agent) return;
   const menu = el('div', 'lv-model-chip-menu');
   menu.setAttribute('role', 'menu');
-  menu.appendChild(el('div', 'lv-model-chip-menu-title', t('cfg.switchTitle')));
-  const current = activeProfile()?.id;
-  for (const p of c.models) {
+  // Named for the agent: the pick is its setting, not this chat's.
+  menu.appendChild(
+    el('div', 'lv-model-chip-menu-title', t('cfg.switchTitle', { name: agent.display_name })),
+  );
+  /**
+   * @param {string} label
+   * @param {string | null} id What switchModel gets.
+   * @param {string} [sub]
+   */
+  const option = (label, id, sub) => {
+    const on = (agent.model ?? null) === id;
     const item = el('button', 'lv-model-chip-item');
     item.setAttribute('type', 'button');
     item.setAttribute('role', 'menuitemradio');
-    item.setAttribute('aria-checked', String(p.id === current));
-    item.appendChild(el('span', 'lv-model-chip-item-name', profileName(p)));
-    if (p.vision === 'on') item.appendChild(el('span', 'lv-model-chip-item-sub', t('cfg.visionBadge')));
-    if (p.id === current) item.insertAdjacentHTML('beforeend', icon('check', { size: 15 }));
+    item.setAttribute('aria-checked', String(on));
+    item.appendChild(el('span', 'lv-model-chip-item-name', label));
+    if (sub) item.appendChild(el('span', 'lv-model-chip-item-sub', sub));
+    if (on) item.insertAdjacentHTML('beforeend', icon('check', { size: 15 }));
     item.addEventListener('click', async () => {
       closeChipMenu();
       try {
-        await switchModel(p.id);
+        await switchModel(id);
       } catch (err) {
         toast(String(err.message || err), { type: 'error' });
       }
     });
     menu.appendChild(item);
+  };
+  const fallback = c.models.find((/** @type {any} */ m) => m.id === c.roles.chat);
+  option(
+    fallback ? t('agent.modelDefault', { name: profileName(fallback) }) : t('agent.modelNone'),
+    null,
+  );
+  for (const p of c.models) {
+    option(profileName(p), p.id, p.vision === 'on' ? t('cfg.visionBadge') : undefined);
   }
   menu.appendChild(el('div', 'lv-model-chip-menu-divider'));
   const manage = el('button', 'lv-model-chip-item lv-manage');
@@ -1155,7 +1151,7 @@ async function openChipMenu() {
   manage.addEventListener('click', async () => {
     closeChipMenu();
     const { openSettings } = await import('./settings.js');
-    openSettings('connections');
+    openSettings('models');
   });
   menu.appendChild(manage);
 
@@ -1182,7 +1178,7 @@ function initModelChip() {
     e.stopPropagation();
     if (!store.configured) {
       const { openSettings } = await import('./settings.js');
-      openSettings('connections');
+      openSettings('models');
       return;
     }
     openChipMenu();
@@ -1232,6 +1228,6 @@ export function initModelConfig() {
   store.on('agent-changed', updateChip);
   store.on('open-model-settings', async () => {
     const { openSettings } = await import('./settings.js');
-    openSettings('connections');
+    openSettings('models');
   });
 }

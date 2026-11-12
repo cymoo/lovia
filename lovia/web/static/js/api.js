@@ -411,7 +411,7 @@ export const api = {
     }).then(_json);
   },
 
-  // ---- configuration (Settings → Connections/Skills/Agents; the CLI's) ----
+  // ---- configuration (Settings → Models/Web search/Skills/Agents; the CLI's) ----
   // Only served when /api/info reports features.model_config. API keys never
   // round-trip: reads carry { set, hint }; writes use null=keep, ''=clear.
   getConfig: () => request('/api/config').then(_json),

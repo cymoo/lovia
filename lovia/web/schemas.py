@@ -18,9 +18,8 @@ def _bounded_context(value: dict[str, Any] | None) -> dict[str, Any] | None:
 class AgentInfo(BaseModel):
     # The registry key: what requests name and chats store.
     name: str
-    # What the page calls it, and the line under that; None: show ``name``.
+    # What the page calls it; None: show ``name``.
     label: str | None = None
-    description: str | None = None
     # The permission mode a new chat with this agent starts in; None: the
     # server's default (``ServerInfo.workspace_modes``).
     mode: str | None = None

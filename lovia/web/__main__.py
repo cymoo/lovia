@@ -101,7 +101,7 @@ REMOVED_OPTIONS: dict[str, str] = {
     "--no-subagents": _SETTINGS.format(pane="Agents", key="agents[].subagents"),
     "--instructions": _SETTINGS.format(pane="Agents", key="agents[].instructions"),
     "--instructions-file": _SETTINGS.format(pane="Agents", key="agents[].instructions"),
-    "--max-tokens": _SETTINGS.format(pane="Connections", key="models[].max_tokens"),
+    "--max-tokens": _SETTINGS.format(pane="Models", key="models[].max_tokens"),
 }
 REMOVED_ENV: dict[str, str] = {
     "LOVIA_WORKSPACE_MODE": "--readonly to lock read-only; otherwise "

@@ -6576,12 +6576,6 @@ body.lv-files-resizing {
 .lv-cfg-pane > .lv-cfg-pane-title {
   margin-bottom: 12px;
 }
-/* A second section on one page (Connections: models, then search). */
-.lv-cfg-section {
-  margin-top: 22px;
-  border-top: 1px solid var(--lv-border);
-  padding-top: 16px;
-}
 .lv-model-list {
   display: flex;
   flex-direction: column;

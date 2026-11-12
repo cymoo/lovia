@@ -187,11 +187,35 @@ def test_connection_official_host_with_key_is_complete() -> None:
 # ----------------------------------------------------------------- skills -
 
 
-def test_skills_defaults_to_conventional_roots() -> None:
-    assert WebConfig().skills.dirs == [".agents/skills", "~/.agents/skills"]
-    # An older document without the key parses to the same defaults.
+def test_skills_defaults_to_the_global_convention() -> None:
+    assert WebConfig().skills.dirs == ["~/.agents/skills"]
+    # An older document without the key parses to the same default.
     old = WebConfig.model_validate({"version": 1, "models": []})
-    assert old.skills.dirs == [".agents/skills", "~/.agents/skills"]
+    assert old.skills.dirs == ["~/.agents/skills"]
+
+
+def test_skills_saved_old_default_still_loads(tmp_path: Path) -> None:
+    # The pre-0.9.179 default, as every saved file carries it: the project
+    # entry is the convention now, dropped rather than refused.
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"skills": {"dirs": [".agents/skills", "~/.agents/skills"]}}),
+        encoding="utf-8",
+    )
+    loaded = storage.load_config(path)
+    assert loaded is not None and loaded.skills.dirs == ["~/.agents/skills"]
+
+
+def test_skills_relative_entry_in_a_file_says_why(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"skills": {"dirs": ["skills"]}}), encoding="utf-8")
+    with pytest.raises(UserError, match="loads by itself"):
+        storage.load_config(path)
+
+
+def test_web_runs_default_to_a_hundred_turns() -> None:
+    # The web's own default; core's Runner keeps its library one.
+    assert WebConfig().run.max_turns == 100
 
 
 def test_skills_explicit_empty_list_stays_empty() -> None:
@@ -200,7 +224,7 @@ def test_skills_explicit_empty_list_stays_empty() -> None:
 
 
 def test_skills_dirs_stripped_and_deduped_in_order() -> None:
-    assert SkillsConfig(dirs=[" a ", "a", "b"]).dirs == ["a", "b"]
+    assert SkillsConfig(dirs=[" ~/a ", "~/a", "~/b"]).dirs == ["~/a", "~/b"]
 
 
 def test_skills_blank_entry_rejected() -> None:
@@ -218,18 +242,52 @@ def test_skills_roundtrips_through_storage(tmp_path: Path) -> None:
 # ---------------------------------------------------------------- storage -
 
 
-def test_save_config_is_owner_only_and_gitignored(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
+def test_save_config_is_owner_only_and_gitignored(tmp_path: Path) -> None:
     cfg = WebConfig(models=[ModelProfile(id="a", model="m", api_key="sk-secret")])
-    path = storage.save_config(cfg, storage.project_config_path())
-    assert path == storage.project_config_path()
+    # Any home, whatever it is called.
+    target = storage.config_path(tmp_path / "my-home")
+    path = storage.save_config(cfg, target)
+    assert path == target
     assert (path.parent / ".gitignore").read_text().strip().splitlines()[-1] == "*"
     if os.name == "posix":
         assert path.stat().st_mode & 0o777 == 0o600  # secret file: owner-only
         assert path.parent.stat().st_mode & 0o777 == 0o700  # dir: owner-only too
     assert not list(path.parent.glob("*.tmp"))  # the atomic temp file is gone
+
+
+@pytest.mark.parametrize(
+    ("setup", "match"),
+    [
+        # A project's own .gitignore would leave the key committable.
+        (lambda d: (d / ".gitignore").write_text(".venv/\n"), "ignore everything"),
+        # A repository's root is a project, not lovia's own directory.
+        (lambda d: (d / ".git").mkdir(), "repository's root"),
+    ],
+)
+def test_save_config_refuses_a_home_that_is_not_lovias_own(
+    tmp_path: Path, setup: object, match: str
+) -> None:
+    home = tmp_path / "project"
+    home.mkdir()
+    setup(home)  # type: ignore[operator]
+    before = home.stat().st_mode
+    cfg = WebConfig(models=[ModelProfile(id="a", model="m", api_key="sk-secret")])
+    with pytest.raises(UserError, match=match) as info:
+        storage.save_config(cfg, storage.config_path(home))
+    assert "--home ./.lovia" in str(info.value)
+    # Refused before anything changed.
+    assert not (home / "config.json").exists()
+    assert home.stat().st_mode == before
+
+
+def test_save_config_accepts_a_home_whose_gitignore_ignores_everything(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "h"
+    home.mkdir()
+    (home / ".gitignore").write_text("# mine\n *\n", encoding="utf-8")
+    storage.save_config(WebConfig(), storage.config_path(home))
+    assert (home / ".gitignore").read_text(encoding="utf-8") == "# mine\n *\n"
 
 
 def test_save_config_omits_null_fields(tmp_path: Path) -> None:
@@ -280,40 +338,33 @@ def test_load_config_invalid_schema_names_the_field(tmp_path: Path) -> None:
         storage.load_config(path)
 
 
-def test_load_active_project_beats_user(
+def test_load_active_reads_the_home_only(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_home: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
     user = WebConfig(models=[ModelProfile(id="u", model="user-model")])
-    storage.save_config(user, storage.user_config_path())
-    project = WebConfig(models=[ModelProfile(id="p", model="project-model")])
-    storage.save_config(project, storage.project_config_path())
+    storage.save_config(user, storage.config_path())
+    # A launch directory's ./.lovia is just a directory now.
+    here = WebConfig(models=[ModelProfile(id="p", model="here-model")])
+    storage.save_config(here, tmp_path / ".lovia" / "config.json")
     loaded = storage.load_active()
     assert loaded.exists
-    assert loaded.label == storage.PROJECT_CONFIG_LABEL
-    assert loaded.config.default_profile().model == "project-model"  # type: ignore[union-attr]
-
-
-def test_load_active_falls_back_to_user_scope(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_home: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    user = WebConfig(models=[ModelProfile(id="u", model="user-model")])
-    storage.save_config(user, storage.user_config_path())
-    loaded = storage.load_active()
-    assert loaded.label == storage.USER_CONFIG_LABEL
+    assert loaded.label == "~/.lovia/config.json"
     assert loaded.config.default_profile().model == "user-model"  # type: ignore[union-attr]
+    # Another home is read whole, and labelled by its path.
+    other = storage.load_active(tmp_path / ".lovia")
+    assert other.config.default_profile().model == "here-model"  # type: ignore[union-attr]
+    assert other.label == str((tmp_path / ".lovia" / "config.json").absolute())
 
 
-def test_load_active_empty_targets_user_scope(
+def test_load_active_empty_targets_the_home(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_home: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    loaded = storage.load_active()
+    loaded = storage.load_active(tmp_path / "h")
     assert not loaded.exists
     assert loaded.config.models == []
-    assert loaded.path == storage.user_config_path()
-    assert loaded.label == storage.USER_CONFIG_LABEL
+    assert loaded.path == tmp_path / "h" / "config.json"
 
 
 def test_load_active_warns_once_about_legacy_env_files(
@@ -331,7 +382,7 @@ def test_load_active_warns_once_about_legacy_env_files(
     assert "no longer read" in caplog.text
     # Once config.json exists the nudge stops.
     storage.save_config(
-        WebConfig(models=[ModelProfile(id="a", model="m")]), storage.user_config_path()
+        WebConfig(models=[ModelProfile(id="a", model="m")]), storage.config_path()
     )
     caplog.clear()
     with caplog.at_level("WARNING", logger="lovia.web.config"):

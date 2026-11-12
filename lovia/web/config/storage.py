@@ -1,10 +1,10 @@
 """Where ``config.json`` lives, and how it is read and written.
 
-Two scopes, project first: ``./.lovia/config.json`` beats
-``~/.lovia/config.json`` as a whole file (no per-key merging — the active
-file *is* the configuration). Writes are atomic and owner-only, and a
-``.lovia/`` target directory is made ``0700`` with a ``*`` .gitignore — the
-file holds API keys and must never be committed or world-readable.
+One file: ``<home>/config.json``, where the home is ``~/.lovia`` unless
+``lovia web --home DIR`` names another. Nothing resolves against the
+directory the server was started in. Writes are atomic and owner-only, and
+the home is made ``0700`` with a ``*`` .gitignore — the file holds API keys
+and must never be committed or world-readable.
 """
 
 from __future__ import annotations
@@ -27,35 +27,35 @@ log = logging.getLogger("lovia.web.config")
 # How to get configured — pointed at whenever the model is missing.
 CONFIG_HINT = (
     "start `lovia web` and open the printed URL — Settings → Models — "
-    "or write ~/.lovia/config.json by hand"
+    "or write config.json in lovia's home (~/.lovia, or --home DIR) by hand"
 )
 
-# lovia's data dir beside the chat DB — a lovia-owned home, so it never
-# collides with another tool's files and stays tidy when launched from $HOME.
-CONFIG_DIR = Path(".lovia")
+# lovia's home: config, chat history, memory and the general workspace.
+DEFAULT_HOME = Path("~/.lovia")
 CONFIG_NAME = "config.json"
 
-PROJECT_CONFIG_LABEL = ".lovia/config.json"
-USER_CONFIG_LABEL = "~/.lovia/config.json"
+
+def config_path(home: Path = DEFAULT_HOME) -> Path:
+    """The configuration file inside ``home``."""
+    return home.expanduser() / CONFIG_NAME
 
 
-def project_config_path() -> Path:
-    """Project-scope config (``./.lovia/config.json``) — this directory only."""
-    return CONFIG_DIR / CONFIG_NAME
-
-
-def user_config_path() -> Path:
-    """User-scope config (``~/.lovia/config.json``) — used from any directory."""
-    return Path("~/.lovia").expanduser() / CONFIG_NAME
+def display_path(path: Path) -> str:
+    """``path`` for people: under the user's home directory it reads
+    ``~/…`` (``~/.lovia/config.json``), anywhere else in full."""
+    path = Path(os.path.abspath(path.expanduser()))
+    try:
+        return "~/" + path.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return str(path)
 
 
 @dataclass
 class LoadedConfig:
-    """The active configuration document and where it came from.
+    """The configuration document and where it came from.
 
-    When neither scope has a file yet, ``config`` is empty, ``exists`` is
-    False, and ``path``/``label`` point at the user scope — the default save
-    target for a first-run setup.
+    When the home has no file yet, ``config`` is empty and ``exists`` is
+    False; ``path`` is still where the first save goes.
     """
 
     config: WebConfig
@@ -90,19 +90,14 @@ def load_config(path: Path) -> WebConfig | None:
         ) from exc
 
 
-def load_active() -> LoadedConfig:
-    """The effective configuration: the project file if present, else the user's."""
-    for path, label in (
-        (project_config_path(), PROJECT_CONFIG_LABEL),
-        (user_config_path(), USER_CONFIG_LABEL),
-    ):
-        config = load_config(path)
-        if config is not None:
-            return LoadedConfig(config, path, label, exists=True)
-    _warn_legacy_env_files()
-    return LoadedConfig(
-        WebConfig(), user_config_path(), USER_CONFIG_LABEL, exists=False
-    )
+def load_active(home: Path = DEFAULT_HOME) -> LoadedConfig:
+    """The configuration in ``home`` (empty when it has no file yet)."""
+    path = config_path(home)
+    config = load_config(path)
+    if config is not None:
+        return LoadedConfig(config, path, display_path(path), exists=True)
+    _warn_legacy_env_file(home)
+    return LoadedConfig(WebConfig(), path, display_path(path), exists=False)
 
 
 def config_writable(path: Path) -> bool:
@@ -125,11 +120,8 @@ def config_writable(path: Path) -> bool:
 
 def save_config(config: WebConfig, path: Path | None = None) -> Path:
     """Write the whole document atomically, owner-only (``0600``)."""
-    path = path or user_config_path()
-    if path.parent.name == CONFIG_DIR.name:
-        _protect_config_dir(path.parent)
-    else:
-        path.parent.mkdir(parents=True, exist_ok=True)
+    path = path or config_path()
+    protect_home(path.parent)
     payload = config.model_dump(mode="json", exclude_none=True)
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     fd, tmp = tempfile.mkstemp(
@@ -148,17 +140,41 @@ def save_config(config: WebConfig, path: Path | None = None) -> Path:
     return path
 
 
-def _protect_config_dir(directory: Path) -> None:
-    """Create lovia's data dir, make it owner-only, and drop a ``*`` .gitignore.
+_OWN_HOME_HINT = (
+    "give lovia a directory of its own, e.g. --home ./.lovia (it writes the "
+    "protections itself), or add a line `*` to that directory's .gitignore"
+)
 
-    The dir holds saved secrets and the chat DB, so it's ``0700`` where the OS
+
+def protect_home(directory: Path) -> None:
+    """Create lovia's home, make it owner-only, and drop a ``*`` .gitignore.
+
+    The home holds saved secrets and the chat DB, so it's ``0700`` where the OS
     honours it (Windows ignores mode bits) and its whole contents are
     git-ignored — never committed inside someone's repo.
+
+    It must be lovia's own directory: one whose ``.gitignore`` already says
+    something else, or a repository's root, is refused before anything is
+    changed — writing the key there would leave it committable, and taking
+    the directory over (``0700``, ignore everything) would break the project.
     """
+    if (directory / ".git").exists():
+        raise UserError(
+            f"lovia's home can't be a Git repository's root: {directory}",
+            hint=_OWN_HOME_HINT,
+        )
+    gitignore = directory / ".gitignore"
+    if gitignore.is_file():
+        lines = gitignore.read_text(encoding="utf-8", errors="replace").splitlines()
+        if "*" not in (line.strip() for line in lines):
+            raise UserError(
+                f"{gitignore} doesn't ignore everything, so the API keys in "
+                "config.json and the chat history could be committed",
+                hint=_OWN_HOME_HINT,
+            )
     directory.mkdir(parents=True, exist_ok=True)
     with suppress(OSError):  # best-effort; Windows ignores mode bits
         directory.chmod(0o700)
-    gitignore = directory / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(
             "# lovia data — secrets and chat history; never commit.\n*\n",
@@ -166,24 +182,17 @@ def _protect_config_dir(directory: Path) -> None:
         )
 
 
-def _warn_legacy_env_files() -> None:
+def _warn_legacy_env_file(home: Path) -> None:
     """One heads-up when only a pre-0.9.37 ``config.env`` is around.
 
     Those files are no longer read (the model connection lives in
     ``config.json`` now); without this line the old configuration would just
     silently stop applying.
     """
-    legacy = [
-        label
-        for path, label in (
-            (CONFIG_DIR / "config.env", "./.lovia/config.env"),
-            (Path("~/.lovia/config.env").expanduser(), "~/.lovia/config.env"),
-        )
-        if path.is_file()
-    ]
-    if legacy:
+    legacy = home.expanduser() / "config.env"
+    if legacy.is_file():
         log.warning(
             "found legacy %s — no longer read since 0.9.37; reconnect the "
             "model in the web UI (Settings → Models writes config.json)",
-            " and ".join(legacy),
+            display_path(legacy),
         )

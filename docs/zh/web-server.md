@@ -724,8 +724,8 @@ app = create_app(agent, workspaces=WorkspaceSwitch(remotes={"box": RemoteHost.ss
 列表（`POST /api/workspaces`）时会到主机上确认目录存在；直接在其中开对话则不会，目录不在的话会体现为运行的第一个错误。
 
 `"any"` 等于服务端账号的全部触及范围（它的 SSH 密钥、它的 Docker），所以只适合只有所有者能用的服务。
-`lovia web` 绑定回环地址时启用它，其他情况不启用：`--allow-workspace-switch` 向持有 token 的人开放的是
-这台服务器上的目录，不是它连往其他主机的密钥。
+`lovia web` 在对话可以选目录的地方都启用它，不看绑定地址：持有 token、能在这里跑 shell 的人本来就能执行
+`ssh`。`--lock-workspace` 和 `--no-workspace` 会关闭它。
 
 对话的目录在创建时确定（第一条消息的 `workspace`，不带则用 Agent 自己的目录），之后不再改变；每次运行前都按 `roots`
 校验，服务端不再允许的目录会被拒绝（409 `workspace_not_allowed`），不会被换掉。附件、文件面板和上传都在对话的目录里

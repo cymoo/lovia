@@ -14,33 +14,40 @@ Open `http://127.0.0.1:8000` and configure one model on first launch. Later,
 `lovia web --check` validates the configuration and probes the endpoint without
 starting the server.
 
-Model configuration has two scopes. A project file replaces the user-level
-configuration as a whole; the files are not merged field by field:
+Everything the server keeps lives in one directory, lovia's **home** —
+`~/.lovia` unless `--home DIR` names another. Nothing is read from the
+directory the server was started in, which only decides where new chats work:
 
-| Path | Scope |
+| In the home | What |
 | --- | --- |
-| `~/.lovia/config.json` | Default for the current user |
-| `./.lovia/config.json` | Complete override for the current project |
+| `config.json` | Models, web search, global skill directories, and the Settings below |
+| `lovia.db` | Chat history (`--db FILE` puts it elsewhere) |
+| `memory/` | Long-term memory |
+| `workspace/` | Where chats that belong to no project work |
 
-The CLI adds `.lovia/` to `.gitignore` to protect keys and chat data. On
-platforms with Unix permissions, the configuration is owner-readable and
-writable only.
+Separate setups — a test instance, unrelated clients — each take their own
+`--home`. The home is owner-only on platforms with Unix permissions and holds
+a `*` `.gitignore`, so a home inside a repository is never committed. It must
+be lovia's own directory: a repository's root, or a directory whose
+`.gitignore` doesn't ignore everything, is refused before anything is written.
+
+Before 0.9.179 a `./.lovia/config.json` in the launch directory replaced the
+user's file, a `./.lovia/lovia.db` there was kept in use, and memory defaulted
+to `./.lovia/memory`. None of that is read now; `lovia web --home ./.lovia`
+runs exactly as such a launch did, and the server logs this when it finds a
+`./.lovia/config.json` without `--home`.
 
 The default Agent includes Todo, Memory, time and HTTP Tools, web search,
-scheduling, and a coding-mode Workspace rooted at the current directory. It
-also discovers:
+scheduling, and a coding-mode Workspace rooted at the current directory. From
+the directory each chat works in, on every run, it reads:
 
 - `AGENTS.md` as Agent instructions;
-- `./.agents/skills` and `~/.agents/skills` as the Skills directories
-  (project scope first; manage the list in Settings → Skills);
+- `.agents/skills` as the project's own skills, ahead of the global skill
+  directories (`~/.agents/skills` by default; Settings → Skills).
 
-both read from the directory each chat works in, on every run, so a chat in
-another project follows that project's `AGENTS.md` and skills;
-- `./.lovia/memory` as the Memory directory.
-
-The legacy `./skills` directory is no longer discovered automatically. Move it
-to `./.agents/skills`, or add it in Settings → Skills. Web search uses Tavily
-when its key is configured, otherwise it tries the optional DuckDuckGo backend.
+So a chat in another project follows that project's `AGENTS.md` and skills.
+Web search uses Tavily when its key is configured, otherwise it tries the
+optional DuckDuckGo backend.
 
 Default features can make model calls outside the main Run. Memory performs one
 digest after each completed Run and another call when a periodic dream is due;
@@ -53,8 +60,10 @@ cheaper model. See [Memory](memory.md#sharp-edges) for the full cost boundary.
     Loopback `127.0.0.1` requires no credentials. Binding another address
     requires `--token` or `LOVIA_WEB_TOKEN`; the server generates one when none
     is supplied. A client holding that token can use every Agent capability,
-    including file edits and shell execution. Treat it as a password and
-    prefer `--readonly` when allowing other devices. For multi-user operation,
+    including file edits, shell execution, other directories and remote
+    workspaces — the bind address changes nothing else. Treat it as a password
+    and narrow the server with `--readonly`, `--lock-workspace` or
+    `--no-workspace` when allowing other devices. For multi-user operation,
     see [Deployment](deployment.md).
 
 ## Models and switching
@@ -107,15 +116,25 @@ directly.
 
 ## Skills
 
-Settings → Skills manages the skill directories — an ordered list; each skill
-is a subdirectory with a `SKILL.md` (see [Skills](skills.md)). On duplicate
-skill names the earlier directory wins. The list defaults to
-`./.agents/skills` and `~/.agents/skills`; remove a default to disable it,
-or add any other directory (`~` works). The pane shows what each directory
-contributes — discovered skills, parse problems, shadowed duplicates — and a
-directory that does not exist is simply skipped, so a stale entry never
-prevents the server from starting. Changing the list applies immediately;
-adding a skill inside an already-listed directory needs no action at all.
+Skills load from two places; each skill is a subdirectory with a `SKILL.md`
+(see [Skills](skills.md)):
+
+- **The project's own** `.agents/skills`, in the root of the directory a chat
+  works in. It is a convention, like `AGENTS.md`, not a setting: it loads in
+  every chat there, and wins on a duplicate skill name. A chat on a remote
+  workspace does not get its project's skills yet.
+- **The global directories**, managed in Settings → Skills — an ordered list
+  of absolute or `~` paths, the same for every chat; on duplicate names the
+  earlier one wins. It defaults to `~/.agents/skills`; remove it to disable
+  it, or add any other directory. A relative entry is refused, since it
+  would name a different directory in every chat (an old `.agents/skills`
+  entry in a saved file is dropped: it loads anyway).
+
+The pane lists only the global directories, with what each contributes —
+discovered skills, parse problems, shadowed duplicates — and a directory that
+does not exist is simply skipped, so a stale entry never prevents the server
+from starting. Changing the list applies immediately; adding a skill inside
+an already-listed directory needs no action at all.
 
 ## Serve your own Agent
 
@@ -297,8 +316,8 @@ What the page can and can't do:
 
 ## Settings that apply without a restart
 
-Everything about the default Agent lives in `config.json` and is edited in
-Settings. A save applies from the next run; a reply already streaming
+Everything about the default Agent lives in `config.json` in the home and is
+edited in Settings. A save applies from the next run; a reply already streaming
 finishes with what it started with.
 
 | Settings pane | `config.json` | Default |
@@ -307,10 +326,10 @@ finishes with what it started with.
 | **Workspace** → Permission mode for new chats | `workspace.default_mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
 | **Workspace** → Commands that run without asking (shown for Edit in workspace) | `workspace.auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
 | **Agent** → Custom instructions | `agent.instructions` | Empty: the chat directory's `AGENTS.md`, else a generic prompt; set, `AGENTS.md` is appended |
-| **Agent** → Max turns / Retries | `run.max_turns` / `run.max_retries` | `50` / the Agent's own (`4`) |
+| **Agent** → Max turns / Retries | `run.max_turns` / `run.max_retries` | `100` / the Agent's own (`4`) |
 | **Agent** → Suggest follow-up questions | `run.followups` | On |
 | **Agent** → Background tasks | `agent.subagents` | On |
-| **Agent** → Long-term memory | `agent.memory` / `agent.memory_dir` | On, `./.lovia/memory` |
+| **Agent** → Long-term memory | `agent.memory` | On, kept in `<home>/memory` |
 
 When `config.json` isn't writable (a read-only mount, say), the server still
 starts and Settings shows these as view-only.
@@ -319,7 +338,7 @@ starts and Settings shows these as view-only.
 
 Each chat works in a folder of its own. The sidebar groups chats by folder:
 the one `lovia web` was launched in first, then the rest by recent activity,
-with **No project** (`~/.lovia/workspace`, for chats that belong to no
+with **No project** (`<home>/workspace`, for chats that belong to no
 project) always listed. A folder's **+** starts a new chat there; its
 **⋯** removes it from the list — files and chats stay, and adding the folder
 again brings its chats back. The folder button beside **Chats** adds
@@ -337,11 +356,11 @@ composer shows which, with the full path on hover; pick another there before
 sending. A chat keeps its folder for good: to work elsewhere, start a new
 chat. Attachments are saved into the draft's folder, so the chip locks while
 the draft holds some. The Files panel shows the open chat's folder, and the
-agent reads that folder's `AGENTS.md` and skills.
+agent reads that folder's `AGENTS.md` and `.agents/skills`.
 
-**A folder on another machine.** When the page is served on this computer
-only (the default, `127.0.0.1`), the add dialog has three tabs: **Local**,
-**SSH** and **Container**. On the last two, name the host — an alias
+**A folder on another machine.** Unless the server was started with
+`--lock-workspace` (or `--no-workspace`), the add dialog has three tabs:
+**Local**, **SSH** and **Container**. On the last two, name the host — an alias
 from `~/.ssh/config` or `user@host`; a running container, or
 `user@container` to be someone other than its default user — and the list
 shows *its* folders. Chats in that folder run there: the agent's file and
@@ -352,8 +371,7 @@ or newer and nothing installed, and SSH must work without a password prompt
 and attachments are saved there (under `uploads/`, as in a local one); a
 large file takes as long as the link to the host does. The agent reads the
 folder's `AGENTS.md` on the host, once per run. The folder's own skills are
-not loaded yet: only skill directories that belong to no project
-(`~/.lovia/skills`) apply. If the
+not loaded yet: only the global skill directories apply. If the
 connection drops, the run in progress fails and says so; the next message
 reconnects. See [Remote workspaces](workspace.md#remote-workspaces).
 
@@ -362,9 +380,9 @@ needs nothing; the first message to one asks which folder it works in
 (folders where its approvals were given come first), and **Link…** on the
 group links several at once. A link can't be changed later.
 
-A server started with `--lock-workspace`, or on a non-loopback `--host`
-without `--allow-workspace-switch`, keeps every chat in its launch folder:
-there is nothing to pick, and the sidebar lists chats by date as before.
+A server started with `--lock-workspace` keeps every chat in its launch
+folder: there is nothing to pick, and the sidebar lists chats by date as
+before.
 
 ## Permission mode per chat
 
@@ -391,30 +409,33 @@ Each resolves as flag, environment variable, then default.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
-| `DIR` (positional) | `LOVIA_WORKSPACE` | `.`: where new chats work — or `~/.lovia/workspace`, the general workspace, when launched from your home or the root directory |
+| `DIR` (positional) | `LOVIA_WORKSPACE` | `.`: where new chats work — or `<home>/workspace`, the general workspace, when launched from your home or the root directory |
+| `--home` | — | `~/.lovia`: config, chat history, memory and the general workspace |
 | `--readonly` | — | Off. On, every run is read-only and Settings can't change it |
 | `--no-workspace` | — | Off. On, no file or shell tools |
-| `--allow-workspace-switch` | — | Off. On a non-loopback `--host`, lets the browser open other directories and change the workspace settings (`trusted` stays loopback-only) |
-| `--lock-workspace` | — | Off. On, every chat works in `DIR`: the browser can't open another (wins over `--allow-workspace-switch`) |
+| `--lock-workspace` | — | Off. On, every chat works in `DIR`: the browser can't open another, on this machine or a remote one |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--root-path` | `LOVIA_ROOT_PATH` | None; the prefix a proxy serves the app under ([details](web-server.md#serving-under-a-path-prefix)) |
 | `--token` | `LOVIA_WEB_TOKEN` | Not needed on loopback; generated otherwise |
-| `--db` | `LOVIA_DB` | `~/.lovia/lovia.db`, one history for every directory — or `./.lovia/lovia.db` where one already exists (from before 0.9.148) |
+| `--db` | `LOVIA_DB` | `<home>/lovia.db` |
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent (or: an Agent, mapping, or app of your own) |
 | `--title` | `LOVIA_TITLE` | `lovia` |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--check` | — | Check model configuration and exit |
 
-On a non-loopback `--host`, the browser can't widen permissions: every chat
-works in `DIR`, the workspace settings are read-only there and `trusted` runs
-as `coding`. Edit `config.json` and restart instead, or pass
-`--allow-workspace-switch`.
+The bind address decides only whether a token is required: a server on
+`0.0.0.0` (in a container, say) offers every mode, folder and remote
+workspace that one on `127.0.0.1` does. A deployment narrows it with the
+three flags above. Before 0.9.179 a non-loopback `--host` capped modes at
+`coding` and kept chats in `DIR` unless `--allow-workspace-switch` was given;
+that flag is gone.
 
 The options that moved into Settings in 0.9.146 (`--trusted`,
 `--auto-allow`, `--max-turns`, `--max-retries`, `--max-tokens`,
-`--no-followups`, `--memory-dir`, `--no-memory`, `--no-subagents`,
-`--instructions`, `--instructions-file`, and their `LOVIA_*` variables) stop
-the CLI with a message naming the setting that replaced them. A custom `--app`
+`--no-followups`, `--no-memory`, `--no-subagents`, `--instructions`,
+`--instructions-file`, and their `LOVIA_*` variables) stop the CLI with a
+message naming the setting that replaced them; `--memory-dir` names
+`--home`. A custom `--app`
 Agent runs with the CLI defaults; set its limits with `create_app(max_turns=…,
 retry=…, followups=…)` in code. Use `lovia web --help` for the complete list.
 

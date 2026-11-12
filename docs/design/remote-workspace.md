@@ -164,24 +164,25 @@ await box.aclose()
 
 **部署约束：**
 
-| 启动方式 | 能否连远程 |
+| 启动方式（任意绑定地址） | 能否连远程 |
 | --- | --- |
-| 回环地址（默认） | 能 |
-| 回环 + `--lock-workspace` | 不能 |
-| 非回环地址，含 `--allow-workspace-switch` | 不能 |
+| 默认 | 能 |
+| `--lock-workspace` | 不能 |
 | `--no-workspace` | 不能 |
 
-回环地址上本来就能开任意目录、用 trusted 模式，智能体的 shell 已经可以直接执行 `ssh box`，远程没有增加权限。`--allow-workspace-switch` 放开的是服务器上的目录；远程是用服务器的密钥去碰别的机器，不是一回事，所以不随它开放。规则在服务端执行。
+能开任意目录的服务，智能体的 shell 已经可以直接执行 `ssh box`，远程没有增加权限。规则在服务端执行。
+
+**已推翻（0.9.179）**：原先只在回环地址上开远程，非回环地址即使加了 `--allow-workspace-switch` 也不开——理由是那个参数放开的是服务器上的目录，远程却是用服务器的密钥碰别的机器。但非回环地址上 coding 模式本来就可用，持有令牌的人能批准自己发起的一条 `ssh`，这条区分挡不住它想挡的东西；而容器里必须绑 `0.0.0.0`，部署者本人反倒用不上远程。所以远程和目录一样只看 `--lock-workspace` / `--no-workspace`，`--allow-workspace-switch` 已删除。见 `web-scopes-and-agents.md` §6。
 
 **库 API 与 `roots` 对称：**
 
 ```python
-WorkspaceSwitch(roots="any", remotes="any")              # lovia web 在回环地址上的行为
+WorkspaceSwitch(roots="any", remotes="any")              # lovia web 的默认行为
 WorkspaceSwitch(remotes={"box": RemoteHost.ssh("box")})  # 部署者显式声明，只有这些
 WorkspaceSwitch()                                        # remotes=None：没有远程（默认）
 ```
 
-要在非回环部署里用远程，走 `--app` 自己声明。声明过的主机上任意目录都可以打开：边界是部署者选的那个账号能访问什么，已经在操作系统层面生效。
+只允许某几台主机时，走 `--app` 自己声明。声明过的主机上任意目录都可以打开：边界是部署者选的那个账号能访问什么，已经在操作系统层面生效。
 
 **Files 面板。** 只走协议方法。只读视图是同一条连接上的另一个会话（readonly 策略，沿用 `_view_session` 的规则：只带 `denied_paths`）。"最近文件"仍是一次 `list_files(pattern="**/*")`。`raw` 用 `read_bytes`，上限沿用 `limits.max_file_read_bytes`（本地 `raw` 已经用它，`api/workspace.py:383`），远程首版不支持 Range。二进制嗅探改走 `read_bytes(max_bytes=…)`。
 
@@ -262,7 +263,6 @@ WorkspaceSwitch()                                        # remotes=None：没有
 | `raw` 的 Range / 流式 | 有需求再加 |
 | `config.json` 的 `remotes` 段、`--remote` 参数 | 远程位置是对话级数据（§6）；不能在设置页改的 `config.json` 段不符合现有约定，结构化数据也不适合做命令行参数 |
 | 远程主机上的目录白名单 | 边界是远端账号的权限；以后要加是给 `remotes` 的值加字段，不破坏已有用法 |
-| 非回环部署下从界面连远程 | 用服务器的密钥碰别的机器；需要的部署走 `--app` 声明 |
 | 界面上指定解释器路径 | 首版固定 `python3`；有人撞上再给"打开"对话框加高级字段 |
 | 从 `~/.ssh/config` 或 `docker ps` 列出候选 | 首版是文本输入 |
 

@@ -38,7 +38,6 @@ from ..tools import HumanChannel
 from ..workspace import WorkspaceMode
 from . import config as webconfig
 from .app import (
-    _default_db_path,
     _display_host,
     _generated_token,
     create_app,
@@ -48,8 +47,7 @@ from fastapi import FastAPI  # after .app: its import names a missing [web] extr
 
 from .api import RouterDeps
 from .auth import is_loopback
-from .builder import GENERAL_WORKSPACE, Deployment, resolve_retry
-from .config.storage import _protect_config_dir
+from .builder import Deployment, resolve_retry
 from .store import ChatStore
 from .workspaces import WorkspaceSwitch
 
@@ -64,7 +62,7 @@ Serves a ready-made agent — skills, long-term memory, todos, web search,
 scheduled runs, and a workspace rooted at DIR (default: the current
 directory). Everything about the agent — models, workspace mode, run limits,
 memory, the system prompt — is set in the browser (Settings) and saved to
-config.json, applying from the next run without a restart.
+config.json in lovia's home, applying from the next run without a restart.
 """
 
 EPILOG = """\
@@ -72,18 +70,19 @@ examples:
   lovia web                                # first run: configure in the browser
   lovia web ~/notes --port 9000
   lovia web ~/notes --readonly             # let it read, never write
+  lovia web --home ~/lovia-test            # a separate config, history, memory
   lovia web --app myagents:assistant       # serve your own agent
   lovia web --app myserver:app             # ... or your own create_app() app
   lovia web init-ui ui                     # scaffold a UI directory for ChatUI(assets=)
 
 configuration:
-  Models, web search, skills, the workspace mode and auto-allowed commands,
-  run limits, memory, subagents and the system prompt live in
-  ./.lovia/config.json — the project file wins — or ~/.lovia/config.json
-  (any directory). Managed in the web UI's Settings; inspect with --check.
-  The flags above are the server's own, plus the workspace locks a
-  deployment needs; on a non-loopback --host the browser can't change the
-  workspace settings unless --allow-workspace-switch is given.
+  Models, web search, global skill directories, the workspace mode and
+  auto-allowed commands, run limits, memory, subagents and the system prompt
+  live in config.json in lovia's home (~/.lovia, or --home DIR), beside the
+  chat history and memory. Managed in the web UI's Settings; inspect with
+  --check. A project's own AGENTS.md and .agents/skills load in every chat
+  working there. The flags above are the server's own, plus the workspace
+  locks a deployment needs — the same on every --host.
 """
 
 # Options that moved into config.json (Settings) in 0.9.146. Each still
@@ -96,7 +95,7 @@ REMOVED_OPTIONS: dict[str, str] = {
     "--max-turns": _SETTINGS.format(pane="Agent", key="run.max_turns"),
     "--max-retries": _SETTINGS.format(pane="Agent", key="run.max_retries"),
     "--no-followups": _SETTINGS.format(pane="Agent", key="run.followups"),
-    "--memory-dir": _SETTINGS.format(pane="Agent", key="agent.memory_dir"),
+    "--memory-dir": "--home DIR (memory lives in <home>/memory)",
     "--no-memory": _SETTINGS.format(pane="Agent", key="agent.memory"),
     "--no-subagents": _SETTINGS.format(pane="Agent", key="agent.subagents"),
     "--instructions": _SETTINGS.format(pane="Agent", key="agent.instructions"),
@@ -169,8 +168,7 @@ def check_removed_options(
             hits.append(f"{name} → {where}")
     if hits:
         raise CliError(
-            "these options moved into Settings and are no longer read:\n  "
-            + "\n  ".join(hits),
+            "these options are no longer read:\n  " + "\n  ".join(hits),
             hint="remove them; a custom --app sets its run limits in code "
             "(create_app(max_turns=..., retry=..., followups=...))",
         )
@@ -237,17 +235,16 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "--no-workspace", action="store_true", help="no filesystem/shell workspace"
     )
     agent.add_argument(
-        "--allow-workspace-switch",
-        action="store_true",
-        help="on a non-loopback --host, let the browser open other directories "
-        "and change the workspace mode and auto-allowed commands (trusted stays "
-        "loopback-only)",
-    )
-    agent.add_argument(
         "--lock-workspace",
         action="store_true",
         help="keep every chat in the launch directory: the browser can't open "
-        "another (wins over --allow-workspace-switch)",
+        "another, here or on another machine",
+    )
+    agent.add_argument(
+        "--home",
+        metavar="DIR",
+        help="lovia's home: config.json, the chat history, memory and the "
+        "general workspace (default ~/.lovia); one per setup kept apart",
     )
 
     server = p.add_argument_group("server")
@@ -274,8 +271,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     server.add_argument(
         "--db",
         metavar="FILE",
-        help="SQLite file for chat history (env LOVIA_DB, default "
-        "~/.lovia/lovia.db, or ./.lovia/lovia.db where that already exists)",
+        help="SQLite file for chat history (env LOVIA_DB, default <home>/lovia.db)",
     )
 
     advanced = p.add_argument_group("advanced")
@@ -352,46 +348,54 @@ def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
         ("DIR", args.dir is not None or args.workspace is not None),
         ("--readonly", args.readonly),
         ("--no-workspace", args.no_workspace),
-        ("--allow-workspace-switch", args.allow_workspace_switch),
         ("--lock-workspace", args.lock_workspace),
+        ("--home", args.home is not None),
     ]
     ignored = [name for name, given in flags if given]
     if ignored:
         log.warning("--app set; ignoring default-agent options: %s", ", ".join(ignored))
 
 
-def _launch_dir(args: argparse.Namespace) -> str:
+def _launch_dir(args: argparse.Namespace, general: Path) -> str:
     """The effective launch directory: ``DIR`` as given (the home directory
     too — that is the person's explicit choice), else the current one —
-    unless that is the home or root directory, where the general workspace
-    stands in (created now: it is in use) so files never land loose there."""
+    unless that is the home or root directory, where the ``general``
+    workspace stands in (created now: it is in use) so files never land
+    loose there."""
     given = _workspace_arg(args)
     if given:
         return given
     cwd = Path.cwd().resolve()
     if cwd in (Path.home().resolve(), Path(cwd.anchor)):
-        general = GENERAL_WORKSPACE.expanduser()
         general.mkdir(parents=True, exist_ok=True)
         return str(general)
     return "."
 
 
-def _default_db() -> Path:
-    """The chat history's default file: the user's (``~/.lovia/lovia.db``),
-    shared by every directory — unless the launch directory already has its
-    own ``./.lovia/lovia.db`` (from before 0.9.148), which stays in use."""
-    local = _default_db_path("lovia")
-    if local.is_file():
-        log.info(
-            "chat history: using %s found here (new installs keep it in "
-            "~/.lovia/lovia.db; pass --db to choose)",
-            local,
+def _home(args: argparse.Namespace) -> Path:
+    """lovia's home, from ``--home`` (default ``~/.lovia``), expanded.
+
+    Without ``--home``, a ``./.lovia/config.json`` here is what older
+    versions read first; it is not read now, and silently ignoring it would
+    leave the server on another configuration, so say how to keep it.
+    """
+    if args.home:
+        # Absolute, so the banner, the db path and memory name one place
+        # whatever the working directory (and no "run/../home" in them).
+        home = Path(os.path.abspath(Path(args.home).expanduser()))
+        if home.exists() and not home.is_dir():
+            raise CliError(f"--home is not a directory: {home}")
+        return home
+    home = webconfig.DEFAULT_HOME.expanduser()
+    legacy = Path(".lovia")
+    if (legacy / "config.json").is_file() and (legacy.resolve() != home.resolve()):
+        log.warning(
+            "./.lovia/config.json is not read: lovia keeps its configuration, "
+            "chat history and memory in %s — start with --home ./.lovia to "
+            "use that directory instead",
+            webconfig.display_path(home),
         )
-        return local
-    home = Path("~/.lovia").expanduser()
-    # It holds chat history beside the saved secrets: owner-only.
-    _protect_config_dir(home)
-    return home / "lovia.db"
+    return home
 
 
 def _warn_ignored_app_flags(args: argparse.Namespace) -> None:
@@ -441,7 +445,8 @@ def _warn_if_remote_capable(host: str, deployment: Deployment) -> None:
     log.warning(
         "binding to non-loopback host %r with a write/shell-capable workspace: "
         "anyone holding the API token can make the agent edit files or run "
-        "shell commands. Use --readonly, --no-workspace, or bind to 127.0.0.1.",
+        "shell commands, here or on hosts this machine can reach. Narrow it "
+        "with --readonly, --lock-workspace or --no-workspace.",
         host,
     )
 
@@ -456,16 +461,13 @@ def _workspace_desc(deployment: Deployment, config: webconfig.WebConfig) -> str:
     if mode == "coding":
         desc = f"coding, auto-allow: {', '.join(settings.auto_allow) or 'none'}"
     if mode != settings.default_mode:
-        why = "--readonly" if deployment.readonly else "non-loopback host"
-        desc += f"; {settings.default_mode} in config.json, capped by {why}"
+        desc += f"; {settings.default_mode} in config.json, capped by --readonly"
     elif deployment.readonly:
         desc += ", locked by --readonly"
     if deployment.lock_workspace:
         desc += "; every chat here (--lock-workspace)"
-    elif deployment.roots() is None:
-        desc += "; every chat here (non-loopback host)"
     root = Path(deployment.workspace).resolve()
-    if root == GENERAL_WORKSPACE.expanduser().resolve():
+    if root == deployment.general_workspace().resolve():
         desc += "; the general workspace — pass DIR to work in a project"
     return f"{root} ({desc})"
 
@@ -589,8 +591,8 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 version=__version__, app_target=app_target, db_desc=db_desc, url=url
             )
         else:
-            db_desc = db_path or str(_default_db())
-            loaded = webconfig.load_active()
+            home = _home(args)
+            loaded = webconfig.load_active(home)
             profile = loaded.config.default_profile()
             conn = (
                 webconfig.Connection.from_profile(profile)
@@ -599,34 +601,23 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             )
             if args.check:
                 # Read-only diagnosis: report, probe, exit — never serves.
-                return webconfig.run_check(conn, version=__version__)
+                return webconfig.run_check(conn, version=__version__, path=loaded.path)
+            # It holds the chat history and memory beside the saved
+            # secrets: owner-only, never committed.
+            webconfig.protect_home(home)
+            db_desc = db_path or str(home / "lovia.db")
             # Anything missing (no model, a keyless official host) means
             # "serve the setup screen": the browser's Settings is the one
             # write path, on a TTY exactly like everywhere else.
             unconfigured = bool(conn.missing())
             run = loaded.config.run
+            general = Deployment(home=home).general_workspace()
             deployment = Deployment(
-                workspace=None if args.no_workspace else _launch_dir(args),
+                workspace=None if args.no_workspace else _launch_dir(args, general),
                 readonly=args.readonly,
-                loopback=is_loopback(host),
-                allow_workspace_edit=args.allow_workspace_switch,
                 lock_workspace=args.lock_workspace,
+                home=home,
             )
-            settings = loaded.config.workspace
-            effective = deployment.effective_mode(settings.default_mode)
-            # --readonly is the person's own word; only the silent cap of a
-            # non-loopback bind deserves a line.
-            if (
-                effective is not None
-                and effective != settings.default_mode
-                and not deployment.readonly
-            ):
-                log.warning(
-                    "config.json asks for %s workspace mode; this server runs %s "
-                    "(trusted is offered on loopback hosts only)",
-                    settings.default_mode,
-                    effective,
-                )
             _warn_if_remote_capable(host, deployment)
             store = ChatStore.sqlite(db_desc)
             question_channel = HumanChannel()
@@ -640,20 +631,17 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 roots = deployment.roots()
                 workspaces = WorkspaceSwitch(
                     roots=roots,
-                    modes=cast(
-                        "tuple[WorkspaceMode, ...]",
-                        deployment.chat_modes(settings.default_mode),
-                    ),
+                    modes=cast("tuple[WorkspaceMode, ...]", deployment.modes()),
                     build=config_runtime.workspace_for,
                     agent_for=config_runtime.agent_for,
-                    general=GENERAL_WORKSPACE if roots == "any" else None,
+                    general=general if roots == "any" else None,
                     remotes=deployment.remotes(),
                     agent_for_remote=config_runtime.agent_for_remote,
                 )
             if unconfigured:
                 agent_or_agents = {}
                 summary = webconfig.format_unconfigured_summary(
-                    version=__version__, url=url, db_desc=db_desc
+                    version=__version__, url=url, db_desc=db_desc, path=loaded.path
                 )
             else:
                 # The same build hot-reload uses, so boot and Settings can't

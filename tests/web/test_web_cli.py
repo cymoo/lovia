@@ -33,32 +33,41 @@ from lovia.web.config import (  # noqa: E402
 # ---------------------------------------------------------------- skills -
 
 
-def test_resolve_skills_defaults_when_present(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_home: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".agents" / "skills").mkdir(parents=True)
+def test_resolve_skills_project_before_global(tmp_path: Path, fake_home: Path) -> None:
+    project = tmp_path / ".agents" / "skills"
+    project.mkdir(parents=True)
     user = fake_home / ".agents" / "skills"
     user.mkdir(parents=True)
-    # Project scope first — on duplicate skill names it wins.
-    assert resolve_skills_dirs(SkillsConfig()) == [Path(".agents/skills"), user]
+    # The project's own first — on duplicate skill names it wins.
+    assert resolve_skills_dirs(SkillsConfig(), tmp_path) == [project, user]
+    # No project, no project skills.
+    assert resolve_skills_dirs(SkillsConfig()) == [user]
 
 
-def test_resolve_skills_defaults_absent(
+def test_resolve_skills_reads_no_launch_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".agents" / "skills").mkdir(parents=True)
     assert resolve_skills_dirs(SkillsConfig()) == []
     assert resolve_skills_dirs(None) == []
 
 
-def test_resolve_skills_removed_default_not_loaded(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # Removing a conventional root from the list is how it gets disabled.
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".agents" / "skills").mkdir(parents=True)
-    assert resolve_skills_dirs(SkillsConfig(dirs=["~/.agents/skills"])) == []
+def test_resolve_skills_removed_default_not_loaded(fake_home: Path) -> None:
+    # Removing the global default from the list is how it gets disabled.
+    (fake_home / ".agents" / "skills").mkdir(parents=True)
+    assert resolve_skills_dirs(SkillsConfig(dirs=[])) == []
+
+
+def test_skills_dirs_refuse_relative_entries() -> None:
+    with pytest.raises(ValueError, match="not a global path"):
+        SkillsConfig(dirs=["team-skills"])
+
+
+def test_skills_dirs_drop_the_old_project_default() -> None:
+    # Saved files carry the pre-0.9.179 default; it loads by itself now.
+    cfg = SkillsConfig(dirs=[".agents/skills", "./.agents/skills", "~/.agents/skills"])
+    assert cfg.dirs == ["~/.agents/skills"]
 
 
 def test_resolve_skills_custom_dir_expands_user(fake_home: Path) -> None:
@@ -75,34 +84,18 @@ def test_resolve_skills_missing_dir_skipped_never_raises(
     # A stale path in config.json must never make the server unbootable.
     monkeypatch.chdir(tmp_path)
     with caplog.at_level("INFO", logger="lovia.web.config"):
-        assert resolve_skills_dirs(SkillsConfig(dirs=["/definitely/nope"])) == []
+        assert resolve_skills_dirs(SkillsConfig(dirs=["~/definitely-nope"])) == []
     assert "skipped" in caplog.text
 
 
-def test_resolve_skills_dedupes_by_identity(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
+def test_resolve_skills_dedupes_by_identity(tmp_path: Path) -> None:
     (tmp_path / "x").mkdir()
-    assert resolve_skills_dirs(SkillsConfig(dirs=["x", "./x"])) == [Path("x")]
-
-
-def test_resolve_skills_legacy_dir_ignored_with_hint(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    # Pre-0.9.13 default: a bare ./skills is no longer auto-loaded.
-    from lovia.web.config import skills as skills_mod
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(skills_mod, "_legacy_hint_emitted", False)
-    (tmp_path / "skills").mkdir()
-    with caplog.at_level("WARNING", logger="lovia.web.config"):
-        assert resolve_skills_dirs(SkillsConfig()) == []
-        assert resolve_skills_dirs(SkillsConfig()) == []
-    assert caplog.text.count("no longer auto-loaded") == 1  # once per process
-    assert "--skills-dir" not in caplog.text  # the flag is gone
+    dirs = [str(tmp_path / "x"), f"{tmp_path}{os.sep}.{os.sep}x"]
+    assert resolve_skills_dirs(SkillsConfig(dirs=dirs)) == [tmp_path / "x"]
+    # The project's own directory listed globally too: loaded once.
+    (tmp_path / ".agents" / "skills").mkdir(parents=True)
+    listed = SkillsConfig(dirs=[str(tmp_path / ".agents" / "skills")])
+    assert resolve_skills_dirs(listed, tmp_path) == [tmp_path / ".agents" / "skills"]
 
 
 # ----------------------------------------------------------------- memory -
@@ -112,15 +105,22 @@ def test_resolve_memory_disabled() -> None:
     assert builder.resolve_memory(False, "./anywhere") is None
 
 
-def test_resolve_memory_default_root(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_default_agent_memory_lives_in_the_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_home: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    mem = builder.resolve_memory(True, AgentSettings().memory_dir)
-    assert isinstance(mem, Memory)
+    home = tmp_path / "home"
+    agent = builder.build_default_agent(
+        builder.Deployment(workspace=str(tmp_path), home=home),
+        ChatStore.in_memory(),
+        _provider(),
+    )
+    (mem,) = [p for p in agent.plugins if isinstance(p, Memory)]
     assert mem.index is not None  # default builds both the notes and archive tiers
-    # The default root is created eagerly under cwd.
-    assert (tmp_path / ".lovia" / "memory").is_dir()
+    assert (home / "memory").is_dir()
+    # Nothing under the launch directory, nor the default home.
+    assert not (tmp_path / ".lovia").exists()
+    assert not (fake_home / ".lovia" / "memory").exists()
 
 
 def test_resolve_memory_explicit_dir(tmp_path: Path) -> None:
@@ -305,18 +305,6 @@ def test_readonly_flag_beats_the_configured_mode(tmp_path: Path) -> None:
     [
         (builder.Deployment(), ("readonly", "coding", "trusted"), "trusted", None),
         (builder.Deployment(readonly=True), ("readonly",), "readonly", "readonly"),
-        (
-            builder.Deployment(loopback=False),
-            ("readonly", "coding"),
-            "coding",
-            "remote",
-        ),
-        (
-            builder.Deployment(loopback=False, allow_workspace_edit=True),
-            ("readonly", "coding"),
-            "coding",
-            None,
-        ),
         (builder.Deployment(workspace=None), (), None, "no_workspace"),
     ],
 )
@@ -336,14 +324,6 @@ def test_deployment_bounds_modes_and_edits(
     [
         (builder.Deployment(), "any"),
         (builder.Deployment(lock_workspace=True), None),
-        (builder.Deployment(loopback=False), None),
-        (builder.Deployment(loopback=False, allow_workspace_edit=True), "any"),
-        (
-            builder.Deployment(
-                loopback=False, allow_workspace_edit=True, lock_workspace=True
-            ),
-            None,
-        ),
         (builder.Deployment(workspace=None), None),
     ],
 )
@@ -351,25 +331,32 @@ def test_deployment_bounds_the_directories_a_chat_opens(
     deployment: builder.Deployment, roots: str | None
 ) -> None:
     assert deployment.roots() == roots
+    assert deployment.remotes() == roots
 
 
 @pytest.mark.parametrize(
-    ("argv", "roots", "general"),
+    ("argv", "roots", "modes"),
     [
-        ([], "any", True),
-        (["--lock-workspace"], None, False),
-        (["--host", "0.0.0.0"], None, False),
-        (["--host", "0.0.0.0", "--allow-workspace-switch"], "any", True),
+        ([], "any", ("readonly", "coding", "trusted")),
+        (["--lock-workspace"], None, ("readonly", "coding", "trusted")),
+        (["--readonly"], "any", ("readonly",)),
+        # The bind address changes nothing: tightening is explicit.
+        (["--host", "0.0.0.0"], "any", ("readonly", "coding", "trusted")),
+        (
+            ["--host", "0.0.0.0", "--lock-workspace"],
+            None,
+            ("readonly", "coding", "trusted"),
+        ),
     ],
 )
-def test_main_wires_the_switch_roots_and_general_workspace(
+def test_main_wires_the_switch_by_the_flags_alone(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fake_home: Path,
     write_config: Callable[..., Path],
     argv: list[str],
     roots: str | None,
-    general: bool,
+    modes: tuple[str, ...],
 ) -> None:
     monkeypatch.chdir(tmp_path)
     write_config()
@@ -377,11 +364,14 @@ def test_main_wires_the_switch_roots_and_general_workspace(
     assert cli.main(argv) == 0
     switch = seen["workspaces"]
     assert switch.roots == roots  # type: ignore[attr-defined]
-    expected = (fake_home / ".lovia" / "workspace").resolve() if general else None
+    assert switch.remotes == roots  # type: ignore[attr-defined]
+    assert switch.modes == modes  # type: ignore[attr-defined]
+    general = fake_home / ".lovia" / "workspace"
+    expected = general.resolve() if roots else None
     assert switch.general == expected  # type: ignore[attr-defined]
     assert switch.agent_for is not None  # type: ignore[attr-defined]
     # Listed, not made: only a chat there creates it.
-    assert not (fake_home / ".lovia" / "workspace").exists()
+    assert not general.exists()
 
 
 @pytest.mark.parametrize("where", ["home", "dir"])
@@ -606,7 +596,13 @@ def test_parser_defaults_are_none() -> None:
     assert args.host is None and args.port is None
     assert args.dir is None and args.workspace is None
     assert args.no_workspace is False and args.readonly is False
-    assert args.allow_workspace_switch is False
+    assert args.home is None
+
+
+def test_parser_has_no_bind_dependent_workspace_flag() -> None:
+    # The bind address changes nothing, so there is nothing to opt out of.
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["--allow-workspace-switch"])
 
 
 def test_parser_takes_the_workspace_as_dir() -> None:
@@ -652,7 +648,7 @@ def test_help_defaults_render_from_core_constants() -> None:
         (["--trusted"], "workspace.default_mode"),
         (["--auto-allow", "none"], "workspace.auto_allow"),
         (["--no-memory"], "agent.memory"),
-        (["--memory-dir", "m"], "agent.memory_dir"),
+        (["--memory-dir", "m"], "--home DIR"),
         (["--no-subagents"], "agent.subagents"),
         (["--instructions", "x"], "agent.instructions"),
         (["--instructions-file", "x"], "agent.instructions"),
@@ -1042,9 +1038,9 @@ def test_no_warn_on_readonly_workspace(
 @pytest.mark.parametrize(
     ("host", "deployment", "warns"),
     [
-        ("0.0.0.0", builder.Deployment(loopback=False), True),
-        ("0.0.0.0", builder.Deployment(loopback=False, readonly=True), False),
-        ("0.0.0.0", builder.Deployment(workspace=None, loopback=False), False),
+        ("0.0.0.0", builder.Deployment(), True),
+        ("0.0.0.0", builder.Deployment(readonly=True), False),
+        ("0.0.0.0", builder.Deployment(workspace=None), False),
         ("127.0.0.1", builder.Deployment(), False),
     ],
 )
@@ -1179,9 +1175,9 @@ def test_main_check_reports_and_exits_without_serving(
     assert "configuration check" in out
     assert "openai:gpt-x" in out
     assert "✓ endpoint reachable" in out
-    # Both config scopes are reported with presence.
-    assert "./.lovia/config.json (absent)" in out
+    # The home's one config file, with its presence.
     assert "~/.lovia/config.json (present)" in out
+    assert "./.lovia" not in out
 
 
 def test_main_check_missing_config_is_exit_2_without_serving(
@@ -1403,7 +1399,7 @@ def test_main_rejects_bad_provider_timeout(
     assert "must be > 0" in capsys.readouterr().err
 
 
-def test_main_default_db_lands_in_the_user_dir(
+def test_main_default_db_lands_in_the_home(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fake_home: Path,
@@ -1421,21 +1417,124 @@ def test_main_default_db_lands_in_the_user_dir(
     assert str(db) in capsys.readouterr().out
 
 
-def test_main_keeps_a_launch_dir_db_that_already_exists(
+def test_main_ignores_a_launch_dir_db(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_home: Path,
+    write_config: Callable[..., Path],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_config()
+    ChatStore.sqlite(tmp_path / ".lovia" / "lovia.db")  # from before 0.9.148
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    assert cli.main([]) == 0
+    assert (fake_home / ".lovia" / "lovia.db").is_file()
+
+
+def test_main_home_holds_config_history_memory_and_general_workspace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fake_home: Path,
     capsys: pytest.CaptureFixture[str],
     write_config: Callable[..., Path],
 ) -> None:
+    home = tmp_path / "home"
+    write_config("openai:in-home", home=home)
+    write_config("openai:in-default-home")  # never read with --home
+    monkeypatch.chdir(tmp_path)
+    seen = _capture_serving(monkeypatch)
+    assert cli.main(["--home", str(home)]) == 0
+    agent = seen["agent"]
+    assert getattr(agent.model, "model", None) == "in-home"
+    assert (home / "lovia.db").is_file()
+    assert (home / ".gitignore").is_file()
+    (mem,) = [p for p in agent.plugins if isinstance(p, Memory)]
+    assert Path(mem.root).resolve() == (home / "memory").resolve()  # type: ignore[attr-defined]
+    switch = seen["workspaces"]
+    assert switch.general == (home / "workspace").resolve()  # type: ignore[attr-defined]
+    assert not (fake_home / ".lovia" / "lovia.db").exists()
+    assert str(home / "config.json") in capsys.readouterr().out
+
+
+def test_main_home_must_be_a_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "file").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "serve", _unexpected_create_app)
+    assert cli.main(["--home", "file"]) == 2
+    assert "--home is not a directory" in capsys.readouterr().err
+
+
+def test_main_refuses_a_project_directory_as_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
+) -> None:
+    # `--home .` in a project whose .gitignore says something else: the key
+    # and the history would be committable, so nothing is served or written.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    write_config(home=tmp_path)
+    monkeypatch.setattr(cli, "serve", _unexpected_create_app)
+    assert cli.main(["--home", "."]) == 2
+    assert "doesn't ignore everything" in capsys.readouterr().err
+    assert not (tmp_path / "lovia.db").exists()
+
+
+def test_main_keeps_serving_an_old_launch_dir_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    write_config: Callable[..., Path],
+) -> None:
+    # The migration path: a ./.lovia that older versions wrote, `*` and all.
+    monkeypatch.chdir(tmp_path)
+    old = tmp_path / ".lovia"
+    write_config(home=old)
+    (old / ".gitignore").write_text(
+        "# lovia data — secrets and chat history; never commit.\n*\n",
+        encoding="utf-8",
+    )
+    _capture_serving(monkeypatch)
+    assert cli.main(["--home", "./.lovia"]) == 0
+    assert (old / "lovia.db").is_file()
+
+
+def test_main_names_an_unread_launch_dir_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    write_config: Callable[..., Path],
+) -> None:
     monkeypatch.chdir(tmp_path)
     write_config()
-    local = tmp_path / ".lovia" / "lovia.db"
-    ChatStore.sqlite(local)  # a database from before 0.9.148
-    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    write_config("openai:old-project", home=tmp_path / ".lovia")
+    warned: list[str] = []
+    monkeypatch.setattr(cli.log, "warning", lambda msg, *a, **k: warned.append(msg % a))
+    seen = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
-    assert ".lovia/lovia.db" in capsys.readouterr().out.replace("\\", "/")
-    assert not (fake_home / ".lovia" / "lovia.db").exists()
+    assert getattr(seen["agent"].model, "model", None) == "gpt-x"
+    assert any("--home ./.lovia" in w for w in warned)
+    # Asked for it by name: no line.
+    warned.clear()
+    assert cli.main(["--home", ".lovia"]) == 0
+    assert getattr(seen["agent"].model, "model", None) == "old-project"
+    assert not any("--home ./.lovia" in w for w in warned)
+
+
+def test_main_launched_in_the_home_directory_names_no_legacy_config(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_home: Path,
+    write_config: Callable[..., Path],
+) -> None:
+    # From ~, ./.lovia *is* the default home.
+    monkeypatch.chdir(fake_home)
+    write_config()
+    warned: list[str] = []
+    monkeypatch.setattr(cli.log, "warning", lambda msg, *a, **k: warned.append(msg % a))
+    _capture_serving(monkeypatch)
+    assert cli.main([]) == 0
+    assert not any("--home ./.lovia" in w for w in warned)
 
 
 def test_main_wires_the_aux_role_into_titles_and_followups(
@@ -1526,28 +1625,6 @@ def test_main_passes_followups_to_serve(
 
 
 # ------------------------------------------------- per-chat modes (CLI) -
-
-
-@pytest.mark.parametrize(
-    ("deployment", "default", "modes"),
-    [
-        (builder.Deployment(), "coding", ("readonly", "coding", "trusted")),
-        (builder.Deployment(readonly=True), "coding", ("readonly",)),
-        # Off loopback: nothing wider than what the server started with.
-        (builder.Deployment(loopback=False), "readonly", ("readonly",)),
-        (builder.Deployment(loopback=False), "trusted", ("readonly", "coding")),
-        (
-            builder.Deployment(loopback=False, allow_workspace_edit=True),
-            "readonly",
-            ("readonly", "coding"),
-        ),
-        (builder.Deployment(workspace=None), "coding", ()),
-    ],
-)
-def test_chat_modes_follow_the_deployment(
-    deployment: builder.Deployment, default: str, modes: tuple[str, ...]
-) -> None:
-    assert deployment.chat_modes(default) == modes
 
 
 def test_main_lets_chats_pick_a_mode(

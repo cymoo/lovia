@@ -40,7 +40,7 @@
 | 开关 | 层 | 存放 | 生效时机 |
 | --- | --- | --- | --- |
 | host、port、root-path、token、db、title、log-level、provider-timeout、trust-env、`--app`、`--check` | 服务 | 命令行（及现有环境变量） | 重启 |
-| 启动目录、`--readonly`、`--no-workspace`、`--lock-workspace`、`--allow-workspace-switch` | 服务（部署约束，见 §2） | 命令行 | 重启 |
+| 启动目录、`--readonly`、`--no-workspace`、`--lock-workspace` | 服务（部署约束，见 §2） | 命令行 | 重启 |
 | 上传大小、扩展名白名单（`LOVIA_MAX_UPLOAD_MB`、`LOVIA_UPLOAD_ALLOWED_EXT`） | 服务（部署限制） | 环境变量，不变 | 重启 |
 | 默认模式、auto-allow 包 | 设置 | `config.json` 的 `workspace` 节 | 默认模式只影响新对话；auto-allow 从下次运行起生效 |
 | max turns、max retries、follow-ups | 设置 | `config.json` 的 `run` 节 | 下次运行 |
@@ -75,22 +75,19 @@
 先确定**有效启动目录**，再套用锁：
 
 1. 命令行给了 `DIR`，就用 `DIR`，主目录也照用（`lovia web ~` 是用户明确的选择）。
-2. 没给 `DIR`：用启动目录。如果启动目录是主目录或根目录，就改用通用工作区 `~/.lovia/workspace`（见 §5），并在启动摘要里说明。
+2. 没给 `DIR`：用启动目录。如果启动目录是主目录或根目录，就改用通用工作区 `<home>/workspace`（默认 `~/.lovia/workspace`，见 §5），并在启动摘要里说明。
 
-| 启动方式 | 能开的目录 | 能选的模式 | 浏览器能改的 `workspace` 设置 |
+| 启动方式（任意绑定地址） | 能开的目录 | 能选的模式 | 浏览器能改的 `workspace` 设置 |
 | --- | --- | --- | --- |
-| 回环地址（默认） | 任意目录，加通用工作区 | readonly、coding、trusted | 全部 |
-| 回环 + `--lock-workspace` | 只有有效启动目录 | readonly、coding、trusted | 全部 |
-| 非回环地址（默认） | 只有有效启动目录 | 不高于启动时的默认模式，且不含 trusted | 不能改；改磁盘上的文件后重启 |
-| 非回环 + `--allow-workspace-switch` | 任意目录，加通用工作区 | readonly、coding | 全部 |
-| 任意地址 + `--readonly` | 按上面对应的行 | 只有 readonly | 默认模式和 auto-allow 显示为“由 --readonly 固定”，`config.json` 里的值保持不动 |
+| 默认 | 任意目录，加通用工作区 | readonly、coding、trusted | 全部 |
+| `--lock-workspace` | 只有有效启动目录 | readonly、coding、trusted | 全部 |
+| `--readonly` | 按上面对应的行 | 只有 readonly | 默认模式和 auto-allow 显示为“由 --readonly 固定”，`config.json` 里的值保持不动 |
 | `--no-workspace` | 无 | 无 | 隐藏 |
 
 补充：
 
-- trusted 只在回环地址上提供，`--allow-workspace-switch` 也不会放开它。
+- **已推翻（0.9.179）**：原先这张表按绑定地址分行——非回环地址只能用启动目录、模式不高于启动时的默认且不含 trusted、浏览器不能改工作区设置，`--allow-workspace-switch` 放开目录但仍不给 trusted。绑定地址说明不了浏览器前是不是部署者本人（容器里必须绑 `0.0.0.0`），而持有令牌的人在 coding 下已能批准自己发起的任何命令，所以这些分支都删了，`--allow-workspace-switch` 也一并删除。理由见 `web-scopes-and-agents.md` §6。非本机绑定必须有令牌不变。
 - 模式的高低顺序是 readonly < coding < trusted。
-- `--allow-workspace-switch` 和 `--lock-workspace` 同时给时，以 `--lock-workspace` 为准。
 - 模型、搜索、运行参数这类设置，在任何部署方式下都可以从浏览器修改，和现在一样。
 - 现有的 `_warn_if_exposed`（`__main__.py:368`）改为按“能选的最宽模式”来判断。
 
@@ -112,7 +109,7 @@
 保留下来的：
 
 ```
-lovia web [DIR]  --readonly | --no-workspace  --lock-workspace  --allow-workspace-switch
+lovia web [DIR]  --readonly | --no-workspace  --lock-workspace  --home
                  --host --port --root-path --token --db --title --log-level
                  --provider-timeout --trust-env --app --check
 ```
@@ -197,7 +194,7 @@ app = create_app(agent, workspaces=WorkspaceSwitch(roots=None))           # 目�
 class WorkspaceSwitch:
     # "any"：任意目录；列表：只能是这些目录或其子目录；None：固定为 Agent 自带的根目录。
     roots: Literal["any"] | Sequence[str | Path] | None = "any"
-    # 界面提供哪些模式。trusted 只在回环地址上生效（§2）。
+    # 界面提供哪些模式（lovia web 按 §2 的部署约束给）。
     modes: Sequence[WorkspaceMode] = ("readonly", "coding")
     # 管工作区：按 (根目录, 模式) 建。默认用 Workspace.local(root, mode=mode) 的预设，
     # 沿用 Agent 自带工作区的 env、limits、executor、inherit_env、shell_timeout，

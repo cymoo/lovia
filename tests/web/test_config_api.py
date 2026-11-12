@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any, Iterator
@@ -32,18 +33,19 @@ def _lean() -> WebConfig:
     return WebConfig(agent=AgentSettings(memory=False, subagents=False))
 
 
+def _loaded(tmp_path: Path) -> LoadedConfig:
+    """``_lean()``, not saved yet, in a home under ``tmp_path``."""
+    path = storage.config_path(tmp_path / "home")
+    return LoadedConfig(_lean(), path, storage.display_path(path), exists=False)
+
+
 @pytest.fixture
 def served(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> Iterator[tuple[TestClient, ConfigRuntime, Any]]:
     """An unconfigured app serving the config API, cwd-isolated to tmp."""
     monkeypatch.chdir(tmp_path)
-    loaded = LoadedConfig(
-        _lean(),
-        storage.project_config_path(),
-        storage.PROJECT_CONFIG_LABEL,
-        exists=False,
-    )
+    loaded = _loaded(tmp_path)
     runtime = ConfigRuntime(
         deployment=Deployment(), loaded=loaded, store=ChatStore.in_memory()
     )
@@ -91,7 +93,7 @@ def test_first_model_brings_the_agent_up(served, tmp_path: Path) -> None:
     assert info["agents"] == ["lovia"]
     assert runtime.configured
     # The document was persisted to the runtime's target scope.
-    saved = json.loads((tmp_path / ".lovia" / "config.json").read_text())
+    saved = json.loads((tmp_path / "home" / "config.json").read_text())
     assert saved["roles"]["chat"] == "deepseek"
     assert saved["models"][0]["api_key"] == "sk-secret-1234567890"
 
@@ -141,12 +143,12 @@ def test_create_rejects_duplicate_and_bad_vendor(served, tmp_path: Path) -> None
         == 409
     )
     # An unknown vendor prefix fails the pre-persist build: 400, nothing saved.
-    before = (tmp_path / ".lovia" / "config.json").read_text()
+    before = (tmp_path / "home" / "config.json").read_text()
     res = client.put("/api/config/models/one", json={"model": "nosuchvendor:m"})
     assert res.status_code == 400
     assert res.json()["detail"]["code"] == "invalid_request"
     assert "Unknown model spec" in res.json()["detail"]["message"]
-    assert (tmp_path / ".lovia" / "config.json").read_text() == before
+    assert (tmp_path / "home" / "config.json").read_text() == before
 
 
 def test_update_key_keep_replace_clear(served) -> None:
@@ -354,12 +356,14 @@ def _write_skill(
 def test_skills_block_in_get_config(served) -> None:
     client, _runtime, _app = served
     out = client.get("/api/config").json()["skills"]
-    assert out == {"dirs": [".agents/skills", "~/.agents/skills"]}
+    assert out == {"dirs": ["~/.agents/skills"]}
 
 
-def test_skills_update_rebuilds_the_agent(served, tmp_path: Path) -> None:
+def test_skills_update_rebuilds_the_agent(
+    served, tmp_path: Path, fake_home: Path
+) -> None:
     client, runtime, app = served
-    _write_skill(tmp_path / ".agents" / "skills", "greet")
+    _write_skill(fake_home / ".agents" / "skills", "greet")
     _add_model(client)
     agent = app.state.deps.agents["lovia"]
     assert any(isinstance(p, Skills) for p in agent.plugins)
@@ -368,7 +372,7 @@ def test_skills_update_rebuilds_the_agent(served, tmp_path: Path) -> None:
     assert res.json()["config"]["skills"] == {"dirs": []}
     agent = app.state.deps.agents["lovia"]
     assert not any(isinstance(p, Skills) for p in agent.plugins)
-    saved = json.loads((tmp_path / ".lovia" / "config.json").read_text())
+    saved = json.loads((tmp_path / "home" / "config.json").read_text())
     assert saved["skills"] == {"dirs": []}
     assert runtime.config.skills.dirs == []
 
@@ -378,9 +382,9 @@ def test_skills_missing_dir_still_applies(served) -> None:
     # otherwise a stale config.json could brick the hot-swap and the boot.
     client, runtime, _app = served
     _add_model(client)
-    res = client.put("/api/config/skills", json={"dirs": ["/definitely/nope"]})
+    res = client.put("/api/config/skills", json={"dirs": ["~/definitely-nope"]})
     assert res.status_code == 200
-    assert runtime.config.skills.dirs == ["/definitely/nope"]
+    assert runtime.config.skills.dirs == ["~/definitely-nope"]
 
 
 def test_skills_blank_entry_is_rejected(served) -> None:
@@ -405,28 +409,28 @@ def test_skills_scan_reports_each_root(served, tmp_path: Path) -> None:
     team = tmp_path / "team-skills"
     _write_skill(team, "greet", "A shadowed duplicate.")
     _add_model(client)
-    dirs = [".agents/skills", "~/.agents/skills", str(team)]
+    dirs = [str(project), "~/.agents/skills", str(team)]
     assert client.put("/api/config/skills", json={"dirs": dirs}).status_code == 200
 
     res = client.get("/api/config/skills")
     assert res.status_code == 200
     assert res.headers["cache-control"] == "no-store"
     out = res.json()
-    assert out["defaults"] == [".agents/skills", "~/.agents/skills"]
+    assert out["defaults"] == ["~/.agents/skills"]
     roots = {r["path"]: r for r in out["roots"]}
     assert set(roots) == set(dirs)
 
-    project_root = roots[".agents/skills"]
-    assert project_root["kind"] == "project_default"
-    assert project_root["exists"] is True
-    assert [s["name"] for s in project_root["skills"]] == ["greet"]
-    assert project_root["skills"][0]["shadowed"] is False
-    assert project_root["skills"][0]["description"] == "Does a useful thing."
-    assert project_root["problems"][0]["dir"] == "broken"
-    assert "description" in project_root["problems"][0]["error"]
+    first = roots[str(project)]
+    assert first["kind"] == "custom"
+    assert first["exists"] is True
+    assert [s["name"] for s in first["skills"]] == ["greet"]
+    assert first["skills"][0]["shadowed"] is False
+    assert first["skills"][0]["description"] == "Does a useful thing."
+    assert first["problems"][0]["dir"] == "broken"
+    assert "description" in first["problems"][0]["error"]
 
     user_root = roots["~/.agents/skills"]
-    assert user_root["kind"] == "user_default"
+    assert user_root["kind"] == "default"
     assert user_root["exists"] is False
     assert user_root["skills"] == []
 
@@ -438,29 +442,45 @@ def test_skills_scan_reports_each_root(served, tmp_path: Path) -> None:
 
 
 def test_skills_scan_keeps_identity_duplicates_visible(served, tmp_path: Path) -> None:
-    # "x" and "./x" resolve to one directory but stay two removable rows;
-    # only the plugin roots are deduplicated.
+    # Two spellings of one directory stay two removable rows; only the
+    # plugin roots are deduplicated.
     client, _runtime, _app = served
     _write_skill(tmp_path / "x", "greet")
     _add_model(client)
-    assert (
-        client.put("/api/config/skills", json={"dirs": ["x", "./x"]}).status_code == 200
-    )
+    dirs = [str(tmp_path / "x"), f"{tmp_path}{os.sep}.{os.sep}x"]
+    assert client.put("/api/config/skills", json={"dirs": dirs}).status_code == 200
     roots = client.get("/api/config/skills").json()["roots"]
-    assert [r["path"] for r in roots] == ["x", "./x"]
+    assert [r["path"] for r in roots] == dirs
     assert [s["shadowed"] for s in roots[1]["skills"]] == [True]
 
 
-def test_skills_scan_works_unconfigured(served, tmp_path: Path) -> None:
-    # The pane must render (read-only) before any model exists.
+def test_skills_refuse_a_relative_directory(served) -> None:
+    client, runtime, _app = served
+    _add_model(client)
+    for entry in ("team-skills", ".agents/skills"):
+        res = client.put("/api/config/skills", json={"dirs": [entry]})
+        assert res.status_code == 400, res.text
+        assert "loads by itself" in res.json()["detail"]["hint"]
+    assert runtime.config.skills.dirs == ["~/.agents/skills"]
+
+
+def test_skills_scan_lists_no_project_skills(served, tmp_path: Path) -> None:
+    # The launch directory's own skills belong to its chats, not Settings.
     client, _runtime, _app = served
     _write_skill(tmp_path / ".agents" / "skills", "greet")
+    _add_model(client)
+    roots = client.get("/api/config/skills").json()["roots"]
+    assert [r["path"] for r in roots] == ["~/.agents/skills"]
+
+
+def test_skills_scan_works_unconfigured(served, fake_home: Path) -> None:
+    # The pane must render (read-only) before any model exists.
+    client, _runtime, _app = served
+    _write_skill(fake_home / ".agents" / "skills", "greet")
     res = client.get("/api/config/skills")
     assert res.status_code == 200
-    assert [r["path"] for r in res.json()["roots"]] == [
-        ".agents/skills",
-        "~/.agents/skills",
-    ]
+    (root,) = res.json()["roots"]
+    assert [s["name"] for s in root["skills"]] == ["greet"]
 
 
 def test_skills_write_refuses_foreign_hosts(served) -> None:
@@ -562,12 +582,7 @@ def test_token_auth_lifts_the_host_restriction(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    loaded = LoadedConfig(
-        _lean(),
-        storage.project_config_path(),
-        storage.PROJECT_CONFIG_LABEL,
-        exists=False,
-    )
+    loaded = _loaded(tmp_path)
     runtime = ConfigRuntime(
         deployment=Deployment(), loaded=loaded, store=ChatStore.in_memory()
     )
@@ -600,9 +615,7 @@ def _served_with(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, deployment: Deployment
 ) -> tuple[TestClient, ConfigRuntime]:
     monkeypatch.chdir(tmp_path)
-    loaded = LoadedConfig(
-        _lean(), storage.project_config_path(), storage.PROJECT_CONFIG_LABEL, False
-    )
+    loaded = _loaded(tmp_path)
     runtime = ConfigRuntime(
         deployment=deployment, loaded=loaded, store=ChatStore.in_memory()
     )
@@ -705,7 +718,6 @@ def test_max_tokens_round_trips_through_a_profile(served) -> None:
 @pytest.mark.parametrize(
     ("deployment", "lock"),
     [
-        (Deployment(loopback=False), "remote"),
         (Deployment(readonly=True), "readonly"),
         (Deployment(workspace=None), "no_workspace"),
     ],
@@ -737,19 +749,15 @@ def test_readonly_flag_shows_the_effective_mode(
     assert ws["modes"] == ["readonly"]
 
 
-def test_remote_switch_never_offers_trusted(
+def test_settings_offer_every_mode_without_a_flag(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    deployment = Deployment(loopback=False, allow_workspace_edit=True)
-    client, _runtime = _served_with(monkeypatch, tmp_path, deployment)
+    client, _runtime = _served_with(monkeypatch, tmp_path, Deployment())
     with client:
-        assert client.get("/api/config").json()["workspace"]["modes"] == [
-            "readonly",
-            "coding",
-        ]
+        ws = client.get("/api/config").json()["workspace"]
+        assert ws["modes"] == ["readonly", "coding", "trusted"]
+        assert ws["lock"] is None
         res = client.put("/api/config/workspace", json={"default_mode": "trusted"})
-        assert res.status_code == 400
-        res = client.put("/api/config/workspace", json={"default_mode": "readonly"})
         assert res.status_code == 200, res.text
 
 

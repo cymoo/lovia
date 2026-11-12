@@ -83,4 +83,4 @@ A newer lovia reads what an older one wrote:
 | Built-in tool names | As above |
 | `MEMORY.md` | One `- fact` per line; other lines are ignored, so people can edit it |
 | `FileResultStore` | One `<key>.txt` file per stored value |
-| `.lovia/config.json` (the `lovia web` settings) | Unknown fields are ignored |
+| `config.json` in the `lovia web` home (`~/.lovia` by default) | Unknown fields are ignored |

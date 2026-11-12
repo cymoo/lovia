@@ -12,29 +12,34 @@ lovia web
 访问 `http://127.0.0.1:8000`，首次启动时配置一个模型即可。之后可用
 `lovia web --check` 检查配置并探测端点，而不启动服务。
 
-模型配置有两级，项目级文件存在时会**整体覆盖**用户级配置，而不是逐项合并：
+服务保存的一切都在一个目录里，即 lovia 的 **home**——默认 `~/.lovia`，`--home DIR`
+可以换成别处。启动目录里的东西一概不读，它只决定新对话默认在哪个目录工作：
 
-| 路径 | 作用域 |
+| home 里的 | 内容 |
 | --- | --- |
-| `~/.lovia/config.json` | 当前用户的默认配置 |
-| `./.lovia/config.json` | 当前项目的完整覆盖配置 |
+| `config.json` | 模型、Web 搜索、全局技能目录，以及下文的各项设置 |
+| `lovia.db` | 聊天记录（`--db FILE` 可放到别处） |
+| `memory/` | 长期记忆 |
+| `workspace/` | 不属于任何项目的对话的工作区 |
 
-密钥和聊天数据所在的 `.lovia/` 会自动加入 `.gitignore`。在支持 Unix 权限的平台上，
-配置文件只允许当前用户读写。
+互不相干的环境——一个测试实例、不同的客户——各用一个 `--home`。在支持 Unix 权限的平台上，
+home 只允许当前用户访问，里面还放了一个内容为 `*` 的 `.gitignore`，所以放在仓库里的 home
+不会被提交。home 必须是 lovia 专用的目录：仓库根目录，或者 `.gitignore` 没有忽略全部内容的目录，
+会在写入任何东西之前被拒绝。
+
+0.9.179 之前，启动目录里的 `./.lovia/config.json` 会整体取代用户的配置，那里已有的
+`./.lovia/lovia.db` 会被沿用，记忆默认放在 `./.lovia/memory`。这些现在都不再读取；
+`lovia web --home ./.lovia` 与以前在那个目录启动的行为完全一样。没有传 `--home` 而启动目录里有
+`./.lovia/config.json` 时，服务会打一行日志说明这一点。
 
 CLI 创建的默认 Agent 包含 Todo、Memory、时间与 HTTP Tool、Web 搜索、定时任务，以及以
-当前目录为根的 coding 模式 Workspace。它还会自动读取：
+当前目录为根的 coding 模式 Workspace。它每次运行都从对话所在的目录读取：
 
 - `AGENTS.md`：作为 Agent instructions；
-- `./.agents/skills` 与 `~/.agents/skills`：作为 Skills 目录（项目目录优先；
-  目录列表在设置 → 技能中管理）；
+- `.agents/skills`：项目自己的技能，排在全局技能目录（默认 `~/.agents/skills`，在设置 → 技能中管理）之前。
 
-前两项每次运行都从对话所在的目录读取，所以在另一个项目里的对话会遵循那个项目的 `AGENTS.md` 和技能；
-- `./.lovia/memory`：作为 Memory 目录。
-
-旧的 `./skills` 不再自动加载；可以迁移到 `./.agents/skills`，或在设置 → 技能中
-添加。Web 搜索在配置 Tavily Key 后使用 Tavily，否则尝试可选的
-DuckDuckGo 后端。
+所以在另一个项目里的对话会遵循那个项目的 `AGENTS.md` 和技能。Web 搜索在配置 Tavily Key 后
+使用 Tavily，否则尝试可选的 DuckDuckGo 后端。
 
 默认功能会产生主 Run 之外的模型调用：Memory 默认在每个已完成 Run 后提炼一次，定期整理时
 再调用一次；标题和追问建议也各自独立调用。可以在**设置 → 智能体**里关闭长期记忆或追问建议，
@@ -44,8 +49,9 @@ DuckDuckGo 后端。
 
     回环地址 `127.0.0.1` 默认不鉴权。绑定其他地址时必须设置 `--token` 或
     `LOVIA_WEB_TOKEN`；未设置时服务会自动生成。持有 token 的客户端可以使用 Agent 的
-    全部能力，包括编辑文件和执行 Shell 命令，因此应把 token 当作密码。允许其他设备访问时，
-    建议同时使用 `--readonly`；多用户部署请参阅[生产部署](deployment.md)。
+    全部能力，包括编辑文件、执行 Shell 命令、打开其他目录和远程工作区——除此之外绑定地址不改变
+    任何行为，因此应把 token 当作密码。允许其他设备访问时，用 `--readonly`、`--lock-workspace`
+    或 `--no-workspace` 收紧；多用户部署请参阅[生产部署](deployment.md)。
 
 ## 模型配置与切换
 
@@ -81,12 +87,18 @@ API Key 只写不读：服务端只返回是否已设置及脱敏提示，不会
 
 ## Skills
 
-设置 → 技能管理 Skill 目录——一个有序列表；每个 skill 是含 `SKILL.md` 的子目录
-（详见 [Skills](skills.md)）。skill 重名时靠前的目录优先。列表默认为
-`./.agents/skills` 和 `~/.agents/skills`；移除某个默认目录即禁用它，也可以添加任意
-其他目录（支持 `~`）。面板会展示每个目录的贡献——发现的 skills、解析问题、被遮蔽的
-重名项；不存在的目录会被直接跳过，过期条目不会阻止服务启动。列表变更立即生效；
-向已配置的目录里新增 skill 则无需任何操作。
+技能从两处加载；每个 skill 是含 `SKILL.md` 的子目录（详见 [Skills](skills.md)）：
+
+- **项目自己的** `.agents/skills`，位于对话所在目录的根下。它和 `AGENTS.md` 一样是约定，
+  不是配置项：在该项目的每个对话里自动加载，重名时优先。远程工作区里的对话暂时拿不到项目的技能。
+- **全局目录**，在设置 → 技能中管理——一个有序列表，只接受绝对路径或 `~` 开头的路径，
+  对所有对话都一样；重名时靠前的目录优先。默认是 `~/.agents/skills`；移除它即禁用，
+  也可以添加任意其他目录。相对路径会被拒绝，因为它在每个对话里指向不同的目录
+  （已保存文件里旧的 `.agents/skills` 条目会被丢掉：它本来就会加载）。
+
+面板只列全局目录，并展示每个目录的贡献——发现的 skills、解析问题、被遮蔽的重名项；
+不存在的目录会被直接跳过，过期条目不会阻止服务启动。列表变更立即生效；向已配置的目录里
+新增 skill 则无需任何操作。
 
 ## 加载自定义 Agent
 
@@ -225,7 +237,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 
 ## 不用重启的设置
 
-默认 Agent 的设置都保存在 `config.json` 里，在设置页修改。保存后从下次运行起生效；正在进行的
+默认 Agent 的设置都保存在 home 的 `config.json` 里，在设置页修改。保存后从下次运行起生效；正在进行的
 回复仍按开始时的设置完成。
 
 | 设置页 | `config.json` | 默认值 |
@@ -234,17 +246,17 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | **工作区** → 新对话的权限模式 | `workspace.default_mode` | `coding`，见[模式](workspace.md#模式)和[下文](#每个对话的权限模式) |
 | **工作区** → 不询问直接运行的命令（选“工作区内修改”时显示） | `workspace.auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
 | **智能体** → 自定义指令 | `agent.instructions` | 空：使用对话所在目录的 `AGENTS.md`，没有就用通用提示；填写后 `AGENTS.md` 接在后面 |
-| **智能体** → 最大轮数 / 重试次数 | `run.max_turns` / `run.max_retries` | `50` / Agent 自己的设置（`4`） |
+| **智能体** → 最大轮数 / 重试次数 | `run.max_turns` / `run.max_retries` | `100` / Agent 自己的设置（`4`） |
 | **智能体** → 生成追问建议 | `run.followups` | 开启 |
 | **智能体** → 后台子任务 | `agent.subagents` | 开启 |
-| **智能体** → 长期记忆 | `agent.memory` / `agent.memory_dir` | 开启，`./.lovia/memory` |
+| **智能体** → 长期记忆 | `agent.memory` | 开启，保存在 `<home>/memory` |
 
 `config.json` 不可写时（比如只读挂载），服务照常启动，设置页里这些设置只能查看。
 
 ## 工作区
 
 每个对话在自己的目录里工作。侧栏按目录给对话分组：启动 `lovia web` 的目录在最前，其余按最近的活动排序；**无项目**
-（`~/.lovia/workspace`，给不属于任何项目的对话）始终在列表里。目录右侧的 **+** 在该目录新建对话；**⋯** 可以把它从列表移除——
+（`<home>/workspace`，给不属于任何项目的对话）始终在列表里。目录右侧的 **+** 在该目录新建对话；**⋯** 可以把它从列表移除——
 文件和对话都会保留，重新添加该目录就能找回这些对话。**对话**旁边的文件夹按钮用来添加目录，输入路径时会自动补全；它旁边的
 显示方式按钮可以在“按工作区分组”和“按日期的单列表”之间切换，也可以在当前对话和已归档对话之间切换。拖动侧栏右边缘
 可以调整宽度（双击还原）。
@@ -254,23 +266,21 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 
 新对话默认使用这个标签页上次用过的目录，输入框里的目录按钮会显示是哪个（悬停显示完整路径）；发送前可以在那里换一个。
 对话的目录创建后不会再变，要在别处工作请新建对话。附件会保存到草稿所在的目录，所以草稿里有附件时目录按钮不能切换。
-文件面板显示当前对话的目录，Agent 也会读取这个目录的 `AGENTS.md` 和技能。
+文件面板显示当前对话的目录，Agent 也会读取这个目录的 `AGENTS.md` 和 `.agents/skills`。
 
-**另一台机器上的目录。**页面只在本机提供服务时（默认的 `127.0.0.1`），添加对话框里有三个标签页：
+**另一台机器上的目录。**只要没有用 `--lock-workspace`（或 `--no-workspace`）启动，添加对话框里就有三个标签页：
 **本机**、**SSH** 和**容器**。在后两个里填上主机（`~/.ssh/config` 里的别名，或 `user@host`；运行中的容器名，
 想用默认用户以外的身份进入就写 `user@容器名`），列表里显示的就是**那台主机**上的目录。这个目录里的对话在那边运行：
 Agent 的文件和命令工具都作用在主机上，受对话的权限模式约束，侧栏用服务器图标标出这个目录。主机需要有
 `python3` 3.10 或更新版本，不用安装任何东西；SSH 必须能免密码登录（密钥或 agent）。文件面板显示的是主机上的这个目录，
 上传的文件和附件也保存在那里（和本机目录一样放在 `uploads/` 下）；大文件的快慢取决于到主机的链路。
-Agent 会读取主机上这个目录的 `AGENTS.md`（每次运行读一次）；目录里的技能目前还不加载，只有不属于某个项目的技能目录
-（如 `~/.lovia/skills`）生效。连接断开时，进行中的运行会失败并说明原因，
+Agent 会读取主机上这个目录的 `AGENTS.md`（每次运行读一次）；目录里的技能目前还不加载，只有全局技能目录生效。连接断开时，进行中的运行会失败并说明原因，
 下一条消息会重新连接。详见[远程工作区](workspace.md#远程工作区)。
 
 早于工作区功能的旧对话归在 **未关联** 分组里。只是查看不需要做什么；第一次给它发消息时会先问它在哪个目录
 （之前授权过的目录排在前面），分组上的 **关联…** 可以一次关联多个。关联后不能再更改。
 
-用 `--lock-workspace` 启动，或监听非本机地址且没加 `--allow-workspace-switch` 时，所有对话都在启动目录里：
-没有目录可选，侧栏照旧按日期列出对话。
+用 `--lock-workspace` 启动时，所有对话都在启动目录里：没有目录可选，侧栏照旧按日期列出对话。
 
 ## 每个对话的权限模式
 
@@ -288,27 +298,28 @@ Agent 会读取主机上这个目录的 `AGENTS.md`（每次运行读一次）�
 
 | 命令行选项 | 环境变量 | 默认值 |
 | --- | --- | --- |
-| `DIR`（位置参数） | `LOVIA_WORKSPACE` | `.`：新对话工作的目录；在主目录或根目录启动时改用通用工作区 `~/.lovia/workspace` |
+| `DIR`（位置参数） | `LOVIA_WORKSPACE` | `.`：新对话工作的目录；在主目录或根目录启动时改用通用工作区 `<home>/workspace` |
+| `--home` | — | `~/.lovia`：配置、聊天记录、记忆和通用工作区 |
 | `--readonly` | — | 关闭。开启后所有运行都是只读，设置页不能修改 |
 | `--no-workspace` | — | 关闭。开启后没有文件和 shell 工具 |
-| `--allow-workspace-switch` | — | 关闭。监听非本机地址时，允许在浏览器里打开其他目录、修改工作区设置（`trusted` 仍只在本机地址提供） |
-| `--lock-workspace` | — | 关闭。开启后所有对话都在 `DIR` 里工作，浏览器不能打开其他目录（优先于 `--allow-workspace-switch`） |
+| `--lock-workspace` | — | 关闭。开启后所有对话都在 `DIR` 里工作，浏览器不能打开其他目录，本机和远程都不行 |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--root-path` | `LOVIA_ROOT_PATH` | 无；代理发布应用时使用的路径前缀（[详见](web-server.md#部署在路径前缀下)） |
 | `--token` | `LOVIA_WEB_TOKEN` | 回环地址无需设置；其他地址自动生成 |
-| `--db` | `LOVIA_DB` | `~/.lovia/lovia.db`，所有目录共用一份历史；启动目录下已有 `./.lovia/lovia.db`（0.9.148 之前的）时继续用它 |
+| `--db` | `LOVIA_DB` | `<home>/lovia.db` |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent（或使用自己的 Agent、映射或应用） |
 | `--title` | `LOVIA_TITLE` | `lovia` |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--check` | — | 检查模型配置并退出 |
 
-监听非本机地址时，浏览器不能放宽权限：所有对话都在 `DIR` 里工作，工作区设置在设置页里只读，`trusted` 按 `coding` 运行。
-要修改，请编辑 `config.json` 后重启，或加 `--allow-workspace-switch`。
+绑定地址只决定要不要令牌：监听 `0.0.0.0` 的服务（比如在容器里）和监听 `127.0.0.1` 的一样，
+所有模式、目录和远程工作区都可用；部署方用上面三个参数收紧。0.9.179 之前，监听非本机地址时
+模式最高只到 `coding`、对话只能在 `DIR` 里，除非加 `--allow-workspace-switch`；这个参数已删除。
 
 0.9.146 起移到设置页的选项（`--trusted`、`--auto-allow`、`--max-turns`、`--max-retries`、
-`--max-tokens`、`--no-followups`、`--memory-dir`、`--no-memory`、`--no-subagents`、
+`--max-tokens`、`--no-followups`、`--no-memory`、`--no-subagents`、
 `--instructions`、`--instructions-file` 及对应的 `LOVIA_*` 环境变量）会让 CLI 报错退出，并说明
-改到了哪个设置。自定义的 `--app` Agent 使用 CLI 默认值，要调整上限请在代码里用
+改到了哪个设置；`--memory-dir` 会指向 `--home`。自定义的 `--app` Agent 使用 CLI 默认值，要调整上限请在代码里用
 `create_app(max_turns=…, retry=…, followups=…)`。完整列表以 `lovia web --help` 为准。
 
 ## 审批

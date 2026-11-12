@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import TextIO
 
 import httpx
@@ -15,13 +16,7 @@ from .probe import (
     validate_connection,
 )
 from .schema import Connection
-from .storage import (
-    CONFIG_HINT,
-    PROJECT_CONFIG_LABEL,
-    USER_CONFIG_LABEL,
-    project_config_path,
-    user_config_path,
-)
+from .storage import CONFIG_HINT, config_path, display_path
 
 
 def mask_key(key: str | None) -> str:
@@ -66,24 +61,22 @@ def _connection_rows(conn: Connection) -> list[tuple[str, str]]:
     ]
 
 
-def _config_files_cell() -> str:
-    return " · ".join(
-        f"{label} ({'present' if path.is_file() else 'absent'})"
-        for label, path in (
-            (f"./{PROJECT_CONFIG_LABEL}", project_config_path()),
-            (USER_CONFIG_LABEL, user_config_path()),
-        )
-    )
+def _config_file_cell(path: Path) -> str:
+    return f"{display_path(path)} ({'present' if path.is_file() else 'absent'})"
 
 
 def run_check(
     conn: Connection,
     *,
     version: str,
+    path: Path | None = None,
     out: TextIO | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> int:
     """``lovia web --check``: report the configuration, probe it, exit.
+
+    ``path`` is the config file the connection came from (default: the one
+    in the default home), reported as present or absent.
 
     Read-only diagnosis — never prompts and never writes. Exit 0
     when the endpoint answered (or can't be verified, which is normal for
@@ -101,7 +94,7 @@ def run_check(
     if conn.model is not None:
         for label, value in _connection_rows(conn):
             say(f"  {label:<16} {value}")
-    say(f"  {'config files':<16} {_config_files_cell()}")
+    say(f"  {'config':<16} {_config_file_cell(path or config_path())}")
     missing = conn.missing()
     if missing:
         say(f"  missing: {', '.join(missing)} — {CONFIG_HINT}")
@@ -142,12 +135,14 @@ def format_summary(
     return "\n".join(lines)
 
 
-def format_unconfigured_summary(*, version: str, url: str, db_desc: str) -> str:
+def format_unconfigured_summary(
+    *, version: str, url: str, db_desc: str, path: Path | None = None
+) -> str:
     """The startup block for a headless launch with nothing configured yet."""
     lines = [
         f"lovia v{version}",
         "  model            (not configured — open the UI to connect one)",
-        f"  {'config files':<16} {_config_files_cell()}",
+        f"  {'config':<16} {_config_file_cell(path or config_path())}",
         f"  db               {db_desc}",
         "",
         f"serving on {url}",

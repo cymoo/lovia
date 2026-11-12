@@ -26,8 +26,8 @@ from ..config.probe import unlisted_model_note, validate_connection
 from ..config.runtime import ConfigRuntime
 from ..config.schema import (
     ANTHROPIC_FLAVOR,
+    GLOBAL_SKILLS_HINT,
     AutoAllowBundle,
-    DEFAULT_SKILLS_DIR,
     OPENAI_FLAVOR,
     USER_SKILLS_DIR,
     Connection,
@@ -37,10 +37,10 @@ from ..config.schema import (
     VisionMode,
     WebConfig,
     WorkspaceModeName,
+    is_global_dir,
     slugify,
 )
 from ..config.skills import scan_skills_status
-from ..config.storage import PROJECT_CONFIG_LABEL, USER_CONFIG_LABEL
 from ..errors import WebError
 
 # Loopback names a same-machine browser legitimately uses. Anything else in
@@ -114,7 +114,10 @@ class SearchIn(BaseModel):
 
 
 class SkillsIn(BaseModel):
-    """Full-list replacement for the skill directories (order = precedence)."""
+    """Full-list replacement for the global skill directories (order =
+    precedence). A relative entry is refused here, even the project
+    convention a saved file may still carry: adding one could only be a
+    misunderstanding, since a project's skills load by themselves."""
 
     dirs: list[str]
 
@@ -139,7 +142,6 @@ class AgentIn(BaseModel):
     """Agent-settings updates; only the fields present change."""
 
     memory: bool | None = None
-    memory_dir: str | None = Field(default=None, min_length=1)
     subagents: bool | None = None
     instructions: str | None = None
 
@@ -233,8 +235,6 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             "scope": {
                 "label": runtime.loaded.label,
                 "exists": runtime.loaded.exists,
-                "project_label": PROJECT_CONFIG_LABEL,
-                "user_label": USER_CONFIG_LABEL,
             },
             "defaults": {
                 "openai_base_url": OPENAI_FLAVOR.default_base_url,
@@ -403,6 +403,16 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
     @router.put("/skills")
     async def update_skills(body: SkillsIn, request: Request) -> dict[str, object]:
         _guard_write(request)
+        relative = [
+            d.strip() for d in body.dirs if d.strip() and not is_global_dir(d.strip())
+        ]
+        if relative:
+            raise WebError(
+                400,
+                "invalid_request",
+                f"{relative[0]!r} is not a global path",
+                hint=GLOBAL_SKILLS_HINT,
+            )
         await _apply(_copy(skills={"dirs": body.dirs}))
         return {"config": _config_out()}
 
@@ -421,8 +431,6 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                 hint={
                     "no_workspace": "started with --no-workspace",
                     "readonly": "started with --readonly",
-                    "remote": "a non-loopback server; edit config.json and "
-                    "restart, or start with --allow-workspace-switch",
                 }[lock],
             )
         workspace = runtime.config.workspace.model_dump()
@@ -475,9 +483,9 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         response.headers["Cache-Control"] = "no-store"
         roots = await asyncio.to_thread(scan_skills_status, runtime.config.skills)
         return {
-            # The conventional roots, so the pane can offer restoring a
-            # removed default without hardcoding the paths client-side.
-            "defaults": [DEFAULT_SKILLS_DIR, USER_SKILLS_DIR],
+            # The conventional root, so the pane can offer restoring a
+            # removed default without hardcoding the path client-side.
+            "defaults": [USER_SKILLS_DIR],
             "roots": [asdict(r) for r in roots],
         }
 

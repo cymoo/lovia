@@ -549,9 +549,7 @@ const MESSAGES = {
     'cfg.modeTrusted': '完全权限',
     'cfg.wsLock_no_workspace': '服务以 --no-workspace 启动，没有工作区。',
     'cfg.wsLock_readonly': '服务以 --readonly 启动，所有运行固定为“仅可查看”，这里不能修改。',
-    'cfg.wsLock_remote': '服务监听的不是本机地址，权限设置不能在浏览器里修改。要修改，请编辑 config.json 后重启，或以 --allow-workspace-switch 启动。',
     'cfg.defaultMode': '新对话的权限模式',
-    'cfg.modeCapped': '配置里是“{mode}”，但这台服务器实际按“{runs}”运行。',
     'cfg.modeHint_readonly': '只能读取工作区内的文件，不能写入，也不能运行命令。',
     'cfg.modeHint_coding': '可以修改工作区内的文件；运行命令和读取工作区外的文件前会先询问。',
     'cfg.modeHint_trusted': '运行命令、读取工作区外的文件都不再询问。危险命令和敏感文件仍会被拦下。',
@@ -575,7 +573,6 @@ const MESSAGES = {
     'cfg.subagentsHint': '允许把独立的工作交给后台子代理并行完成。',
     'cfg.memory': '长期记忆',
     'cfg.memoryHint': '跨对话记住你的偏好和重要信息。',
-    'cfg.memoryDir': '记忆目录',
     'cfg.maxTokens': '最大输出 tokens',
     'cfg.maxTokensAuto': '留空使用服务端默认',
     'cfg.maxTokensHint': '每次回复最多生成的 tokens 数。',
@@ -652,7 +649,7 @@ const MESSAGES = {
     'cfg.tavilyKey': 'Tavily API Key',
     'cfg.skillsTitle': 'Skill 目录',
     'cfg.skillsIntro':
-      '按顺序扫描以下目录加载 skills（每个 skill 是含 SKILL.md 的子目录）；重名时靠前的目录优先。目录内新增 skill 即时生效。',
+      '所有对话都会按顺序扫描以下目录加载 skills（每个 skill 是含 SKILL.md 的子目录）；重名时靠前的目录优先。目录内新增 skill 即时生效。项目自己的 .agents/skills 会在该项目的对话里自动加载，与这里重名时项目的优先。',
     'cfg.skillsDefaultBadge': '默认',
     'cfg.skillsMissing': '目录不存在',
     'cfg.skillsEmpty': '未发现 skill',
@@ -1205,9 +1202,7 @@ const EN = {
   'cfg.modeTrusted': 'Full access',
   'cfg.wsLock_no_workspace': 'This server was started with --no-workspace, so there is no workspace.',
   'cfg.wsLock_readonly': 'This server was started with --readonly: every run is View only, and this can’t be changed here.',
-  'cfg.wsLock_remote': 'This server listens on a non-local address, so permission settings can’t be changed from the browser. Edit config.json and restart, or start it with --allow-workspace-switch.',
   'cfg.defaultMode': 'Permission mode for new chats',
-  'cfg.modeCapped': 'config.json says “{mode}”, but this server runs as “{runs}”.',
   'cfg.modeHint_readonly': 'Reads files inside the workspace. No writes, no commands.',
   'cfg.modeHint_coding': 'Edits files inside the workspace. Asks before running commands or reading outside it.',
   'cfg.modeHint_trusted': 'Runs commands and reads outside the workspace without asking. Dangerous commands and sensitive files are still blocked.',
@@ -1231,7 +1226,6 @@ const EN = {
   'cfg.subagentsHint': 'Lets the agent hand self-contained work to background subagents.',
   'cfg.memory': 'Long-term memory',
   'cfg.memoryHint': 'Remembers your preferences and key facts across chats.',
-  'cfg.memoryDir': 'Memory directory',
   'cfg.maxTokens': 'Max output tokens',
   'cfg.maxTokensAuto': 'Empty for the provider default',
   'cfg.maxTokensHint': 'The most tokens one response may generate.',
@@ -1308,9 +1302,11 @@ const EN = {
   'cfg.tavilyKey': 'Tavily API Key',
   'cfg.skillsTitle': 'Skill directories',
   'cfg.skillsIntro':
-    'Skills load from these directories in order (each skill is a '
+    'Every chat loads skills from these directories in order (each skill is a '
     + 'subdirectory with a SKILL.md); on duplicate names the earlier '
-    + 'directory wins. New skills in a listed directory work right away.',
+    + 'directory wins. New skills in a listed directory work right away. '
+    + 'A project’s own .agents/skills loads by itself in chats there, and '
+    + 'wins over these on a duplicate name.',
   'cfg.skillsDefaultBadge': 'default',
   'cfg.skillsMissing': 'directory not found',
   'cfg.skillsEmpty': 'no skills found',

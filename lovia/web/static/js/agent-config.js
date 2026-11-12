@@ -138,13 +138,10 @@ export function buildWorkspacePane() {
       if (ws.lock) form.appendChild(notice(t(`cfg.wsLock_${ws.lock}`)));
       if (ws.lock === 'no_workspace') return { read: () => ({}), controls: [], locked: true };
 
-      // Locked by --readonly: show what runs get. Otherwise the file's
-      // choice — even one this server can't offer (trusted off loopback)
-      // still shows, so the control never misstates the file.
+      // Locked by --readonly: show what runs get. Otherwise the file's choice.
       let mode = ws.lock === 'readonly' ? ws.effective_mode : ws.default_mode;
-      const offered = ws.modes.includes(mode) ? ws.modes : [...ws.modes, mode];
       const modeCtl = segmented(
-        offered.map((m) => [m, labels[m] || m]),
+        ws.modes.map((/** @type {string} */ m) => [m, labels[m] || m]),
         mode,
         (val) => {
           mode = val;
@@ -155,11 +152,6 @@ export function buildWorkspacePane() {
       const modeField = field(t('cfg.defaultMode'), modeCtl);
       modeField.appendChild(modeHint);
       form.appendChild(modeField);
-      if (ws.lock !== 'readonly' && ws.effective_mode && ws.effective_mode !== ws.default_mode) {
-        form.appendChild(
-          notice(t('cfg.modeCapped', { mode: labels[ws.default_mode], runs: labels[ws.effective_mode] })),
-        );
-      }
 
       // Switch rows, as every other on/off setting in the dialog.
       const bundles = el('div', 'lv-cfg-switches');
@@ -231,22 +223,6 @@ export function buildAgentPane() {
 
       const memory = switchControl(agent.memory);
       form.appendChild(switchRow(t('cfg.memory'), memory.node, t('cfg.memoryHint')));
-      const memDir = input(agent.memory_dir, { mono: true });
-      const memDirField = field(t('cfg.memoryDir'), memDir);
-      form.appendChild(memDirField);
-      // Disabled with memory off, not hidden: the field sits right under its
-      // switch, and taking it out of the layout would shift the pane (and
-      // what the pointer is on) at the click.
-      const syncMemory = () => {
-        const on = memory.value();
-        memDir.disabled = !on || memory.node.hasAttribute('disabled');
-        memDirField.classList.toggle('lv-cfg-off', !on);
-      };
-      memory.node.addEventListener('change', syncMemory);
-      syncMemory();
-      // Once the pane has applied a read-only state to the switch (after
-      // this builder returns), which the folder then follows too.
-      queueMicrotask(syncMemory);
 
       /** @param {HTMLInputElement} node */
       const invalid = (node) => {
@@ -266,24 +242,19 @@ export function buildAgentPane() {
             if (!Number.isInteger(n) || n < 0) return invalid(retries);
             maxRetries = n;
           }
-          if (memory.value() && !memDir.value.trim()) return invalid(memDir);
           return {
             run: { max_turns: maxTurns, max_retries: maxRetries, followups: followups.value() },
             agent: {
               instructions: prompt.value,
               subagents: subagents.value(),
               memory: memory.value(),
-              ...(memDir.value.trim() ? { memory_dir: memDir.value.trim() } : {}),
             },
           };
         },
-        // The memory folder follows its switch (syncMemory), not this list.
         controls: [prompt, turns, retries, followups.node, subagents.node, memory.node],
       };
     },
-    // Agent first: it is the half the server can still refuse (a memory
-    // directory that is a file), and the run limits are checked above —
-    // so a refusal leaves nothing half-saved.
+    // Both halves are checked above, so neither write is expected to fail.
     /** @param {any} body */
     async (body) => {
       await api.setAgentSettings(body.agent);

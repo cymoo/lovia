@@ -7002,12 +7002,6 @@ body.lv-files-resizing {
   gap: 10px;
   margin-top: 8px;
 }
-.lv-cfg-off .lv-cfg-label {
-  color: var(--lv-muted-2);
-}
-.lv-cfg-off .lv-cfg-input:disabled {
-  opacity: 0.6;
-}
 .lv-cfg-input.lv-invalid {
   border-color: var(--lv-danger);
 }

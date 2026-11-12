@@ -70,4 +70,4 @@ transcript，工具视图、审批规则和评测也按名字匹配，所以给�
 | 内置工具名 | 见上文 |
 | `MEMORY.md` | 每行一条 `- fact`，其他行会被忽略，因此可以直接手动编辑 |
 | `FileResultStore` | 每个值存为一个 `<key>.txt` 文件 |
-| `.lovia/config.json`（`lovia web` 的设置） | 忽略未知字段 |
+| `lovia web` 的 home 里的 `config.json`（默认 `~/.lovia`） | 忽略未知字段 |

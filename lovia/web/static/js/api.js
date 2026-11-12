@@ -476,7 +476,7 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
-  /** @param {{ memory?: boolean, memory_dir?: string, subagents?: boolean, instructions?: string }} body */
+  /** @param {{ memory?: boolean, subagents?: boolean, instructions?: string }} body */
   setAgentSettings: (body) =>
     request('/api/config/agent', {
       method: 'PUT',

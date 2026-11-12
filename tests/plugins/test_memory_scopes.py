@@ -7,6 +7,7 @@ the digest side-query is monkeypatched. ``scope=None`` behavior is covered by
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -273,7 +274,7 @@ async def test_recall_searches_only_its_own_scope(tmp_path) -> None:
     mem = _scoped(tmp_path, expand_query=False, summarize_recall=False)
     for key, words in (("/a", "zebra migration"), ("/b", "zebra outage")):
         await mem._curate(
-            mem._tier(key).index,
+            None,
             _msgs(("user", f"let's talk about the {words}"), ("assistant", "sure")),
             _ctx(key, run_id=key),
             mem._tier(key),
@@ -453,7 +454,7 @@ async def test_clear_scope_removes_notes_and_archive(tmp_path) -> None:
     await mem.remember("uses uv", scope="/p")
     tier = mem._tier("/p")
     await mem._curate(
-        tier.index,
+        None,
         _msgs(("user", "the zebra plan"), ("assistant", "ok")),
         _ctx("/p"),
         tier,
@@ -474,3 +475,44 @@ async def test_clear_scope_removes_notes_and_archive(tmp_path) -> None:
     assert await _notes(mem, "/p") == ["uses pdm"]
     meta = json.loads((_scope_dir(tmp_path, "/p") / "scope.json").read_text())
     assert meta == {"key": "/p"}
+
+
+async def test_clear_scope_while_curation_awaits_the_digest(
+    tmp_path, monkeypatch
+) -> None:
+    # The run's archive write comes after the digest's model call; a clear
+    # landing in between must not leave that write on the deleted stores.
+    mem = _scoped(
+        tmp_path,
+        auto_curate=True,
+        curate_in_background=True,
+        expand_query=False,
+        summarize_recall=False,
+    )
+    release = asyncio.Event()
+    paused = asyncio.Event()
+
+    async def slow_digest(entries, current_notes, model, scope_name):
+        if not release.is_set():
+            paused.set()
+            await release.wait()
+        return _ScopedRunDigest(summary="The quokka migration plan.")
+
+    monkeypatch.setattr(plugin_mod, "_scoped_digest", slow_digest)
+    agent = Agent(
+        name="a", model=ScriptedProvider([text("ok"), text("ok")]), plugins=[mem]
+    )
+    release.set()
+    await Runner.run(agent, "the zebra plan", deps="/p")  # archives once
+    await mem.drain()
+    release.clear()
+
+    await Runner.run(agent, "the quokka plan", deps="/p")
+    await paused.wait()  # curation is parked in the digest call
+    await mem.clear_scope("/p")
+    release.set()
+    await mem.drain()
+
+    hits = await mem._tier("/p").index.search("quokka", 5)  # type: ignore[union-attr]
+    assert {h.doc.meta["kind"] for h in hits} == {"message", "summary"}
+    assert await mem._tier("/p").index.search("zebra", 5) == []  # type: ignore[union-attr]

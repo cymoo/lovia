@@ -331,9 +331,11 @@ class FileNotesStore:
 class _Tier:
     """One layer of memory: the user's (``key=None``), or one scope's.
 
-    Long-lived and shared by every run, like the stores it holds. Code reads
-    ``notes`` / ``index`` at use time rather than capturing them, because
-    :meth:`Memory.clear_scope` swaps in fresh stores under the lock.
+    Long-lived and shared by every run, like the stores it holds.
+    :meth:`Memory.clear_scope` deletes a scope's files and swaps in fresh
+    stores under ``lock``, so code never captures ``notes`` / ``index``:
+    every write reads them while holding ``lock`` (reads may race a clear
+    and fail; writes must not, or they'd land on deleted stores).
     """
 
     root: Path
@@ -1416,9 +1418,7 @@ class Memory:
             if finalized:
                 return
             finalized = True
-            # The archive is read now, not at setup: clear_scope may have
-            # reopened the scope's stores while the run was going.
-            index = (scope or self._user).index
+            index = self._user.index if scope is None else None
             curation = self._curate(index, ev.result.entries, ctx, scope)
             if self.curate_in_background:
                 # Off the hot path: the run's final event shouldn't wait for
@@ -1444,8 +1444,8 @@ class Memory:
         ctx: RunContext[Any],
         scope: _Tier | None = None,
     ) -> None:
-        """Post-run memory upkeep: ``index`` is the archive this run's
-        conversation goes to, ``scope`` the run's scope tier, if any.
+        """Post-run memory upkeep: ``index`` is an unscoped run's archive,
+        ``scope`` a scoped run's tier (whose archive is read at write time).
         Best-effort throughout: the run already completed, so every failure
         here is a WARNING, never an error."""
         digest: _RunDigest | None = None
@@ -1461,11 +1461,10 @@ class Memory:
             except Exception:
                 logger.warning("memory: run digest failed", exc_info=True)
 
-        if index is not None:
-            try:
-                await index.add(self._run_docs(entries, ctx, digest))
-            except Exception:
-                logger.warning("memory: archive ingest failed", exc_info=True)
+        try:
+            await self._archive(index, self._run_docs(entries, ctx, digest), scope)
+        except Exception:
+            logger.warning("memory: archive ingest failed", exc_info=True)
 
         if digest and digest.touches_notes():
             try:
@@ -1480,6 +1479,22 @@ class Memory:
                 await self._dream_if_due(ctx, tier)
             except Exception:
                 logger.warning("memory: dream failed", exc_info=True)
+
+    @staticmethod
+    async def _archive(
+        index: "Index | None", docs: list[Doc], scope: _Tier | None
+    ) -> None:
+        if scope is None:
+            if index is not None:
+                await index.add(docs)
+            return
+        # Under the tier's lock, with the index read inside it: clear_scope
+        # deletes the files and reopens the stores under the same lock, and
+        # curation may have spent seconds in the digest call before getting
+        # here — a captured index could be one that no longer has a file.
+        async with scope.lock:
+            if scope.index is not None:
+                await scope.index.add(docs)
 
     async def _digest_notes(self, scope: _Tier | None) -> str:
         """The current Notes as the digest sees them (the source for stale)."""

@@ -346,7 +346,11 @@ function buildModelsPane(onView) {
         actions.appendChild(
           ghostBtn(t('cfg.makeDefault'), async (e) => {
             e.stopPropagation();
-            await switchModel(p.id);
+            try {
+              await makeDefaultModel(p.id);
+            } catch (err) {
+              toast(String(err.message || err), { type: 'error' });
+            }
             render();
           }),
         );
@@ -1066,9 +1070,26 @@ async function switchModel(id) {
   const agent = activeAgent();
   if (agent?.model) await api.updateAgent(agent.id, { model: id });
   else await api.setRoles({ chat: id });
+  await afterModelChange(id);
+}
+
+/**
+ * Settings → Connections' "Make default": the default chat model itself
+ * (roles.chat), whichever agent the composer is on.
+ * @param {string} id
+ */
+async function makeDefaultModel(id) {
+  await api.setRoles({ chat: id });
+  await afterModelChange(id, 'cfg.madeDefault');
+}
+
+/**
+ * @param {string} id The model switched to.
+ * @param {string} [message] What the toast says about it.
+ */
+async function afterModelChange(id, message = 'cfg.switched') {
   await loadConfig();
-  const p = activeProfile();
-  toast(t('cfg.switched', { name: profileName(p) }));
+  toast(t(message, { name: profileName(cfg()?.models.find((m) => m.id === id)) }));
   updateChip();
   await refreshAgents();
 }

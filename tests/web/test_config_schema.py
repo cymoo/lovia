@@ -16,6 +16,7 @@ from lovia.exceptions import UserError  # noqa: E402
 from lovia.web.config import (  # noqa: E402
     ANTHROPIC_FLAVOR,
     OPENAI_FLAVOR,
+    AgentConfig,
     Connection,
     ModelProfile,
     SkillsConfig,
@@ -101,6 +102,17 @@ def test_slugify() -> None:
     assert slugify("x", {"x"}) == "x-2"
     assert slugify("x", {"x", "x-2"}) == "x-3"
     assert slugify("!!!") == "model"
+
+
+@pytest.mark.parametrize("name", ["_Review", ".hidden", "-x-", "a" * 65, "é" * 80])
+def test_slugify_makes_a_valid_id_from_any_name(name: str) -> None:
+    taken: set[str] = set()
+    for _ in range(3):  # the unique suffix fits too
+        slug = slugify(name, taken)
+        ModelProfile(id=slug, model="m")  # the stricter of the two id rules
+        AgentConfig(id=slug.replace(".", "-"))
+        assert len(slug) <= 64
+        taken.add(slug)
 
 
 # ----------------------------------------------------------------- config -

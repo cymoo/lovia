@@ -72,13 +72,18 @@ VISION_OVERRIDES: dict[str, bool | None] = {"auto": None, "on": True, "off": Fal
 RESERVED_BODY_FIELDS = frozenset({"model", "messages", "system", "stream", "tools"})
 
 _SLUG = re.compile(r"[^a-z0-9._-]+")
+# Ids are at most 64 characters; the base keeps room for a "-NNN" suffix.
+_SLUG_BASE_MAX = 56
 
 
 def slugify(
     text: str, taken: set[str] | None = None, *, fallback: str = "model"
 ) -> str:
-    """An id from a display name or model spec, unique among ``taken``."""
-    base = _SLUG.sub("-", text.lower()).strip("-.") or fallback
+    """An id from a display name or model spec, unique among ``taken``:
+    starting with a letter or digit, at most 64 characters, whatever the
+    text (``fallback`` when nothing of it survives)."""
+    base = _SLUG.sub("-", text.lower()).strip("-._")[:_SLUG_BASE_MAX].rstrip("-._")
+    base = base or fallback
     taken = taken or set()
     if base not in taken:
         return base

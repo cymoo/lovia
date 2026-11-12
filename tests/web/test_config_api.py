@@ -762,6 +762,29 @@ def test_agents_are_served_side_by_side(
         # A name with nothing to slug gets a generic id, kept unique.
         assert _add_agent(client, name="审阅") == "agent"
         assert _add_agent(client, name="审阅") == "agent-2"
+        # Any name makes a valid id: no leading punctuation, room for the suffix.
+        assert _add_agent(client, name="_Review") == "review"
+        long = _add_agent(client, name="a" * 65)
+        assert len(long) <= 64
+        assert len(_add_agent(client, name="a" * 65)) <= 64
+        assert client.post(f"/api/config/agents/{long}/duplicate").status_code == 201
+
+
+def test_a_background_child_runs_on_its_agents_turn_limit(served) -> None:
+    from lovia.plugins import Subagents
+
+    client, _runtime, app = served
+    _add_model(client)
+    res = client.put(
+        "/api/config/agents/lovia", json={"max_turns": 1, "subagents": True}
+    )
+    assert res.status_code == 200, res.text
+    deps = app.state.deps
+    (plugin,) = [p for p in deps.agents["lovia"].plugins if isinstance(p, Subagents)]
+    (child,) = plugin.agents
+    # A child run goes by its own name (deps.name_of finds no registry key).
+    assert deps.name_of(child) == child.name != "lovia"
+    assert deps.max_turns_for(child.name) == 1
 
 
 def test_the_build_hooks_use_each_agents_own_settings(

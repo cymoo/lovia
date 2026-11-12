@@ -1384,7 +1384,8 @@ def test_main_gives_each_agent_its_retry_and_context_policy(
     assert agent.retry.max_attempts == 2  # first attempt + 1 retry
     assert isinstance(agent.context_policy, Compaction)
     assert agent.context_policy.context_window == 111_111
-    assert captured["max_turns"] == {"lovia": 7}
+    # Its background child runs under its own name, on the same limit.
+    assert captured["max_turns"] == {"lovia": 7, "lovia.sub": 7}
 
 
 def test_main_provider_timeout_and_trust_env_set_env(
@@ -1636,12 +1637,17 @@ def test_main_passes_followups_to_serve(
     # The runtime's suggester: each agent's own switch decides.
     assert seen["followups"] == seen["config_runtime"].followups  # type: ignore[union-attr]
     assert seen["followup_model"] is None
-    assert seen["max_turns"] == {"lovia": 100}
+    assert seen["max_turns"] == {"lovia": 100, "lovia.sub": 100}
 
     seen.clear()
     write_config(agents=[{"id": "lovia", "max_turns": 7}, {"id": "two"}])
     assert cli.main([]) == 0
-    assert seen["max_turns"] == {"lovia": 7, "two": 100}
+    assert seen["max_turns"] == {
+        "lovia": 7,
+        "lovia.sub": 7,
+        "two": 100,
+        "two.sub": 100,
+    }
     assert list(seen["agent"]) == ["lovia", "two"]  # type: ignore[call-overload]
 
 

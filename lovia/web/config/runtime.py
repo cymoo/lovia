@@ -185,8 +185,14 @@ class ConfigRuntime:
         return agents, resolve_aux_model(config.aux_profile())
 
     def max_turns(self) -> dict[str, int]:
-        """Each served agent's turn limit — ``create_app(max_turns=)``."""
-        return {spec.id: spec.max_turns for spec in self.config.agents}
+        """Each served agent's turn limit — ``create_app(max_turns=)`` —
+        and its background child's, which runs under its own name."""
+        from ..builder import SUBAGENT_SUFFIX
+
+        limits: dict[str, int] = {}
+        for spec in self.config.agents:
+            limits[spec.id] = limits[f"{spec.id}{SUBAGENT_SUFFIX}"] = spec.max_turns
+        return limits
 
     def workspace_for(self, agent: Agent[Any], root: Path, mode: str) -> LocalWorkspace:
         """A chat's workspace in ``mode`` — ``WorkspaceSwitch.build`` for the

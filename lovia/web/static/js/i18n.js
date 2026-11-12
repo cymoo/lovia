@@ -696,6 +696,7 @@ const MESSAGES = {
     'cfg.switchTitle': '切换模型',
     'cfg.manageModels': '管理模型…',
     'cfg.switched': '已切换到 {name}',
+    'cfg.madeDefault': '默认模型已设为 {name}',
     'cfg.heroTitle': '接入你的第一个模型',
     'cfg.heroBody': 'lovia 需要一个模型端点才能开始对话。填写 Base URL、API Key 与模型 ID，配置保存在服务端的 .lovia/config.json，今后启动即用。',
     'cfg.heroCta': '配置模型',
@@ -1378,6 +1379,7 @@ const EN = {
   'cfg.switchTitle': 'Switch model',
   'cfg.manageModels': 'Manage models…',
   'cfg.switched': 'Switched to {name}',
+  'cfg.madeDefault': 'The default model is now {name}',
   'cfg.heroTitle': 'Connect your first model',
   'cfg.heroBody':
     'lovia needs a model endpoint to chat. Enter a Base URL, API key and '

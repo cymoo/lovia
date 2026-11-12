@@ -512,7 +512,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         stored = _stored_agent(agent_id)
         copy = stored.model_copy(
             update={
-                "id": slugify(f"{agent_id}-copy", {a.id for a in cfg.agents}),
+                "id": agent_slug(f"{agent_id}-copy", {a.id for a in cfg.agents}),
                 "name": f"{stored.display_name} copy",
             }
         )

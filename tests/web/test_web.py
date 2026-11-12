@@ -438,6 +438,7 @@ def test_list_agents_single() -> None:
             "tools": [],
             "workspace": False,
             "memory": False,
+            "memory_projects": False,
             "context_window": None,
             "model": None,
         }
@@ -1267,6 +1268,7 @@ def test_get_agent_by_name() -> None:
         "tools": [],
         "workspace": False,
         "memory": False,
+        "memory_projects": False,
         "context_window": None,
         "model": None,
     }
@@ -1472,6 +1474,7 @@ def test_build_api_router_is_embeddable() -> None:
             "tools": [],
             "workspace": False,
             "memory": False,
+            "memory_projects": False,
             "context_window": None,
             "model": None,
         }

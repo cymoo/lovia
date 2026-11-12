@@ -4286,11 +4286,33 @@ dialog.lv-custom-dialog::backdrop {
   font-weight: 700;
   letter-spacing: -0.01em;
 }
+.lv-memory-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.lv-memory-tabs .lv-files-tabs {
+  min-width: 0;
+}
+.lv-memory-tab-project {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lv-memory-clear {
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--lv-muted);
+}
 .lv-memory-hint {
   margin: 0;
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--lv-muted);
+  /* Two lines held: the tabs' hints differ in length, the dialog mustn't jump. */
+  min-height: calc(2 * 1.55em);
 }
 .lv-memory-hint code {
   font-family: var(--lv-mono);
@@ -4301,6 +4323,7 @@ dialog.lv-custom-dialog::backdrop {
 }
 .lv-memory-editor {
   margin-top: 0;
+  height: 320px;
   min-height: 280px;
   max-height: 52vh;
   resize: vertical;
@@ -4309,13 +4332,12 @@ dialog.lv-custom-dialog::backdrop {
   line-height: 1.75;
 }
 .lv-memory-foot {
+  /* Meter above the buttons, always: side by side they wrap only when the
+     meter is long ("last tidied …"), and the dialog would change height
+     between tabs. */
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 10px;
-  /* When space runs out the meter and the button row wrap as whole blocks —
-     never letter-wrap inside a button or mid-timestamp. */
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
 }
 .lv-memory-meter {
   font-size: 11.5px;
@@ -4329,8 +4351,7 @@ dialog.lv-custom-dialog::backdrop {
 .lv-memory-actions {
   display: flex;
   gap: 8px;
-  flex-shrink: 0;
-  margin-left: auto;
+  align-self: flex-end;
 }
 .lv-memory-actions .lv-btn {
   white-space: nowrap;

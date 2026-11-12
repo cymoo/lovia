@@ -506,20 +506,28 @@ export const api = {
     }).then(_json),
 
   // ---- memory (the agent's editable Notes) ----
-  /** @param {{ agent?: string }} [opts] */
-  getMemory: ({ agent } = {}) => request(`/api/memory${qs({ agent })}`).then(_json),
+  // Every call names a layer: `layer: 'user'` (the default) or 'project' —
+  // the project of chat `session`, or of a draft's `root`, else the agent's own.
+  /** @typedef {{ agent?: string, layer?: 'user' | 'project', session?: string, root?: string }} MemoryLayer */
+  /** @param {MemoryLayer} [opts] */
+  getMemory: (opts = {}) => request(`/api/memory${qs(opts)}`).then(_json),
   // Replaces the notes wholesale; returns the canonical stored form.
-  putMemory: ({ agent, content }) =>
-    request(`/api/memory${qs({ agent })}`, {
+  /** @param {MemoryLayer & { content: string }} opts */
+  putMemory: ({ content, ...where }) =>
+    request(`/api/memory${qs(where)}`, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify({ content }),
     }).then(_json),
   // Runs the dream pass (merge duplicates, resolve conflicts, prune stale);
   // returns {before, after} counts plus the fresh canonical body.
-  /** @param {{ agent?: string }} [opts] */
-  dreamMemory: ({ agent } = {}) =>
-    request(`/api/memory/dream${qs({ agent })}`, { method: 'POST' }).then(_json),
+  /** @param {MemoryLayer} [opts] */
+  dreamMemory: (opts = {}) =>
+    request(`/api/memory/dream${qs(opts)}`, { method: 'POST' }).then(_json),
+  // Forgets a project — its notes and its conversation archive, for good.
+  /** @param {MemoryLayer} opts */
+  clearMemory: (opts) =>
+    request(`/api/memory${qs({ ...opts, layer: 'project' })}`, { method: 'DELETE' }).then(_json),
 };
 
 // Parse one SSE chunk ("event: x\ndata: y") into { event, data }, or null.

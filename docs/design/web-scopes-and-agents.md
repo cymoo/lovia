@@ -1,6 +1,6 @@
 # 多工作区之后：每份状态归谁，以及自定义 Agent
 
-> 状态：评审通过，作为实现基线；第 1 期（§1、§2、§6、§8）已实现（v0.9.179），第 2 期（§3–§5）已实现（v0.9.180），第 3 期（§7 的 core 部分）已实现（v0.9.181），两期实现时定下的接缝见文末；第 4 期未开始 · 2026-11-12 · 范围：`lovia/web`（配置、CLI、构建、设置页、composer、记忆对话框）、core 的 `plugins/memory`（加作用域）
+> 状态：评审通过，作为实现基线；第 1 期（§1、§2、§6、§8）已实现（v0.9.179），第 2 期（§3–§5）已实现（v0.9.180），第 3 期（§7 的 core 部分）已实现（v0.9.181），第 4 期（§7 的 web 部分）已实现（v0.9.182），各期实现时定下的接缝见文末 · 2026-11-13 · 范围：`lovia/web`（配置、CLI、构建、设置页、composer、记忆对话框）、core 的 `plugins/memory`（加作用域）
 >
 > 行号指向 `main`（`0422800`，v0.9.178）。
 
@@ -315,6 +315,19 @@ memory/
 | `scope` 求值 | `setup` 时调一次（此时 `ctx.workspace` 已打开，有测试钉住）；之后的工具和整理都用这一层 |
 | `index=None` + `scope` | 允许：不涉及自定义存储，两层都没有 `recall` |
 | `about` | 必填，取值 `"user"` 或 `scope_name`；`scope_name` 须是一个词且不是 `"user"` |
+
+## 第 4 期实现时定下的接缝
+
+| 问题 | 定论 |
+| --- | --- |
+| 运行怎么知道自己的项目 | supervisor 的 `_run()` 和 `RUN_CLIENT` 一起设 `RUN_PROJECT`（ContextVar，存项目键）；`lovia.web.chat_project` 就是读它的 `scope` 函数。不在 web 运行里时是 `None`，落到用户层 |
+| 对话 → 项目键 | 只有 `RouterDeps.project_of(binding)` 一处：绑定的 `root`，没有工作区或是 `general` 时为 `None`。运行和 `/api/memory` 都走它，两边不会分到不同的层 |
+| 改配置时的 Memory | `ConfigRuntime` 只建一个，跨 `apply` 复用：还在跑的旧 Agent 和新 Agent、`clear_scope` 共用同一把锁；关停时每个实例只 drain 一次 |
+| API 怎么指明层 | `layer=user\|project`（默认 `user`）；项目用 `session=`（对话的）或 `root=`（新对话的，按新对话检查，被拒 409），都不带就是 Agent 自己的目录。无项目 400，Memory 不是按 `chat_project` 分层 404 |
+| 清空 | `DELETE /api/memory?layer=project&…`，返回空的笔记；`layer=user` 返回 400 |
+| 前端怎么知道有没有"本项目" | `AgentInfo.memory_projects`（`Memory.scope is chat_project`）为真才去取项目层；有没有项目由服务器回答（400 即没有），不在前端重复"无项目"的判断。两层都取到再开对话框，标签条不会后出现 |
+| 库用户自带 `scope=` | 键的含义对话框不知道，所以只有"关于我"一个标签；要两个标签就用 `chat_project` |
+| 对话框 | 各标签各自保留未保存的修改，保存时一并写回；整理只作用于当前标签；计量行固定在按钮上方，提示固定两行高，切标签和清空后高度都不变 |
 
 ## 参考
 

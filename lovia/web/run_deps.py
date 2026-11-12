@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from fastapi import Request
 
     from ..agent import Agent
+    from ..run_context import RunContext
     from .api.deps import RouterDeps
 
 log = logging.getLogger(__name__)
@@ -48,6 +49,23 @@ RUN_CLIENT: ContextVar[JsonObject | None] = ContextVar("lovia_run_client", defau
 #: The app serving the run on this task, set beside RUN_CLIENT: what the
 #: start_session tool (scheduling.py) opens a new chat through.
 RUN_SERVER: ContextVar[RouterDeps | None] = ContextVar("lovia_run_server", default=None)
+
+#: The project the run on this task works in — set beside RUN_CLIENT from
+#: RouterDeps.project_of, the rule the memory routes use too, so a run and
+#: the Memory editor always name the same layer.
+RUN_PROJECT: ContextVar[str | None] = ContextVar("lovia_run_project", default=None)
+
+
+def chat_project(ctx: RunContext[Any]) -> str | None:
+    """``Memory(scope=chat_project)``: split memory by the chat's project.
+
+    The key is the chat's workspace (``WorkspaceRef.key``: a resolved path,
+    or ``ssh://…`` / ``docker://…``); ``None`` — the user's layer only — for
+    a chat in the "General" catch-all, an agent without a workspace, or a run
+    the web server didn't start. The Memory editor's per-project tab shows
+    only for a Memory scoped by this function: it is the key it looks up.
+    """
+    return RUN_PROJECT.get()
 
 
 @dataclass(frozen=True)

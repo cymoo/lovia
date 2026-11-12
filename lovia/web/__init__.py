@@ -37,7 +37,7 @@ try:
     from .followups import FollowupFn, FollowupRequest, generate_followups
     from .html import show_html
     from .questions import QuestionRegistry
-    from .run_deps import RunDepsFn, RunTrigger
+    from .run_deps import RunDepsFn, RunTrigger, chat_project
     from .scheduling import Scheduling
     from .store import ChatMeta, ChatStore
     from .subagents import subagent_deliver, wire_subagents
@@ -63,6 +63,7 @@ __all__ = [
     "Scheduling",
     "WorkspaceSwitch",
     "build_api_router",
+    "chat_project",
     "create_app",
     "generate_followups",
     "generate_token",

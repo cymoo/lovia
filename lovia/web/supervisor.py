@@ -74,7 +74,7 @@ from .sse import (
 from ..types import JsonObject
 from ..workspace.remote import RemoteWorkspace
 from ..workspace.workspace import LocalWorkspace, WorkspaceSessionBinding
-from .run_deps import RUN_CLIENT, RUN_SERVER
+from .run_deps import RUN_CLIENT, RUN_PROJECT, RUN_SERVER
 from .store import RunRow, grant_context
 from .workspaces import ChatBinding
 
@@ -808,6 +808,7 @@ class RunController:
         UI_DATA_SINK.set((store, sid))
         RUN_CLIENT.set(self.client or None)
         RUN_SERVER.set(deps)
+        RUN_PROJECT.set(deps.project_of(self.binding))
         next_input: str | list[Message] = self._first_input
         ckpt = self._first_ckpt
         seed = self._seed_entries

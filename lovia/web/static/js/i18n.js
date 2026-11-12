@@ -147,6 +147,7 @@ const MESSAGES = {
     'toast.pathCopied': '已复制路径',
     'toast.memorySaved': '记忆已保存',
     'toast.memoryDreamed': '记忆已整理：{before} → {after} 条',
+    'toast.memoryCleared': '已清空「{name}」的记忆',
     'toast.unauthorized': '未授权——请刷新页面并输入服务器令牌',
     'toast.signedOut': '未登录，或登录已过期',
     // ---- auth
@@ -347,7 +348,16 @@ const MESSAGES = {
     // ---- memory dialog
     'memory.title': '记忆',
     'memory.hint':
-      'Agent 带入每次对话的长期事实，每行一条 `- 事实`。保存时生效；非列表行会被丢弃。',
+      '关于你的长期事实，带入每个项目的对话，每行一条 `- 事实`。保存时生效；非列表行会被丢弃。',
+    'memory.hintProject':
+      '只带入「{name}」里的对话：关于这个项目的长期事实，每行一条 `- 事实`。历史对话检索也只搜这个项目。',
+    'memory.tabUser': '关于我',
+    'memory.tabProject': '本项目（{name}）',
+    'memory.placeholderProject': '- 这个项目用 …',
+    'memory.clear': '清空本项目记忆',
+    'memory.clearConfirm':
+      '清空「{name}」的记忆？这个项目的笔记和历史对话检索都会删除，不可撤销。项目里的对话本身不受影响。',
+    'memory.clearFailed': '无法清空本项目记忆',
     'memory.loading': '加载中…',
     'memory.chars': '{used} / {budget} 字符',
     'memory.dropped': '{n} 行非列表内容将被丢弃',
@@ -828,6 +838,7 @@ const EN = {
   'toast.pathCopied': 'Path copied',
   'toast.memorySaved': 'Memory saved',
   'toast.memoryDreamed': 'Memory tidied: {before} → {after} notes',
+  'toast.memoryCleared': 'Cleared the memory of “{name}”',
   'toast.unauthorized': 'Unauthorized — reload and enter the server token',
   'toast.signedOut': 'Not signed in, or your sign-in has expired',
   'auth.tokenPrompt':
@@ -1024,7 +1035,16 @@ const EN = {
   'lightbox.download': 'Download original',
   'memory.title': 'Memory',
   'memory.hint':
-    'Durable facts the agent carries into every chat, one per `- fact` line. Edits apply on save; lines that aren’t bullets are dropped.',
+    'Durable facts about you, carried into chats in every project, one per `- fact` line. Edits apply on save; lines that aren’t bullets are dropped.',
+  'memory.hintProject':
+    'Carried only into chats in “{name}”: durable facts about this project, one per `- fact` line. Recall searches only this project’s past chats too.',
+  'memory.tabUser': 'About me',
+  'memory.tabProject': 'This project ({name})',
+  'memory.placeholderProject': '- This project uses …',
+  'memory.clear': 'Clear project memory',
+  'memory.clearConfirm':
+    'Clear the memory of “{name}”? This project’s notes and its past-chat recall are deleted for good. The chats themselves stay.',
+  'memory.clearFailed': 'Couldn’t clear project memory',
   'memory.loading': 'Loading…',
   'memory.chars': '{used} / {budget} chars',
   'memory.dropped': '{n} non-bullet lines will be dropped',

@@ -188,6 +188,18 @@ itself. Scopes live only in the default stores, so `scope=` can't be
 combined with `notes=` or a custom `index=`; `index=None` and `embedder=`
 apply to every layer.
 
+Served with `lovia.web`, `scope=chat_project` splits memory by the chat's
+directory — what `lovia web` does. Its key is the chat's workspace (a
+resolved path, or `ssh://…` / `docker://…`), and a chat in the
+`WorkspaceSwitch(general=)` catch-all, or without a workspace, has no scope.
+The Memory dialog's per-project tab shows only for a Memory scoped by it:
+
+```python
+from lovia.web import chat_project
+
+Memory("~/.lovia/memory", scope=chat_project, scope_name="project")
+```
+
 ## Recall quality, one argument at a time
 
 ```python

@@ -357,7 +357,8 @@ export const api = {
   /** @param {{ agent?: string }} [opts] */
   workspaceInfo: ({ agent } = {}) =>
     request(`/api/workspace${qs({ agent, ..._scope() })}`).then(_json),
-  // One directory level, dirs first. `path` is workspace-relative.
+  // One directory level, dirs first: { files, truncated } — `truncated` when
+  // the workspace's listing cap left entries out. `path` is workspace-relative.
   /** @param {{ agent?: string, path?: string }} [opts] */
   workspaceFiles: ({ agent, path } = {}) =>
     request(`/api/workspace/files${qs({ agent, path, ..._scope() })}`).then(_json),

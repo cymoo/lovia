@@ -71,6 +71,7 @@ from ..schemas import (
     WorkspaceEntry,
     WorkspaceFile,
     WorkspaceInfo,
+    WorkspaceListing,
 )
 from ..workspaces import ChatBinding, WorkspaceRef, files_config, open_view
 from .deps import RouterDeps
@@ -321,18 +322,22 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         cfg = await require_cfg(agent, chat, root)
         return WorkspaceInfo(name=_root_name(cfg), scratch_dir=SCRATCH_DIR)
 
-    @router.get("/api/workspace/files", response_model=list[WorkspaceEntry])
+    @router.get("/api/workspace/files", response_model=WorkspaceListing)
     async def list_dir(
         agent: str | None = Query(None),
         chat: str | None = Query(None, alias="session"),
         root: str | None = Query(None, max_length=4096),
         path: str = Query(".", max_length=4096),
-    ) -> list[WorkspaceEntry]:
-        """One directory level (breadcrumb browsing), dirs first."""
+    ) -> WorkspaceListing:
+        """One directory level, dirs first; ``truncated`` when the workspace's
+        listing cap (``max_list_results``) left entries out."""
         cfg = await require_cfg(agent, chat, root)
         async with _view(cfg) as session:
             entries = await session.list_files(path)
-        return [entry_out(e) for e in entries]
+        return WorkspaceListing(
+            files=[entry_out(e) for e in entries],
+            truncated=getattr(entries, "truncated", False),
+        )
 
     @router.post("/api/workspace/changes", response_model=WorkspaceChanges)
     async def list_changes(

@@ -19,7 +19,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent  # noqa: E402
-from lovia.workspace import Workspace  # noqa: E402
+from lovia.workspace import Workspace, WorkspaceLimits  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -137,7 +137,9 @@ def test_feature_flag_false_without_any_workspace() -> None:
 def test_files_lists_one_level_dirs_first_dotfiles_hidden(
     client: TestClient,
 ) -> None:
-    entries = client.get("/api/workspace/files", params={"agent": "bot"}).json()
+    listing = client.get("/api/workspace/files", params={"agent": "bot"}).json()
+    assert listing["truncated"] is False
+    entries = listing["files"]
     paths = [e["path"] for e in entries]
     assert paths[0] == "__pycache__"  # dirs first
     assert "notes/plan.md" not in paths  # one level only
@@ -146,10 +148,26 @@ def test_files_lists_one_level_dirs_first_dotfiles_hidden(
     assert sizes["report.csv"] > 0
 
 
+def test_files_says_when_the_listing_cap_cut_it(tmp_path: Path) -> None:
+    """A folder past ``max_list_results`` lists that many and says so: the
+    Files panel's tree would otherwise show a short folder as complete."""
+    for i in range(5):
+        (tmp_path / f"f{i}.txt").write_text("x")
+    ws = Workspace.local(str(tmp_path), limits=WorkspaceLimits(max_list_results=3))
+    app = create_app(
+        {"bot": Agent(name="bot", model=ScriptedProvider([text("hi")]), workspace=ws)},
+        store=ChatStore.in_memory(),
+        titles=False,
+    )
+    listing = TestClient(app).get("/api/workspace/files", params={"agent": "bot"})
+    assert listing.json()["truncated"] is True
+    assert len(listing.json()["files"]) == 3
+
+
 def test_files_subdir_and_missing(client: TestClient) -> None:
     entries = client.get(
         "/api/workspace/files", params={"agent": "bot", "path": "notes"}
-    ).json()
+    ).json()["files"]
     assert [e["path"] for e in entries] == ["notes/plan.md"]
     assert (
         client.get(
@@ -200,11 +218,11 @@ def test_browse_shows_what_changes_leaves_out(client: TestClient) -> None:
     """The change list's scratch rule is presentation only: a directory
     listing is one level and can't be crowded, so it tells the truth."""
     entries = client.get("/api/workspace/files", params={"agent": "bot"}).json()
-    paths = {e["path"] for e in entries}
+    paths = {e["path"] for e in entries["files"]}
     assert {"__pycache__", "venv", "node_modules", "orphan.pyc", "tmp"} <= paths
     scratch = client.get(
         "/api/workspace/files", params={"agent": "bot", "path": "tmp"}
-    ).json()
+    ).json()["files"]
     assert {e["path"] for e in scratch} == {"tmp/chart.png", "tmp/scratch.txt"}
 
 

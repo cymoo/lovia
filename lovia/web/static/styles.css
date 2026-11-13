@@ -4853,6 +4853,13 @@ body.lv-files-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* A sentence, not a label: it wraps rather than ellipsizes. */
+.lv-tree-cut {
+  height: auto;
+  padding-block: 5px;
+  line-height: 1.5;
+  white-space: normal;
+}
 .lv-tree-more {
   border-radius: var(--lv-radius-sm);
   cursor: pointer;
@@ -4895,45 +4902,40 @@ body.lv-files-resizing {
   flex-shrink: 0;
   border-bottom: 1px solid var(--lv-border);
 }
-/* The open file's name, then its folder, dimmed (a click shows it in the
-   tree). Short of room, the folder gives way first, from its far end. */
+/* Back to the list where the file covers it; "×" where the list stays beside
+   it (wide) — one way out at a time. */
+.lv-files-viewer-back {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+}
+.lv-files-wide .lv-files-viewer-back,
+.lv-files-panel:not(.lv-files-wide) #files-viewer-close {
+  display: none;
+}
+.lv-files-panel:not(.lv-files-wide) .lv-files-viewer-head {
+  gap: 4px;
+  padding-left: 6px;
+}
+/* The open file's name. Short of room it gives way in its middle: the stem
+   ellipsizes, the extension stays. */
 .lv-files-viewer-name {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: baseline;
-  gap: 6px;
   overflow: hidden;
   font-size: 13px;
-  color: var(--lv-muted-2);
-  white-space: nowrap;
-}
-.lv-files-viewer-file {
-  flex: 0 0 auto;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-weight: 600;
   color: var(--lv-ink);
+  white-space: nowrap;
 }
-.lv-files-viewer-dir {
-  flex: 0 1 auto;
+.lv-files-viewer-stem {
   min-width: 0;
-  margin: -2px 0;
-  padding: 2px 5px;
-  border-radius: var(--lv-radius-xs);
   overflow: hidden;
   text-overflow: ellipsis;
-  direction: rtl;
-  font-size: 12px;
-  color: var(--lv-muted-2);
-  transition:
-    background var(--lv-t-fast),
-    color var(--lv-t-fast);
 }
-.lv-files-viewer-dir:hover {
-  background: var(--lv-surface-2);
-  color: var(--lv-ink-2);
+.lv-files-viewer-ext {
+  flex-shrink: 0;
 }
 .lv-files-viewer-abs {
   min-width: 0;
@@ -4951,9 +4953,9 @@ body.lv-files-resizing {
   width: 28px;
   height: 28px;
 }
-/* Attach / line wrap / download live in the "⋯" menu until the panel has room
-   for them beside the file's name; then they come back inline and "⋯" goes.
-   Copy, used far more, always stays out. */
+/* Source / line wrap / attach / download live in the "⋯" menu until the
+   panel has room for them beside the file's name; then they come back inline.
+   Copy, used far more, always stays out; "⋯" always stays (the file's place). */
 .lv-files-viewer {
   container-type: inline-size;
 }
@@ -4961,11 +4963,8 @@ body.lv-files-resizing {
   display: none;
 }
 @container (min-width: 480px) {
-  .lv-files-viewer-actions .lv-files-overflow {
+  .lv-files-viewer-actions .lv-files-overflow:not(.lv-hidden) {
     display: inline-flex;
-  }
-  #files-more {
-    display: none;
   }
 }
 .lv-files-viewer-body {

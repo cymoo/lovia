@@ -555,7 +555,15 @@ const tree = {
   /** @type {Map<string, number>} folder → rows shown, in TREE_PAGE steps */
   shown: new Map(),
   loading: new Set(), // folders whose first listing is on its way
+  cut: new Set(), // folders the workspace's listing cap cut short
 };
+
+/** Keep a folder's listing (`{ files, truncated }`) under the path it was opened by. */
+function setListing(dir, listing) {
+  tree.listings.set(dir, underDir(dir, listing.files));
+  if (listing.truncated) tree.cut.add(dir);
+  else tree.cut.delete(dir);
+}
 
 /** 'a/b/c' → ['a', 'a/b']: the folders above a path. */
 const ancestorsOf = (path) => {
@@ -571,6 +579,7 @@ function syncTreeScope() {
   tree.listings.clear();
   tree.shown.clear();
   tree.loading.clear();
+  tree.cut.clear();
   tree.open = new Set();
   try {
     const saved = JSON.parse(sessionStorage.getItem(TREE_KEY) || 'null');
@@ -629,10 +638,13 @@ function applyTree(listings) {
   const fetched = new Set(listings.map(([dir]) => dir));
   const shown = new Set(shownDirs());
   for (const dir of tree.listings.keys()) {
-    if (!fetched.has(dir) && !shown.has(dir)) tree.listings.delete(dir);
+    if (!fetched.has(dir) && !shown.has(dir)) {
+      tree.listings.delete(dir);
+      tree.cut.delete(dir);
+    }
   }
   for (const [dir, r] of listings) {
-    if (r.status === 'fulfilled') tree.listings.set(dir, underDir(dir, r.value));
+    if (r.status === 'fulfilled') setListing(dir, r.value);
     else tree.open.delete(dir);
   }
   saveTree();
@@ -661,9 +673,9 @@ async function openDir(path) {
       tree.loading.add(dir);
       // "Loading…" under the row only once the wait is felt.
       const slow = setTimeout(queueRender, 250);
-      let entries;
+      let listing;
       try {
-        entries = await api.workspaceFiles({ agent: store.agent, path: dir });
+        listing = await api.workspaceFiles({ agent: store.agent, path: dir });
       } catch (err) {
         if (tree.scope !== scope) return;
         tree.open.delete(dir);
@@ -674,7 +686,7 @@ async function openDir(path) {
         tree.loading.delete(dir);
       }
       if (tree.scope !== scope) return; // another agent or folder meanwhile
-      tree.listings.set(dir, underDir(dir, entries));
+      setListing(dir, listing);
       if (!tree.open.has(dir)) break; // closed again while it loaded
     }
     const only = soleDir(dir);
@@ -758,6 +770,14 @@ function treeLevel(dir, depth, needle) {
       renderList();
     });
     nodes.push(more);
+  }
+  // The server stopped at the workspace's listing cap: say the folder holds
+  // more than it shows. Which entries made it is the directory's own order,
+  // so this is "some of", not "the first".
+  if (tree.cut.has(dir)) {
+    const cut = treeNote(t('files.dirCut', { n: entries.length }), depth);
+    cut.classList.add('lv-tree-cut');
+    nodes.push(cut);
   }
   return nodes;
 }
@@ -1489,35 +1509,29 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
   if (!els.panel.classList.contains('lv-viewing')) state.listScroll = els.list.scrollTop;
   els.viewer.classList.remove('lv-hidden');
   els.panel.classList.add('lv-viewing');
-  // The header names the file, then its folder, dimmed — a click shows it in
-  // the tree. An absolute path (outside the workspace) has no folder there to
-  // show, so it stays text. Both truncate from the left (rtl) to keep the
-  // nearest part; the bidi isolate keeps a leading "~/." from being
-  // reordered to the far end.
-  const isolated = (cls, text, tag = 'span') => {
-    const el = document.createElement(tag);
-    el.className = cls;
-    const bdi = document.createElement('bdi');
-    bdi.textContent = text;
-    el.appendChild(bdi);
-    return el;
-  };
+  // The header names the file; its folder is in the tooltip, and "⋯" shows
+  // it in the tree. A long name gives way in its middle, so the extension —
+  // what kind of file this is — stays in view. An absolute path (outside the
+  // workspace) shows whole, truncated from the left (rtl) to keep the name;
+  // the bidi isolate keeps a leading "~/." from being reordered to the far end.
   if (path.startsWith('/')) {
-    els.viewerName.replaceChildren(isolated('lv-files-viewer-abs', path));
+    const abs = document.createElement('span');
+    abs.className = 'lv-files-viewer-abs';
+    const bdi = document.createElement('bdi');
+    bdi.textContent = path;
+    abs.appendChild(bdi);
+    els.viewerName.replaceChildren(abs);
   } else {
-    const file = document.createElement('span');
-    file.className = 'lv-files-viewer-file';
-    file.textContent = name;
-    els.viewerName.replaceChildren(file);
-    if (dirname(path)) {
-      const dir = /** @type {HTMLButtonElement} */ (
-        isolated('lv-files-viewer-dir', dirname(path), 'button')
-      );
-      dir.type = 'button';
-      dir.title = t('files.revealInTree');
-      dir.addEventListener('click', () => void revealInTree(path));
-      els.viewerName.appendChild(dir);
-    }
+    const dot = name.lastIndexOf('.');
+    // A short tail after the last dot reads as an extension; anything else stays one piece.
+    const cut = dot > 0 && name.length - dot <= 8 ? dot : name.length;
+    const stem = document.createElement('span');
+    stem.className = 'lv-files-viewer-stem';
+    stem.textContent = name.slice(0, cut);
+    const tail = document.createElement('span');
+    tail.className = 'lv-files-viewer-ext';
+    tail.textContent = name.slice(cut);
+    els.viewerName.replaceChildren(stem, tail);
   }
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
@@ -1900,20 +1914,35 @@ export function initFiles() {
   els.viewerClose.title = t('files.closeFile');
   els.viewerClose.setAttribute('aria-label', els.viewerClose.title);
   if (els.upload) els.upload.innerHTML = icon('upload', { size: 15 });
-  // A narrow panel folds the less-used actions — attach, line wrap, download —
-  // into "⋯" (CSS decides when): each item clicks the real button, so its
-  // handler and its hidden state (no wrap for an image) are the button's own.
+  els.viewerBack = document.getElementById('files-viewer-back');
+  if (els.viewerBack) {
+    els.viewerBack.innerHTML = icon('chevron-left', { size: 16 });
+    els.viewerBack.addEventListener('click', () => closeViewer());
+  }
+  // "⋯" holds what the header has no room for — a narrow panel folds the
+  // source toggle, line wrap, attach and download into it (CSS decides when)
+  // — then the file's place: show it in the tree, copy its path. A folded
+  // item clicks the real button, so its handler and its hidden state (no
+  // wrap for an image) are the button's own.
   els.more = document.getElementById('files-more');
   if (els.more) {
     els.more.innerHTML = icon('ellipsis', { size: 15 });
     els.more.addEventListener('click', () => {
-      const shown = (/** @type {HTMLElement} */ b) => !b.classList.contains('lv-hidden');
-      /** @type {import('./ui.js').MenuItem[]} */
+      const v = state.viewing;
+      if (!v) return;
+      // Folded away by the container query — not merely hidden for this file.
+      const folded = (/** @type {HTMLElement} */ b) =>
+        !b.classList.contains('lv-hidden') && !b.getClientRects().length;
+      /** @type {(import('./ui.js').MenuItem | null)[]} */
       const items = [];
-      if (shown(els.attach)) {
-        items.push({ label: t('files.attach'), icon: icon('paperclip', { size: 15 }), onSelect: () => els.attach.click() });
+      if (folded(els.mdToggle)) {
+        items.push({
+          label: els.mdToggle.title,
+          icon: icon(v.raw ? 'file-text' : 'code', { size: 15 }),
+          onSelect: () => els.mdToggle.click(),
+        });
       }
-      if (shown(els.wrapToggle)) {
+      if (folded(els.wrapToggle)) {
         items.push({
           label: t('files.wrap'),
           icon: icon('wrap-text', { size: 15 }),
@@ -1921,7 +1950,27 @@ export function initFiles() {
           onSelect: () => els.wrapToggle.click(),
         });
       }
-      items.push({ label: t('files.download'), icon: icon('download', { size: 15 }), onSelect: () => els.download.click() });
+      if (folded(els.attach)) {
+        items.push({ label: t('files.attach'), icon: icon('paperclip', { size: 15 }), onSelect: () => els.attach.click() });
+      }
+      if (folded(els.download)) {
+        items.push({ label: t('files.download'), icon: icon('download', { size: 15 }), onSelect: () => els.download.click() });
+      }
+      if (items.length) items.push(null);
+      if (!v.path.startsWith('/')) {
+        items.push({
+          label: t('files.revealInTree'),
+          icon: icon('folder-open', { size: 15 }),
+          onSelect: () => void revealInTree(v.path),
+        });
+      }
+      items.push({
+        label: t('files.copyPath'),
+        icon: icon('copy', { size: 15 }),
+        onSelect: async () => {
+          if (await copyToClipboard(v.path)) toast(t('ws.pathCopied'));
+        },
+      });
       openMenu(els.more, items);
     });
   }

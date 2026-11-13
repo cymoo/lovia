@@ -5,16 +5,17 @@ from __future__ import annotations
 from typing import Any
 
 try:
-    from fastapi import APIRouter
+    from fastapi import APIRouter, Query
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
 
     raise_missing_web_extra(exc)
 
 from ...agent import Agent
+from ...plugins.skills import Skills
 from ...providers.base import context_window as provider_context_window
 from ..errors import WebError
-from ..schemas import AgentInfo
+from ..schemas import AgentInfo, SkillInfo
 from .deps import RouterDeps
 from .memory import memory_plugin, splits_by_project
 from ..workspaces import files_config
@@ -101,5 +102,32 @@ def build_agents_router(deps: RouterDeps) -> APIRouter:
         if agent is None:
             raise WebError(404, "agent_not_found", f"unknown agent {name!r}")
         return info(name, agent)
+
+    @router.get("/api/skills", response_model=list[SkillInfo])
+    async def list_skills(
+        agent: str | None = Query(None),
+        chat: str | None = Query(None, alias="session"),
+        root: str | None = Query(None, max_length=4096),
+    ) -> list[SkillInfo]:
+        """The skills a run of chat ``session`` — or of a draft opening in
+        ``root`` with ``agent`` — sees: its agent built the way the run
+        builds it (``effective_agent``, so the project's skills, a remote
+        chat's lack of them, and the agent's own settings all apply), then
+        each Skills plugin's catalog, filter and precedence included."""
+        if chat is not None:
+            meta = await deps.store.get(chat)
+            if meta is None:
+                raise WebError(404, "session_not_found", "session not found")
+            host = deps.pick(deps.agent_of(meta))
+            binding = deps.chat_binding(host, meta)
+        else:
+            host = deps.pick(agent)
+            binding = deps.new_chat_binding(host, None, root)
+        return [
+            SkillInfo(name=m.name, description=m.description)
+            for plugin in deps.effective_agent(host, binding).plugins
+            if isinstance(plugin, Skills)
+            for m in await plugin.catalog.list_skills()
+        ]
 
     return router

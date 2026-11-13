@@ -516,6 +516,12 @@ export const api = {
       body: JSON.stringify(body),
     }).then(_json),
 
+  // ---- skills ----
+  // The skills a run of chat `session` sees — or of a draft opening in
+  // `root` with `agent`: [{ name, description }], in the prompt index's order.
+  /** @param {{ agent?: string, session?: string, root?: string }} [where] */
+  listSkills: (where = {}) => request(`/api/skills${qs(where)}`).then(_json),
+
   // ---- memory (the agent's editable Notes) ----
   // Every call names a layer: `layer: 'user'` (the default) or 'project' —
   // the project of chat `session`, or of a draft's `root`, else the agent's own.

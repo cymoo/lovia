@@ -427,7 +427,8 @@ agent = Agent(
 - **`Todo()`**：给模型一份多步任务清单；当前清单每轮重新展示，但不会撑大
   transcript。
 - **`Skills(dir)`**：可复用的指令包（`SKILL.md` + 附属文件）。提示词里常驻
-  一行索引，完整内容按需加载。
+  一行索引，完整内容按需加载。消息以 `/名字` 开头就是点名使用这个 skill；
+  web 输入框里打 `/` 会列出可用的 skill。
 - **`MCP(server)`**：接入 Model Context Protocol 服务器提供的工具，支持
   stdio 或 HTTP，可按服务器加名称前缀和审批门禁。网页研究可参考
   [Parallel Search MCP 配置示例](https://cymoo.github.io/lovia/zh/mcp/#使用-parallel-进行网页研究)。

@@ -669,6 +669,26 @@ class TestCatalogInstructions:
             catalog = SkillCatalog.from_dir(root, usage_rules="")
             text = await catalog.instructions()
             assert "Using skills" not in text
+            assert "begins with `/`" not in text
+
+    async def test_slash_rule_is_part_of_the_default_rules(self) -> None:
+        """The `/name` rule is one static sentence of the default rules: the
+        same text whatever the skills (the prompt prefix stays byte-stable),
+        and a custom ``usage_rules`` replaces it along with the rest."""
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            _add_skill(Path(a), "review")
+            _add_skill(Path(b), "deploy")
+            _add_skill(Path(b), "init")
+            first = await SkillCatalog.from_dir(a).instructions()
+            second = await SkillCatalog.from_dir(b).instructions()
+            rule = "When the user's message begins with `/` and a skill name"
+            assert rule in first
+            rules = first[first.index("## Using skills") :]
+            assert second.endswith(rules)
+            custom = await SkillCatalog.from_dir(
+                a, usage_rules="Be brief."
+            ).instructions()
+            assert rule not in custom and custom.endswith("Be brief.")
 
     async def test_includes_all_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

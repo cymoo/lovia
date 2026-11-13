@@ -1228,12 +1228,14 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   color: var(--lv-muted);
 }
 .lv-popup-menu-item:hover,
-.lv-popup-menu-item:focus-visible {
+.lv-popup-menu-item:focus-visible,
+.lv-popup-menu-item[aria-selected="true"] {
   background: var(--lv-surface-2);
   color: var(--lv-ink);
 }
 [data-theme="dark"] .lv-popup-menu-item:hover,
-[data-theme="dark"] .lv-popup-menu-item:focus-visible {
+[data-theme="dark"] .lv-popup-menu-item:focus-visible,
+[data-theme="dark"] .lv-popup-menu-item[aria-selected="true"] {
   background: var(--lv-surface-3);
 }
 .lv-popup-menu-item.lv-danger,
@@ -1257,6 +1259,25 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   height: 1px;
   margin: 4px 6px;
   background: var(--lv-border);
+}
+/* The composer's `/` menu (skill-menu.js): a popup menu that scrolls, its
+   rows a name over a one-line description. */
+.lv-skill-menu {
+  width: min(420px, calc(100vw - 16px));
+  max-height: min(300px, 50vh);
+  overflow-y: auto;
+}
+.lv-skill-menu-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+}
+.lv-skill-menu-desc {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--lv-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* ---- Main page ---------------------------------------------------------- */

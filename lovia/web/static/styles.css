@@ -4419,16 +4419,27 @@ dialog.lv-custom-dialog::backdrop {
   width: min(var(--lv-files-w, clamp(340px, 28vw, 440px)), calc(100vw - 520px));
   min-width: 300px;
   flex-shrink: 0;
-  border-left: 1px solid var(--lv-border);
-  background: var(--lv-surface);
+  /* The panel navigates, as the sidebar does, so it wears the sidebar's tone;
+     the open file sits on the chat's own canvas (.lv-files-viewer). */
+  border-left: 1px solid var(--lv-sidebar-edge);
+  background: var(--lv-sidebar-surface);
   flex-direction: column;
   min-height: 0;
 }
 .lv-files-panel.lv-open {
   display: flex;
 }
-[data-theme="dark"] .lv-files-panel {
-  background: var(--lv-bg);
+.lv-files-search .lv-search-input:not(:focus) {
+  background: var(--lv-sidebar-hover);
+}
+.lv-files-search .lv-search-input:not(:focus):hover {
+  background: var(--lv-sidebar-active);
+}
+.lv-files-head .lv-files-tabs {
+  background: var(--lv-sidebar-active);
+}
+[data-theme="dark"] .lv-files-head .lv-files-tabs {
+  background: var(--lv-surface-2); /* the dark active tab is sidebar-active's tone */
 }
 
 /* Divider on the panel's left edge: drag to resize, arrow keys to nudge,
@@ -4471,7 +4482,7 @@ body.lv-files-resizing {
    ≥720px), the list keeps a column beside the preview, as a desktop file pane
    does — a grid over the panel's own children, so no wrapper is needed. */
 .lv-files-panel.lv-viewing:not(.lv-files-wide)
-  > :is(.lv-files-crumbs, .lv-files-search, .lv-files-procs, .lv-files-list) {
+  > :is(.lv-files-search, .lv-files-procs, .lv-files-list) {
   display: none;
 }
 /* `.lv-open` is part of it: this outweighs the rule that shows the panel, and
@@ -4479,7 +4490,7 @@ body.lv-files-resizing {
 .lv-files-panel.lv-open.lv-files-wide.lv-viewing {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 .lv-files-wide.lv-viewing > .lv-files-head {
   grid-column: 1 / -1;
@@ -4490,11 +4501,10 @@ body.lv-files-resizing {
   grid-row: 2 / -1;
   border-right: 1px solid var(--lv-border);
 }
-.lv-files-wide.lv-viewing > .lv-files-crumbs { grid-column: 2; grid-row: 2; }
-.lv-files-wide.lv-viewing > .lv-files-search { grid-column: 2; grid-row: 3; }
-.lv-files-wide.lv-viewing > .lv-files-procs { grid-column: 2; grid-row: 4; }
-.lv-files-wide.lv-viewing > .lv-files-list { grid-column: 2; grid-row: 5; }
-.lv-files-wide.lv-viewing > .lv-files-crumbs {
+.lv-files-wide.lv-viewing > .lv-files-search { grid-column: 2; grid-row: 2; }
+.lv-files-wide.lv-viewing > .lv-files-procs { grid-column: 2; grid-row: 3; }
+.lv-files-wide.lv-viewing > .lv-files-list { grid-column: 2; grid-row: 4; }
+.lv-files-wide.lv-viewing > .lv-files-search {
   padding-top: 10px;
 }
 
@@ -4563,47 +4573,6 @@ body.lv-files-resizing {
     animation: none;
     opacity: 0.5;
   }
-}
-
-.lv-files-crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 1px;
-  padding: 0 14px 8px;
-  font-size: 12px;
-  font-family: var(--lv-mono);
-  color: var(--lv-muted-2);
-  flex-shrink: 0;
-}
-.lv-files-crumb {
-  display: inline-flex; /* the root's glyph + sans name sit on the same line */
-  align-items: center;
-  padding: 1px 5px;
-  border-radius: var(--lv-radius-xs);
-  color: var(--lv-muted);
-  transition:
-    background var(--lv-t-fast),
-    color var(--lv-t-fast);
-}
-.lv-files-crumb:hover {
-  background: var(--lv-surface-2);
-  color: var(--lv-ink);
-}
-.lv-files-crumb[disabled] {
-  color: var(--lv-ink-2);
-  pointer-events: none;
-  font-weight: 600;
-}
-.lv-files-crumb-sep {
-  opacity: 0.55;
-}
-/* The root: the workspace's name behind a folder glyph, in the UI's face. */
-.lv-files-crumb-root {
-  gap: 5px;
-  max-width: 100%;
-  font-family: var(--lv-sans);
-  white-space: nowrap;
 }
 
 /* ---- Background processes strip ---- */
@@ -4714,21 +4683,45 @@ body.lv-files-resizing {
   font-size: 12.5px;
   color: var(--lv-muted-2);
 }
-.lv-files-empty-upload {
+.lv-files-empty-action {
   display: flex;
   gap: 6px;
   margin: 12px auto 0;
 }
+/* The chat has no files and git nothing else: what will land here. */
+.lv-files-empty-first {
+  padding: 44px 24px;
+  line-height: 1.6;
+  text-wrap: balance;
+}
+.lv-files-empty-title {
+  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lv-ink-2);
+}
+/* … and when other changes are listed: one quiet line under its label. */
+.lv-files-group-empty {
+  padding: 4px 10px 6px;
+  font-size: 12.5px;
+  color: var(--lv-muted-2);
+}
+/* One line per row, 28px tall — the tree's sticky rows stack by that height. */
 .lv-file-row {
+  --lv-row-h: 28px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
+  height: var(--lv-row-h);
   text-align: left;
-  padding: 7px 9px;
+  padding: 0 8px;
   border-radius: var(--lv-radius-sm);
   cursor: pointer;
   transition: background var(--lv-t-fast);
+}
+.lv-file-row:focus-visible {
+  outline-offset: -2px;
 }
 /* Hover and selection are the sidebar's own neutral steps, so both lists
    read alike; the accent stays for meaning (the "written here" dot below). */
@@ -4746,12 +4739,17 @@ body.lv-files-resizing {
 .lv-file-row.lv-active .lv-file-row-icon {
   color: var(--lv-ink-2);
 }
+/* The name keeps its room; the change list's folder takes what is left. */
 .lv-file-row-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
 }
 .lv-file-row-name {
-  display: block;
+  flex: 0 0 auto;
+  max-width: 100%;
   font-size: 13px;
   color: var(--lv-ink-2);
   white-space: nowrap;
@@ -4776,14 +4774,108 @@ body.lv-files-resizing {
   background: var(--lv-accent);
   vertical-align: middle;
 }
-.lv-file-row-sub {
-  display: block;
-  font-size: 11px;
+.lv-file-row-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 11.5px;
   color: var(--lv-muted-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
+  direction: rtl; /* ellipsis on the left: the nearest folder stays */
+}
+
+/* ---- Browse: the folder tree (files.js treeLevel) ---- */
+/* Indent 12px a level; the chevron's 14px column comes first. */
+.lv-tree-row {
+  gap: 6px;
+  padding-left: calc(4px + var(--depth, 0) * 12px);
+}
+.lv-tree-twisty {
+  flex-shrink: 0;
+  width: 14px;
+  display: flex;
+  justify-content: center;
+  color: var(--lv-muted-2);
+}
+.lv-tree-twisty svg {
+  transition: transform var(--lv-t-fast) var(--lv-ease);
+}
+.lv-tree-row[aria-expanded="true"] .lv-tree-twisty svg {
+  transform: rotate(90deg);
+}
+/* An open folder's row stays at the top while its children scroll under it,
+   below the rows of the folders it sits in — sticky inside its own node, so
+   it leaves with its last child. Opaque, or the rows beneath would show. */
+.lv-tree-row.lv-sticky {
+  position: sticky;
+  top: calc(var(--depth) * var(--lv-row-h));
+  z-index: calc(10 - var(--depth));
+  background: var(--lv-sidebar-surface);
+}
+.lv-tree-row.lv-sticky:hover {
+  background: var(--lv-sidebar-hover);
+}
+.lv-tree-row.lv-sticky.lv-active {
+  background: var(--lv-sidebar-active);
+}
+/* Indent guides: a hairline under each open folder's chevron, shown while
+   the pointer or the keyboard is in the tree. */
+.lv-tree-group {
+  position: relative;
+}
+.lv-tree-group::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(10.5px + (var(--depth) - 1) * 12px);
+  width: 1px;
+  background: var(--lv-border);
+  opacity: 0;
+  transition: opacity var(--lv-t-fast);
+  pointer-events: none;
+}
+.lv-files-list:is(:hover, :focus-within) .lv-tree-group::before {
+  opacity: 1;
+}
+/* "Loading…", "Empty directory.", "Show more": in line with the names. */
+.lv-tree-note {
+  display: block;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px 0 calc(24px + var(--depth, 0) * 12px);
+  line-height: 28px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--lv-muted-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lv-tree-more {
+  border-radius: var(--lv-radius-sm);
+  cursor: pointer;
+}
+.lv-tree-more:hover {
+  color: var(--lv-ink-2);
+  background: var(--lv-sidebar-hover);
+}
+/* A path just revealed from the viewer's header. */
+.lv-file-row.lv-flash {
+  animation: lv-row-flash 1.2s ease-out;
+}
+@keyframes lv-row-flash {
+  0%,
+  40% {
+    background: var(--lv-sidebar-active);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lv-file-row.lv-flash {
+    animation: none;
+    background: var(--lv-sidebar-active);
+  }
 }
 
 /* ---- Viewer ---- */
@@ -4793,10 +4885,7 @@ body.lv-files-resizing {
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--lv-border);
-  background: var(--lv-bg);
-}
-[data-theme="dark"] .lv-files-viewer {
-  background: var(--lv-surface);
+  background: var(--lv-bg); /* the chat's canvas: content, not navigation */
 }
 .lv-files-viewer-head {
   display: flex;
@@ -4806,48 +4895,45 @@ body.lv-files-resizing {
   flex-shrink: 0;
   border-bottom: 1px solid var(--lv-border);
 }
-/* The open file's crumbs. Short of room, the folders give way first and the
-   file's own name last; the workspace keeps its (capped) width. */
+/* The open file's name, then its folder, dimmed (a click shows it in the
+   tree). Short of room, the folder gives way first, from its far end. */
 .lv-files-viewer-name {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 1px;
+  align-items: baseline;
+  gap: 6px;
   overflow: hidden;
-  font-size: 12.5px;
-  font-family: var(--lv-mono);
+  font-size: 13px;
   color: var(--lv-muted-2);
   white-space: nowrap;
 }
-.lv-files-viewer-name .lv-files-crumb {
-  flex: 0 1000 auto;
-  min-width: 2.2em;
+.lv-files-viewer-file {
+  flex: 0 0 auto;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: block; /* text-overflow needs a block box */
-}
-.lv-files-viewer-name .lv-files-crumb-root {
-  flex-shrink: 0; /* which workspace is context worth keeping; capped instead */
-  max-width: 8em;
-  display: inline-flex;
-}
-.lv-files-crumb-root > svg {
-  flex-shrink: 0;
-}
-.lv-files-crumb-root > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.lv-files-viewer-name .lv-files-crumb:last-child {
-  flex-shrink: 1;
-  min-width: 4em;
   font-weight: 600;
-  color: var(--lv-ink-2);
+  color: var(--lv-ink);
 }
-.lv-files-viewer-name .lv-files-crumb-sep {
-  flex-shrink: 0;
+.lv-files-viewer-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: -2px 0;
+  padding: 2px 5px;
+  border-radius: var(--lv-radius-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  font-size: 12px;
+  color: var(--lv-muted-2);
+  transition:
+    background var(--lv-t-fast),
+    color var(--lv-t-fast);
+}
+.lv-files-viewer-dir:hover {
+  background: var(--lv-surface-2);
+  color: var(--lv-ink-2);
 }
 .lv-files-viewer-abs {
   min-width: 0;

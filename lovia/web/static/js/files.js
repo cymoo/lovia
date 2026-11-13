@@ -606,9 +606,15 @@ async function fetchTree() {
   return dirs.map((d, i) => /** @type {const} */ ([d, got[i]]));
 }
 
-/** Replace the listings with a fresh set; a folder that no longer lists (gone) closes. */
+/** Take a refresh's listings; a folder that no longer lists (gone) closes. */
 function applyTree(listings) {
-  tree.listings.clear(); // a closed folder's listing is stale by now: it re-lists on open
+  // A closed folder's listing is stale by now: it re-lists on open. One that
+  // opened while this refresh was out has a listing newer than it: it stays.
+  const fetched = new Set(listings.map(([dir]) => dir));
+  const shown = new Set(shownDirs());
+  for (const dir of tree.listings.keys()) {
+    if (!fetched.has(dir) && !shown.has(dir)) tree.listings.delete(dir);
+  }
   for (const [dir, r] of listings) {
     if (r.status === 'fulfilled') tree.listings.set(dir, r.value);
     else tree.open.delete(dir);
@@ -738,10 +744,13 @@ function treeLevel(dir, depth, needle) {
   return nodes;
 }
 
-const findRow = (path) =>
-  /** @type {HTMLElement | null} */ (
-    els.list.querySelector(`.lv-file-row[data-path="${CSS.escape(path)}"]`)
+/** The row of `path`: a file's, or a folder's — the chain row it heads or ends. */
+const findRow = (path) => {
+  const p = CSS.escape(path);
+  return /** @type {HTMLElement | null} */ (
+    els.list.querySelector(`.lv-file-row:is([data-path="${p}"], [data-head="${p}"])`)
   );
+};
 
 /**
  * Show `path` in the tree: open the folders above it (and, `open`, the folder
@@ -752,9 +761,18 @@ async function revealInTree(path, { open = false } = {}) {
   if (state.viewing && !isWide()) closeViewer();
   syncTreeScope();
   for (const d of ancestorsOf(path)) tree.open.add(d);
-  if (open) tree.open.add(path);
   saveTree();
   await (state.mode === 'browse' ? refresh() : setMode('browse'));
+  if (open) await openDir(path); // and the lone folders inside, as a click would
+  // A row past its folder's first pages isn't rendered: each folder on the
+  // way down shows enough pages to include the next step.
+  for (const step of [...ancestorsOf(path), path]) {
+    const dir = dirname(step);
+    const i = tree.listings.get(dir)?.findIndex((e) => e.path === step) ?? -1;
+    const need = Math.ceil((i + 1) / TREE_PAGE) * TREE_PAGE;
+    if (need > (tree.shown.get(dir) || TREE_PAGE)) tree.shown.set(dir, need);
+  }
+  renderList();
   const row = findRow(path);
   if (!row) return;
   rove(row);
@@ -931,6 +949,9 @@ function rowFor(entry, { depth = -1, chain = null, open = false } = {}) {
   row.className = 'lv-file-row';
   row.tabIndex = -1; // renderList gives one row the list's tab stop
   row.dataset.path = last.path;
+  // A chain grows and shrinks at its tail as listings come and go; its head
+  // stays put, so the head is the row's identity across renders.
+  row.dataset.head = entry.path;
   // Browsing, a dot marks what this chat wrote; the change list groups it instead.
   if (!changes && !entry.is_dir && isTouched(entry.path)) row.classList.add('lv-touched');
   if (entry.status === 'deleted') row.classList.add('lv-deleted');
@@ -1024,13 +1045,17 @@ function renderList() {
   const needle = state.filter.toLowerCase();
   if (state.mode === 'browse') renderTree(frag, needle);
   else renderChanges(frag, needle);
-  // A re-render keeps the keyboard where it was: on the same row, by path.
+  // A re-render keeps the keyboard where it was: on the same row, by its head.
   const focused = /** @type {HTMLElement | null} */ (
     els.list.contains(document.activeElement) ? document.activeElement : null
   );
-  const focusedPath = focused?.dataset.path;
+  const focusedHead = focused?.dataset.head;
   els.list.replaceChildren(frag);
-  const again = focusedPath ? findRow(focusedPath) : null;
+  const again = focusedHead
+    ? /** @type {HTMLElement | null} */ (
+        els.list.querySelector(`.lv-file-row[data-head="${CSS.escape(focusedHead)}"]`)
+      )
+    : null;
   again?.focus({ preventScroll: true });
   rove(
     again ||

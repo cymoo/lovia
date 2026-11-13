@@ -590,6 +590,20 @@ function saveTree() {
   }
 }
 
+/**
+ * A folder's entries, named under the path it was opened by. Through a
+ * symlinked folder the server names them where they really are (`bl -> blog`
+ * lists `blog/x`, `loop -> .` lists `big`, `loop`, …): kept that way, a link
+ * back up would hold itself and the tree recurse forever. Renamed, each level
+ * of a loop is one more folder to open, as in a file manager.
+ */
+function underDir(dir, entries) {
+  if (!dir) return entries;
+  return entries.map((e) =>
+    e.path.startsWith(`${dir}/`) ? e : { ...e, path: `${dir}/${basename(e.path)}` },
+  );
+}
+
 /** Open folders whose every ancestor is open: the ones a refresh re-lists. */
 const shownDirs = () =>
   [...tree.open].filter((d) => ancestorsOf(d).every((a) => tree.open.has(a)));
@@ -616,7 +630,7 @@ function applyTree(listings) {
     if (!fetched.has(dir) && !shown.has(dir)) tree.listings.delete(dir);
   }
   for (const [dir, r] of listings) {
-    if (r.status === 'fulfilled') tree.listings.set(dir, r.value);
+    if (r.status === 'fulfilled') tree.listings.set(dir, underDir(dir, r.value));
     else tree.open.delete(dir);
   }
   saveTree();
@@ -658,7 +672,7 @@ async function openDir(path) {
         tree.loading.delete(dir);
       }
       if (tree.scope !== scope) return; // another agent or folder meanwhile
-      tree.listings.set(dir, entries);
+      tree.listings.set(dir, underDir(dir, entries));
       if (!tree.open.has(dir)) break; // closed again while it loaded
     }
     const only = soleDir(dir);
@@ -759,6 +773,9 @@ const findRow = (path) => {
  */
 async function revealInTree(path, { open = false } = {}) {
   if (state.viewing && !isWide()) closeViewer();
+  // Asked for by name, the row must show: a filter that might hide it goes.
+  state.filter = '';
+  if (els.filter) els.filter.value = '';
   syncTreeScope();
   for (const d of ancestorsOf(path)) tree.open.add(d);
   saveTree();

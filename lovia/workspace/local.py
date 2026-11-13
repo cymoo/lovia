@@ -28,7 +28,7 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, Literal, Mapping
+from typing import TYPE_CHECKING, Iterable, Iterator, Literal, Mapping, Sequence
 
 from ..exceptions import UserError
 from .command_guard import extract_path_claims
@@ -197,6 +197,95 @@ def root_facts(root: Path) -> RootFacts:
 
 def _has_hidden_segment(rel: str) -> bool:
     return any(seg.startswith(".") for seg in rel.split("/") if seg)
+
+
+_GIT_TIMEOUT = 10.0
+
+
+def _git(base: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    # No fsmonitor: a repository's own config must not run a hook on search.
+    # No optional locks: never take the index lock from the agent's own git.
+    return subprocess.run(
+        ["git", "-c", "core.fsmonitor=false", "-C", str(base), *args],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=_GIT_TIMEOUT,
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+    )
+
+
+def _git_files(base: Path) -> list[str] | None:
+    """The files a search under ``base`` covers, as git sees them.
+
+    Tracked files plus untracked ones no ignore rule excludes, as
+    ``base``-relative POSIX paths, unordered. ``None`` means "walk the tree
+    instead": ``base`` is not in a work tree, git is missing, fails or times
+    out — or ``base`` itself is ignored, since naming an ignored directory
+    is asking to search it. A directory git lists whole (a submodule, a
+    nested repository) is expanded the same way, so its files stay
+    searchable; entries gone from disk (deleted, not committed) are dropped.
+    """
+    try:
+        if _git(base, "check-ignore", "-q", ".").returncode != 1:
+            return None
+        out = _git(base, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    files: list[str] = []
+    for raw in set(out.stdout.split(b"\0")):
+        rel = os.fsdecode(raw).rstrip("/")
+        if rel in ("", "."):  # an uninitialized submodule lists itself as "./"
+            continue
+        try:
+            mode = os.lstat(base / rel).st_mode
+        except OSError:
+            continue
+        if not stat_module.S_ISDIR(mode):
+            files.append(rel)
+            continue
+        inner = _git_files(base / rel)
+        if inner is None:
+            return None
+        files.extend(f"{rel}/{name}" for name in inner)
+    return files
+
+
+def _walk_order(rel: str) -> list[tuple[bool, str]]:
+    """Sort key reproducing ``os.walk``'s sorted top-down order: a
+    directory's files first, then each subdirectory's tree, by name."""
+    *dirs, name = rel.split("/")
+    return [(True, d) for d in dirs] + [(False, name)]
+
+
+def _glob_match(parts: Sequence[str], segs: Sequence[str]) -> bool:
+    """``Path.glob`` matching of one path's segments; ``**`` spans zero or more."""
+    if not segs:
+        return not parts
+    if segs[0] == "**":
+        return any(_glob_match(parts[i:], segs[1:]) for i in range(len(parts) + 1))
+    return (
+        bool(parts) and fnmatch(parts[0], segs[0]) and _glob_match(parts[1:], segs[1:])
+    )
+
+
+def _glob_listed(files: list[str], pattern: str) -> list[str]:
+    """``files`` and their directories matching a glob ``pattern``, sorted.
+
+    Directories come from the files' ancestors, so an ignored one never
+    shows — nor an empty one (git tracks no directories). A trailing ``/``
+    keeps directories only, as ``Path.glob`` does.
+    """
+    dirs: set[str] = set()
+    for rel in files:
+        head = rel.rpartition("/")[0]
+        while head and head not in dirs:
+            dirs.add(head)
+            head = head.rpartition("/")[0]
+    segs = Path(pattern).parts
+    pool = dirs if pattern.endswith(("/", os.sep)) else dirs.union(files)
+    return sorted(rel for rel in pool if _glob_match(rel.split("/"), segs))
 
 
 def _venv_bin_dir(root: Path) -> tuple[Path, Path] | None:
@@ -940,7 +1029,14 @@ class LocalWorkspaceSession:
         results: dict[str, DirEntry] = {}
         truncated = False
         under_outside = self._is_outside(base)
-        for p in base.glob(pattern):
+        listed = _git_files(base)
+        # Sorted when git lists the files, so the cap below keeps the first.
+        found: Iterable[Path] = (
+            base.glob(pattern)
+            if listed is None
+            else (base / rel for rel in _glob_listed(listed, pattern))
+        )
+        for p in found:
             display, _ = self._display_and_rel(p)
             # Hidden filtering is relative to the *listed* directory: listing
             # ".config" explicitly must not hide everything just because the
@@ -1068,13 +1164,23 @@ class LocalWorkspaceSession:
     ) -> Iterator[tuple[str, Path]]:
         """Yield (display path, absolute path) for searchable files.
 
-        Policy-denied paths are skipped (and dotfiles too unless
-        ``include_hidden``). ``os.walk(followlinks=False)`` does not descend
-        through symlinked directories, so the walk itself stays under
-        ``base``; a symlinked *file* is still listed, so grep re-checks each
-        one before reading.
+        In a git work tree the files are git's (see ``_git_files``), so
+        ignored ones are left out; otherwise the tree is walked. Either way
+        policy-denied paths are skipped (and dotfiles too unless
+        ``include_hidden``). Neither descends through symlinked directories,
+        so the files stay under ``base``; a symlinked *file* is still listed,
+        so grep re-checks each one before reading.
         """
         under_outside = self._is_outside(base)
+        listed = _git_files(base)
+        if listed is not None:
+            for rel in sorted(listed, key=_walk_order):
+                if not include_hidden and _has_hidden_segment(rel):
+                    continue
+                p = base / rel
+                if not self._read_hidden(p, under_outside=under_outside):
+                    yield self._display_and_rel(p)[0], p
+            return
         for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
             dp = Path(dirpath)
             # In-place assignment (note the [:]) prunes os.walk's recursion:

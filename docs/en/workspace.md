@@ -152,6 +152,16 @@ search; reading it by name asks. Listing an *outside* directory you approved
 shows its entries (that approval covered the subtree), but a rule-gated file
 inside it is still skipped.
 
+**Searches follow git's ignore rules.** In a git work tree, `grep_files` and
+`list_files` with a `pattern` cover what git sees: tracked files plus
+untracked ones no ignore rule excludes, submodules and nested repositories
+included — so `node_modules/` and `dist/` stay out of the results. Naming an
+ignored directory as `path` searches it; to search everything, ignored files
+included, use the shell. Outside a work tree, or when `git` is missing or
+fails, the tree is walked. Git tracks no directories, so a pattern listing
+shows no empty ones. Plain `list_files` (no `pattern`) and the web Files
+panel are unfiltered.
+
 **Symlinks have no special case**: every path is resolved first (symlinks
 followed, `~` expanded, relative anchored at the root) and judged by where
 it *lands* — so a `.venv/bin/python` pointing at the system interpreter

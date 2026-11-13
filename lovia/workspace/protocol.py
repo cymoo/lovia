@@ -140,8 +140,10 @@ class WorkspaceSession(Protocol):
 
         Without ``pattern``, returns the direct children of ``path``. With a
         glob ``pattern`` (relative to ``path``), returns matching paths
-        recursively per the pattern. ``max_results`` defaults to the session's
-        configured limit; results past the cap are dropped (not an error).
+        recursively per the pattern — in a git work tree, only those git
+        doesn't ignore, unless ``path`` itself is ignored. ``max_results``
+        defaults to the session's configured limit; results past the cap are
+        dropped (not an error).
         """
         ...
 
@@ -157,9 +159,10 @@ class WorkspaceSession(Protocol):
     ) -> list[GrepMatch]:
         """Search file contents under ``path`` with a regular expression.
 
-        ``path`` may also be a single file. ``max_matches`` defaults to the
-        session's configured limit; matches past the cap are dropped (not an
-        error).
+        ``path`` may also be a single file. In a git work tree, git-ignored
+        files are skipped unless ``path`` itself is ignored. ``max_matches``
+        defaults to the session's configured limit; matches past the cap are
+        dropped (not an error).
         """
         ...
 

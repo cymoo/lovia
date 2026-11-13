@@ -379,7 +379,8 @@ async def edit_file(
         "- Without pattern: lists the direct children of path (directories "
         "end with '/').\n"
         "- With pattern: returns paths matching a glob relative to path, e.g. "
-        "'**/*.py' for all Python files recursively.\n"
+        "'**/*.py' for all Python files recursively. In a git repository, "
+        "git-ignored paths are left out unless path is itself ignored.\n"
         "- Hidden files (dotfiles) are skipped unless include_hidden=true.\n"
         "- Symlinks are shown with their resolved target ('link -> /target').\n"
         "- To search file *contents*, use grep_files instead."
@@ -443,6 +444,8 @@ async def list_files(
         "- path may be a directory to search recursively, or a single file.\n"
         "- Dotfiles are skipped unless include_hidden=true; binary files and "
         "policy-denied paths are always skipped.\n"
+        "- In a git repository, git-ignored files are skipped unless path "
+        "is itself ignored (e.g. path='node_modules' searches it).\n"
         "- This is the fastest way to locate code or text; prefer it over "
         "reading files one by one."
     ),

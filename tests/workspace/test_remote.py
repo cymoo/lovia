@@ -145,6 +145,109 @@ async def test_files_round_trip(host, tmp_path) -> None:
     assert len(capped) == 1 and capped.truncated is True
 
 
+def test_large_messages_travel_compressed_small_ones_as_they_are() -> None:
+    import json
+    import random
+
+    from lovia.workspace.remote.wire import frame, unframe
+
+    small = json.dumps({"id": 1, "result": "ok"}).encode()
+    assert frame(small) == small + b"\n"
+    listing = json.dumps({"id": 2, "result": [f"pkg/mod_{i}.py" for i in range(5000)]})
+    line = frame(listing.encode())
+    assert line.startswith(b"z") and line.endswith(b"\n") and b"\n" not in line[:-1]
+    assert len(line) < len(listing) / 5
+    assert unframe(line[:-1]) == json.loads(listing)
+    # What does not shrink (already-compressed data, near enough) goes plain.
+    rng = random.Random(7)
+    noise = bytes(rng.randrange(35, 127) for _ in range(64 * 1024))
+    noisy = b'{"id": 3, "result": "' + noise.replace(b"\\", b"/") + b'"}'
+    assert frame(noisy) == noisy + b"\n"
+
+
+def test_a_large_incompressible_message_is_sampled_not_compressed(
+    monkeypatch,
+) -> None:
+    # A big upload of an image: one sample says no, and the whole is never
+    # compressed — the near side frames on the web server's event loop.
+    import base64
+    import json
+    import os
+
+    from lovia.workspace.remote import wire
+
+    sizes: list[int] = []
+    compress = wire.zlib.compress
+
+    def spy(data: bytes, level: int = -1) -> bytes:
+        sizes.append(len(data))
+        return compress(data, level)
+
+    monkeypatch.setattr(wire.zlib, "compress", spy)
+    upload = json.dumps(
+        {"id": 4, "params": base64.b64encode(os.urandom(2_000_000)).decode()}
+    )
+    data = upload.encode()
+    assert wire.frame(data) == data + b"\n"
+    assert sizes == [wire._SAMPLE]
+    # A large message that does compress is sampled, then compressed whole.
+    sizes.clear()
+    listing = json.dumps(
+        {"id": 5, "result": [f"src/mod_{i}.py" for i in range(40_000)]}
+    )
+    assert wire.frame(listing.encode()).startswith(b"z")
+    assert sizes == [wire._SAMPLE, len(listing)]
+
+
+def test_a_compressed_line_is_held_to_the_line_limit(monkeypatch) -> None:
+    from lovia.workspace.remote import wire
+
+    line = wire.frame(b'"' + b"0" * 200_000 + b'"')[:-1]
+    assert line.startswith(b"z") and len(line) < 4096
+    monkeypatch.setattr(wire, "MAX_LINE", 4096)
+    with pytest.raises(ValueError, match="exceeded"):
+        wire.unframe(line)
+    monkeypatch.undo()
+    packed = line[1:]
+    cut = b"z" + packed[: len(packed) // 2 // 4 * 4]  # whole base64 quads, cut short
+    with pytest.raises(ValueError, match="ended early"):
+        wire.unframe(cut)
+
+
+async def test_large_messages_cross_compressed_both_ways(
+    host, tmp_path, monkeypatch
+) -> None:
+    sent: list[bool] = []
+    received: list[bool] = []
+    frame, unframe = host_module.frame, host_module.unframe
+
+    def spy_frame(data: bytes) -> bytes:
+        line = frame(data)
+        sent.append(line.startswith(b"z"))
+        return line
+
+    def spy_unframe(line: bytes):
+        received.append(line.startswith(b"z"))
+        return unframe(line)
+
+    monkeypatch.setattr(host_module, "frame", spy_frame)
+    monkeypatch.setattr(host_module, "unframe", spy_unframe)
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.trusted())
+    text = "".join(f"line {i}: the same words again\n" for i in range(8000))
+    await session.write_text("big.txt", text)  # near → far
+    assert any(sent), "the large write went uncompressed"
+    assert (tmp_path / "big.txt").read_text() == text
+    for i in range(3000):
+        (tmp_path / f"f{i:04d}.txt").write_text("")
+    received.clear()
+    listing = await session.list_files(".", pattern="*.txt", max_results=5000)
+    assert any(received), "the large listing came uncompressed"
+    assert len(listing) == 3001 and listing.truncated is False
+    received.clear()
+    assert (await session.read_bytes("big.txt")).data == text.encode()
+    assert any(received), "the large read came uncompressed"
+
+
 async def test_a_request_too_large_to_send_is_refused_not_fatal(
     host, tmp_path, monkeypatch
 ) -> None:

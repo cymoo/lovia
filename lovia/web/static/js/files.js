@@ -591,16 +591,18 @@ function saveTree() {
 }
 
 /**
- * A folder's entries, named under the path it was opened by. Through a
- * symlinked folder the server names them where they really are (`bl -> blog`
- * lists `blog/x`, `loop -> .` lists `big`, `loop`, …): kept that way, a link
- * back up would hold itself and the tree recurse forever. Renamed, each level
- * of a loop is one more folder to open, as in a file manager.
+ * A folder's subfolders, named under the path it was opened by. Through a
+ * symlinked folder the server names entries where they really are (`bl ->
+ * blog` lists `blog/x`, `loop -> .` lists `big`, `loop`, …): kept that way, a
+ * link back up would hold itself and the tree recurse forever. Renamed, each
+ * level of a loop is one more folder to open, as in a file manager. Folders
+ * are only the tree's own keys; a file keeps its real path — its identity for
+ * the change map, write notices, and everything it opens with.
  */
 function underDir(dir, entries) {
   if (!dir) return entries;
   return entries.map((e) =>
-    e.path.startsWith(`${dir}/`) ? e : { ...e, path: `${dir}/${basename(e.path)}` },
+    !e.is_dir || e.path.startsWith(`${dir}/`) ? e : { ...e, path: `${dir}/${basename(e.path)}` },
   );
 }
 
@@ -719,7 +721,9 @@ function treeLevel(dir, depth, needle) {
   const nodes = [];
   for (const entry of entries.slice(0, limit)) {
     if (!entry.is_dir) {
-      if (!needle || nameHit(entry, needle)) nodes.push(rowFor(entry, { depth }));
+      // Its place in the tree: the same file can show under a folder and a link to it.
+      const head = dir ? `${dir}/${basename(entry.path)}` : entry.path;
+      if (!needle || nameHit(entry, needle)) nodes.push(rowFor(entry, { depth, head }));
       continue;
     }
     const chain = chainFrom(entry);
@@ -758,11 +762,16 @@ function treeLevel(dir, depth, needle) {
   return nodes;
 }
 
-/** The row of `path`: a file's, or a folder's — the chain row it heads or ends. */
+/**
+ * The row of `path`: the one at that place in the tree (a file, or the folder
+ * heading a chain), else one that ends a chain there or shows that file
+ * through a link.
+ */
 const findRow = (path) => {
   const p = CSS.escape(path);
   return /** @type {HTMLElement | null} */ (
-    els.list.querySelector(`.lv-file-row:is([data-path="${p}"], [data-head="${p}"])`)
+    els.list.querySelector(`.lv-file-row[data-head="${p}"]`) ||
+      els.list.querySelector(`.lv-file-row[data-path="${p}"]`)
   );
 };
 
@@ -956,9 +965,9 @@ function changeMark(entry) {
  * `depth` makes it a tree row; a folder's `chain` (lone folders below it) is
  * one row, and `open` turns its chevron.
  * @param {any} entry
- * @param {{ depth?: number, chain?: any[] | null, open?: boolean }} [opts]
+ * @param {{ depth?: number, chain?: any[] | null, open?: boolean, head?: string }} [opts]
  */
-function rowFor(entry, { depth = -1, chain = null, open = false } = {}) {
+function rowFor(entry, { depth = -1, chain = null, open = false, head = entry.path } = {}) {
   const changes = state.mode === 'changes';
   const last = chain ? chain[chain.length - 1] : entry;
   const row = document.createElement('button');
@@ -968,7 +977,7 @@ function rowFor(entry, { depth = -1, chain = null, open = false } = {}) {
   row.dataset.path = last.path;
   // A chain grows and shrinks at its tail as listings come and go; its head
   // stays put, so the head is the row's identity across renders.
-  row.dataset.head = entry.path;
+  row.dataset.head = head;
   // Browsing, a dot marks what this chat wrote; the change list groups it instead.
   if (!changes && !entry.is_dir && isTouched(entry.path)) row.classList.add('lv-touched');
   if (entry.status === 'deleted') row.classList.add('lv-deleted');

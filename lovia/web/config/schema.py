@@ -225,6 +225,49 @@ class SkillsConfig(BaseModel):
         return self
 
 
+class MCPServerConfig(BaseModel):
+    """One MCP server from Settings → MCP: a command to run (stdio) or a URL
+    (streamable HTTP), never both. ``name`` prefixes its tools
+    (``name__tool``), so it is short and safe in a tool name, and unique.
+    ``env`` and ``headers`` hold secrets as often as not: the API masks
+    their values (see :mod:`lovia.web.config.mcp`)."""
+
+    model_config = ConfigDict(extra="ignore", validate_assignment=True)
+
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$", max_length=32)
+    enabled: bool = True
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _one_transport(self) -> "MCPServerConfig":
+        command = (self.command or "").strip() or None
+        url = (self.url or "").strip() or None
+        if (command is None) == (url is None):
+            raise ValueError(
+                f"MCP server {self.name!r} needs either a command or a url"
+            )
+        if command is not None and self.headers:
+            raise ValueError(f"MCP server {self.name!r}: headers go with a url")
+        if url is not None:
+            if self.args or self.env:
+                raise ValueError(
+                    f"MCP server {self.name!r}: args and env go with a command"
+                )
+            if urlparse(url).scheme not in ("http", "https"):
+                raise ValueError(f"MCP server {self.name!r}: url must be http(s)")
+        self.__dict__["command"] = command
+        self.__dict__["url"] = url
+        return self
+
+    @property
+    def transport(self) -> Literal["stdio", "http"]:
+        return "stdio" if self.command else "http"
+
+
 WorkspaceModeName = Literal["readonly", "coding", "trusted"]
 # Named command bundles a ``coding`` workspace runs without asking; the rules
 # behind each name live in :mod:`lovia.web.builder`.
@@ -266,6 +309,8 @@ class AgentConfig(BaseModel):
     # Skill directories; None: the global ones. A project's own load anyway.
     skills: list[str] | None = None
     search: bool = True
+    # The enabled servers of Settings → MCP; off: none of them.
+    mcp: bool = True
     # Long-term memory, kept in <home>/memory and shared by every agent.
     memory: bool = True
     subagents: bool = True
@@ -309,6 +354,8 @@ class WebConfig(BaseModel):
     roles: Roles = Field(default_factory=Roles)
     search: SearchConfig = Field(default_factory=SearchConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    # For every agent whose ``mcp`` switch is on; order is display order.
+    mcp: list[MCPServerConfig] = Field(default_factory=list)
     # The first is the default: what a new chat starts with, and what a chat
     # whose agent was deleted runs on.
     agents: list[AgentConfig] = Field(
@@ -332,6 +379,10 @@ class WebConfig(BaseModel):
             ref = getattr(self.roles, role)
             if ref is not None and ref not in known:
                 raise ValueError(f"roles.{role} references unknown model id {ref!r}")
+        names = [s.name for s in self.mcp]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ValueError(f"duplicate MCP server names: {', '.join(dupes)}")
         if not self.agents:
             self.__dict__["agents"] = [AgentConfig(id=DEFAULT_AGENT_ID)]
         agent_ids = [a.id for a in self.agents]

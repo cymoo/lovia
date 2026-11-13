@@ -511,6 +511,42 @@ export const api = {
     }).then(_json),
   // Per-directory discovery report (live filesystem scan) for the pane.
   getSkills: () => request('/api/config/skills').then(_json),
+  // Settings → MCP. `document` is the pasted mcpServers JSON (parsed); env
+  // and header values come back masked, and a mask sent back unchanged keeps
+  // what is stored. Each write resolves to the whole (masked) config.
+  addMcpServers: (document) =>
+    request('/api/config/mcp', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ document }),
+    }).then(_json),
+  /** @param {string} name @param {unknown} document */
+  updateMcpServer: (name, document) =>
+    request(`/api/config/mcp/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ document }),
+    }).then(_json),
+  /** @param {string} name @param {boolean} enabled */
+  setMcpServerEnabled: (name, enabled) =>
+    request(`/api/config/mcp/${encodeURIComponent(name)}/enabled`, {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ enabled }),
+    }).then(_json),
+  /** @param {string} name */
+  deleteMcpServer: (name) =>
+    request(`/api/config/mcp/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(_json),
+  // Connect, list tools, close: { name } for a saved server (its outcome is
+  // remembered), or { document, original } for an edit not saved yet.
+  // Resolves to { results: [{ name, ok, at, tools, error }] }.
+  /** @param {{ name?: string, document?: unknown, original?: string | null }} body */
+  testMcpServers: (body) =>
+    request('/api/config/mcp/test', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
   // Probe a connection (a real /models request server-side). Either free-form
   // fields or { profile_id } — the stored key is reused server-side, so the
   // page never holds it.

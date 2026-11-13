@@ -14,6 +14,7 @@ always exactly what the next message runs on.
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 from dataclasses import asdict
 from typing import Any, Literal
 
@@ -42,8 +43,11 @@ from ..config.schema import (
     is_global_dir,
     slugify,
 )
+from ..config.mcp import parse_servers, restore_secrets, spec_of
+from ..config.schema import MCPServerConfig
 from ..config.skills import scan_skills_status
 from ..errors import WebError
+from ..mcp import CONNECT_TIMEOUT, MCPStatus, probe
 
 # Loopback names a same-machine browser legitimately uses. Anything else in
 # the Host header of an *unauthenticated* config write is a DNS-rebinding
@@ -139,6 +143,7 @@ class AgentIn(BaseModel):
     auto_allow: list[AutoAllowBundle] | None = None
     skills: list[str] | None = None
     search: bool | None = None
+    mcp: bool | None = None
     memory: bool | None = None
     subagents: bool | None = None
     max_turns: int | None = Field(default=None, ge=1)
@@ -150,6 +155,27 @@ class AgentIn(BaseModel):
 _INHERITABLE = frozenset({"name", "model", "skills", "max_retries"})
 # Fixed by --readonly / --no-workspace: the browser can't change them then.
 _PERMISSION_FIELDS = frozenset({"mode", "auto_allow"})
+
+
+class MCPDocumentIn(BaseModel):
+    """Servers as pasted into Settings → MCP: an ``mcpServers`` document, or
+    the object inside it (:func:`lovia.web.config.mcp.parse_servers`)."""
+
+    document: Any
+
+
+class MCPEnabledIn(BaseModel):
+    enabled: bool
+
+
+class MCPTestIn(BaseModel):
+    """What to test: a saved server by ``name``, or the servers of a
+    ``document`` not saved yet — whose masked values are the saved values of
+    ``original``, the server being edited."""
+
+    name: str | None = None
+    document: Any = None
+    original: str | None = None
 
 
 class TestIn(BaseModel):
@@ -190,6 +216,44 @@ def _refuse_relative(dirs: list[str]) -> None:
             f"{relative[0]!r} is not a global path",
             hint=GLOBAL_SKILLS_HINT,
         )
+
+
+def _status_out(status: MCPStatus | None) -> dict[str, object] | None:
+    if status is None:
+        return None
+    return {
+        "ok": status.ok,
+        "at": status.at,
+        "tools": list(status.tools),
+        "error": status.error,
+    }
+
+
+def _mcp_installed() -> bool:
+    """Whether the ``mcp`` SDK is installed — by its distribution, which an
+    ``mcp/`` folder in the launch directory (on ``sys.path`` under
+    ``python -m``) can't pass for."""
+    try:
+        importlib.metadata.distribution("mcp")
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return True
+
+
+def _parsed(document: Any) -> list[MCPServerConfig]:
+    try:
+        return parse_servers(document)
+    except ValueError as exc:
+        raise WebError(400, "invalid_request", str(exc)) from exc
+
+
+def _with_secrets(
+    server: MCPServerConfig, stored: MCPServerConfig | None
+) -> MCPServerConfig:
+    try:
+        return restore_secrets(server, stored)
+    except ValueError as exc:
+        raise WebError(400, "invalid_request", str(exc)) from exc
 
 
 def build_config_router(runtime: ConfigRuntime) -> APIRouter:
@@ -288,9 +352,31 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                 "tavily_api_key": _mask(cfg.search.tavily_api_key),
             },
             "skills": cfg.skills.model_dump(),
+            "mcp": _mcp_out(),
             # The first is the default agent.
             "agents": [_agent_out(a) for a in cfg.agents],
             "permissions": _permissions_out(),
+        }
+
+    def _mcp_out() -> dict[str, object]:
+        return {
+            # Without the SDK every server is skipped; Settings says how to fix it.
+            "available": _mcp_installed(),
+            "timeout": CONNECT_TIMEOUT,
+            "servers": [
+                {
+                    "name": s.name,
+                    "enabled": s.enabled,
+                    "transport": s.transport,
+                    "command": s.command,
+                    "args": s.args,
+                    "url": s.url,
+                    # What the editor shows: env and header values masked.
+                    "spec": spec_of(s),
+                    "status": _status_out(runtime.mcp.get(s)),
+                }
+                for s in runtime.config.mcp
+            ],
         }
 
     async def _apply(config: WebConfig, *, settings_only: bool = False) -> None:
@@ -559,6 +645,103 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             "defaults": [USER_SKILLS_DIR],
             "roots": [asdict(r) for r in roots],
         }
+
+    # ---- MCP servers ------------------------------------------------------
+    # Saving a server is consent to run its command on every message, and a
+    # test runs it now: both need a local origin (or the token). Each write
+    # reads the list and applies the edited copy under one lock, so two tabs
+    # editing at once can't each drop the other's change.
+    mcp_lock = asyncio.Lock()
+
+    def _stored_server(name: str) -> MCPServerConfig:
+        found = next((s for s in runtime.config.mcp if s.name == name), None)
+        if found is None:
+            raise WebError(404, "mcp_server_not_found", f"no MCP server {name!r}")
+        return found
+
+    async def _apply_servers(servers: list[MCPServerConfig]) -> None:
+        # No model is touched: before one is configured this saves for later.
+        await _apply(_copy(mcp=[s.model_dump() for s in servers]), settings_only=True)
+
+    @router.post("/mcp", status_code=201)
+    async def add_mcp_servers(
+        body: MCPDocumentIn, request: Request
+    ) -> dict[str, object]:
+        _guard_write(request)
+        added = [_with_secrets(s, None) for s in _parsed(body.document)]
+        async with mcp_lock:
+            taken = {s.name for s in runtime.config.mcp}
+            clash = next((s.name for s in added if s.name in taken), None)
+            if clash is not None:
+                raise WebError(
+                    409,
+                    "mcp_server_exists",
+                    f"an MCP server named {clash!r} exists",
+                    hint="edit that one, or give this one another name",
+                )
+            await _apply_servers([*runtime.config.mcp, *added])
+        return _config_out()
+
+    @router.put("/mcp/{name}")
+    async def update_mcp_server(
+        name: str, body: MCPDocumentIn, request: Request
+    ) -> dict[str, object]:
+        _guard_write(request)
+        parsed = _parsed(body.document)
+        if len(parsed) != 1:
+            raise WebError(400, "invalid_request", "edit one server at a time")
+        async with mcp_lock:
+            server = _with_secrets(parsed[0], _stored_server(name))
+            if server.name != name and any(
+                s.name == server.name for s in runtime.config.mcp
+            ):
+                raise WebError(
+                    409,
+                    "mcp_server_exists",
+                    f"an MCP server named {server.name!r} exists",
+                )
+            await _apply_servers(
+                [server if s.name == name else s for s in runtime.config.mcp]
+            )
+        return _config_out()
+
+    @router.put("/mcp/{name}/enabled")
+    async def set_mcp_server_enabled(
+        name: str, body: MCPEnabledIn, request: Request
+    ) -> dict[str, object]:
+        _guard_write(request)
+        async with mcp_lock:
+            changed = _stored_server(name).model_copy(update={"enabled": body.enabled})
+            await _apply_servers(
+                [changed if s.name == name else s for s in runtime.config.mcp]
+            )
+        return _config_out()
+
+    @router.delete("/mcp/{name}")
+    async def delete_mcp_server(name: str, request: Request) -> dict[str, object]:
+        _guard_write(request)
+        async with mcp_lock:
+            _stored_server(name)
+            await _apply_servers([s for s in runtime.config.mcp if s.name != name])
+        return _config_out()
+
+    @router.post("/mcp/test")
+    async def test_mcp_servers(body: MCPTestIn, request: Request) -> dict[str, object]:
+        """Connect, list tools, close — each server at once, each within the
+        connect timeout. A saved server's outcome is its last connection.
+        Writes nothing, so a read-only ``config.json`` doesn't stop it."""
+        _guard_host(request)
+        if body.name is not None:
+            stored = _stored_server(body.name)
+            status = await probe(stored)
+            runtime.mcp.record(stored, status)
+            results = [(stored.name, status)]
+        else:
+            original = _stored_server(body.original) if body.original else None
+            servers = [_with_secrets(s, original) for s in _parsed(body.document)]
+            statuses = await asyncio.gather(*(probe(s) for s in servers))
+            results = list(zip((s.name for s in servers), statuses))
+        return {"results": [{"name": n, **(_status_out(s) or {})} for n, s in results]}
 
     @router.post("/test")
     async def test_connection(body: TestIn, request: Request) -> TestOut:

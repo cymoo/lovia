@@ -1742,6 +1742,46 @@ function appendErrorNotice(message, code) {
   scrollDown();
 }
 
+// Settings → MCP servers this run started without (it goes on, minus their
+// tools): which ones, why on demand, and the way to the page that fixes it.
+// Each failure arrives as it happens; one run's gather in one note.
+/** @type {WeakMap<HTMLElement, { name: string, error: string }[]>} */
+const _mcpNoted = new WeakMap();
+
+function appendMcpUnavailable(/** @type {{ servers: { name: string, error: string }[] }} */ data) {
+  if (!store.bubble || !data?.servers?.length) return;
+  const bubble = /** @type {HTMLElement} */ (store.bubble);
+  const existing = /** @type {HTMLElement | null} */ (bubble.querySelector('.lv-mcp-notice'));
+  const servers = [...(existing ? _mcpNoted.get(existing) || [] : []), ...data.servers];
+  const note = existing || document.createElement('div');
+  _mcpNoted.set(note, servers);
+  note.className = 'lv-mcp-notice';
+  note.setAttribute('role', 'status');
+  note.innerHTML = icon('triangle-alert', { size: 15, cls: 'lv-mcp-notice-icon' });
+  const main = document.createElement('div');
+  main.className = 'lv-mcp-notice-main';
+  const head = document.createElement('div');
+  head.textContent = t('chat.mcpUnavailable', { names: servers.map((s) => s.name).join(', ') });
+  const detail = document.createElement('details');
+  detail.className = 'lv-error-notice-detail';
+  const summary = document.createElement('summary');
+  summary.textContent = t('chat.errorDetails');
+  const why = document.createElement('div');
+  why.textContent = servers.map((s) => `${s.name}: ${s.error}`).join('\n');
+  detail.append(summary, why);
+  main.append(head, detail);
+  if (store.canConfigureModels) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-mcp-notice-open';
+    open.textContent = t('chat.mcpSettings');
+    open.addEventListener('click', () => openSettings('mcp'));
+    main.appendChild(open);
+  }
+  note.appendChild(main);
+  if (!existing) appendBubbleContent(store.bubble, note);
+}
+
 function cleanMarkdownForCopy(markdown) {
   const lines = markdown.trim().split('\n');
   let openFence = null;
@@ -2816,6 +2856,10 @@ async function applyEvent({ event, data }) {
 
     case 'context_compacted':
       appendContextCompacted(store.bubble, data);
+      break;
+
+    case 'mcp_unavailable':
+      appendMcpUnavailable(data);
       break;
 
     case 'error': {

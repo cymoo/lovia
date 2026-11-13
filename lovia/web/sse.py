@@ -207,8 +207,26 @@ class ApprovalResolved:
     cause: Literal["user", "timeout", "cancel"]
 
 
+class UnavailableServer(TypedDict):
+    name: str
+    error: str
+
+
+class MCPUnavailableData(TypedDict):
+    servers: list[UnavailableServer]
+
+
+@dataclass(frozen=True)
+class MCPUnavailable:
+    """Settings → MCP servers a run started without, and why: published as
+    the run sets up its tools (:mod:`lovia.web.mcp`), so the chat can say
+    which server did not connect while the run goes on without it."""
+
+    servers: list[tuple[str, str]]
+
+
 #: What the supervisor publishes besides the run's own events.
-LegFrame = UserTurnRefs | LegTiming | ApprovalAsked | ApprovalResolved
+LegFrame = UserTurnRefs | LegTiming | ApprovalAsked | ApprovalResolved | MCPUnavailable
 
 
 CHAT_EVENTS: dict[str, type] = {
@@ -231,6 +249,7 @@ CHAT_EVENTS: dict[str, type] = {
     "error": ErrorData,
     "refs": RefsData,
     "timing": TimingData,
+    "mcp_unavailable": MCPUnavailableData,
     "done": DoneData,
 }
 
@@ -413,6 +432,13 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
     if isinstance(ev, LegTiming):
         return frame(
             "timing", TimingData(finished_at=ev.finished_at, duration=ev.duration)
+        )
+    if isinstance(ev, MCPUnavailable):
+        return frame(
+            "mcp_unavailable",
+            MCPUnavailableData(
+                servers=[{"name": n, "error": e} for n, e in ev.servers]
+            ),
         )
     if isinstance(ev, events.TextDelta):
         return frame("text_delta", DeltaData(delta=ev.delta))

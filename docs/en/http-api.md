@@ -123,6 +123,7 @@ normalizes all three.
 | `session_not_found` | 404 | no such chat |
 | `schedule_not_found` | 404 | no such schedule |
 | `model_not_found` | 404 | no such model profile |
+| `mcp_server_not_found` | 404 | no MCP server by that name in Settings |
 | `file_not_found` | 404 | no such workspace file or directory |
 | `turn_not_found` | 404 | rewind or fork named a user turn the chat doesn't have |
 | `image_not_found` | 404 | no servable image at that tool-result index |
@@ -140,6 +141,7 @@ normalizes all three.
 | `agent_unregistered` | 409 | the interrupted run's agent is no longer served |
 | `schedule_not_fired` | 409 | the schedule couldn't fire right now |
 | `model_exists` | 409 | a model profile with that id exists |
+| `mcp_server_exists` | 409 | an MCP server with that name exists |
 | `model_in_use` | 409 | the default chat model can't be deleted |
 | `agent_in_use` | 409 | the only agent can't be deleted |
 | `config_read_only` | 409 | `config.json` is not writable (e.g. a read-only mount) |
@@ -197,7 +199,7 @@ normalizes all three.
 | `GET /api/skills?agent=` | the skills a run sees → `[{name, description}]`, in the prompt index's order: the agent built as the run builds it (a [workspace switch](web-ui.md#workspaces)'s project hooks included), then each `Skills` plugin's catalog with its filter and precedence. `?session=` for an existing chat, `?root=` for a draft about to open there |
 | `GET` / `PUT /api/memory?agent=` | read / replace the [Memory notes](memory.md#how-memories-get-written) (`{content, used, budget, dreamed_at}`) |
 | `POST /api/memory/dream?agent=` | [dream](memory.md#dreaming) the notes now → `{content, used, budget, dreamed_at, before, after}` |
-| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/agents` · `PUT`/`DELETE /api/config/agents/{id}` · `POST /api/config/agents/{id}/duplicate` · `POST /api/config/agents/{id}/default` · `POST /api/config/test` | **UI-internal**, serving the CLI's built-in settings UI and not part of the [stable API](stability.md): the CLI's [model configuration](web-ui.md#models-and-switching), [skill directories](web-ui.md#skills) and [agents](web-ui.md#agents) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); writes validate the whole document, persist it, and hot-swap the served agents. `GET /api/config/skills` reports per-directory discovery |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/agents` · `PUT`/`DELETE /api/config/agents/{id}` · `POST /api/config/agents/{id}/duplicate` · `POST /api/config/agents/{id}/default` · `POST /api/config/test` · `POST /api/config/mcp` · `PUT`/`DELETE /api/config/mcp/{name}` · `PUT /api/config/mcp/{name}/enabled` · `POST /api/config/mcp/test` | **UI-internal**, serving the CLI's built-in settings UI and not part of the [stable API](stability.md): the CLI's [model configuration](web-ui.md#models-and-switching), [skill directories](web-ui.md#skills), [MCP servers](web-ui.md#mcp-servers) and [agents](web-ui.md#agents) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); MCP `env` and `headers` values read back masked, and a mask sent back unchanged keeps the stored value. Writes validate the whole document, persist it, and hot-swap the served agents. `GET /api/config/skills` reports per-directory discovery |
 
 `POST /api/chat` and `/api/chat/stream` take
 `{message, session_id?, agent?, attachments?, context?}`, and `POST /api/schedules`
@@ -300,6 +302,7 @@ of `event:` / `data:` pairs: the Runner's
 | `error` | `{type, message, code, status_code?, retryable?, hint?}` — tool-scoped, or terminal when the stream then ends |
 | `refs` | `{refs}` — the `ref`s of the user messages the run just finished holds, in order; precedes `done`. Absent without a checkpointer, or when the run holds a user entry the stream never showed (a structured-output repair prompt): the next load of the chat names them |
 | `timing` | `{finished_at, duration}` — the run just finished, as its segment recorded it (epoch seconds; seconds), so a live answer reads as on reload; precedes `done`. Absent when the segment went untimed |
+| `mcp_unavailable` | `{servers}` — `[{name, error}]`: Settings → MCP servers this run could not connect to, as it starts; it goes on without their tools. Live only, not replayed on reload |
 | `done` | `{output, usage}` — terminal success |
 
 An `error` event's `code` classifies the failure; `status_code` and

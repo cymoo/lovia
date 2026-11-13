@@ -1,5 +1,5 @@
 // settings.js — the Settings dialog: a left-rail shell (General / Models /
-// Web search / Skills / Agents / About) in a wide dialog. General holds
+// Web search / Skills / MCP / Agents / About) in a wide dialog. General holds
 // the client-side preferences (localStorage: language, theme, text size,
 // Enter behavior, notifications, sound); the server panes edit config.json
 // through model-config.js and agent-config.js and appear only when the
@@ -10,6 +10,7 @@ import { toast } from './toast.js';
 import { store } from './store.js';
 import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
 import { buildAgentsPane } from './agent-config.js';
+import { buildMcpPane } from './mcp-config.js';
 
 const NOTIF_KEY = 'lovia-notify';
 const SOUND_KEY = 'lovia-sound';
@@ -269,7 +270,7 @@ function buildGeneralPane() {
 
 /**
  * Open the Settings dialog on a given tab.
- * @param {'general' | 'models' | 'search' | 'skills' | 'agents' | 'about'} [initialTab]
+ * @param {'general' | 'models' | 'search' | 'skills' | 'mcp' | 'agents' | 'about'} [initialTab]
  */
 export function openSettings(initialTab = 'general') {
   const tabs = [
@@ -278,10 +279,11 @@ export function openSettings(initialTab = 'general') {
   if (store.canConfigureModels) {
     tabs.push(
       // What the agents connect to, what they can know, then who they are.
-      // One page per service: the next (MCP servers, say) is one more entry.
+      // One page per service.
       { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
       { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
       { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
+      { id: 'mcp', label: t('settings.tabMcp'), build: buildMcpPane },
       { id: 'agents', label: t('settings.tabAgents'), build: buildAgentsPane },
     );
   }

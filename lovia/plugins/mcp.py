@@ -427,6 +427,15 @@ class MCPConnection:
                         hint="The MCP server connection could not be recovered.",
                         tool_name=tool_name,
                     ) from exc2
+            if _is_connection_error(exc):
+                # Lost mid-call: the server may have finished the work before
+                # the answer could come back.
+                raise MCPError(
+                    f"MCP tool {tool_name!r} lost its connection to the server; "
+                    "the call may or may not have taken effect",
+                    hint="Check the outcome on the server before repeating it.",
+                    tool_name=tool_name,
+                ) from exc
             raise MCPError(
                 f"MCP tool {tool_name!r} failed: {exc}",
                 hint="Check that the MCP server is running and reachable.",

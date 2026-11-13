@@ -115,6 +115,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `session_not_found` | 404 | 聊天不存在 |
 | `schedule_not_found` | 404 | 定时任务不存在 |
 | `model_not_found` | 404 | 模型配置不存在 |
+| `mcp_server_not_found` | 404 | 设置里没有这个名字的 MCP 服务器 |
 | `file_not_found` | 404 | 工作区文件或目录不存在 |
 | `turn_not_found` | 404 | rewind 或 fork 指定的用户 Turn 不存在 |
 | `image_not_found` | 404 | 该 Tool 结果位置没有可提供的图片 |
@@ -132,6 +133,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `agent_unregistered` | 409 | 中断的 Run 所属 Agent 已不再提供服务 |
 | `schedule_not_fired` | 409 | 定时任务暂时无法触发 |
 | `model_exists` | 409 | 该 id 的模型配置已存在 |
+| `mcp_server_exists` | 409 | 同名的 MCP 服务器已存在 |
 | `model_in_use` | 409 | 默认聊天模型不能删除 |
 | `agent_in_use` | 409 | 唯一的 Agent 不能删除 |
 | `config_read_only` | 409 | `config.json` 不可写（比如只读挂载） |
@@ -189,7 +191,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/skills?agent=` | 一次 run 能看到的技能 → `[{name, description}]`，顺序同提示词索引：先按 run 的方式构造 agent（包括[工作区切换](web-ui.md#工作区)的项目钩子），再取每个 `Skills` 插件的 catalog，过滤和同名优先级照常生效。已有对话用 `?session=`，即将在某目录打开的草稿用 `?root=` |
 | `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget, dreamed_at}`） |
 | `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
-| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/agents` · `PUT`/`DELETE /api/config/agents/{id}` · `POST /api/config/agents/{id}/duplicate` · `POST /api/config/agents/{id}/default` · `POST /api/config/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 的[模型配置](web-ui.md#模型配置与切换)、[Skill 目录](web-ui.md#skills)与 [Agent](web-ui.md#agent)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/agents` · `PUT`/`DELETE /api/config/agents/{id}` · `POST /api/config/agents/{id}/duplicate` · `POST /api/config/agents/{id}/default` · `POST /api/config/test` · `POST /api/config/mcp` · `PUT`/`DELETE /api/config/mcp/{name}` · `PUT /api/config/mcp/{name}/enabled` · `POST /api/config/mcp/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 的[模型配置](web-ui.md#模型配置与切换)、[Skill 目录](web-ui.md#skills)、[MCP 服务器](web-ui.md#mcp-服务器)与 [Agent](web-ui.md#agent)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；MCP 的 `env` 和 `headers` 值读取时打码，原样发回的打码值保留已存的值。写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
 
 `POST /api/chat` 和 `/api/chat/stream` 的请求体为 `{message, session_id?, agent?, attachments?, context?}`，
 `POST /api/schedules` 同样接受 `context`。`context` 是一个不超过 64 KB 的 JSON 对象，即
@@ -278,6 +280,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `error` | `{type, message, code, status_code?, retryable?, hint?}`：Tool 错误，或聊天流终止前的运行错误 |
 | `refs` | `{refs}`：刚结束的 Run 中各条用户消息的 `ref`，按顺序排列；在 `done` 之前发送。未配置 checkpointer 时不发送；Run 中含有流里从未显示过的用户条目（结构化输出的修复提示）时也不发送，下次加载对话时会补上 |
 | `timing` | `{finished_at, duration}`：刚结束的 Run 在其 segment 中记录的完成时间（epoch 秒）和用时（秒），实时显示因此与刷新后一致；在 `done` 之前发送。segment 未记录用时时不发送 |
+| `mcp_unavailable` | `{servers}`，即 `[{name, error}]`：Run 开始时没连上的“设置 → MCP”服务器；Run 不带它们的工具继续。只在实时流中发送，刷新后不重放 |
 | `done` | `{output, usage}`：Run 成功结束 |
 
 `error` 事件的 `code` 标明错误类别；`status_code` 和 `retryable` 来自 Provider 错误，

@@ -383,8 +383,10 @@ async def test_no_reconnect_when_disabled(monkeypatch: pytest.MonkeyPatch) -> No
     conn = MCPConnection(transport=lambda: None, auto_reconnect=False)
     conn._session = FakeSession(error=ConnectionError("dead"))
 
-    with pytest.raises(MCPError):
+    # Not replayed — and the error says the call may have run regardless.
+    with pytest.raises(MCPError, match="may or may not have taken effect") as caught:
         await conn._call("x", {})
+    assert caught.value.hint and "before repeating" in caught.value.hint
     assert opens["n"] == 0
 
 

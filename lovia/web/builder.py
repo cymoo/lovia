@@ -55,6 +55,7 @@ from .config import (
     resolve_skills_dirs,
 )
 from .html import show_html
+from .mcp import MCPBook, SettingsMCP
 from .run_deps import chat_project
 from .scheduling import Scheduling
 from .store import ChatStore
@@ -469,6 +470,7 @@ def build_agent(
     config: WebConfig | None = None,
     spec: AgentConfig | None = None,
     memory: Memory | None = None,
+    mcp: MCPBook | None = None,
 ) -> Agent[Any]:
     """One agent ``lovia web`` serves, from ``spec`` (default: the
     configuration's default agent) on ``provider``.
@@ -478,6 +480,9 @@ def build_agent(
     workspace and names the home memory lives in. ``memory`` is the plugin
     to share when ``spec`` keeps memory — every agent of one configuration
     must share one, it owns the notes file's lock — and ``None`` builds one.
+    ``mcp`` records how each MCP server's connections go and where a run
+    reports one it started without (``ConfigRuntime`` passes its own); the
+    enabled servers of ``config.mcp`` load when ``spec.mcp`` is on.
     The core ``Agent.name`` is ``spec.id``: what chats store.
     """
     config = config or WebConfig()
@@ -505,6 +510,9 @@ def build_agent(
         if memory is None:
             memory = resolve_memory(True, deployment.home / "memory")
         plugins.append(cast(Memory, memory))
+    servers = [s for s in config.mcp if s.enabled]
+    if spec.mcp and servers:
+        plugins.append(SettingsMCP(servers, mcp if mcp is not None else MCPBook()))
     workspace = resolve_workspace(deployment, spec)
     tools = resolve_tools(config.search, web_search=spec.search)
     vision_tool = resolve_vision_tool(provider, workspace, config.vision_profile())

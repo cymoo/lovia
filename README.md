@@ -518,7 +518,8 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   approvals, schedules, a memory editor (notes about you, and per project)
   and file attachments; `@` in the composer mentions a workspace file by
   path; runs survive browser disconnects.
-- **Settings without restarts** — `lovia web` keeps models and its agents in
+- **Settings without restarts** — `lovia web` keeps models, MCP servers
+  (paste the usual `mcpServers` JSON) and its agents in
   Settings: each agent has its own prompt, model, permission mode, switches
   and run limits, and a new chat picks one in the composer. A change
   applies from the next run. Settings, chat history and memory live in one

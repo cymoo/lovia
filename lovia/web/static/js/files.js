@@ -2,8 +2,8 @@
 //
 // lovia is a personal assistant, so the panel leads with "Changes": the files
 // this chat wrote or brought in, newest first, then — in a git work tree — the
-// other uncommitted changes, folded. "Browse" (breadcrumb + one directory
-// level) is the secondary view. The viewer renders documents as documents:
+// other uncommitted changes, folded. "Browse" (a folder tree that opens in
+// place) is the secondary view. The viewer renders documents as documents:
 // markdown rich by default, images inline, CSV as a table; code gets
 // highlighting; a changed tracked file also offers its diff against HEAD.
 //
@@ -26,7 +26,7 @@ import {
 } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
-import { isRemote, scopeRoot, workspaceName } from './workspaces.js';
+import { scopeRoot } from './workspaces.js';
 import { sortRows } from './tables.js';
 import { renderMermaid } from './diagrams.js';
 import { sandboxFrame } from './sandbox.js';
@@ -55,8 +55,7 @@ const state = {
   available: false, // current agent has a workspace
   open: false,
   mode: 'changes', // 'changes' | 'browse'
-  browsePath: '', // '' = workspace root
-  entries: [],
+  entries: [], // the change list (Browse keeps its listings in `tree`)
   // The last change list, by path — what the viewer asks whether a file has
   // a diff to show (also while browsing). `git` says whether there is one at all.
   changes: new Map(),
@@ -166,7 +165,7 @@ function initResizer() {
 
 // ---- List / preview layout --------------------------------------------------
 // An open file takes the panel (`lv-viewing`): on a narrow panel the list
-// steps aside and the preview's crumbs lead back; once the panel is dragged
+// steps aside and the tabs, the header's folder or Esc lead back; once the panel is dragged
 // wide enough (`lv-files-wide`), the list stays beside the preview instead.
 // Width is the panel's own, so a ResizeObserver decides — not the viewport.
 const WIDE_W = 720;
@@ -240,16 +239,10 @@ function isScratch(key, dir) {
 // this promise rather than reading a field, so a write that lands before the
 // answer does is still judged by it — a failed request settles to null.
 let _info = null; // { agent, promise: Promise<string | null> }
-let _rootName = /** @type {string | null} */ (null); // the workspace's display name
 function scratchDirFor(agent) {
   if (_info?.agent !== agent) {
-    _rootName = null;
     const promise = api.workspaceInfo({ agent }).then(
-      (info) => {
-        _rootName = info.name || null;
-        renderCrumbs(); // the root crumb waits for the name
-        return info.scratch_dir || null;
-      },
+      (info) => info.scratch_dir || null,
       () => null,
     );
     _info = { agent, promise };
@@ -325,18 +318,15 @@ async function refresh() {
   // folder on another machine): a local one answers before the eye asks.
   clearTimeout(_slowTimer);
   _slowTimer = setTimeout(() => {
-    if (!state.entries.length) els.list.replaceChildren(emptyNode(t('files.loading')));
+    const empty = state.mode === 'changes' ? !state.entries.length : !tree.listings.has('');
+    if (empty) els.list.replaceChildren(emptyNode(t('files.loading')));
   }, 300);
-  let entries = null;
   let changes = null;
+  let listings = null;
   let failure = null;
   try {
-    if (state.mode === 'changes') {
-      changes = await fetchChanges();
-      entries = changes.files;
-    } else {
-      entries = await api.workspaceFiles({ agent: store.agent, path: state.browsePath || '.' });
-    }
+    if (state.mode === 'changes') changes = await fetchChanges();
+    else listings = await fetchTree();
   } catch (err) {
     failure = err;
   }
@@ -351,7 +341,7 @@ async function refresh() {
     const failed = emptyNode(failure.message || t('files.loadFailed'));
     const retry = document.createElement('button');
     retry.type = 'button';
-    retry.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-files-empty-upload';
+    retry.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-files-empty-action';
     retry.innerHTML = icon('refresh-cw', { size: 14 });
     retry.append(t('files.retry'));
     retry.addEventListener('click', refresh);
@@ -359,12 +349,13 @@ async function refresh() {
     els.list.replaceChildren(failed);
     return;
   }
-  state.entries = entries;
   if (changes) {
+    state.entries = changes.files;
     state.truncated = changes.truncated;
     applyChangeMap(changes);
+  } else {
+    applyTree(listings);
   }
-  renderCrumbs();
   renderList();
   void restoreViewing();
 }
@@ -539,81 +530,337 @@ function setMode(mode) {
   els.tabChanges.setAttribute('aria-selected', String(mode === 'changes'));
   els.tabBrowse.classList.toggle('lv-active', mode === 'browse');
   els.tabBrowse.setAttribute('aria-selected', String(mode === 'browse'));
-  els.crumbs.classList.toggle('lv-hidden', mode !== 'browse');
-  refresh();
+  if (els.filter) els.filter.placeholder = t(mode === 'browse' ? 'files.filterTree' : 'files.filter');
+  if (mode === 'browse') els.list.setAttribute('role', 'tree');
+  else els.list.removeAttribute('role');
+  return refresh();
 }
 
-/**
- * A crumb row: the workspace (folder glyph, its path on hover), then one crumb
- * per segment of `path`. Every crumb but the last opens Browse at that
- * directory; the last is where you are. Shared by the list's row (`path` = the
- * directory shown) and the preview's header (`path` = the open file).
- * `fold` keeps a deep path to `root / … / parent / last` (the preview header
- * has one line): "…" opens the deepest folder it hides.
- * @param {HTMLElement} into @param {string} path
- * @param {(dir: string) => void} go
- * @param {{ fold?: boolean }} [opts]
- */
-function fillCrumbs(into, path, go, { fold = false } = {}) {
-  into.replaceChildren();
-  const parts = path ? path.split('/') : [];
-  // Folded, the middle folders share one crumb; `skip` is how many it hides.
-  const skip = fold && parts.length > 3 ? parts.length - 3 : 0;
-  const crumb = (label, dir, last) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'lv-files-crumb';
-    b.textContent = label;
-    if (last) b.disabled = true;
-    else b.addEventListener('click', () => go(dir));
-    return b;
-  };
-  // The root names the folder the chat works in (its path on hover), not "~".
-  const root = scopeRoot();
-  const home = crumb('', '', parts.length === 0);
-  home.classList.add('lv-files-crumb-root');
-  if (root) home.title = root;
-  const homeName = document.createElement('span'); // ellipsizes; the glyph doesn't
-  homeName.textContent = root ? workspaceName(root) : _rootName || '~';
-  // … behind the glyph the sidebar gives it: a server for one on another machine.
-  home.innerHTML = icon(root && isRemote(root) ? 'server' : 'folder', { size: 13 });
-  home.appendChild(homeName);
-  into.appendChild(home);
-  parts.forEach((part, i) => {
-    if (i > 0 && i <= skip) return; // inside the fold
-    const sep = document.createElement('span');
-    sep.className = 'lv-files-crumb-sep';
-    sep.textContent = '/';
-    into.appendChild(sep);
-    if (i === 0 && skip) {
-      const hidden = parts.slice(0, skip + 1).join('/');
-      const more = crumb('…', hidden, false);
-      more.title = hidden;
-      into.appendChild(more);
-      return;
+// ---- Browse: the folder tree -------------------------------------------------
+// A folder opens in place, its listing fetched on first open; a refresh
+// re-lists every open folder in view. A folder whose only child is a folder
+// shows the chain as one row ("src/app/core"), and an open folder's row
+// sticks to the top while its children scroll under it, so a deep position
+// keeps its context. What is open persists per tab and scope, as the open
+// file does.
+const TREE_KEY = 'lovia-files-tree';
+const TREE_PAGE = 200; // rows a folder shows before "show more"
+const STICKY_DEPTH = 4; // open folders deeper than this scroll away instead of stacking
+const tree = {
+  scope: /** @type {string | null} */ (null),
+  /** @type {Map<string, any[]>} folder ('' = the root) → its entries */
+  listings: new Map(),
+  /** Open folders — one inside a closed folder stays open for when it shows again. */
+  open: new Set(),
+  /** @type {Map<string, number>} folder → rows shown, in TREE_PAGE steps */
+  shown: new Map(),
+  loading: new Set(), // folders whose first listing is on its way
+};
+
+/** 'a/b/c' → ['a', 'a/b']: the folders above a path. */
+const ancestorsOf = (path) => {
+  const parts = path.split('/');
+  return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'));
+};
+
+/** The tree belongs to the agent and folder on screen: another one starts from what it left. */
+function syncTreeScope() {
+  const scope = viewingScope();
+  if (tree.scope === scope) return;
+  tree.scope = scope;
+  tree.listings.clear();
+  tree.shown.clear();
+  tree.loading.clear();
+  tree.open = new Set();
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(TREE_KEY) || 'null');
+    if (saved?.scope === scope && Array.isArray(saved.open)) {
+      tree.open = new Set(saved.open.filter((p) => typeof p === 'string'));
     }
-    into.appendChild(crumb(part, parts.slice(0, i + 1).join('/'), i === parts.length - 1));
-  });
+  } catch {
+    /* unreadable: start closed */
+  }
 }
 
-function renderCrumbs() {
-  if (state.mode !== 'browse' || !els.crumbs) return;
-  fillCrumbs(els.crumbs, state.browsePath, (dir) => {
-    state.browsePath = dir;
-    refresh();
-  });
+function saveTree() {
+  try {
+    sessionStorage.setItem(TREE_KEY, JSON.stringify({ scope: tree.scope, open: [...tree.open] }));
+  } catch {
+    /* storage off: this tab just won't remember */
+  }
 }
 
 /**
- * A preview crumb: Browse at `dir`. Narrow, that means leaving the file for
- * the list; wide, the list beside it moves and the file stays open.
+ * A folder's subfolders, named under the path it was opened by. Through a
+ * symlinked folder the server names entries where they really are (`bl ->
+ * blog` lists `blog/x`, `loop -> .` lists `big`, `loop`, …): kept that way, a
+ * link back up would hold itself and the tree recurse forever. Renamed, each
+ * level of a loop is one more folder to open, as in a file manager. Folders
+ * are only the tree's own keys; a file keeps its real path — its identity for
+ * the change map, write notices, and everything it opens with.
  */
-function browseTo(dir) {
-  state.browsePath = dir;
-  state.listScroll = 0; // a different list than the one left behind
-  if (!isWide()) closeViewer();
-  if (state.mode === 'browse') refresh();
-  else setMode('browse');
+function underDir(dir, entries) {
+  if (!dir) return entries;
+  return entries.map((e) =>
+    !e.is_dir || e.path.startsWith(`${dir}/`) ? e : { ...e, path: `${dir}/${basename(e.path)}` },
+  );
+}
+
+/** Open folders whose every ancestor is open: the ones a refresh re-lists. */
+const shownDirs = () =>
+  [...tree.open].filter((d) => ancestorsOf(d).every((a) => tree.open.has(a)));
+
+/** The root and every open folder in view, listed at once. Only the root's failure fails. */
+async function fetchTree() {
+  syncTreeScope();
+  const dirs = ['', ...shownDirs()];
+  const agent = store.agent;
+  const got = await Promise.allSettled(
+    dirs.map((d) => api.workspaceFiles({ agent, path: d || '.' })),
+  );
+  if (got[0].status === 'rejected') throw got[0].reason;
+  return dirs.map((d, i) => /** @type {const} */ ([d, got[i]]));
+}
+
+/** Take a refresh's listings; a folder that no longer lists (gone) closes. */
+function applyTree(listings) {
+  // A closed folder's listing is stale by now: it re-lists on open. One that
+  // opened while this refresh was out has a listing newer than it: it stays.
+  const fetched = new Set(listings.map(([dir]) => dir));
+  const shown = new Set(shownDirs());
+  for (const dir of tree.listings.keys()) {
+    if (!fetched.has(dir) && !shown.has(dir)) tree.listings.delete(dir);
+  }
+  for (const [dir, r] of listings) {
+    if (r.status === 'fulfilled') tree.listings.set(dir, underDir(dir, r.value));
+    else tree.open.delete(dir);
+  }
+  saveTree();
+}
+
+/** The folder a folder holds when it holds nothing else — the next link of a chain. */
+function soleDir(dir) {
+  const entries = tree.listings.get(dir);
+  const only = entries?.length === 1 ? entries[0] : null;
+  return only?.is_dir && !only.symlink_target ? only : null;
+}
+
+/** `entry` and the lone folders below it, as far as their listings are known. */
+function chainFrom(entry) {
+  const chain = [entry];
+  for (let next = soleDir(entry.path); next; next = soleDir(next.path)) chain.push(next);
+  return chain;
+}
+
+/** Open a folder: fetch it if need be, and a lone folder inside opens with it (one row). */
+async function openDir(path) {
+  const scope = tree.scope;
+  tree.open.add(path);
+  for (let dir = path, hops = 0; dir && hops < 64; hops++) {
+    if (!tree.listings.has(dir)) {
+      tree.loading.add(dir);
+      // "Loading…" under the row only once the wait is felt.
+      const slow = setTimeout(queueRender, 250);
+      let entries;
+      try {
+        entries = await api.workspaceFiles({ agent: store.agent, path: dir });
+      } catch (err) {
+        if (tree.scope !== scope) return;
+        tree.open.delete(dir);
+        toast(err?.message || t('files.loadFailed'), { type: 'error' });
+        break;
+      } finally {
+        clearTimeout(slow);
+        tree.loading.delete(dir);
+      }
+      if (tree.scope !== scope) return; // another agent or folder meanwhile
+      tree.listings.set(dir, underDir(dir, entries));
+      if (!tree.open.has(dir)) break; // closed again while it loaded
+    }
+    const only = soleDir(dir);
+    if (only) tree.open.add(only.path);
+    dir = only?.path;
+  }
+  saveTree();
+  queueRender();
+}
+
+/** A folder row's click: a chain opens and closes as the one row it is. */
+function toggleDir(chain) {
+  if (chain.every((e) => tree.open.has(e.path))) {
+    for (const e of chain) tree.open.delete(e.path);
+    saveTree();
+    renderList();
+    return;
+  }
+  for (const e of chain.slice(0, -1)) tree.open.add(e.path);
+  void openDir(chain[chain.length - 1].path);
+  renderList(); // the chevron turns now; the children follow their listing
+}
+
+const nameHit = (entry, needle) => basename(entry.path).toLowerCase().includes(needle);
+
+/** A note in the tree's own indent: "Loading…", "Empty directory.". */
+function treeNote(text, depth) {
+  const div = document.createElement('div');
+  div.className = 'lv-tree-note';
+  div.style.setProperty('--depth', String(depth));
+  div.textContent = text;
+  return div;
+}
+
+/**
+ * One folder's rows, and under each open folder its own. Filtering searches
+ * only what is listed — every row of an open folder, not the folders closed
+ * — and keeps the folders above a hit.
+ * @returns {Node[]}
+ */
+function treeLevel(dir, depth, needle) {
+  const entries = tree.listings.get(dir) || [];
+  const limit = needle ? entries.length : tree.shown.get(dir) || TREE_PAGE;
+  const nodes = [];
+  for (const entry of entries.slice(0, limit)) {
+    if (!entry.is_dir) {
+      // Its place in the tree: the same file can show under a folder and a link to it.
+      const head = dir ? `${dir}/${basename(entry.path)}` : entry.path;
+      if (!needle || nameHit(entry, needle)) nodes.push(rowFor(entry, { depth, head }));
+      continue;
+    }
+    const chain = chainFrom(entry);
+    const last = chain[chain.length - 1];
+    const open = chain.every((e) => tree.open.has(e.path));
+    const kids = open && tree.listings.has(last.path) ? treeLevel(last.path, depth + 1, needle) : null;
+    if (needle && !chain.some((e) => nameHit(e, needle)) && !kids?.length) continue;
+    const node = document.createElement('div');
+    node.className = 'lv-tree-node';
+    node.appendChild(rowFor(entry, { depth, chain, open }));
+    const group = document.createElement('div');
+    // No role="group": it would need to sit inside its treeitem (a button
+    // here); each row's aria-level carries the nesting instead.
+    group.className = 'lv-tree-group';
+    group.style.setProperty('--depth', String(depth + 1));
+    if (kids?.length) group.append(...kids);
+    else if (kids && !needle) group.appendChild(treeNote(t('files.emptyDir'), depth + 1));
+    else if (open && !kids && tree.loading.has(last.path)) {
+      group.appendChild(treeNote(t('files.loading'), depth + 1));
+    }
+    if (group.childElementCount) node.appendChild(group);
+    nodes.push(node);
+  }
+  if (entries.length > limit) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'lv-tree-note lv-tree-more';
+    more.style.setProperty('--depth', String(depth));
+    more.textContent = t('files.showMore', { n: entries.length - limit });
+    more.addEventListener('click', () => {
+      tree.shown.set(dir, limit + TREE_PAGE);
+      renderList();
+    });
+    nodes.push(more);
+  }
+  return nodes;
+}
+
+/**
+ * The row of `path`: the one at that place in the tree (a file, or the folder
+ * heading a chain), else one that ends a chain there or shows that file
+ * through a link.
+ */
+const findRow = (path) => {
+  const p = CSS.escape(path);
+  return /** @type {HTMLElement | null} */ (
+    els.list.querySelector(`.lv-file-row[data-head="${p}"]`) ||
+      els.list.querySelector(`.lv-file-row[data-path="${p}"]`)
+  );
+};
+
+/**
+ * Show `path` in the tree: open the folders above it (and, `open`, the folder
+ * itself), then bring its row into view. Narrow, that means leaving the file
+ * for the tree; wide, the tree beside it moves and the file stays open.
+ */
+async function revealInTree(path, { open = false } = {}) {
+  if (state.viewing && !isWide()) closeViewer();
+  // Asked for by name, the row must show: a filter that might hide it goes.
+  state.filter = '';
+  if (els.filter) els.filter.value = '';
+  syncTreeScope();
+  for (const d of ancestorsOf(path)) tree.open.add(d);
+  saveTree();
+  await (state.mode === 'browse' ? refresh() : setMode('browse'));
+  if (open) await openDir(path); // and the lone folders inside, as a click would
+  // A row past its folder's first pages isn't rendered: each folder on the
+  // way down shows enough pages to include the next step.
+  for (const step of [...ancestorsOf(path), path]) {
+    const dir = dirname(step);
+    const i = tree.listings.get(dir)?.findIndex((e) => e.path === step) ?? -1;
+    const need = Math.ceil((i + 1) / TREE_PAGE) * TREE_PAGE;
+    if (need > (tree.shown.get(dir) || TREE_PAGE)) tree.shown.set(dir, need);
+  }
+  renderList();
+  const row = findRow(path);
+  if (!row) return;
+  rove(row);
+  row.scrollIntoView({ block: 'center' });
+  row.classList.add('lv-flash'); // a re-render takes the flash with it, which is fine
+  setTimeout(() => row.classList.remove('lv-flash'), 1200);
+}
+
+// ---- Keyboard: the list as one tab stop ------------------------------------
+// Rows take focus one at a time (roving tabindex): Tab enters the list on the
+// last row it left, and the arrows move within it — ↑↓ Home End everywhere,
+// and in the tree → opens a folder or steps into it, ← closes it or steps up
+// to its parent (the WAI-ARIA tree pattern). Enter opens, as a click does.
+/** @param {HTMLElement | null | undefined} row */
+function rove(row) {
+  for (const r of els.list.querySelectorAll('.lv-file-row[tabindex="0"]')) {
+    /** @type {HTMLElement} */ (r).tabIndex = -1;
+  }
+  if (row) row.tabIndex = 0;
+}
+
+/** @param {KeyboardEvent} e */
+function listKeydown(e) {
+  const row = e.target instanceof Element ? e.target.closest('.lv-file-row') : null;
+  if (!row || e.altKey || e.ctrlKey || e.metaKey) return;
+  const rows = /** @type {HTMLElement[]} */ ([...els.list.querySelectorAll('.lv-file-row')]);
+  const i = rows.indexOf(/** @type {HTMLElement} */ (row));
+  const expanded = row.getAttribute('aria-expanded');
+  /** @param {Element | null | undefined} to */
+  const go = (to) => {
+    if (!(to instanceof HTMLElement)) return;
+    e.preventDefault();
+    to.focus();
+    to.scrollIntoView({ block: 'nearest' });
+  };
+  switch (e.key) {
+    case 'ArrowDown':
+      return go(rows[i + 1]);
+    case 'ArrowUp':
+      return go(rows[i - 1]);
+    case 'Home':
+      return go(rows[0]);
+    case 'End':
+      return go(rows[rows.length - 1]);
+    case 'ArrowRight':
+      if (expanded === 'false') {
+        e.preventDefault();
+        /** @type {HTMLElement} */ (row).click();
+      } else if (expanded === 'true') {
+        go(row.nextElementSibling?.querySelector('.lv-file-row'));
+      }
+      return;
+    case 'ArrowLeft':
+      if (expanded === 'true') {
+        e.preventDefault();
+        /** @type {HTMLElement} */ (row).click();
+      } else {
+        // The row of the folder this one is in: its group's sibling.
+        go(row.closest('.lv-tree-group')?.previousElementSibling);
+      }
+      return;
+  }
 }
 
 // What a row's icon says the file is — by extension, as file managers do.
@@ -712,50 +959,84 @@ function changeMark(entry) {
   return mark.childElementCount ? mark : null;
 }
 
-function rowFor(entry) {
+/**
+ * One line per row: the name, then — in the change list — its folder, dimmed,
+ * and what git says changed. Size, time and the rest wait in the tooltip.
+ * `depth` makes it a tree row; a folder's `chain` (lone folders below it) is
+ * one row, and `open` turns its chevron.
+ * @param {any} entry
+ * @param {{ depth?: number, chain?: any[] | null, open?: boolean, head?: string }} [opts]
+ */
+function rowFor(entry, { depth = -1, chain = null, open = false, head = entry.path } = {}) {
   const changes = state.mode === 'changes';
+  const last = chain ? chain[chain.length - 1] : entry;
   const row = document.createElement('button');
   row.type = 'button';
   row.className = 'lv-file-row';
+  row.tabIndex = -1; // renderList gives one row the list's tab stop
+  row.dataset.path = last.path;
+  // A chain grows and shrinks at its tail as listings come and go; its head
+  // stays put, so the head is the row's identity across renders.
+  row.dataset.head = head;
   // Browsing, a dot marks what this chat wrote; the change list groups it instead.
   if (!changes && !entry.is_dir && isTouched(entry.path)) row.classList.add('lv-touched');
   if (entry.status === 'deleted') row.classList.add('lv-deleted');
   if (state.viewing?.path === entry.path) row.classList.add('lv-active');
 
+  if (depth >= 0) {
+    row.classList.add('lv-tree-row');
+    row.setAttribute('role', 'treeitem');
+    row.setAttribute('aria-level', String(depth + 1));
+    row.style.setProperty('--depth', String(depth));
+    const twisty = document.createElement('span');
+    twisty.className = 'lv-tree-twisty';
+    if (entry.is_dir) {
+      twisty.innerHTML = icon('chevron-right', { size: 12 });
+      row.setAttribute('aria-expanded', String(open));
+      if (open && depth < STICKY_DEPTH) row.classList.add('lv-sticky');
+    }
+    row.appendChild(twisty);
+  }
+
   const ic = document.createElement('span');
   ic.className = 'lv-file-row-icon';
-  ic.innerHTML = rowIcon(entry);
+  ic.innerHTML = open ? icon('folder-open', { size: 15 }) : rowIcon(entry);
 
   const main = document.createElement('span');
   main.className = 'lv-file-row-main';
   const name = document.createElement('span');
   name.className = 'lv-file-row-name';
-  name.textContent = basename(entry.path);
-  const sub = document.createElement('span');
-  sub.className = 'lv-file-row-sub';
-  const bits = [];
-  if (changes && dirname(entry.path)) bits.push(dirname(entry.path));
-  if (entry.old_path) bits.push(t('files.renamedFrom', { path: entry.old_path }));
-  // A folder's icon already says what it is; its line keeps just the time.
-  if (!entry.is_dir && entry.size != null) bits.push(formatBytes(entry.size));
-  if (entry.mtime) bits.push(formatTimeSmart(entry.mtime));
-  if (entry.symlink_target) bits.push('→ ' + entry.symlink_target);
-  sub.textContent = bits.join(' · ');
-  main.append(name, sub);
-
+  name.textContent = (chain || [entry]).map((e) => basename(e.path)).join('/');
+  main.appendChild(name);
+  if (changes && dirname(entry.path)) {
+    // Ellipsized from the left: the folder nearest the file is the telling one.
+    const dir = document.createElement('span');
+    dir.className = 'lv-file-row-dir';
+    const bdi = document.createElement('bdi');
+    bdi.textContent = dirname(entry.path);
+    dir.appendChild(bdi);
+    main.appendChild(dir);
+  }
   row.append(ic, main);
   const mark = changes ? changeMark(entry) : null;
   if (mark) row.appendChild(mark);
-  row.title = entry.path;
-  row.addEventListener('contextmenu', (e) => rowMenu(entry, e, row));
+
+  const facts = [];
+  if (entry.old_path) facts.push(t('files.renamedFrom', { path: entry.old_path }));
+  if (!entry.is_dir && entry.size != null) facts.push(formatBytes(entry.size));
+  if (entry.mtime) facts.push(formatTimeSmart(entry.mtime));
+  if (entry.symlink_target) facts.push('→ ' + entry.symlink_target);
+  row.title = facts.length ? `${last.path}\n${facts.join(' · ')}` : last.path;
+
+  row.addEventListener('contextmenu', (e) => rowMenu(last, e, row));
   row.addEventListener('click', () => {
-    if (entry.is_dir) {
-      state.mode === 'browse' || setMode('browse');
-      state.browsePath = entry.path;
-      refresh();
-    } else {
+    if (!entry.is_dir) {
       // From the change list a file opens on what changed; browsing, on itself.
       openFile(entry.path, { view: changes ? 'diff' : 'file' });
+    } else if (depth >= 0) {
+      toggleDir(chain || [entry]);
+    } else {
+      void revealInTree(entry.path, { open: true }); // an untracked folder in the change list
     }
   });
   return row;
@@ -775,7 +1056,8 @@ function othersToggle(count) {
   b.className = 'lv-files-group-label lv-files-group-toggle';
   b.setAttribute('aria-expanded', String(state.othersOpen));
   b.innerHTML = icon('chevron-right', { size: 12 });
-  b.append(`${t('files.otherChanges')} · ${count}`);
+  // Git listed more than came back: the count is a floor.
+  b.append(`${t('files.otherChanges')} · ${count}${state.truncated ? '+' : ''}`);
   b.addEventListener('click', () => {
     state.othersOpen = !state.othersOpen;
     renderList();
@@ -787,34 +1069,66 @@ function renderList() {
   if (state.failed) return; // the list is the failure and its retry until one works
   const frag = document.createDocumentFragment();
   const needle = state.filter.toLowerCase();
+  if (state.mode === 'browse') renderTree(frag, needle);
+  else renderChanges(frag, needle);
+  // A re-render keeps the keyboard where it was: on the same row, by its head.
+  const focused = /** @type {HTMLElement | null} */ (
+    els.list.contains(document.activeElement) ? document.activeElement : null
+  );
+  const focusedHead = focused?.dataset.head;
+  els.list.replaceChildren(frag);
+  const again = focusedHead
+    ? /** @type {HTMLElement | null} */ (
+        els.list.querySelector(`.lv-file-row[data-head="${CSS.escape(focusedHead)}"]`)
+      )
+    : null;
+  again?.focus({ preventScroll: true });
+  rove(
+    again ||
+      els.list.querySelector('.lv-file-row.lv-active') ||
+      els.list.querySelector('.lv-file-row'),
+  );
+  els.collapse?.classList.toggle('lv-hidden', state.mode !== 'browse' || !tree.open.size);
+}
+
+function renderTree(frag, needle) {
+  syncTreeScope();
+  if (!tree.listings.has('')) return; // on its way
+  const nodes = treeLevel('', 0, needle);
+  if (!nodes.length) frag.appendChild(emptyNode(needle ? t('files.noMatch') : t('files.emptyDir')));
+  frag.append(...nodes);
+}
+
+/** "Nothing here yet" when nothing else is listed: what lands here, and how. */
+function noFilesNode() {
+  const div = document.createElement('div');
+  div.className = 'lv-files-empty lv-files-empty-first';
+  const title = document.createElement('div');
+  title.className = 'lv-files-empty-title';
+  title.textContent = t('files.noFiles');
+  const hint = document.createElement('div');
+  hint.textContent = t('files.noFilesHint');
+  div.append(title, hint);
+  return div;
+}
+
+function renderChanges(frag, needle) {
   const entries = needle
     ? state.entries.filter((e) => e.path.toLowerCase().includes(needle))
     : state.entries;
-  if (state.mode === 'browse') {
-    if (!entries.length) frag.appendChild(emptyNode(needle ? t('files.noMatch') : t('files.emptyDir')));
-    for (const entry of entries) frag.appendChild(rowFor(entry));
-    els.list.replaceChildren(frag);
-    return;
-  }
   // The change list leads with what THIS chat produced — the panel's whole
   // reason to exist for most visits — then, folded, what else git sees.
   const mine = entries.filter((e) => e.touched);
   const others = entries.filter((e) => !e.touched);
-  if (!mine.length && !needle) {
-    // A chat with no files yet says how they get here, and offers the first way.
-    const empty = emptyNode(t('files.noFiles'));
-    if (els.upload) {
-      const up = document.createElement('button');
-      up.type = 'button';
-      up.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-files-empty-upload';
-      up.innerHTML = icon('upload', { size: 14 });
-      up.append(t('files.uploadAction'));
-      up.addEventListener('click', () => els.upload?.click());
-      empty.append(up);
-    }
-    frag.appendChild(empty);
-  } else if (!entries.length) {
-    frag.appendChild(emptyNode(t('files.noMatch')));
+  if (!entries.length) {
+    frag.appendChild(needle ? emptyNode(t('files.noMatch')) : noFilesNode());
+  } else if (!mine.length && !needle) {
+    // Others are listed: the chat's own group keeps its place, one quiet line.
+    frag.appendChild(groupLabel(t('files.thisChat')));
+    const none = document.createElement('div');
+    none.className = 'lv-files-group-empty';
+    none.textContent = t('files.noFilesShort');
+    frag.appendChild(none);
   }
   if (mine.length && others.length) frag.appendChild(groupLabel(t('files.thisChat')));
   for (const entry of mine) frag.appendChild(rowFor(entry));
@@ -828,7 +1142,6 @@ function renderList() {
       }
     }
   }
-  els.list.replaceChildren(frag);
 }
 
 // ---- Viewer -------------------------------------------------------------------
@@ -1176,19 +1489,35 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
   if (!els.panel.classList.contains('lv-viewing')) state.listScroll = els.list.scrollTop;
   els.viewer.classList.remove('lv-hidden');
   els.panel.classList.add('lv-viewing');
-  // The header is the file's crumbs: its folders lead back into Browse. An
-  // absolute path (outside the workspace) has no folders there to open, so
-  // it stays text, truncated from the left (rtl) to keep the filename; the
-  // bidi isolate keeps a leading "~/." from being reordered to the far end.
+  // The header names the file, then its folder, dimmed — a click shows it in
+  // the tree. An absolute path (outside the workspace) has no folder there to
+  // show, so it stays text. Both truncate from the left (rtl) to keep the
+  // nearest part; the bidi isolate keeps a leading "~/." from being
+  // reordered to the far end.
+  const isolated = (cls, text, tag = 'span') => {
+    const el = document.createElement(tag);
+    el.className = cls;
+    const bdi = document.createElement('bdi');
+    bdi.textContent = text;
+    el.appendChild(bdi);
+    return el;
+  };
   if (path.startsWith('/')) {
-    const abs = document.createElement('span');
-    abs.className = 'lv-files-viewer-abs';
-    const label = document.createElement('bdi');
-    label.textContent = path;
-    abs.appendChild(label);
-    els.viewerName.replaceChildren(abs);
+    els.viewerName.replaceChildren(isolated('lv-files-viewer-abs', path));
   } else {
-    fillCrumbs(els.viewerName, path, browseTo, { fold: true });
+    const file = document.createElement('span');
+    file.className = 'lv-files-viewer-file';
+    file.textContent = name;
+    els.viewerName.replaceChildren(file);
+    if (dirname(path)) {
+      const dir = /** @type {HTMLButtonElement} */ (
+        isolated('lv-files-viewer-dir', dirname(path), 'button')
+      );
+      dir.type = 'button';
+      dir.title = t('files.revealInTree');
+      dir.addEventListener('click', () => void revealInTree(path));
+      els.viewerName.appendChild(dir);
+    }
   }
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
@@ -1523,7 +1852,7 @@ export function initFiles() {
   els.tabBrowse = document.getElementById('files-tab-browse');
   els.refresh = document.getElementById('files-refresh');
   els.close = document.getElementById('files-close');
-  els.crumbs = document.getElementById('files-crumbs');
+  els.collapse = document.getElementById('files-collapse');
   els.list = document.getElementById('files-list');
   els.procs = document.getElementById('files-procs');
   els.viewer = document.getElementById('files-viewer');
@@ -1545,6 +1874,20 @@ export function initFiles() {
   els.upload = document.getElementById('files-upload');
 
   els.refresh.innerHTML = icon('refresh-cw', { size: 15 });
+  if (els.collapse) {
+    els.collapse.innerHTML = icon('chevrons-down-up', { size: 15 });
+    els.collapse.addEventListener('click', () => {
+      tree.open.clear();
+      saveTree();
+      renderList();
+      els.list.scrollTop = 0;
+    });
+  }
+  els.list.addEventListener('keydown', listKeydown);
+  els.list.addEventListener('focusin', (e) => {
+    const row = e.target instanceof Element ? e.target.closest('.lv-file-row') : null;
+    if (row) rove(/** @type {HTMLElement} */ (row));
+  });
   els.close.innerHTML = icon('x', { size: 16 });
   els.attach.innerHTML = icon('paperclip', { size: 14 });
   els.copyContent.innerHTML = icon('copy', { size: 14 });
@@ -1716,7 +2059,6 @@ export function initFiles() {
   store.on('agent-changed', () => {
     state.touched.clear();
     state.revs.clear();
-    state.browsePath = '';
     state.filter = '';
     if (els.filter) els.filter.value = '';
     clearUnseen();
@@ -1730,8 +2072,8 @@ export function initFiles() {
   });
   // The panel shows the directory the chat on screen works in (a draft's,
   // for a new chat): a different one is a different tree — start over.
+  // (The tree follows the scope on its own: see syncTreeScope.)
   store.on('workspace-scope-changed', () => {
-    state.browsePath = '';
     state.filter = '';
     if (els.filter) els.filter.value = '';
     closeViewer({ forget: false });

@@ -234,9 +234,12 @@
   <div id="files-list" class="lv-files-list"></div>
   <section id="files-viewer" class="lv-files-viewer lv-hidden" aria-label="File preview">
     <div class="lv-files-viewer-head">
+      <!-- Narrow, the file covers the list: back leads to it. Wide, the list
+           stays beside the file and "×" closes the file instead (styles.css). -->
+      <button id="files-viewer-back" class="lv-btn-icon lv-files-viewer-back" type="button" title="Back to list" aria-label="Back to list" data-i18n-title="files.backToList" data-i18n-aria="files.backToList"></button>
       <span id="files-viewer-name" class="lv-files-viewer-name" title=""></span>
       <div class="lv-files-viewer-actions">
-        <button id="files-md-toggle" class="lv-btn-icon lv-hidden" type="button" title="Toggle rendered / raw" aria-label="Toggle rendered or raw markdown"></button>
+        <button id="files-md-toggle" class="lv-btn-icon lv-hidden lv-files-overflow" type="button" title="Toggle rendered / raw" aria-label="Toggle rendered or raw markdown"></button>
         <!-- lv-files-overflow: inline on a wide panel, else in the "⋯" menu (files.js) -->
         <button id="files-wrap-toggle" class="lv-btn-icon lv-hidden lv-files-overflow" type="button" title="Toggle line wrap" aria-label="Toggle line wrap"></button>
         <button id="files-attach" class="lv-btn-icon lv-files-overflow" type="button" title="Attach to chat" aria-label="Attach this file to the chat" data-i18n-title="files.attach" data-i18n-aria="files.attach"></button>

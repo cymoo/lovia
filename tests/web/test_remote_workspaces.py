@@ -183,8 +183,13 @@ def test_the_files_panel_reads_a_remote_chats_directory(remote_chat, places) -> 
 
     assert c.get("/api/workspace", params=at).json()["name"] == "there"
     listed = c.get("/api/workspace/files", params=at).json()
-    assert [(e["path"], e["is_dir"]) for e in listed] == [("docs", True), ("tmp", True)]
-    inside = c.get("/api/workspace/files", params={**at, "path": "docs"}).json()
+    assert listed["truncated"] is False  # the flag rides the wire (ClippedList)
+    assert [(e["path"], e["is_dir"]) for e in listed["files"]] == [
+        ("docs", True),
+        ("tmp", True),
+    ]
+    docs = c.get("/api/workspace/files", params={**at, "path": "docs"})
+    inside = docs.json()["files"]
     assert [e["path"] for e in inside] == ["docs/note.md"]
     assert inside[0]["size"] == 11 and inside[0]["mtime"]
     # The change list: stat-ed and judged over there, git asked over there.
@@ -218,9 +223,8 @@ def test_a_draft_reads_the_remote_folder_it_is_about_to_open(remote_chat) -> Non
     c, _sid, there = remote_chat
     (there / "a.txt").write_text("a")
     at = {"root": f"remote://far{there}"}
-    assert [e["path"] for e in c.get("/api/workspace/files", params=at).json()] == [
-        "a.txt"
-    ]
+    listed = c.get("/api/workspace/files", params=at).json()["files"]
+    assert [e["path"] for e in listed] == ["a.txt"]
     # … and only a remote this server opens.
     res = c.get("/api/workspace/files", params={"root": f"remote://other{there}"})
     assert (res.status_code, res.json()["detail"]["code"]) == (
@@ -468,9 +472,8 @@ def test_an_agent_whose_own_workspace_is_remote_has_a_files_panel(places) -> Non
     with _client(agent, None) as c:
         try:
             assert c.get("/api/agents").json()[0]["workspace"] is True
-            assert [e["path"] for e in c.get("/api/workspace/files").json()] == [
-                "a.txt"
-            ]
+            listed = c.get("/api/workspace/files").json()["files"]
+            assert [e["path"] for e in listed] == ["a.txt"]
             up = c.post("/api/workspace/upload", files={"file": ("b.txt", b"b")})
             assert up.json()["path"] == "uploads/b.txt"
             assert (there / "uploads" / "b.txt").read_bytes() == b"b"

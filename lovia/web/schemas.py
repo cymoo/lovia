@@ -100,6 +100,15 @@ class WorkspaceEntry(BaseModel):
     symlink_target: str | None = None
 
 
+class WorkspaceListing(BaseModel):
+    """``GET /api/workspace/files``: one directory level, dirs first.
+    ``truncated``: the workspace's listing cap left entries out — which ones
+    is arbitrary (the cap applies before sorting)."""
+
+    files: list[WorkspaceEntry]
+    truncated: bool = False
+
+
 class ChangesRequest(BaseModel):
     """``POST /api/workspace/changes``: the paths this chat wrote."""
 

@@ -289,8 +289,9 @@ host that holds the files, limited to `git rev-parse`, `git status` and
 **Browse** is the folder tree: a folder opens in place, a folder holding
 nothing but another folder shows the chain as one row (`src/app/core`), and an
 open folder's row stays at the top while its contents scroll. The arrow keys
-move through it. The folder next to an open file's name shows that file in the
-tree.
+move through it. An open file's "⋯" menu shows it in the tree. A folder too
+large for the workspace's listing cap (`max_list_results`) lists that many
+entries and says so.
 
 A file uploaded from the Files panel is not automatically attached to the next
 message. The change list leaves out the agent's scratch dir `tmp/`, and the

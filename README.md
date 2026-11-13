@@ -429,6 +429,10 @@ lookups work by default.
 API keys and proxy settings are not inherited; pass required variables via
 `Workspace.local(..., env={...})`.
 
+In a git work tree, `grep_files` and globbed `list_files` skip what git
+ignores (`node_modules/`, `dist/`) — naming an ignored directory still
+searches it.
+
 The workspace can also be a directory in a running container or on an SSH
 host — `Workspace.remote(RemoteHost.ssh("box"), "/srv/project")` — with the
 same tools and the same policy, enforced over there. The host needs

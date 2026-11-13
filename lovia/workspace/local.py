@@ -275,6 +275,11 @@ def _has_hidden_segment(rel: str) -> bool:
 
 _GIT_TIMEOUT = 10.0
 
+# Whether lstat (and os.path.islink) see every link that redirects a path.
+# Not on Windows: a directory junction reads as a plain directory to both,
+# so there only resolve() finds where a path really leads.
+_LSTAT_SEES_LINKS = os.name != "nt"
+
 
 def _git(base: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     # No fsmonitor: a repository's own config must not run a hook on search.
@@ -1213,9 +1218,10 @@ class LocalWorkspaceSession:
             # list never runs through a symlinked directory (_git_files drops
             # those) and base is resolved, so there only the entry itself can
             # be a link: one lstat says, where resolve() costs one per level.
+            # Only where lstat sees every link (see _LSTAT_SEES_LINKS).
             lst: os.stat_result | None = None
             try:
-                if listed is None:
+                if listed is None or not _LSTAT_SEES_LINKS:
                     resolved = p.resolve()
                 else:
                     lst = os.lstat(p)

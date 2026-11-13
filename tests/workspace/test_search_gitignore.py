@@ -191,6 +191,29 @@ async def test_symlinks_git_lists_are_judged_by_their_targets(tmp_path) -> None:
     )
 
 
+async def test_a_link_the_link_checks_miss_is_still_followed(
+    tmp_path, monkeypatch
+) -> None:
+    # A Windows junction reads as a plain directory to islink and lstat, so
+    # git's list runs through it and the entry inside looks like no link at
+    # all. Where that can happen the listing resolves every path, as it did
+    # before the lstat shortcut. Simulated here: a symlinked directory that
+    # islink does not report, under the Windows setting.
+    from lovia.workspace import local as local_module
+
+    root = _project(tmp_path)
+    outside = tmp_path / "outside"
+    _write(outside, {"mod.py": "TOKEN\n"})
+    shutil.rmtree(root / "pkg")
+    (root / "pkg").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(local_module.os.path, "islink", lambda _p: False)
+    monkeypatch.setattr(local_module, "_LSTAT_SEES_LINKS", False)
+    session = LocalWorkspaceSession(root=str(root))  # read_outside: deny
+    listed = [e.path for e in await session.list_files(".", pattern="**/*")]
+    assert "pkg/mod.py" not in listed
+    assert "top.py" in listed
+
+
 async def test_without_git_the_tree_is_walked(tmp_path, monkeypatch) -> None:
     root = _project(tmp_path)
     monkeypatch.setenv("PATH", "")

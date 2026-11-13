@@ -177,6 +177,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
 | `GET /api/schedules/{id}/runs` | 按时间倒序列出定时任务的运行记录 |
 | `GET /api/workspace` · `/files` · `/file` · `/raw` | 读取 Agent [工作区](workspace.md)中的文件；带 `?session=` 时读该对话的目录，带 `?root=` 时读还没发送的草稿的目录（按新对话的规则校验） |
+| `GET /api/workspace/paths` | 目录下的所有文件 → `{paths, truncated}`：相对根目录、已排序，就是输入框 `@` 菜单的列表。经文件面板的只读视图调用 Agent 自己的 `list_files('.', pattern='**/*')`——在 Git 工作区里遵守忽略规则，不含点开头的文件、`denied_paths` 屏蔽的文件和目录；远程对话在远端主机上执行。上限 20000 条（目录也计入），被截掉时 `truncated` 为真。`?session=` / `?root=` 同文件面板 |
 | `POST /api/workspace/changes` | `{paths}`（最多 500 个，按对话里工具调用的写法）→ `{git, truncated, files: [{path, is_dir, touched, status, old_path, added, removed, size, mtime}]}`：仍然存在的路径按修改时间倒序（`touched: true`）；目录在 git 仓库里时，后面是 `git status` 在该目录下看到的其余未提交改动，最多 200 项（`truncated` 表示还有更多）。`status` 取 `modified`、`added`、`untracked`、`deleted`、`renamed` 或 `null`；`added` / `removed` 是相对 `HEAD` 的行数。`?session=` / `?root=` 同文件面板 |
 | `GET /api/workspace/diff?path=&old=` | `{path, diff, binary, truncated}`：该文件相对 `HEAD` 的 unified diff（`old` 是重命名前的路径，这样移动按一次改名比较），按工作区的 shell 输出上限截断。不在 git 仓库里或仓库还没有提交时返回 404 `feature_unavailable` |
 | `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束；`?session=` / `?root=` 同文件面板 |

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -217,6 +218,22 @@ def test_the_files_panel_reads_a_remote_chats_directory(remote_chat, places) -> 
             assert (res.status_code, res.json()["detail"]["code"]) == (status, code)
     missing = c.get("/api/workspace/files", params={**at, "path": "nope"})
     assert missing.status_code == 404
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_the_at_menu_lists_a_remote_chats_files(remote_chat, places) -> None:
+    """Listed on the host, with git asked over there: ignore rules, dotfiles
+    and directories out, as for a local chat."""
+    from .test_workspace_paths import EXPECTED, seed_repo
+
+    c, sid, there = remote_chat
+    seed_repo(there)
+    (places[0] / "local-only.txt").write_text("not over there")
+    body = c.get("/api/workspace/paths", params={"session": sid}).json()
+    # The remote chat's own agent has no denied_paths: secrets.env shows.
+    assert body == {"paths": sorted([*EXPECTED, "secrets.env"]), "truncated": False}
+    draft = c.get("/api/workspace/paths", params={"root": f"remote://far{there}"})
+    assert draft.json() == body
 
 
 def test_a_draft_reads_the_remote_folder_it_is_about_to_open(remote_chat) -> None:

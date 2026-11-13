@@ -290,6 +290,23 @@ downloads it otherwise; either way the conversation stays put. Inside the Files
 panel the same link opens in the viewer instead. External links in a reply also
 open in a new tab.
 
+To point the Agent at a file without attaching it, type `@` at the start of the
+message or after a space: the composer lists the chat folder's files, matched
+as you type — file names first, then folders, then the letters in order. ↑/↓
+move, Enter or Tab inserts `@path `, Esc closes. A path with a space goes in
+quoted, `@"docs/my notes.md"`; a path holding a double quote, a line break or
+another control character is not offered (type it out instead). Only the path
+is sent, as typed — the model opens the file itself with `read_file`, so nothing
+changes about permissions or context size.
+
+The list is what the Agent's own `list_files` sees: in a Git repository it
+follows the repository's ignore rules, dotfiles are left out (as in the Files
+panel), and so is anything the Workspace's `denied_paths` hide; a remote chat
+lists the host's files. The browser keeps one chat's list and fetches it again
+after each run, so files the Agent made show up. The list stops at about 20,000
+entries; past that the menu says how many files it has, and the rest can be
+typed by path.
+
 Vision configuration controls whether images are sent inline:
 
 - Official OpenAI and Anthropic endpoints are treated as vision-capable by

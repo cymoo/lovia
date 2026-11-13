@@ -117,6 +117,14 @@ class WorkspaceListing(BaseModel):
     truncated: bool = False
 
 
+class WorkspacePaths(BaseModel):
+    """``GET /api/workspace/paths``: every file under the root, as
+    root-relative paths, sorted. ``truncated``: the cap left files out."""
+
+    paths: list[str]
+    truncated: bool = False
+
+
 class ChangesRequest(BaseModel):
     """``POST /api/workspace/changes``: the paths this chat wrote."""
 

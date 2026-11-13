@@ -27,7 +27,7 @@ from ...exceptions import UserError
 from ..errors import WorkspaceClosedError
 from ..local import LocalWorkspaceSession, root_facts
 from ..paths import complete_dirs
-from .wire import PROTOCOL, decode, encode, encode_error, read_lines
+from .wire import PROTOCOL, decode, encode, encode_error, frame, read_lines, unframe
 
 __all__ = ["main"]
 
@@ -80,7 +80,7 @@ class _Server:
         self._write_lock = asyncio.Lock()
 
     async def _send(self, message: dict[str, Any]) -> None:
-        data = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
+        data = frame(json.dumps(message, ensure_ascii=False).encode("utf-8"))
         # Shielded: a request cancelled while its reply is going out must not
         # release the lock under the writing thread — the next message would
         # be written into the middle of this one.
@@ -112,7 +112,7 @@ class _Server:
         )
         try:
             async for line in read_lines(reader, IDLE_SECONDS):
-                message = json.loads(line)
+                message = unframe(line)
                 if "id" not in message:
                     self._notified(message)
                     continue

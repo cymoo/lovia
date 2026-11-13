@@ -136,6 +136,7 @@ await box.aclose()
 | 握手 | 协议号、Python 版本、平台、home、服务进程的启动目录（容器是 `WORKDIR`，ssh 是 home，用作目录选择的起点）；之后 `open(root, policy, env, limits, …)` 返回会话 id、规范化后的 root 和 root 事实 |
 | 策略 | 按数据编码（规则、默认值、baseline）；`set_policy` 是一次调用 |
 | 二进制 | base64；`read_bytes` 的上限在远端生效；单帧上限从 `limits.max_file_read_bytes` 推导，不单独配置 |
+| 压缩（协议 2，v0.9.197） | 两个方向都一样：32 KiB 以上的消息先试 zlib（level 1），能压到原大小 90% 以下时，发 `z` 加 base64 的一行，否则原样发送。解压后同样受行上限约束。2 万条的文件列表从约 3 MB 压到约 0.3 MB；已经压过的数据（图片、压缩包）原样发送 |
 | 列表结果 | `{items, truncated}`，对应 `ClippedList` |
 | 错误 | `{code, message, data: {type, hint}}`，映射回同名异常；未知类型落到 `WorkspaceError` |
 | 取消 | 取消通知带请求 id，只取消那一个请求；`run()` 被取消时本来就会杀掉自己的进程组 |
@@ -227,7 +228,7 @@ WorkspaceSwitch()                                        # remotes=None：没有
 
 - **协议加了两样**：`stat(path) -> DirEntry`（是文件还是目录、大小、mtime，不读内容；不存在抛 `FileNotFoundError`），以及 `read_bytes(..., offset=, length=)` 读其中一段。没有加新的结果类型，也没有改协议号：两端跑的是同一份源码。
 - **页面读写文件都走一个自己的会话**（`web/workspaces.py:open_view`）：只读预设加上 Agent 的 `denied_paths`，本地和远程是同一段代码，`replace(cfg, policy=...).open()`。远程时它开在对话共用的那条连接上，每个请求开一次、关一次。Files 的列表、文本预览、上传、附件全部经过它；只有本地文件的 `raw` 还保留 `FileResponse`（Range、sendfile），不让本地退化成整文件进内存。
-- **远程的 `raw` 分块流式返回**：先 `stat` 得到大小和 mtime（算 ETag，判 304 和 413），再每次 256 KiB 地 `read_bytes`，边读边发。分块解决的是"一条消息就是一整个文件"带来的无进度和连接被独占；带宽本身解决不了。**没有做压缩**：走这条路的主要是图片、PDF 和上传，本来就压过；文本预览走 `read_text`，有 5 万字符的上限。远程 `raw` 不支持 Range。
+- **远程的 `raw` 分块流式返回**：先 `stat` 得到大小和 mtime（算 ETag，判 304 和 413），再每次 256 KiB 地 `read_bytes`，边读边发。分块解决的是"一条消息就是一整个文件"带来的无进度和连接被独占；带宽本身解决不了。**没有单独做压缩**：走这条路的主要是图片、PDF 和上传，本来就压过；文本预览走 `read_text`，有 5 万字符的上限。（v0.9.197 起协议层会压缩可压缩的大消息，见 §5，这些分块多半原样发送。）远程 `raw` 不支持 Range。
 - **文本预览的二进制判断**改成读文件的前 1 KiB（`read_bytes(length=1024)`），不再靠本地路径。
 - **上传**经过一个"只读 + 允许写根目录内"的会话，所以只读模式的对话照样能上传（和以前本地的行为一致），但 `uploads` 是一个指向根目录之外的链接时现在会被拒绝（403）。重名时先 `stat` 探测再写，避免每次冲突都把整个文件重发一遍；写入仍是 `create_only`，并发时不会互相覆盖。
 - **附件**：`user_content` 改成异步，逐个 `stat`（根目录之外在只读预设下是 deny，等于原来的"必须在根目录内"），图片再 `read_bytes` 后内联。主机连不上时返回 502 `workspace_unreachable`，不会丢掉附件只发文字。

@@ -8,6 +8,10 @@ envelope fields nothing here reads::
     <- {"id": 7, "result": {...}}        or   {"id": 7, "error": {...}}
     -> {"method": "cancel", "params": {"id": 7}}
 
+A large message whose JSON compresses well (a 20,000-entry listing: ~3 MB
+down to ~0.3 MB) goes as ``z`` + base64 of its zlib stream instead, still
+one line (:func:`frame`, :func:`unframe`). JSON never starts with ``z``.
+
 Values are JSON with a few tagged objects for what JSON cannot say: bytes, a
 tuple or set (policy fields are tuples and frozensets, and equality depends
 on it), a list that reports truncation, and the dataclasses both sides share.
@@ -21,6 +25,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import errno
+import json
+import zlib
 from collections.abc import AsyncIterator, Callable
 from dataclasses import fields, is_dataclass
 from typing import Any
@@ -59,16 +65,66 @@ __all__ = [
     "decode_error",
     "encode",
     "encode_error",
+    "frame",
     "read_lines",
+    "unframe",
 ]
 
 # Bumped on any incompatible change. Both ends run the same source (the near
 # side ships it), so a mismatch means a stale far process, never a version
-# to negotiate with.
-PROTOCOL = 1
+# to negotiate with. 2: compressed frames.
+PROTOCOL = 2
 
 # One line can carry a whole file (base64): room for the read cap, and then some.
+# A compressed line is held to it once inflated, too.
 MAX_LINE = 64 * 1024 * 1024
+
+# Messages smaller than this go as they are: they cross any link quickly, and
+# most are a few hundred bytes.
+_COMPRESS_FROM = 32 * 1024
+# A larger message is sampled first: a piece this size from its middle.
+_SAMPLE = 64 * 1024
+
+
+def frame(data: bytes) -> bytes:
+    """A message's JSON (``data``) as one line to write: as it is, or — when
+    it is large and compresses to well under its size — ``z`` and the base64
+    of its zlib stream. Level 1: on a slow far side the time saved on the
+    link is the point, and level 6 shrinks a listing only ~10% more at ~3x
+    the cost.
+
+    Data that is already compressed (an image, an archive) only grows, so
+    it goes as it is — and past four samples' size a sample decides that
+    first: the near side frames on the server's event loop, and compressing
+    a 25 MB upload only to throw the result away would stall every chat."""
+    if len(data) < _COMPRESS_FROM:
+        return data + b"\n"
+    if len(data) > 4 * _SAMPLE:
+        mid = len(data) // 2
+        sample = data[mid : mid + _SAMPLE]
+        # The whole must end below 0.9 of its size after base64's 4/3.
+        if len(zlib.compress(sample, 1)) > 0.6 * len(sample):
+            return data + b"\n"
+    packed = base64.b64encode(zlib.compress(data, 1))
+    if len(packed) < len(data) * 0.9:
+        return b"z" + packed + b"\n"
+    return data + b"\n"
+
+
+def unframe(line: bytes) -> Any:
+    """The message one :func:`frame` line carries. A compressed line may
+    inflate to :data:`MAX_LINE` at most — what a plain line may be — else
+    ``ValueError``, like any line past the limit."""
+    if line[:1] != b"z":
+        return json.loads(line)
+    inflater = zlib.decompressobj()
+    data = inflater.decompress(base64.b64decode(line[1:]), MAX_LINE)
+    if inflater.unconsumed_tail:
+        raise ValueError(f"a message exceeded {MAX_LINE} bytes")
+    if not inflater.eof:
+        raise ValueError("a compressed message ended early")
+    return json.loads(data)
+
 
 _TYPES: dict[str, type] = {
     cls.__name__: cls

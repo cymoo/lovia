@@ -32,7 +32,16 @@ from ..policy import WorkspacePolicy
 from ..types import RootFacts, WorkspaceLimits
 from .bundle import BOOT, bundle
 from .session import RemoteWorkspaceSession
-from .wire import MAX_LINE, PROTOCOL, decode, decode_error, encode, read_lines
+from .wire import (
+    MAX_LINE,
+    PROTOCOL,
+    decode,
+    decode_error,
+    encode,
+    frame,
+    read_lines,
+    unframe,
+)
 
 __all__ = ["RemoteHost"]
 
@@ -142,7 +151,7 @@ class _Connection:
         quiet = _PING_SECONDS + _PING_TIMEOUT
         try:
             async for line in read_lines(self._proc.stdout, quiet, self._sending):
-                message = json.loads(line)
+                message = unframe(line)
                 future = self._pending.pop(message.get("id"), None)
                 if future is None or future.done():
                     continue  # a ping's reply, or one whose caller gave up
@@ -221,14 +230,17 @@ class _Connection:
         if self.lost is not None:
             raise self._disconnected()
         assert self._proc.stdin is not None
-        data = (json.dumps(message) + "\n").encode("utf-8")
-        if len(data) > MAX_LINE:
+        data = json.dumps(message).encode("utf-8")
+        # Judged by what the message is, not what it compresses to: the far
+        # side holds an inflated line to the same limit.
+        if len(data) + 1 > MAX_LINE:
             # The far side would drop the whole connection over it — and
             # with it every session of every chat on this host.
             raise FileTooLargeError(
-                f"A {len(data):,}-byte request is more than {self.name} can be "
-                f"sent at once (limit {MAX_LINE:,} bytes)."
+                f"A {len(data) + 1:,}-byte request is more than {self.name} can "
+                f"be sent at once (limit {MAX_LINE:,} bytes)."
             )
+        data = frame(data)
         self._proc.stdin.write(data)
         self._written += len(data)
 

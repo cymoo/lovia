@@ -76,9 +76,9 @@ export function initSkillMenu(input) {
   /** @type {SkillInfo[]} */
   let shown = [];
   let active = 0;
-  let dismissed = false;
-  let loading = false; // one fetch at a time; typing meanwhile waits for it
+  let dismissed = false; // Esc: shut until this opening ends
   let opening = 0; // bumped by close(): an answer fetched before it is stale
+  let loadingFor = -1; // the opening a fetch is out for: one per opening
 
   input.setAttribute('aria-autocomplete', 'list');
 
@@ -91,10 +91,13 @@ export function initSkillMenu(input) {
     input.setAttribute('aria-expanded', 'false');
   }
 
-  // Hidden, and the list forgotten: the next opening fetches it afresh (a
-  // skill added on disk, another chat's or agent's list).
+  // This opening is over — hidden, the list forgotten (the next one fetches
+  // it afresh: a skill added on disk, another chat's or agent's list), and
+  // an Esc forgotten with it. Every way out ends here: the caret leaving the
+  // `/name`, a send (which clears the box without an input event), blur.
   function close() {
     skills = null;
+    dismissed = false;
     opening++;
     hide();
   }
@@ -102,15 +105,13 @@ export function initSkillMenu(input) {
   async function update() {
     const query = slashQuery(input.value, input.selectionEnd ?? 0);
     if (query === null || input.selectionStart !== input.selectionEnd) {
-      dismissed = false;
       close();
       return;
     }
     if (dismissed) return;
     if (skills === null) {
-      if (loading) return;
-      loading = true;
-      const ticket = opening;
+      if (loadingFor === opening) return; // on its way: it updates when in
+      const ticket = (loadingFor = opening);
       const where = store.sessionId
         ? { session: store.sessionId }
         : { agent: store.agent || undefined, root: draftWorkspaceRoot() || undefined };
@@ -120,9 +121,9 @@ export function initSkillMenu(input) {
       } catch {
         // No menu beats a broken one: the text still sends as typed.
       }
-      loading = false;
-      // Closed meanwhile: whatever is open now fetches for itself.
-      if (ticket !== opening) return update();
+      // Closed meanwhile: dropped. A later opening fetches for itself.
+      if (ticket !== opening) return;
+      loadingFor = -1; // a failed fetch is retried on the next keystroke
       if (!got) return;
       skills = got;
       // The caret may have moved on while the list was on its way.
@@ -215,8 +216,8 @@ export function initSkillMenu(input) {
         if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
         pick(shown[active]);
       } else if (e.key === 'Escape') {
-        dismissed = true;
         close();
+        dismissed = true; // after close(), which forgets it
       } else return;
       e.preventDefault();
       e.stopImmediatePropagation();

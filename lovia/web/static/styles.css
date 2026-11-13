@@ -6955,6 +6955,212 @@ body.lv-files-resizing {
   font-size: 11.5px;
   color: var(--lv-danger);
 }
+
+/* ---- Settings → MCP (mcp-config.js) ---- */
+.lv-mcp-intro {
+  margin-bottom: 14px;
+  line-height: 1.55;
+}
+.lv-mcp-install {
+  display: block;
+  width: fit-content;
+  margin-top: 6px;
+  padding: 2px 7px;
+  font-family: var(--lv-mono);
+  font-size: 12px;
+  background: var(--lv-surface-2);
+  border-radius: var(--lv-radius-sm);
+  user-select: all;
+}
+.lv-mcp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px 16px;
+  border: 1px dashed var(--lv-border-strong);
+  border-radius: var(--lv-radius);
+}
+/* Info, actions, switch; on a phone the actions (always shown there) take
+   a line of their own, so the info keeps the row's width. */
+.lv-mcp-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: 'info actions switch';
+  align-items: start;
+  cursor: default;
+}
+.lv-mcp-row .lv-model-row-info {
+  grid-area: info;
+}
+.lv-mcp-row .lv-model-row-actions {
+  grid-area: actions;
+}
+.lv-mcp-row .lv-switch {
+  grid-area: switch;
+  margin-top: 2px;
+}
+@media (max-width: 720px) {
+  .lv-mcp-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'info switch'
+      'actions actions';
+  }
+  .lv-mcp-row .lv-model-row-actions {
+    margin: 4px 0 -4px -8px;
+  }
+}
+.lv-mcp-row.lv-off .lv-model-row-name,
+.lv-mcp-row.lv-off .lv-mcp-target {
+  color: var(--lv-muted);
+}
+.lv-mcp-status,
+.lv-mcp-result {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--lv-ink-2);
+}
+.lv-mcp-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--lv-border-strong);
+}
+.lv-mcp-status-ok .lv-mcp-dot {
+  background: var(--lv-ok);
+}
+.lv-mcp-status-fail .lv-mcp-dot {
+  background: var(--lv-danger);
+}
+.lv-mcp-status-none,
+.lv-mcp-status-testing {
+  color: var(--lv-muted);
+}
+.lv-mcp-status-testing .lv-mcp-dot {
+  background: var(--lv-muted);
+  animation: lv-mcp-pulse 1.1s ease-in-out infinite;
+}
+@keyframes lv-mcp-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lv-mcp-status-testing .lv-mcp-dot {
+    animation: none;
+  }
+}
+.lv-mcp-when {
+  color: var(--lv-muted);
+  font-variant-numeric: tabular-nums;
+}
+.lv-mcp-error {
+  margin: 3px 0 0 13px;
+  font-family: var(--lv-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--lv-danger);
+  overflow-wrap: anywhere;
+}
+.lv-mcp-tools {
+  margin: 5px 0 0 13px;
+}
+.lv-mcp-tools summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--lv-muted);
+}
+.lv-mcp-tools summary:hover {
+  color: var(--lv-ink-2);
+}
+.lv-mcp-tool-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.lv-mcp-tool {
+  padding: 1px 6px;
+  font-family: var(--lv-mono);
+  font-size: 11px;
+  color: var(--lv-ink-2);
+  background: var(--lv-surface-2);
+  border-radius: var(--lv-radius-sm);
+}
+/* JSON keeps its shape: the editor takes the pane's width and scrolls
+   sideways instead of wrapping a long path into the next line. */
+.lv-cfg-form.lv-mcp-form {
+  max-width: none;
+}
+/* A server's name is case-sensitive: shown as written, not as a heading. */
+.lv-mcp-title-name {
+  text-transform: none;
+  font-family: var(--lv-mono);
+}
+.lv-mcp-json {
+  width: 100%;
+  resize: vertical;
+  font-size: 12.5px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+  overflow-x: auto;
+}
+.lv-mcp-syntax {
+  margin-top: -4px;
+}
+.lv-mcp-results:empty {
+  display: none;
+}
+.lv-mcp-result {
+  align-items: baseline;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.lv-mcp-result .lv-mcp-dot {
+  transform: translateY(-1px);
+}
+.lv-mcp-result strong {
+  font-weight: 600;
+  font-family: var(--lv-mono);
+}
+@media (hover: none) {
+  .lv-mcp-row .lv-model-row-actions {
+    opacity: 1; /* no hover on touch — the actions must be visible */
+  }
+}
+
+/* The chat's note that a run started without some MCP servers: a warning,
+   not an error — the run goes on. */
+.lv-mcp-notice {
+  display: flex;
+  gap: 9px;
+  margin: 10px 0;
+  padding: 9px 13px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--lv-ink);
+  background: var(--lv-warn-soft);
+  border: 1px solid var(--lv-warn-border);
+  border-radius: var(--lv-radius-sm);
+}
+.lv-mcp-notice-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--lv-warn);
+}
+.lv-mcp-notice-main {
+  min-width: 0;
+}
+.lv-mcp-notice-open {
+  margin: 4px 0 0 -8px;
+}
 .lv-skills-add {
   display: flex;
   gap: 8px;

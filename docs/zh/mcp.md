@@ -137,7 +137,7 @@ plugins=[MCP(
 
 - **`auto_reconnect` 意味着至少执行一次。** 调用中途断开后，会在新连接上重试一次；
   非幂等副作用（如 `create_ticket`）可能发生两次。对会修改状态的服务器，设置
-  `auto_reconnect=False`，让模型看到错误。
+  `auto_reconnect=False`，让模型看到错误——错误会说明这次调用可能已经生效，也可能没有。
 - **MCP 工具默认并发运行**，和所有工具一样。如果服务器工具会修改共享状态，它们没有天然屏障；
   可以用 `include_tools` 拆成两个服务器条目，或用 `permission="ask"` 给危险工具加门禁。
 - **`permission` 是按服务器，不是按工具。** “读工具自由，写工具门禁”的惯用做法，是把同一
@@ -150,4 +150,5 @@ plugins=[MCP(
 - [插件](plugins.md)：底层机制
 - [工具](tools.md)：转换后的 MCP 工具继承的一切行为
 - [工具审批](tools.md#工具审批)：给服务器工具加门禁
+- [Web UI → MCP 服务器](web-ui.md#mcp-服务器)：在 `lovia web` 的设置里配置同样的服务器，不用写代码
 - 示例：[`24_mcp.py`](../../examples/24_mcp.py)

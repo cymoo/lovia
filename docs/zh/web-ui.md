@@ -122,7 +122,7 @@ API Key 只写不读：服务端只返回是否已设置及脱敏提示，不会
 ## Agent
 
 `lovia web` 起初只有一个 Agent `lovia`，在**设置 → Agent** 里可以再建。每个 Agent 是一种工作方式：有自己的名称、
-提示词、模型、默认权限模式和免确认命令、开关（网页搜索、长期记忆、后台子任务、追问建议），以及“高级”里的技能目录和运行上限。
+提示词、模型、默认权限模式和免确认命令、开关（网页搜索、[MCP 工具](#mcp-服务器)、长期记忆、后台子任务、追问建议），以及“高级”里的技能目录和运行上限。
 模型、密钥、搜索服务在设置 → 模型、设置 → 联网搜索里配一次，各个 Agent 共用，Agent 只是引用它们。
 Agent 菜单里每个 Agent 的名称下方会显示它的模型和权限模式。
 
@@ -157,6 +157,46 @@ Agent 菜单里每个 Agent 的名称下方会显示它的模型和权限模式�
     `config.json` 第 1 版把唯一那个 Agent 的设置放在 `agent`、`run`、`workspace` 三段里。这三段不会折算：
     默认 Agent 从默认值开始（提示词、权限模式、免确认命令、开关和上限），下次保存时写成第 2 版。
     模型、角色、搜索和技能照常保留。
+
+## MCP 服务器
+
+**设置 → MCP** 列出 Agent 可以使用其工具的 [MCP](mcp.md) 服务器，打开了 **MCP 工具** 开关（默认打开）的 Agent 都会用。
+添加时直接粘贴其他客户端通用的 `mcpServers` JSON，一次可以加多个：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "env": { "SOME_TOKEN": "…" }
+    },
+    "docs": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer …" }
+    }
+  }
+}
+```
+
+服务器要么是在 lovia web 所在机器上运行的 `command`（stdio，远程对话也一样），要么是一个 `url`（streamable HTTP，不支持 SSE）。
+服务器名会作为它的工具名前缀（`docs__search`），只能用字母、数字、`-` 和 `_`。`"disabled": true` 表示保存为停用；其他字段会被忽略。
+
+- **每条消息连接一次。** 每个 run 开始时依次连接这些服务器，结束时关闭，run 之间不保持连接。`npx` 类服务器会让每条消息的启动慢一些。
+- **每次调用工具都会先问你**，不管对话是什么权限模式：工作区的权限模式只管文件和 shell，管不到 MCP 工具对外部系统的操作。
+  记住的批准和其他工具一样生效。
+- **不重放调用。** 调用过程中连接断开就算失败；服务器可能已经执行了，错误信息会这样说明，而不是自动再调一次。
+- **连不上的服务器会被跳过。** 每个服务器有 30 秒启动并列出工具；超时或出错时，run 不带它继续，
+  聊天里会显示哪个服务器没连上、原因是什么，模型也会知道。
+- **每一行显示最近一次连接的结果**（来自 run 或“测试”按钮）：成功与否、时间、列出的工具。“测试”会立即运行服务器的命令；
+  保存后会自动测试刚保存的服务器。这些结果只保存在内存里，重启后都显示“还没连接过”。
+- **密钥留在服务器上。** `env` 和 `headers` 的值返回时会打码（`ghp…a1b2`）。在编辑框里，打码的值不改就保持原值，清空表示删除，
+  填新值则替换；对不上任何已保存值的打码值会被拒绝。`command`、`args` 和 `url` 会原样显示，
+  所以令牌应放在 `env` 或 `headers` 里，不要写在参数或 URL 的查询串里。
+
+没有安装 `mcp` 扩展（`pip install 'lovia[mcp]'`）时页面会提示，所有服务器都会被跳过。服务器保存在 `config.json` 的 `mcp` 里。
+后台子任务不带 MCP 工具：没有人在场批准它们的调用。
 
 ## 加载自定义 Agent
 
@@ -328,6 +368,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | **Agent** → 不询问直接运行的命令（选“工作区内修改”时显示） | `agents[].auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
 | **Agent** → 高级 → 技能 | `agents[].skills` | `null`：全局技能目录；填列表则改用这些目录 |
 | **Agent** → 网页搜索 | `agents[].search` | 开启；关闭后去掉 `web_search`（`web_fetch` 保留） |
+| **Agent** → MCP 工具 | `agents[].mcp` | 开启：使用[设置 → MCP](#mcp-服务器)里启用的服务器（`mcp[]`） |
 | **Agent** → 长期记忆 | `agents[].memory` | 开启，保存在 `<home>/memory` |
 | **Agent** → 后台子任务 | `agents[].subagents` | 开启 |
 | **Agent** → 生成追问建议 | `agents[].followups` | 开启 |

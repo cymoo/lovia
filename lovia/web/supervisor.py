@@ -65,6 +65,7 @@ from .sse import (
     SessionData,
     LegFrame,
     LegTiming,
+    MCPUnavailable,
     SnapshotData,
     UserTurnRefs,
     event_to_sse,
@@ -741,11 +742,16 @@ class RunController:
         self._ingest(ev)
         self.hub.publish(ev)
 
-    def _publish_frame(self, frame: ApprovalAsked | ApprovalResolved) -> None:
+    def _publish_frame(self, frame: LegFrame) -> None:
         # Buffered like the run's own events: a re-attach replays the card
         # and how it was settled, so it never shows a decided card as open.
         self.in_flight_buffer.append(frame)
         self.hub.publish(frame)
+
+    def announce(self, frame: MCPUnavailable) -> None:
+        """A frame from outside the run's events — a plugin saying something
+        to the chat as the run starts — sent and kept like the run's own."""
+        self._publish_frame(frame)
 
     def _publish_refs(self, entries: list[TranscriptEntry]) -> None:
         """Name the finished leg's user turns (its segment is keyed by run_id).

@@ -175,7 +175,7 @@ only honours the one that starts it.
 `lovia web` serves one agent, `lovia`, until you add more in **Settings →
 Agents**. Each agent is a way of working: its own name, prompt, model,
 default permission mode and auto-allowed commands, switches (web search,
-memory, background subagents, follow-ups) and, under Advanced, skill
+[MCP tools](#mcp-servers), memory, background subagents, follow-ups) and, under Advanced, skill
 directories and run limits. Models, keys and the search service are configured
 once (Settings → Models, Settings → Web search) and shared; an agent refers to them.
 The agent menu shows each agent's model and permission mode under its name.
@@ -225,6 +225,62 @@ In `config.json` a missing field takes its default ([below](#settings-that-apply
     starts from the defaults (its prompt, permission mode, auto-allowed
     commands, switches and limits), and the next save writes version 2.
     Models, roles, search and skills carry over.
+
+## MCP servers
+
+**Settings → MCP** lists the [MCP](mcp.md) servers whose tools the agents
+use — every agent with its **MCP tools** switch on (the default). Add servers
+by pasting the `mcpServers` JSON other clients use; several at once is fine:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "env": { "SOME_TOKEN": "…" }
+    },
+    "docs": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer …" }
+    }
+  }
+}
+```
+
+A server is a `command` run on the lovia web host (stdio) — for a remote
+chat too — or a `url` (streamable HTTP; SSE is not supported). Its name
+prefixes its tools (`docs__search`), so it is letters, digits, `-` and `_`.
+`"disabled": true` saves it switched off; other keys are ignored.
+
+- **Connected per message.** Each run connects to the servers as it starts,
+  one after another, and closes them when it ends — an `npx` server makes
+  every message start a little later. Nothing stays running between runs.
+- **Every tool call asks first**, whatever the chat's permission mode: the
+  workspace modes govern files and the shell, not what an MCP tool does to
+  an outside system. Remembered approvals work as for any tool.
+- **No replays.** A call whose connection drops fails; the server may still
+  have done it, and the error says so instead of trying again.
+- **A server that can't be reached is skipped.** It has 30 seconds to start
+  and list its tools; past that, or on any error, the run goes on without
+  it, the chat shows which server did not connect and why, and the model is
+  told.
+- **Each row shows the last connection** — from a run or the **Test**
+  button: its outcome, when, and the tools it listed. Testing runs the
+  server's command now; saving tests the servers just saved. This is kept
+  in memory, so a restart starts every row at "not connected yet".
+- **Secrets stay on the server.** `env` and `headers` values come back
+  masked (`ghp…a1b2`). In the editor, a masked value left as it is keeps
+  what is saved, an emptied one is removed, a new one replaces it; a
+  masked value that matches nothing saved is refused. `command`, `args`
+  and `url` are shown as written, so a token belongs in `env` or `headers`,
+  not in an argument or the URL's query.
+
+Without the `mcp` extra installed (`pip install 'lovia[mcp]'`), the page says
+so and every server is skipped. Servers are saved in `config.json` as `mcp`.
+Background subagent tasks don't get MCP tools: no one is there to approve
+their calls.
 
 ## Serve your own Agent
 
@@ -452,6 +508,7 @@ finishes with what it started with.
 | **Agents** → Commands that run without asking (shown for Edit in workspace) | `agents[].auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
 | **Agents** → Advanced → Skills | `agents[].skills` | `null`: the global directories; a list replaces them |
 | **Agents** → Web search | `agents[].search` | On; off leaves out `web_search` (`web_fetch` stays) |
+| **Agents** → MCP tools | `agents[].mcp` | On: the servers turned on in [Settings → MCP](#mcp-servers) (`mcp[]`) |
 | **Agents** → Long-term memory | `agents[].memory` | On, kept in `<home>/memory` |
 | **Agents** → Background tasks | `agents[].subagents` | On |
 | **Agents** → Suggest follow-up questions | `agents[].followups` | On |

@@ -34,7 +34,7 @@ const DEFAULT_MAX_TURNS = 100;
  * An on/off switch for a form row; `value()` reads it back.
  * @param {boolean} checked
  */
-function switchControl(checked) {
+export function switchControl(checked) {
   const sw = el('button', 'lv-switch');
   sw.setAttribute('type', 'button');
   sw.setAttribute('role', 'switch');
@@ -206,6 +206,7 @@ export function buildAgentsPane() {
       auto_allow: [...perms.bundles],
       skills: null,
       search: true,
+      mcp: true,
       memory: true,
       subagents: true,
       max_turns: DEFAULT_MAX_TURNS,
@@ -293,12 +294,20 @@ export function buildAgentsPane() {
 
     // ---- switches
     const search = switchControl(a.search);
+    const mcp = switchControl(a.mcp);
     const memory = switchControl(a.memory);
     const subagents = switchControl(a.subagents);
     const followups = switchControl(a.followups);
     const switches = el('div', 'lv-cfg-switches');
+    const servers = c.mcp?.servers || [];
+    const enabled = servers.filter((/** @type {any} */ s) => s.enabled).length;
     switches.append(
       switchRow(t('agent.search'), search.node, t('agent.searchHint')),
+      switchRow(
+        t('agent.mcp'),
+        mcp.node,
+        servers.length ? t('agent.mcpHint', { n: enabled }) : t('agent.mcpHintNone'),
+      ),
       switchRow(t('cfg.memory'), memory.node, t('cfg.memoryHint')),
       switchRow(t('cfg.subagents'), subagents.node, t('cfg.subagentsHint')),
       switchRow(t('cfg.followups'), followups.node, t('cfg.followupsHint')),
@@ -369,6 +378,7 @@ export function buildAgentsPane() {
         model: model.value || null,
         skills: ownSkills ? dirs : null,
         search: search.value(),
+        mcp: mcp.value(),
         memory: memory.value(),
         subagents: subagents.value(),
         followups: followups.value(),

@@ -1,6 +1,6 @@
 # Coding 能力补齐：搜索、指令、编辑、输入框、MCP
 
-> 状态：方案已定，未实现 · 2026-11-13 · 范围：`lovia/workspace`（session engine）、`lovia/plugins/skills`、`lovia/web`。
+> 状态：六项均已实现（#431–#435、#438；第 5 项的远程首次加载另由 #436、#437 优化）· 2026-11-14 · 范围：`lovia/workspace`（session engine）、`lovia/plugins/skills`、`lovia/web`。
 >
 > 行号指向 `main`（`655bfc56`，v0.9.190）。
 
@@ -160,6 +160,13 @@ git -C <base> ls-files --cached --others --exclude-standard -z
 - "测试"按钮：连接、列出工具、关闭，带超时。
 
 **密钥。** `env` 和 `headers` 里的值在接口返回时打码。保存时沿用模型 API key 的约定（`web/api/config.py:65`）：未改动的打码值保留原值，空字符串清除，其他字符串替换。不能把打码占位符写回配置。
+
+**实现补充（#438）。**
+
+- 每行的“最近一次连接”除了来自“测试”按钮，也来自每个 run 的连接；保存后自动测试刚保存的服务器。这些状态只在内存里，重启后清空。
+- 聊天里的提示是一个只在实时流里出现的 `mcp_unavailable` 帧（刷新后不重放）；同时在系统提示里告诉模型哪些服务器没连上。
+- 后台子任务不挂 MCP：没有人在场批准它们的调用。
+- 核心 `MCPConnection` 在不重连时遇到连接中断，错误信息改为“调用可能已经生效，也可能没有”。
 
 ## 文档
 

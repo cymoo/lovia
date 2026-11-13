@@ -159,7 +159,8 @@ plugin raises `UserError` at setup (give servers a `name=` prefix).
 - **`auto_reconnect` means at-least-once.** A call that died mid-flight is
   retried once on a fresh connection — a non-idempotent side effect
   (`create_ticket`) can happen twice. Set `auto_reconnect=False` on servers
-  with mutating tools, and let the model see the error instead.
+  with mutating tools, and let the model see the error instead — it says
+  the call may or may not have taken effect.
 - **MCP tools run in parallel by default**, like every tool. A server
   whose tools mutate shared state has no barrier protection — wrap the
   risky ones via `include_tools` split across two server entries, or gate
@@ -176,4 +177,6 @@ plugin raises `UserError` at setup (give servers a `name=` prefix).
 - [Plugins](plugins.md) — the mechanism underneath
 - [Tools](tools.md) — everything a converted MCP tool inherits
 - [Tool approval](tools.md#tool-approval) — gating server tools
+- [Web UI → MCP servers](web-ui.md#mcp-servers) — the same servers from
+  `lovia web`'s Settings, no code
 - Example: [`24_mcp.py`](../../examples/24_mcp.py)

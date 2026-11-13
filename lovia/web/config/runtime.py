@@ -25,6 +25,7 @@ from ...exceptions import UserError
 from ...plugins import Memory
 from ...providers import Provider, provider_from_string
 from ...providers._windows import clear_endpoint_cache
+from ...run_context import RunContext
 from ...tools import HumanChannel
 from ...workspace import LocalWorkspace
 from ..followups import FollowupRequest, generate_followups
@@ -84,6 +85,11 @@ class ConfigRuntime:
         # files' locks, so a run still on the old agents and the editor (or
         # clear_scope) on the new ones must share the one instance.
         self._memory: Memory | None = None
+        # Each MCP server's last connection (Settings shows it), and where a
+        # run reports one it started without: kept across ``apply`` too.
+        from ..mcp import MCPBook
+
+        self.mcp = MCPBook(unavailable=self._mcp_unavailable)
 
     # ------------------------------------------------------------- state -
 
@@ -123,6 +129,17 @@ class ConfigRuntime:
         from ..builder import spec_id
 
         return self.config.agent(spec_id(name))
+
+    def _mcp_unavailable(
+        self, ctx: RunContext[Any], failed: list[tuple[str, str]]
+    ) -> None:
+        """Tell the chat whose run started without some MCP servers."""
+        from ..sse import MCPUnavailable
+
+        deps = self._deps
+        ctrl = deps.supervisor.get(ctx.session_id) if deps and ctx.session_id else None
+        if ctrl is not None:
+            ctrl.announce(MCPUnavailable(servers=failed))
 
     def _spec(self, agent: Agent[Any]) -> AgentConfig:
         # An agent deleted since the run began runs on as the default does.
@@ -187,6 +204,7 @@ class ConfigRuntime:
                 config=config,
                 spec=spec,
                 memory=memory,
+                mcp=self.mcp,
             )
         return agents, resolve_aux_model(config.aux_profile())
 

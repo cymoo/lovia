@@ -11,6 +11,7 @@ import shutil
 import signal
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -1330,6 +1331,31 @@ async def test_glob_skips_denied_paths(tmp_path) -> None:
     paths = {e.path for e in await session.list_files(".", pattern="*")}
     assert "ok.txt" in paths
     assert "secret.txt" not in paths
+
+
+async def test_paths_are_placed_against_the_root_as_relative_to_would(
+    tmp_path,
+) -> None:
+    """The prefix shortcut gives what ``Path.relative_to`` gives — a sibling
+    that merely shares the root's name as a prefix is outside, the root
+    itself is "." — under an ordinary root and under "/"."""
+    root = (tmp_path / "ws").resolve()
+    root.mkdir()
+    for base in (root, Path("/")):
+        session = LocalWorkspaceSession(root=str(base))
+        for p in (
+            base,
+            base / "a.txt",
+            base / "d" / "e.txt",
+            base.parent / (base.name + "x") / "f.txt",
+            base.parent / (base.name + "x"),
+            Path("/elsewhere/g.txt"),
+        ):
+            try:
+                want: str | None = p.relative_to(base).as_posix()
+            except ValueError:
+                want = None
+            assert session._display_and_rel(p) == (want or p.as_posix(), want), p
 
 
 async def test_glob_excludes_symlinks_escaping_root(tmp_path) -> None:

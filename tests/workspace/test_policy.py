@@ -735,6 +735,37 @@ def test_rules_ignore_case_where_the_file_system_does(
         assert got.action == "allow", abs_posix
 
 
+@pytest.mark.parametrize("fold", [False, True])
+def test_glob_answers_as_fnmatch_does(
+    monkeypatch: pytest.MonkeyPatch, fold: bool
+) -> None:
+    """The prepared matcher (literal head + compiled regex) is a speed-up of
+    ``fnmatch``, never a different answer — case folding included."""
+    from fnmatch import fnmatch
+
+    from lovia.workspace import paths
+    from lovia.workspace.policy import _glob
+
+    monkeypatch.setattr(paths, "FOLD_CASE", fold)
+    patterns = [
+        ".env*", "*.pem", "id_rsa*", "sub/*.key", "/home/u/.ssh", "/home/u/.ssh/*",
+        "**/secrets", "[ab]*.txt", "[!a]x", "a[", "file?.py", "*", "", ".ENV",
+    ]  # fmt: skip
+    names = [
+        ".env", ".env.local", ".ENV", "x.pem", "x.PEM", "id_rsa.pub", "sub/a.key",
+        "sub/deep/a.key", "/home/u/.ssh", "/home/u/.ssh/config", "/home/U/.ssh/x",
+        "a.txt", "b.txt", "c.txt", "bx", "ax", "a[", "file1.py", "file12.py", "",
+    ]  # fmt: skip
+    for pattern in patterns:
+        for name in names:
+            want = (
+                fnmatch(name.lower(), pattern.lower())
+                if fold
+                else fnmatch(name, pattern)
+            )
+            assert _glob(name, pattern) is want, (name, pattern)
+
+
 def test_bundles_exist_for_both_host_shells() -> None:
     from lovia.workspace import rules
 

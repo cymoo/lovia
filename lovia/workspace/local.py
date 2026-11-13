@@ -275,6 +275,11 @@ def _has_hidden_segment(rel: str) -> bool:
 
 _GIT_TIMEOUT = 10.0
 
+# Whether lstat (and os.path.islink) see every link that redirects a path.
+# Not on Windows: a directory junction reads as a plain directory to both,
+# so there only resolve() finds where a path really leads.
+_LSTAT_SEES_LINKS = os.name != "nt"
+
 
 def _git(base: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     # No fsmonitor: a repository's own config must not run a hook on search.
@@ -494,6 +499,8 @@ class LocalWorkspaceSession:
     executor: "ShellExecutor | None" = None
     id: str = field(default_factory=lambda: f"local-{uuid.uuid4().hex[:8]}")
     _root: Path = field(init=False, repr=False)
+    # The root as a POSIX prefix ending in "/": what a path under it starts with.
+    _root_prefix: str = field(init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     # Per-path write locks keyed by _path_key, so a symlink and its target
     # (and, where the volume ignores case, every spelling) share one lock.
@@ -532,6 +539,8 @@ class LocalWorkspaceSession:
                 hint="Point Workspace.local(root=...) at an existing directory.",
             )
         self._root = root
+        posix = root.as_posix()
+        self._root_prefix = posix if posix.endswith("/") else posix + "/"
 
     def set_policy(self, policy: WorkspacePolicy) -> None:
         """Judge every later operation by ``policy``.
@@ -664,6 +673,14 @@ class LocalWorkspaceSession:
 
     def _display_and_rel(self, p: Path) -> tuple[str, str | None]:
         """(display path, workspace-relative path or None) for ``p``."""
+        # A prefix test settles the common case: Path.relative_to walks the
+        # parents, and a bulk walk asks several times per entry. Anything
+        # else (the root itself, a case-only mismatch on Windows) falls
+        # through to it.
+        posix = p.as_posix()
+        if posix.startswith(self._root_prefix):
+            rel = posix[len(self._root_prefix) :] or "."
+            return rel, rel
         try:
             rel = p.relative_to(self._root).as_posix()
             return rel, rel
@@ -1100,16 +1117,21 @@ class LocalWorkspaceSession:
             self._list_matching, rp.abs, pattern, include_hidden, cap
         )
 
-    def _entry_for(self, p: Path, *, is_dir: bool) -> DirEntry:
+    def _entry_for(
+        self, p: Path, *, is_dir: bool, lst: os.stat_result | None = None
+    ) -> DirEntry:
+        """``p``'s listing entry. ``lst``: its ``lstat``, already taken by a
+        caller that found it is not a symlink — it stands in for ``stat``."""
         display, _ = self._display_and_rel(p)
         symlink_target: str | None = None
+        if lst is None:
+            try:
+                if p.is_symlink():
+                    symlink_target = p.resolve().as_posix()
+            except OSError:
+                symlink_target = None
         try:
-            if p.is_symlink():
-                symlink_target = p.resolve().as_posix()
-        except OSError:
-            symlink_target = None
-        try:
-            st = p.stat()
+            st = lst if lst is not None else p.stat()
             size = None if is_dir else st.st_size
             mtime = st.st_mtime
         except OSError as exc:
@@ -1174,26 +1196,39 @@ class LocalWorkspaceSession:
         under_outside = self._is_outside(base)
         listed = _git_files(base)
         # Sorted when git lists the files, so the cap below keeps the first.
-        found: Iterable[Path] = (
-            base.glob(pattern)
+        # Each comes with its path under base, or None to work it out.
+        found: Iterable[tuple[Path, str | None]] = (
+            ((p, None) for p in base.glob(pattern))
             if listed is None
-            else (base / rel for rel in _glob_listed(listed, pattern))
+            else ((base / rel, rel) for rel in _glob_listed(listed, pattern))
         )
-        for p in found:
-            display, _ = self._display_and_rel(p)
+        for p, base_rel in found:
             # Hidden filtering is relative to the *listed* directory: listing
             # ".config" explicitly must not hide everything just because the
             # base itself is a dotdir, and an outside base gets the same
             # treatment as an inside one.
-            try:
-                base_rel = p.relative_to(base).as_posix()
-            except ValueError:  # defensive; glob yields paths under base
-                base_rel = p.name
+            if base_rel is None:
+                try:
+                    base_rel = p.relative_to(base).as_posix()
+                except ValueError:  # defensive; glob yields paths under base
+                    base_rel = p.name
             if not include_hidden and _has_hidden_segment(base_rel):
                 continue
-            # Judge the resolved target (symlinks may point anywhere).
+            # Judge the resolved target (symlinks may point anywhere). Git's
+            # list never runs through a symlinked directory (_git_files drops
+            # those) and base is resolved, so there only the entry itself can
+            # be a link: one lstat says, where resolve() costs one per level.
+            # Only where lstat sees every link (see _LSTAT_SEES_LINKS).
+            lst: os.stat_result | None = None
             try:
-                resolved = p.resolve()
+                if listed is None or not _LSTAT_SEES_LINKS:
+                    resolved = p.resolve()
+                else:
+                    lst = os.lstat(p)
+                    linked = stat_module.S_ISLNK(lst.st_mode)
+                    resolved = p.resolve() if linked else p
+                    if linked:
+                        lst = None
             except OSError:
                 continue
             # Symlink targets as in _list_children: hidden when denied or
@@ -1202,16 +1237,20 @@ class LocalWorkspaceSession:
                 resolved != p and self._read_hidden(resolved, under_outside=True)
             ):
                 continue
+            display, _ = self._display_and_rel(p)
             if display in results:
                 continue
             if len(results) >= max_results:
                 truncated = True
                 break
-            try:
-                is_dir = p.is_dir()
-            except OSError:
-                is_dir = False
-            results[display] = self._entry_for(p, is_dir=is_dir)
+            if lst is not None:
+                is_dir = stat_module.S_ISDIR(lst.st_mode)
+            else:
+                try:
+                    is_dir = p.is_dir()
+                except OSError:
+                    is_dir = False
+            results[display] = self._entry_for(p, is_dir=is_dir, lst=lst)
         ordered = [results[key] for key in sorted(results)]
         return ClippedList(ordered, truncated=truncated)
 

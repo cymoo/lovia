@@ -1,14 +1,16 @@
 // Files panel — a read-only window into the agent's workspace.
 //
-// lovia is a personal assistant, so the panel leads with "Recent": a flat,
-// newest-first list across the whole workspace — the thing the assistant just
-// wrote floats to the top. "Browse" (breadcrumb + one directory level) is the
-// secondary view. The viewer renders documents as documents: markdown rich by
-// default, images inline, CSV as a table; code gets highlighting.
+// lovia is a personal assistant, so the panel leads with "Changes": the files
+// this chat wrote or brought in, newest first, then — in a git work tree — the
+// other uncommitted changes, folded. "Browse" (breadcrumb + one directory
+// level) is the secondary view. The viewer renders documents as documents:
+// markdown rich by default, images inline, CSV as a table; code gets
+// highlighting; a changed tracked file also offers its diff against HEAD.
 //
-// Wiring: chat.js emits `workspace-file-touched` for write_file/edit_file
-// tool calls (live and replayed history) and `workspace-maybe-stale` after a
-// shell run; this module owns everything else.
+// Wiring: chat.js emits `workspace-file-touched` for successful
+// write_file/edit_file calls and for a sent message's attachments (live and
+// replayed history), and `workspace-maybe-stale` after a shell run; this
+// module owns everything else.
 import { t } from './i18n.js';
 import { store } from './store.js';
 import { api, apiError } from './api.js';
@@ -52,11 +54,17 @@ const els = {};
 const state = {
   available: false, // current agent has a workspace
   open: false,
-  mode: 'recent', // 'recent' | 'browse'
+  mode: 'changes', // 'changes' | 'browse'
   browsePath: '', // '' = workspace root
   entries: [],
+  // The last change list, by path — what the viewer asks whether a file has
+  // a diff to show (also while browsing). `git` says whether there is one at all.
+  changes: new Map(),
+  git: false,
+  truncated: false, // git listed more than the list shows
+  othersOpen: false, // "other uncommitted changes" unfolded
   procs: [], // background processes of this chat's workspace session
-  touched: new Set(), // paths this chat's write_file/edit_file produced
+  touched: new Set(), // paths this chat wrote, or attached to a message
   // Per-path edit counter — busts the browser's in-page image cache only when
   // the agent actually touched the file. First opens use the bare URL, so the
   // HTTP cache (revalidated via the server's ETag/no-cache) does its job.
@@ -68,7 +76,7 @@ const state = {
   failed: false, // the last listing failed: the list shows why, and a retry
   filter: '', // case-insensitive substring over listed paths
   wrap: localStorage.getItem('lovia-files-wrap') !== '0', // wrap long lines
-  viewing: null, // { path, kind, raw, name, end, totalLines, truncated }
+  viewing: null, // { path, kind, raw, name, end, totalLines, truncated, view, diff }
   listScroll: 0, // the list's scroll when a file covered it (narrow panel)
 };
 
@@ -223,7 +231,7 @@ function touchKey(path) {
 }
 
 /** True for a path under the agent's scratch dir (root-relative, like the
- * server's Recent filter). `null` scratch dir means nothing is scratch. */
+ * server's change list). `null` scratch dir means nothing is scratch. */
 function isScratch(key, dir) {
   return !!dir && (key === dir || key.startsWith(`${dir}/`));
 }
@@ -273,7 +281,9 @@ function updateVisibility() {
 // `queueRefresh()` is for what happens to the files meanwhile — every write
 // the chat makes, and every past one a history replay re-emits on opening a
 // chat: a burst of those asks once, and never while an answer is pending
-// (each ask walks the whole tree, on another machine for a remote folder).
+// (each ask stats every touched path and runs git, on another machine for a
+// remote folder).
+const MAX_TOUCHED = 500; // ChangesRequest.paths' cap (schemas.py)
 let _refreshSeq = 0; // the newest request; an older one's answer is stale
 let _refreshing = false; // the newest request is still out
 let _refreshAgain = false; // something changed while it was
@@ -289,8 +299,8 @@ function queueRefresh() {
   _refreshTimer = setTimeout(refresh, 150);
 }
 
-// The list repaints from what is already here (a touched file moves into
-// "this chat") without waiting for the next listing; a burst paints once.
+// The list repaints from what is already here (another chat's files drop
+// out) without waiting for the next listing; a burst paints once.
 let _renderQueued = false;
 function queueRender() {
   if (_renderQueued) return;
@@ -318,12 +328,17 @@ async function refresh() {
     if (!state.entries.length) els.list.replaceChildren(emptyNode(t('files.loading')));
   }, 300);
   let entries = null;
+  let changes = null;
   let failure = null;
   try {
-    entries =
-      state.mode === 'recent'
-        ? await api.workspaceRecent({ agent: store.agent })
-        : await api.workspaceFiles({ agent: store.agent, path: state.browsePath || '.' });
+    if (state.mode === 'changes') {
+      // The server takes 500 at most: the most recently touched, in a chat that long.
+      const paths = [...state.touched].slice(-MAX_TOUCHED);
+      changes = await api.workspaceChanges({ agent: store.agent, paths });
+      entries = changes.files;
+    } else {
+      entries = await api.workspaceFiles({ agent: store.agent, path: state.browsePath || '.' });
+    }
   } catch (err) {
     failure = err;
   }
@@ -347,6 +362,12 @@ async function refresh() {
     return;
   }
   state.entries = entries;
+  if (changes) {
+    state.git = changes.git;
+    state.truncated = changes.truncated;
+    state.changes = new Map(changes.files.map((f) => [f.path, f]));
+    syncViewerViews(); // a file on screen may just have gained (or lost) a diff
+  }
   renderCrumbs();
   renderList();
   void restoreViewing();
@@ -355,6 +376,8 @@ async function refresh() {
 /** The list has nothing of the place just left to show while the new one loads. */
 function clearList() {
   state.entries = [];
+  state.changes = new Map();
+  state.git = false;
   state.failed = false;
   els.list.replaceChildren();
 }
@@ -483,8 +506,8 @@ function setMode(mode) {
   // A tab is also the way back to its list from a file covering the panel.
   if (state.viewing && !isWide()) closeViewer();
   state.mode = mode;
-  els.tabRecent.classList.toggle('lv-active', mode === 'recent');
-  els.tabRecent.setAttribute('aria-selected', String(mode === 'recent'));
+  els.tabChanges.classList.toggle('lv-active', mode === 'changes');
+  els.tabChanges.setAttribute('aria-selected', String(mode === 'changes'));
   els.tabBrowse.classList.toggle('lv-active', mode === 'browse');
   els.tabBrowse.setAttribute('aria-selected', String(mode === 'browse'));
   els.crumbs.classList.toggle('lv-hidden', mode !== 'browse');
@@ -592,8 +615,9 @@ function rowIcon(entry) {
 
 /**
  * A row's right-click menu — what you'd otherwise open the file to reach:
- * attach it to the chat, copy its path, download it. A folder offers its path.
- * @param {{ path: string, is_dir: boolean }} entry
+ * attach it to the chat, copy its path, download it. A folder (or a file git
+ * says is deleted) offers its path.
+ * @param {{ path: string, is_dir: boolean, status?: string | null }} entry
  * @param {MouseEvent} e
  * @param {HTMLElement} row
  */
@@ -608,7 +632,7 @@ function rowMenu(entry, e, row) {
       if (await copyToClipboard(entry.path)) toast(t('ws.pathCopied'));
     },
   };
-  if (entry.is_dir) {
+  if (entry.is_dir || entry.status === 'deleted') {
     openMenu(at, [copy]);
     return;
   }
@@ -637,11 +661,36 @@ function rowMenu(entry, e, row) {
   ]);
 }
 
+/** What git says changed about a change-list row: "+12 −3", or "New". */
+function changeMark(entry) {
+  const mark = document.createElement('span');
+  mark.className = 'lv-file-change';
+  if (entry.status === 'untracked' || entry.status === 'added') {
+    mark.classList.add('lv-new');
+    mark.textContent = t('files.newFile');
+    return mark;
+  }
+  for (const [n, sign, cls] of [
+    [entry.added, '+', 'lv-add'],
+    [entry.removed, '−', 'lv-del'],
+  ]) {
+    if (!n) continue;
+    const span = document.createElement('span');
+    span.className = cls;
+    span.textContent = `${sign}${n}`;
+    mark.appendChild(span);
+  }
+  return mark.childElementCount ? mark : null;
+}
+
 function rowFor(entry) {
+  const changes = state.mode === 'changes';
   const row = document.createElement('button');
   row.type = 'button';
   row.className = 'lv-file-row';
-  if (!entry.is_dir && isTouched(entry.path)) row.classList.add('lv-touched');
+  // Browsing, a dot marks what this chat wrote; the change list groups it instead.
+  if (!changes && !entry.is_dir && isTouched(entry.path)) row.classList.add('lv-touched');
+  if (entry.status === 'deleted') row.classList.add('lv-deleted');
   if (state.viewing?.path === entry.path) row.classList.add('lv-active');
 
   const ic = document.createElement('span');
@@ -656,7 +705,8 @@ function rowFor(entry) {
   const sub = document.createElement('span');
   sub.className = 'lv-file-row-sub';
   const bits = [];
-  if (state.mode === 'recent' && dirname(entry.path)) bits.push(dirname(entry.path));
+  if (changes && dirname(entry.path)) bits.push(dirname(entry.path));
+  if (entry.old_path) bits.push(t('files.renamedFrom', { path: entry.old_path }));
   // A folder's icon already says what it is; its line keeps just the time.
   if (!entry.is_dir && entry.size != null) bits.push(formatBytes(entry.size));
   if (entry.mtime) bits.push(formatTimeSmart(entry.mtime));
@@ -665,6 +715,8 @@ function rowFor(entry) {
   main.append(name, sub);
 
   row.append(ic, main);
+  const mark = changes ? changeMark(entry) : null;
+  if (mark) row.appendChild(mark);
   row.title = entry.path;
   row.addEventListener('contextmenu', (e) => rowMenu(entry, e, row));
   row.addEventListener('click', () => {
@@ -673,7 +725,8 @@ function rowFor(entry) {
       state.browsePath = entry.path;
       refresh();
     } else {
-      openFile(entry.path);
+      // From the change list a file opens on what changed; browsing, on itself.
+      openFile(entry.path, { view: changes ? 'diff' : 'file' });
     }
   });
   return row;
@@ -686,6 +739,21 @@ function groupLabel(text) {
   return div;
 }
 
+/** "Other uncommitted changes · 7": the folded group's header, which unfolds it. */
+function othersToggle(count) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'lv-files-group-label lv-files-group-toggle';
+  b.setAttribute('aria-expanded', String(state.othersOpen));
+  b.innerHTML = icon('chevron-right', { size: 12 });
+  b.append(`${t('files.otherChanges')} · ${count}`);
+  b.addEventListener('click', () => {
+    state.othersOpen = !state.othersOpen;
+    renderList();
+  });
+  return b;
+}
+
 function renderList() {
   if (state.failed) return; // the list is the failure and its retry until one works
   const frag = document.createDocumentFragment();
@@ -693,12 +761,20 @@ function renderList() {
   const entries = needle
     ? state.entries.filter((e) => e.path.toLowerCase().includes(needle))
     : state.entries;
-  if (!entries.length) {
-    const empty = emptyNode(
-      needle ? t('files.noMatch') : state.mode === 'recent' ? t('files.noFiles') : t('files.emptyDir'),
-    );
-    // An empty workspace says how files get here, and offers the first way.
-    if (!needle && state.mode === 'recent' && els.upload) {
+  if (state.mode === 'browse') {
+    if (!entries.length) frag.appendChild(emptyNode(needle ? t('files.noMatch') : t('files.emptyDir')));
+    for (const entry of entries) frag.appendChild(rowFor(entry));
+    els.list.replaceChildren(frag);
+    return;
+  }
+  // The change list leads with what THIS chat produced — the panel's whole
+  // reason to exist for most visits — then, folded, what else git sees.
+  const mine = entries.filter((e) => e.touched);
+  const others = entries.filter((e) => !e.touched);
+  if (!mine.length && !needle) {
+    // A chat with no files yet says how they get here, and offers the first way.
+    const empty = emptyNode(t('files.noFiles'));
+    if (els.upload) {
       const up = document.createElement('button');
       up.type = 'button';
       up.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-files-empty-upload';
@@ -708,24 +784,20 @@ function renderList() {
       empty.append(up);
     }
     frag.appendChild(empty);
+  } else if (!entries.length) {
+    frag.appendChild(emptyNode(t('files.noMatch')));
   }
-  // Recent leads with what THIS chat produced — the panel's whole reason to
-  // exist for most visits. The split disappears when it wouldn't inform
-  // (nothing touched, or everything touched).
-  const touched =
-    state.mode === 'recent'
-      ? entries.filter((e) => !e.is_dir && isTouched(e.path))
-      : [];
-  if (touched.length && touched.length < entries.length) {
-    const inTouched = new Set(touched);
-    frag.appendChild(groupLabel(t('files.thisChat')));
-    for (const entry of touched) frag.appendChild(rowFor(entry));
-    frag.appendChild(groupLabel(t('files.otherFiles')));
-    for (const entry of entries) {
-      if (!inTouched.has(entry)) frag.appendChild(rowFor(entry));
+  if (mine.length && others.length) frag.appendChild(groupLabel(t('files.thisChat')));
+  for (const entry of mine) frag.appendChild(rowFor(entry));
+  if (others.length) {
+    frag.appendChild(othersToggle(others.length));
+    // A filter looks inside the fold too: what it found is shown.
+    if (state.othersOpen || needle) {
+      for (const entry of others) frag.appendChild(rowFor(entry));
+      if (state.truncated && !needle) {
+        frag.appendChild(emptyNode(t('files.changesCut', { n: others.length })));
+      }
     }
-  } else {
-    for (const entry of entries) frag.appendChild(rowFor(entry));
   }
   els.list.replaceChildren(frag);
 }
@@ -959,9 +1031,117 @@ function renderText(content, path) {
   return pre;
 }
 
+// ---- Diff ---------------------------------------------------------------------
+// A tracked file git sees changed has a second view: its diff against HEAD,
+// unified, with old/new line numbers. A new file has none — all green says
+// nothing the file itself doesn't — and a deleted one has only that.
+
+/** The change-list row of `path` when git has a diff of it to show. */
+function diffOf(path) {
+  const c = state.git ? state.changes.get(path) : null;
+  return c && ['modified', 'renamed', 'deleted'].includes(c.status) ? c : null;
+}
+
+/** The "Diff / File" switch above the viewer, for the file on screen. */
+function syncViewerViews() {
+  const v = state.viewing;
+  const c = v ? diffOf(v.path) : null;
+  els.viewerViews.classList.toggle('lv-hidden', !c);
+  if (!v) return;
+  if (!c && v.view === 'diff') {
+    void openFile(v.path, { silent: true, view: 'file' }); // committed meanwhile
+    return;
+  }
+  const deleted = c?.status === 'deleted';
+  for (const [b, view] of [
+    [els.viewDiff, 'diff'],
+    [els.viewFile, 'file'],
+  ]) {
+    b.classList.toggle('lv-active', v.view === view);
+    b.setAttribute('aria-selected', String(v.view === view));
+  }
+  els.viewFile.disabled = deleted;
+  els.attach.classList.toggle('lv-hidden', deleted);
+}
+
+async function loadDiff(v) {
+  let diff;
+  try {
+    // A rename diffs against its old path, or git sees only a new file.
+    const old = state.changes.get(v.path)?.old_path || undefined;
+    diff = await api.workspaceDiff({ agent: store.agent, path: v.path, old });
+  } catch (err) {
+    if (state.viewing === v) {
+      els.viewerBody.replaceChildren(viewerNote(err?.message || t('files.diffFailed')));
+    }
+    return;
+  }
+  if (state.viewing !== v) return; // another file (or view) took the viewer
+  v.diff = diff;
+  renderViewerContent();
+}
+
+const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+// The header lines worth showing: the rest (index, ---/+++) repeat the path.
+const DIFF_META = /^(rename from|rename to|old mode|new mode|deleted file mode|new file mode) /;
+
+function renderDiff(d) {
+  if (d.binary) return viewerNote(t('files.diffBinary'));
+  if (!d.diff.trim()) return viewerNote(t('files.diffEmpty'));
+  const box = document.createElement('div');
+  if (d.truncated) box.appendChild(viewerNote(t('files.diffCut')));
+  const lines = document.createElement('div');
+  lines.className = 'lv-files-diff';
+  const line = (cls, oldN, newN, text) => {
+    const row = document.createElement('div');
+    row.className = cls ? `lv-diff-line ${cls}` : 'lv-diff-line';
+    for (const n of [oldN, newN]) {
+      const num = document.createElement('span');
+      num.className = 'lv-diff-n';
+      num.textContent = n === null ? '' : String(n);
+      row.appendChild(num);
+    }
+    const code = document.createElement('span');
+    code.className = 'lv-diff-code';
+    code.textContent = text;
+    row.appendChild(code);
+    lines.appendChild(row);
+  };
+  let oldN = 0;
+  let newN = 0;
+  let inHunk = false; // before the first @@ are git's headers (diff --git, index, ---, +++)
+  for (const text of d.diff.split('\n')) {
+    const m = HUNK.exec(text);
+    // A rename git didn't pair up diffs as two files: the second's headers
+    // follow the first's last hunk.
+    if (text.startsWith('diff --git ')) inHunk = false;
+    else if (m) {
+      [oldN, newN, inHunk] = [Number(m[1]), Number(m[2]), true];
+      line('lv-hunk', null, null, text);
+    } else if (!inHunk && DIFF_META.test(text)) {
+      // What a pure rename or a mode change consists of: it has no hunk.
+      line('lv-hunk', null, null, text);
+    } else if (!inHunk || !text || text.startsWith('\\')) {
+      // a header, the closing newline, "\ No newline at end of file"
+    } else if (text[0] === '+') {
+      line('lv-add', null, newN++, text);
+    } else if (text[0] === '-') {
+      line('lv-del', oldN++, null, text);
+    } else {
+      line('', oldN++, newN++, text);
+    }
+  }
+  // Nothing git said is worth a row (a header shape not foreseen): say so,
+  // rather than an empty box.
+  if (!lines.childElementCount) return viewerNote(t('files.diffEmpty'));
+  box.appendChild(lines);
+  return box;
+}
+
 // Returns false when the file couldn't be read (so link-following can retry
-// with a different base); true otherwise.
-async function openFile(path, { silent = false } = {}) {
+// with a different base); true otherwise. `view` picks diff or file for a
+// file that has both; a silent reopen (an agent write) keeps the one on screen.
+async function openFile(path, { silent = false, view = undefined } = {}) {
   const name = basename(path);
   rememberViewing(path);
   if (!els.panel.classList.contains('lv-viewing')) state.listScroll = els.list.scrollTop;
@@ -1001,9 +1181,22 @@ async function openFile(path, { silent = false } = {}) {
           : CSV_EXT.has(e)
             ? 'csv'
             : 'text';
-  const keepRaw = silent && state.viewing?.path === path ? state.viewing.raw : false;
-  state.viewing = { path, kind, name, raw: keepRaw };
+  const same = silent && state.viewing?.path === path ? state.viewing : null;
+  const change = diffOf(path);
+  const shown =
+    change?.status === 'deleted' ? 'diff' : change ? (view ?? same?.view ?? 'file') : 'file';
+  // The last diff stays up while a fresh one loads: an agent's edits don't strobe it.
+  const diff = shown === 'diff' ? same?.diff : undefined;
+  state.viewing = { path, kind, name, raw: same?.raw ?? false, view: shown, diff };
   if (!silent) renderList();
+  syncViewerViews();
+  if (shown === 'diff') {
+    const v = state.viewing;
+    if (diff) renderViewerContent();
+    else els.viewerBody.replaceChildren();
+    await loadDiff(v);
+    return true;
+  }
 
   if (kind === 'image') {
     const img = document.createElement('img');
@@ -1127,6 +1320,14 @@ function renderViewerContent() {
   if (!v) return;
   els.viewerBody.replaceChildren();
   els.viewerBody.classList.toggle('lv-nowrap', !state.wrap);
+  if (v.view === 'diff') {
+    if (!v.diff) return; // still loading
+    els.mdToggle.classList.add('lv-hidden');
+    els.wrapToggle.classList.toggle('lv-hidden', !v.diff.diff);
+    els.copyContent.classList.toggle('lv-hidden', !v.diff.diff);
+    els.viewerBody.appendChild(renderDiff(v.diff));
+    return;
+  }
   // Wrap toggling only means something for plain text / raw views.
   const textual =
     v.kind === 'text' ||
@@ -1213,7 +1414,9 @@ async function uploadToWorkspace(files) {
   let ok = 0;
   for (const file of files) {
     try {
-      await api.uploadFile(file, { agent: store.agent });
+      // The user brought it into this chat: it lists with the chat's own
+      // (until the chat changes — it is on no message to replay from).
+      state.touched.add((await api.uploadFile(file, { agent: store.agent })).path);
       ok += 1;
     } catch (err) {
       toast(uploadFailedText(file.name, err), { type: 'error' });
@@ -1221,7 +1424,7 @@ async function uploadToWorkspace(files) {
   }
   if (ok) {
     toast(t('files.uploaded', { n: ok }));
-    if (state.mode !== 'recent') setMode('recent'); // that's where they surface
+    if (state.mode !== 'changes') setMode('changes'); // that's where they surface
     else refresh();
   }
 }
@@ -1275,12 +1478,15 @@ function maybeReloadViewing(touchedPath) {
 }
 
 // ---- Init -----------------------------------------------------------------------
-/** Wire up the Files panel: open/close, Recent/Browse tabs, the viewer, and workspace-change listeners. */
+/** Wire up the Files panel: open/close, Changes/Browse tabs, the viewer, and workspace-change listeners. */
 export function initFiles() {
   els.panel = document.getElementById('files-panel');
   els.btn = document.getElementById('files-btn');
   if (!els.panel || !els.btn) return;
-  els.tabRecent = document.getElementById('files-tab-recent');
+  els.tabChanges = document.getElementById('files-tab-changes');
+  els.viewerViews = document.getElementById('files-viewer-views');
+  els.viewDiff = document.getElementById('files-view-diff');
+  els.viewFile = document.getElementById('files-view-file');
   els.tabBrowse = document.getElementById('files-tab-browse');
   els.refresh = document.getElementById('files-refresh');
   els.close = document.getElementById('files-close');
@@ -1354,8 +1560,17 @@ export function initFiles() {
     refresh();
     refreshProcs();
   });
-  els.tabRecent.addEventListener('click', () => setMode('recent'));
+  els.tabChanges.addEventListener('click', () => setMode('changes'));
   els.tabBrowse.addEventListener('click', () => setMode('browse'));
+  for (const [b, view] of [
+    [els.viewDiff, 'diff'],
+    [els.viewFile, 'file'],
+  ]) {
+    b.addEventListener('click', () => {
+      const v = state.viewing;
+      if (v && v.view !== view) void openFile(v.path, { silent: true, view });
+    });
+  }
   els.viewerClose.addEventListener('click', () => closeViewer());
   els.filter?.addEventListener('input', () => {
     state.filter = els.filter.value.trim();
@@ -1376,7 +1591,8 @@ export function initFiles() {
     renderViewerContent();
   });
   els.copyContent.addEventListener('click', async () => {
-    const content = state.viewing?.content;
+    const v = state.viewing;
+    const content = v?.view === 'diff' ? v.diff?.diff : v?.content;
     if (typeof content !== 'string') return;
     if (await copyToClipboard(content)) toast(t('toast.contentCopied'));
   });
@@ -1490,28 +1706,31 @@ export function initFiles() {
     if (state.open) refresh();
   });
   // "touched" (and the edit revisions) are scoped to the chat on screen —
-  // and so are background processes. The list regroups at once: what the
-  // chat just left wrote is no longer "this chat".
+  // and so are background processes. The list drops at once what the chat
+  // just left wrote; the replay of the new one's history asks for its own.
   const chatChanged = () => {
     state.touched.clear();
     state.revs.clear();
     clearUnseen();
+    state.entries = state.entries.filter((e) => !e.touched);
     queueRender();
+    queueRefresh();
     state.procs = [];
     renderProcs();
     refreshProcs();
   };
   store.on('session-switched', chatChanged);
   store.on('reset-chat-view', chatChanged);
-  store.on('workspace-file-touched', async ({ path }) => {
+  store.on('workspace-file-touched', async ({ path, attached = false }) => {
     const key = touchKey(path);
+    state.touched.delete(key); // re-added last: the set stays in touch order
     state.touched.add(key);
-    state.revs.set(key, (state.revs.get(key) || 0) + 1);
-    queueRender();
     queueRefresh();
+    if (attached) return; // listed, but nothing about the file changed
+    state.revs.set(key, (state.revs.get(key) || 0) + 1);
     maybeReloadViewing(key);
     // Badge only live-run writes of deliverables: replayed history re-emits
-    // old touches, and a scratch write never reaches the Recent list the
+    // old touches, and a scratch write never reaches the change list the
     // badge invites the user to open. Decided once the scratch dir is known.
     if (state.open || !store.streaming) return;
     const agent = store.agent;

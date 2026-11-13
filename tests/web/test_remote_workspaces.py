@@ -187,9 +187,11 @@ def test_the_files_panel_reads_a_remote_chats_directory(remote_chat, places) -> 
     inside = c.get("/api/workspace/files", params={**at, "path": "docs"}).json()
     assert [e["path"] for e in inside] == ["docs/note.md"]
     assert inside[0]["size"] == 11 and inside[0]["mtime"]
-    # Recent: the same presentation filter, applied over there.
-    recent = c.get("/api/workspace/recent", params=at).json()
-    assert [e["path"] for e in recent] == ["docs/note.md"]
+    # The change list: stat-ed and judged over there, git asked over there.
+    paths = ["docs/note.md", "tmp/scratch.txt", ".env", "local-only.txt"]
+    changes = c.post("/api/workspace/changes", params=at, json={"paths": paths})
+    assert changes.json()["git"] is False
+    assert [e["path"] for e in changes.json()["files"]] == ["docs/note.md"]
 
     page = c.get("/api/workspace/file", params={**at, "path": "docs/note.md"}).json()
     assert (page["content"], page["total_lines"]) == ("# hi\nthere\n", 2)
@@ -424,7 +426,7 @@ def test_a_host_that_cannot_be_reached_is_said_so_not_dropped(places) -> None:
     with _client(
         _agent(here, [text("x")]), WorkspaceSwitch(remotes={"gone": gone})
     ) as c:
-        res = c.get("/api/workspace/recent", params={"root": key})
+        res = c.post("/api/workspace/changes", params={"root": key}, json={})
         assert (res.status_code, res.json()["detail"]["code"]) == (
             502,
             "workspace_unreachable",

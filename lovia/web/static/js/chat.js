@@ -74,6 +74,14 @@ function emitWorkspaceTouch(name, path) {
   if (path) store.emit('workspace-file-touched', { path });
 }
 
+// A sent message's attachments are this chat's files too — the user brought
+// them in — so the Files panel lists them with what the assistant wrote.
+function emitAttachmentTouches(/** @type {any[] | null} */ attachments) {
+  for (const a of attachments || []) {
+    if (a?.path) store.emit('workspace-file-touched', { path: a.path, attached: true });
+  }
+}
+
 // Throttled streaming render: the first delta in a window arms the timer and
 // later ones ride along, so a model that never pauses for 60ms (a local vLLM
 // at 100+ tok/s) still repaints ~16×/s. A trailing debounce here (re-arming on
@@ -484,6 +492,7 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
   const bubble = node.querySelector('.lv-bubble');
   if (attachments && attachments.length) {
     appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
+    emitAttachmentTouches(attachments);
   }
   if (text) {
     const body = document.createElement('div');
@@ -2134,7 +2143,29 @@ export function renderHistory(entries) {
   // it, so that copy is stale from the start.
   _historyStale = !!store.streaming;
   _historyStart = alignHistoryStart(_historyEntries.length - HISTORY_PAGE);
+  emitHistoryTouches(_historyEntries);
   renderHistoryWindow({ stickBottom: true });
+}
+
+/**
+ * Tell the Files panel every file the WHOLE history touched — not just the
+ * rendered window: "this chat" lists what the chat produced, whether live or
+ * reloaded, and only from what the page reports. As live, only a write that
+ * landed counts (a denied or failing call never made the file).
+ * @param {any[]} entries
+ */
+function emitHistoryTouches(entries) {
+  const landed = new Set(
+    entries.filter((e) => e.role === 'tool' && !e.is_error).map((e) => e.tool_call_id),
+  );
+  for (const it of entries) {
+    if (it.role === 'user') {
+      emitAttachmentTouches(splitAttachmentNote(contentText(it.content)).attachments);
+    }
+    for (const call of it.tool_calls || []) {
+      if (landed.has(call.id)) emitWorkspaceTouch(call.name, toolPath(call.arguments));
+    }
+  }
 }
 
 /** The "load earlier" button waits out a run: its redraw would wipe the live answer. */
@@ -2324,16 +2355,13 @@ function renderHistoryWindow({ stickBottom }) {
       }
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
-          // Replayed history counts too: "touched" means files THIS chat
-          // produced, whether live or reloaded.
-          emitWorkspaceTouch(call.name, toolPath(call.arguments));
+          const result = pendingResults.get(call.id);
           const todos = parseTodos(call.arguments);
           if (todos) {
             upsertTodoCard(todos); // render/update the session's checklist panel
             continue;
           }
           const node = buildToolNode(call);
-          const result = pendingResults.get(call.id);
           // Attached first, so a UI component renders into a laid-out card.
           appendBubbleContent(currentBubble, node);
           // Same renderer as the live path: highlighting, error styling, and

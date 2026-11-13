@@ -188,7 +188,7 @@ def test_a_chat_in_a_directory_the_server_no_longer_allows_is_refused(
         assert res.status_code == 409
         assert res.json()["detail"]["code"] == "workspace_not_allowed"
         # Nor do its files show.
-        res = c.get("/api/workspace/recent", params={"session": sid})
+        res = c.post("/api/workspace/changes", params={"session": sid}, json={})
         assert res.status_code == 409
     assert not (launch / "out.txt").exists() and not (other / "out.txt").exists()
 
@@ -244,14 +244,16 @@ def test_files_panel_reads_the_chat_directory(dirs: tuple[Path, Path]) -> None:
         sid = c.post(
             "/api/chat", json={"message": "go", "workspace": str(other)}
         ).json()["session_id"]
-        names = [
-            e["path"] for e in c.get(f"/api/workspace/recent?session={sid}").json()
-        ]
-        assert names == ["here.txt"]
+
+        def listed(**scope: str) -> list[str]:
+            body = {"paths": ["here.txt", "there.txt"]}
+            res = c.post("/api/workspace/changes", params=scope, json=body)
+            return [e["path"] for e in res.json()["files"]]
+
+        assert listed(session=sid) == ["here.txt"]
         info = c.get("/api/workspace", params={"root": str(other)}).json()
         assert info["name"] == "other"
-        own = [e["path"] for e in c.get("/api/workspace/recent").json()]
-        assert own == ["there.txt"]
+        assert listed() == ["there.txt"]
 
 
 # ------------------------------------------------ what a run hands on -

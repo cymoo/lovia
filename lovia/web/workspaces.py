@@ -30,6 +30,7 @@ from typing import Any, Literal, cast, get_args
 from ..agent import Agent
 from ..exceptions import UserError
 from ..workspace import (
+    CommandRule,
     LocalWorkspace,
     RemoteHost,
     RemoteWorkspace,
@@ -70,11 +71,23 @@ def files_config(agent: Agent[Any]) -> LocalWorkspace | RemoteWorkspace | None:
     return cfg if isinstance(cfg, (LocalWorkspace, RemoteWorkspace)) else None
 
 
+# The git reads behind the Files panel's change list and diff. The page
+# never sends a command — the server builds each one — so these prefixes
+# only bound what that code can run on an otherwise shell-less view.
+_GIT_READS = tuple(
+    CommandRule(p, "allow") for p in ("git rev-parse", "git status", "git diff")
+)
+# The git view's own output cap: high enough that the caller sees the whole
+# answer and trims it itself (the session clips head + tail, which would cut
+# a -z record list or a diff hunk in the middle).
+_GIT_OUTPUT_CHARS = 2_000_000
+
+
 async def open_view(
     cfg: LocalWorkspace | RemoteWorkspace,
     *,
-    skip: tuple[str, ...] = (),
     write: bool = False,
+    git: bool = False,
 ) -> WorkspaceSession:
     """A session on ``cfg``'s files for the page itself, not for a run.
 
@@ -82,17 +95,21 @@ async def open_view(
     and under this preset everything outside the root — and everything the
     agent's ``denied_paths`` hide — is a plain ``deny``. Only ``denied_paths``
     carry over from the agent's policy, never its ``path_rules``, which
-    could *widen* access. ``skip`` adds paths for a listing to leave out (to
-    the walk, "skipped" and "denied" look the same). ``write`` lets it write
-    inside the root, for an upload: the user's own act, so it does not wait
-    on the chat's mode.
+    could *widen* access. ``write`` lets it write inside the root, for an
+    upload: the user's own act, so it does not wait on the chat's mode.
+    ``git`` lets it run ``git rev-parse`` / ``status`` / ``diff`` and
+    nothing else, with the path guard still judging every argument.
 
     Opened where the files are — on the host, for a remote workspace, over
     the connection its chats share. The caller closes it.
     """
-    policy = WorkspacePolicy.readonly(denied_paths=cfg.policy.denied_paths + skip)
+    policy = WorkspacePolicy.readonly(denied_paths=cfg.policy.denied_paths)
     if write:
         policy = replace(policy, write="allow")
+    if git:
+        policy = replace(policy, allow_shell=True, command_rules=_GIT_READS)
+        limits = replace(cfg.limits, max_shell_output_chars=_GIT_OUTPUT_CHARS)
+        cfg = replace(cfg, limits=limits)
     return await replace(cfg, policy=policy).open()
 
 

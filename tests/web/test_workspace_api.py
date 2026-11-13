@@ -38,7 +38,7 @@ def _seed(root: Path) -> None:
     (root / "blob.bin").write_bytes(b"\x00\x01\x02 junk")
     (root / "pic.png").write_bytes(PNG_BYTES)
     (root / "big.txt").write_text("line\n" * 60_000)  # > max_file_read_chars
-    # Environment junk Recent must leave out (see _RECENT_SKIPS).
+    # Environment junk: browsable, never in the change list (it isn't sent).
     (root / "__pycache__").mkdir()
     (root / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"\x00pyc")
     (root / "orphan.pyc").write_bytes(b"\x00pyc")
@@ -47,7 +47,7 @@ def _seed(root: Path) -> None:
     (root / "node_modules" / "pkg").mkdir(parents=True)
     (root / "node_modules" / "pkg" / "index.js").write_text("module.exports = 1\n")
     # The instructed scratch dir (workspace instructions send intermediates
-    # here) — out of Recent like junk, but browsable and readable: the agent
+    # here) — out of the change list, but browsable and readable: the agent
     # references what it writes there.
     (root / "tmp").mkdir()
     (root / "tmp" / "scratch.txt").write_text("half-done work\n")
@@ -55,9 +55,8 @@ def _seed(root: Path) -> None:
     # A nested directory that merely shares the name is not the scratch dir.
     (root / "reports" / "tmp").mkdir(parents=True)
     (root / "reports" / "tmp" / "nested.txt").write_text("a deliverable\n")
-    # Deterministic recency order: report.csv is the newest file. The junk is
-    # made newer still, so if the Recent filter broke it would visibly take
-    # over the top of the list.
+    # Deterministic recency order: report.csv is the newest deliverable. The
+    # junk is made newer still, so a list that walked the tree would show it.
     now = time.time()
     for i, name in enumerate(
         [
@@ -112,11 +111,13 @@ def test_workspace_info_and_no_workspace_agent(client: TestClient) -> None:
     assert info["name"]  # the root's directory name, never the full path
     assert "/" not in info["name"]
     assert info["scratch_dir"] == "tmp"  # the layout name the prompt teaches
-    for ep in ("", "/files", "/recent"):
+    for ep in ("", "/files"):
         assert (
             client.get(f"/api/workspace{ep}", params={"agent": "plain"}).status_code
             == 404
         )
+    res = client.post("/api/workspace/changes", params={"agent": "plain"}, json={})
+    assert res.status_code == 404
 
 
 def test_feature_flag_false_without_any_workspace() -> None:
@@ -158,36 +159,46 @@ def test_files_subdir_and_missing(client: TestClient) -> None:
     )
 
 
-def test_recent_is_files_only_newest_first(client: TestClient) -> None:
-    entries = client.get("/api/workspace/recent", params={"agent": "bot"}).json()
-    assert all(not e["is_dir"] for e in entries)
-    assert entries[0]["path"] == "report.csv"  # newest by seeded mtimes
-    assert entries[-1]["path"] == "notes/plan.md"  # oldest
-    limited = client.get(
-        "/api/workspace/recent", params={"agent": "bot", "limit": 2}
+def test_changes_lists_the_chats_files_that_are_still_there(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Only the paths sent, each stat-ed — never a walk: gone, denied,
+    outside, scratch and directories drop out, and two spellings of one
+    file list once. The seeded junk is newer than all of them and absent."""
+    paths = [
+        "notes/plan.md",
+        "./report.csv",
+        str(tmp_path / "report.csv"),
+        "reports/tmp/nested.txt",  # only the root's tmp/ is scratch
+        "tmp/scratch.txt",
+        "secrets.env",
+        "/etc/hosts",
+        "gone.md",
+        "notes",
+    ]
+    res = client.post(
+        "/api/workspace/changes", params={"agent": "bot"}, json={"paths": paths}
     ).json()
-    assert [e["path"] for e in limited] == ["report.csv", "blob.bin"]
+    assert res["git"] is False  # tmp_path is no repository
+    assert [e["path"] for e in res["files"]] == [
+        "report.csv",
+        "reports/tmp/nested.txt",
+        "notes/plan.md",
+    ]  # newest first
+    assert all(e["touched"] and e["status"] is None for e in res["files"])
+    assert res["files"][0]["size"] > 0 and res["files"][0]["mtime"]
+    too_many = {"paths": ["a"] * 501}
+    assert (
+        client.post(
+            "/api/workspace/changes", json=too_many, params={"agent": "bot"}
+        ).status_code
+        == 422
+    )
 
 
-# The seeded junk and scratch (all newer than report.csv — they would top
-# Recent if the filter broke) stay out of Recent only: browsing, preview and
-# download follow the agent's read access, not the list's presentation.
-
-
-def test_recent_skips_environment_junk_and_scratch(client: TestClient) -> None:
-    entries = client.get("/api/workspace/recent", params={"agent": "bot"}).json()
-    paths = [e["path"] for e in entries]
-    assert paths[0] == "report.csv"  # the newest *deliverable* leads
-    for path in paths:
-        assert not path.endswith(".pyc")
-        assert not path.startswith(("venv/", "node_modules/", "__pycache__/", "tmp/"))
-    # The scratch rule is root-relative ("under tmp/"), unlike the junk names.
-    assert "reports/tmp/nested.txt" in paths
-
-
-def test_browse_shows_what_recent_skips(client: TestClient) -> None:
-    """The Recent filter is presentation only: a directory listing is one
-    level and can't be crowded, so it tells the truth — scratch included."""
+def test_browse_shows_what_changes_leaves_out(client: TestClient) -> None:
+    """The change list's scratch rule is presentation only: a directory
+    listing is one level and can't be crowded, so it tells the truth."""
     entries = client.get("/api/workspace/files", params={"agent": "bot"}).json()
     paths = {e["path"] for e in entries}
     assert {"__pycache__", "venv", "node_modules", "orphan.pyc", "tmp"} <= paths

@@ -217,7 +217,7 @@
   <div id="files-resizer" class="lv-files-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel (arrow keys; double-click resets)" aria-controls="files-panel" tabindex="0"></div>
   <div class="lv-files-head">
     <div class="lv-files-tabs" role="tablist" aria-label="File view">
-      <button id="files-tab-recent" class="lv-files-tab lv-active" type="button" role="tab" aria-selected="true" data-i18n="files.recent">Recent</button>
+      <button id="files-tab-changes" class="lv-files-tab lv-active" type="button" role="tab" aria-selected="true" data-i18n="files.changes">Changes</button>
       <button id="files-tab-browse" class="lv-files-tab" type="button" role="tab" aria-selected="false" data-i18n="files.browse">Browse</button>
     </div>
     <div class="lv-files-head-actions">
@@ -246,6 +246,13 @@
         <button id="files-more" class="lv-btn-icon" type="button" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" data-i18n-title="files.more" data-i18n-aria="files.more"></button>
         <button id="files-viewer-close" class="lv-btn-icon" type="button" title="Close file" aria-label="Close file preview"></button>
       </div>
+    </div>
+    <div id="files-viewer-views" class="lv-files-viewer-views lv-hidden">
+      <div class="lv-files-tabs" role="tablist" aria-label="Diff or file">
+        <button id="files-view-diff" class="lv-files-tab" type="button" role="tab" aria-selected="false" data-i18n="files.viewDiff">Diff</button>
+        <button id="files-view-file" class="lv-files-tab" type="button" role="tab" aria-selected="false" data-i18n="files.viewFile">File</button>
+      </div>
+      <span class="lv-files-viewer-base" data-i18n="files.diffBase">Since last commit</span>
     </div>
     <div id="files-viewer-body" class="lv-files-viewer-body"></div>
   </section>

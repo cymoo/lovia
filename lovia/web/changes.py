@@ -242,10 +242,21 @@ async def file_diff(
     work tree (or before its first commit). ``old`` is a rename's former
     path: with both named, git diffs the move instead of a new file.
     ``windows``: the command runs under cmd.exe, which knows no ``'``."""
-    if await git_prefix(session) is None:
+    prefix = await git_prefix(session)
+    if prefix is None:
         return None
     quote = (lambda p: subprocess.list2cmdline([p])) if windows else shlex.quote
     paths = " ".join(quote(p) for p in (path, old) if p)
+    # A pathspec may name a directory (`.`, `src`): git then diffs every file
+    # under it, a denied one too. Each file the diff would carry is judged
+    # first, as the change list judges what it lists.
+    names = await _git(session, f"diff -M --name-only -z HEAD -- {paths}")
+    if not names.ok:
+        return None
+    for name in filter(None, names.stdout.split("\0")):
+        rel = _under(name, prefix)
+        if rel is None or not await _readable(session, rel):
+            raise PermissionDeniedError(f"{rel or name} is not readable")
     result = await _git(session, f"diff -M --no-ext-diff --no-textconv HEAD -- {paths}")
     if not result.ok:
         return None

@@ -142,6 +142,22 @@ def test_diff_is_the_file_against_head(repo: Path) -> None:
     # A path is a path: no glob reaches the denied file it doesn't name.
     glob = c.get("/api/workspace/diff", params={"path": "*.env"}).json()
     assert glob["diff"] == ""
+    # Nor does a directory, whose diff would carry every file under it.
+    root = c.get("/api/workspace/diff", params={"path": "."})
+    assert (root.status_code, root.json()["detail"]["code"]) == (403, "path_denied")
+    assert "leak" not in root.text
+    # And no path is no pathspec at all: refused, not a whole-tree diff.
+    assert c.get("/api/workspace/diff", params={"path": ""}).status_code == 422
+    blank_old = {"path": "a.txt", "old": ""}
+    assert c.get("/api/workspace/diff", params=blank_old).status_code == 200
+
+
+@needs_git
+def test_a_directory_of_readable_files_still_diffs(repo: Path) -> None:
+    (repo / "secrets.env").write_text("old\nsame\n")  # back to HEAD
+    (repo / "pic.bin").write_bytes(b"\x00\x01")  # (a binary marks the whole diff)
+    d = _client(repo).get("/api/workspace/diff", params={"path": "."}).json()
+    assert "a/a.txt" in d["diff"] and "a/b.txt" in d["diff"]
 
 
 @needs_git

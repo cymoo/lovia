@@ -354,7 +354,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         agent: str | None = Query(None),
         chat: str | None = Query(None, alias="session"),
         root: str | None = Query(None, max_length=4096),
-        path: str = Query(..., max_length=4096),
+        path: str = Query(..., min_length=1, max_length=4096),
         old: str | None = Query(None, max_length=4096),
     ) -> WorkspaceDiff:
         """One file against ``HEAD``, unified, cut to the workspace's shell

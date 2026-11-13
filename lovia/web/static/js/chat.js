@@ -2143,7 +2143,29 @@ export function renderHistory(entries) {
   // it, so that copy is stale from the start.
   _historyStale = !!store.streaming;
   _historyStart = alignHistoryStart(_historyEntries.length - HISTORY_PAGE);
+  emitHistoryTouches(_historyEntries);
   renderHistoryWindow({ stickBottom: true });
+}
+
+/**
+ * Tell the Files panel every file the WHOLE history touched — not just the
+ * rendered window: "this chat" lists what the chat produced, whether live or
+ * reloaded, and only from what the page reports. As live, only a write that
+ * landed counts (a denied or failing call never made the file).
+ * @param {any[]} entries
+ */
+function emitHistoryTouches(entries) {
+  const landed = new Set(
+    entries.filter((e) => e.role === 'tool' && !e.is_error).map((e) => e.tool_call_id),
+  );
+  for (const it of entries) {
+    if (it.role === 'user') {
+      emitAttachmentTouches(splitAttachmentNote(contentText(it.content)).attachments);
+    }
+    for (const call of it.tool_calls || []) {
+      if (landed.has(call.id)) emitWorkspaceTouch(call.name, toolPath(call.arguments));
+    }
+  }
 }
 
 /** The "load earlier" button waits out a run: its redraw would wipe the live answer. */
@@ -2289,7 +2311,6 @@ function renderHistoryWindow({ stickBottom }) {
       // the previews from it and show the clean message — matching live send.
       const { text: bodyText, attachments } = splitAttachmentNote(contentText(it.content));
       if (attachments.length) appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
-      emitAttachmentTouches(attachments);
       if (bodyText) {
         const body = document.createElement('div');
         body.className = 'lv-body';
@@ -2335,10 +2356,6 @@ function renderHistoryWindow({ stickBottom }) {
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
           const result = pendingResults.get(call.id);
-          // Replayed history counts too: "touched" means files THIS chat
-          // produced, whether live or reloaded — and, as live, only a write
-          // that landed (a denied or failing call never made the file).
-          if (result && !result.isError) emitWorkspaceTouch(call.name, toolPath(call.arguments));
           const todos = parseTodos(call.arguments);
           if (todos) {
             upsertTodoCard(todos); // render/update the session's checklist panel

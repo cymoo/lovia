@@ -1082,6 +1082,8 @@ async function loadDiff(v) {
 }
 
 const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+// The header lines worth showing: the rest (index, ---/+++) repeat the path.
+const DIFF_META = /^(rename from|rename to|old mode|new mode) /;
 
 function renderDiff(d) {
   if (d.binary) return viewerNote(t('files.diffBinary'));
@@ -1115,6 +1117,9 @@ function renderDiff(d) {
     if (text.startsWith('diff --git ')) inHunk = false;
     else if (m) {
       [oldN, newN, inHunk] = [Number(m[1]), Number(m[2]), true];
+      line('lv-hunk', null, null, text);
+    } else if (!inHunk && DIFF_META.test(text)) {
+      // What a pure rename or a mode change consists of: it has no hunk.
       line('lv-hunk', null, null, text);
     } else if (!inHunk || !text || text.startsWith('\\')) {
       // a header, the closing newline, "\ No newline at end of file"

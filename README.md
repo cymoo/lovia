@@ -464,7 +464,9 @@ agent = Agent(
 - **`Todo()`** — gives the model a checklist for multi-step work; the current
   list is re-shown every turn without growing the transcript.
 - **`Skills(dir)`** — reusable instruction bundles (`SKILL.md` + files): a
-  one-line index stays in the prompt, full content loads on demand.
+  one-line index stays in the prompt, full content loads on demand. A
+  message that starts with `/name` asks for that skill by name; the web
+  composer lists them as you type `/`.
 - **`MCP(server)`** — tools from Model Context Protocol servers, stdio or
   HTTP, with per-server name prefixes and approval gates. For web research,
   try the [Parallel Search MCP recipe](https://cymoo.github.io/lovia/mcp/#web-research-with-parallel).

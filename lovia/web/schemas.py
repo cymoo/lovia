@@ -43,6 +43,14 @@ class AgentInfo(BaseModel):
     model: str | None = None
 
 
+class SkillInfo(BaseModel):
+    """``GET /api/skills``: one skill a run of the chat sees, as its prompt
+    index lists it — what the composer's ``/`` menu offers."""
+
+    name: str
+    description: str
+
+
 class MemoryNotes(BaseModel):
     """An agent's hot-tier Notes, as shown in the memory editor.
 

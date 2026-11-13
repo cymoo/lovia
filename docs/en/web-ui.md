@@ -161,6 +161,15 @@ from starting. Changing the list applies immediately; adding a skill inside
 an already-listed directory needs no action at all. An agent may load its own
 list of directories instead (below); the project's own skills load either way.
 
+Type `/` at the very start of the composer and it lists the skills this chat
+can use, filtered as you type; ↑/↓ move, Enter or Tab inserts `/name `, Esc
+closes. The list is exactly what the chat's run loads — the project's skills,
+duplicate-name precedence and the agent's skill settings included; a remote
+chat lists only the global directories'. The message goes out as typed, and
+the model loads the skill by the [`/name` rule](skills.md#calling-a-skill-by-name).
+A `/` later in the message or on a later line opens nothing, since the model
+only honours the one that starts it.
+
 ## Agents
 
 `lovia web` serves one agent, `lovia`, until you add more in **Settings →

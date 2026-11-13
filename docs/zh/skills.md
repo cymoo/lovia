@@ -73,10 +73,42 @@ Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", 
 
 - **多个目录**会合并成一个 `SkillCatalog`；遇到同名 Skill 时，按扫描顺序保留第一个，其余项
   会记录日志并跳过。
-- **`usage_rules`** 会替换索引后的默认使用规则；传 `""` 可以完全省略规则。
+- **`usage_rules`** 会替换索引后的默认使用规则；传 `""` 可以完全省略规则。默认规则里包含
+  [`/名字`](#按名字调用-skill) 这一条，自定义规则如果没有写同样的意思，就不再有这条约定。
 - **`filter`**（任意 `SkillFilter` 谓词）接收每个 Skill 的 `SkillMetadata`
   （`name`、`description`、`extra`），返回 `True` 表示保留。它会切实限制可见范围，而非仅作展示：
   被过滤掉的 Skill 不会出现在索引中，也无法通过工具加载。
+
+### 按名字调用 Skill
+
+用户消息以 `/` 加一个索引里的 Skill 名字**开头**，后面跟空白或消息结束时，就是点名要这个
+Skill：默认使用规则会让模型先加载它。只认消息的最开头，也只认完整的名字，所以 `/src/app.py`
+仍然是路径，`/review` 也不会选中 `review-pr`。消息原样交给模型，不做任何展开；规则是一句固定的
+话，提示词前缀保持不变，不影响缓存。凡是用默认规则的地方都生效，包括 CLI；
+[Web UI](web-ui.md#skills) 在输入 `/` 时会弹出名字菜单。
+
+所谓"命令"就是一个 Skill。两个值得备着的例子：
+
+```markdown
+---
+name: review
+description: Review the uncommitted changes for bugs before a commit.
+---
+Run `git diff HEAD`, read every changed file around the hunks, and report
+real defects first (with file:line), then risky spots. Do not edit files.
+```
+
+```markdown
+---
+name: init
+description: Write an AGENTS.md describing this repository for coding agents.
+---
+Read the README, the build and test configuration, and the top-level layout.
+Write AGENTS.md: setup and test commands, architecture in a few lines, and
+the conventions a newcomer would get wrong. Keep it under one screen.
+```
+
+之后在消息里写 `/review`，或 `/init 补上发布步骤`，就会用上它们。
 
 Skill 相关错误会抛出 `SkillsError`，并附带 `skill_name`、`path` 和 `hint`。名称不存在时，
 会抛出子类 `SkillNotFoundError`，其中还会列出当前可见的 Skill。模型通过工具加载内容时，

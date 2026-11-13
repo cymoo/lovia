@@ -46,6 +46,7 @@ import {
 } from './approvals.js';
 import { BlockStream } from './stream-blocks.js';
 import { createSendQueue } from './send-queue.js';
+import { initSkillMenu } from './skill-menu.js';
 import { isStep, placeStep, removeStep, sealActivity } from './activity.js';
 import { collectContext } from './lovia.js';
 import { messageActionButtons, watchMessageActions } from './message-actions.js';
@@ -4382,6 +4383,7 @@ store.on('theme-changed', rerenderComponents);
 
 export function initComposer() {
   initContextRing();
+  initSkillMenu(promptEl);
 
   // Attachments: "+" opens a hidden picker; paste and drag-drop also upload.
   const attachInput = document.createElement('input');

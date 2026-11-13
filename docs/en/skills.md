@@ -79,11 +79,47 @@ Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", 
 - **Multiple directories** combine into one catalog; on a duplicate skill
   name the first occurrence wins (later ones are logged and skipped).
 - **`usage_rules`** replaces the default usage block appended after the
-  index; pass `""` to omit rules entirely.
+  index; pass `""` to omit rules entirely. The default block includes the
+  [`/name`](#calling-a-skill-by-name) rule, so a custom one drops it unless
+  it says the same.
 - **`filter`** (any `SkillFilter` — a predicate) receives each skill's
   `SkillMetadata` (`name`, `description`, `extra`) and returns `True` to
   keep it. It is a real boundary, not cosmetics: a filtered-out skill is
   invisible in the index *and* unloadable by the tools.
+
+### Calling a skill by name
+
+A user message that **begins** with `/` and a listed skill name, followed by
+whitespace or the end of the message, asks for that skill: the default usage
+rules tell the model to load it first. Only the very start counts and only
+an exact name, so `/src/app.py` stays a path and `/review` does not pick
+`review-pr`. The text reaches the model as typed — nothing expands it — and
+the rule is one fixed sentence, so the prompt prefix stays cache-stable. It
+works wherever the default rules do, the CLI included; the
+[web UI](web-ui.md#skills) offers the names in a menu as you type `/`.
+
+That is all a "command" is: a skill. Two examples worth having:
+
+```markdown
+---
+name: review
+description: Review the uncommitted changes for bugs before a commit.
+---
+Run `git diff HEAD`, read every changed file around the hunks, and report
+real defects first (with file:line), then risky spots. Do not edit files.
+```
+
+```markdown
+---
+name: init
+description: Write an AGENTS.md describing this repository for coding agents.
+---
+Read the README, the build and test configuration, and the top-level layout.
+Write AGENTS.md: setup and test commands, architecture in a few lines, and
+the conventions a newcomer would get wrong. Keep it under one screen.
+```
+
+Then `/review` or `/init add the release steps` in a message runs them.
 
 Skill-layer failures raise `SkillsError` (with `skill_name`/`path`/`hint`);
 unknown names raise its `SkillNotFoundError` subclass, which carries the

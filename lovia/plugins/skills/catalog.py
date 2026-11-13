@@ -31,7 +31,11 @@ Each skill listed above has a description — use it to decide which are relevan
 - Call `read_skill_file(name, relpath)` to read supplementary files
   (e.g. `references/…`, `scripts/…`, `assets/…`).
 - Load skills only when needed. Each one consumes context — prefer
-  targeted loading over loading everything upfront."""
+  targeted loading over loading everything upfront.
+- When the user's message begins with `/` and a skill name listed above,
+  followed by whitespace or the end of the message, load that skill first.
+  Only the very start of the message counts, and only an exact name:
+  `/src/app.py` is a path, and `/name` does not match `name-other`."""
 
 
 # ---------------------------------------------------------------------------

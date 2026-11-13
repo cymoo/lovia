@@ -199,6 +199,7 @@ function initKeyboardShortcuts() {
       if (document.querySelector('dialog[open]')) return;
       if (document.getElementById('context-popover')?.hidden === false) return;
       if (menuOpen()) return;
+      if (document.getElementById('lv-skill-menu')) return; // the composer's `/` menu
       if (document.getElementById('sidebar')?.classList.contains('lv-open')) return;
       const filesOpen = document
         .getElementById('files-panel')

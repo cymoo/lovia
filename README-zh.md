@@ -477,7 +477,7 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   浏览器断开后运行仍在服务端继续。
 - **设置不用重启** —— `lovia web` 的模型和 Agent 都在设置页里改：每个 Agent 有自己的提示词、模型、权限模式、开关和运行上限，
   新对话在输入框下方选用哪个。改动从下次运行起生效。设置、聊天记录和记忆都在一个 home 里（`~/.lovia`，或 `--home DIR`），不放在启动目录；
-  项目自己的 `AGENTS.md` 和 `.agents/skills` 会在该项目的每个对话里加载。每个对话在自己的目录里工作——侧栏按目录分组，权限模式也可以单独选择（自己的应用里用 `create_app(workspaces=WorkspaceSwitch())`）。
+  项目自己的 `AGENTS.md` 和 `.agents/skills` 会在该项目的每个对话里加载（在 Git 仓库里，从仓库根到对话目录沿途的 `AGENTS.md` 都会加载）。每个对话在自己的目录里工作——侧栏按目录分组，权限模式也可以单独选择（自己的应用里用 `create_app(workspaces=WorkspaceSwitch())`）。
   目录也可以在 SSH 主机上或运行中的容器里：在添加对话框里选好位置，对话的工具就在那边执行。
 - **富工具结果** —— 工具返回 `ui_result(kind, props)` 即可渲染 UI；内置表格、ECharts 图表
   和沙箱 HTML 页面（`show_table`、`show_chart`、`show_html`）。

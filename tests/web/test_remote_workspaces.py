@@ -810,7 +810,33 @@ async def test_a_remote_project_file_that_cannot_be_read_is_left_out(
             assert await remote_instructions()(ctx) == GENERIC_INSTRUCTIONS
         finally:
             await session.close()
-    assert caplog.text.count("not using the remote AGENTS.md") == 2
+    assert "AGENTS.md: instructions are limited to 262,144 bytes" in caplog.text
+    assert "AGENTS.md: a workspace rule covers it" in caplog.text
+
+
+async def test_a_remote_chat_in_a_subdirectory_gets_what_a_local_one_does(
+    tmp_path: Path,
+) -> None:
+    # Read-only denies reads outside the root; the repository's own rules
+    # above the chat directory load all the same, here and on a host.
+    from lovia.web.builder import remote_instructions, resolve_instructions
+
+    repo = tmp_path.resolve() / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "pkg").mkdir()
+    (repo / "AGENTS.md").write_text("repo rules", encoding="utf-8")
+    (repo / "pkg" / "AGENTS.md").write_text("pkg rules", encoding="utf-8")
+    workspace = Workspace.local(str(repo / "pkg"), mode="readonly")
+    session = await workspace.open()
+    try:
+        ctx = RunContext(
+            deps=None, entries=[], agent=Agent(name="bot"), workspace=session
+        )
+        got = await remote_instructions("be terse")(ctx)
+    finally:
+        await session.close()
+    assert got == resolve_instructions("be terse", repo / "pkg", workspace.policy)
+    assert "repo rules" in got and "pkg rules" in got
 
 
 def test_a_sandboxed_agent_is_not_quietly_unsandboxed_on_a_remote(places) -> None:

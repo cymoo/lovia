@@ -819,9 +819,10 @@ handed a directory on this machine to read — it gets
 `agent_for_remote(agent, ref)`, where `ref` has the location's `host_name`
 and `root`; if your served agent already carries a local project's
 instructions or skills, take them off there. `lovia web` does, and puts the
-host's `AGENTS.md` in their place: the hook itself reads nothing — it sets
-`instructions` to an async function, which reads the file through
-`ctx.workspace` the first time the run renders its prompt. The Files
+host's `AGENTS.md` files in their place: the hook itself reads nothing — it
+sets `instructions` to an async function, which has `ctx.workspace` find and
+read them on the host ([the same files](web-ui.md#project-instructions) a
+local chat there would load) the first time the run renders its prompt. The Files
 panel, uploads and attachments read and write the host's files too, through
 a read-only session of the page's own on the same connection (an upload may
 write inside the root, nowhere else); when the host can't be reached they

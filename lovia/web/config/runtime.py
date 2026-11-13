@@ -216,9 +216,15 @@ class ConfigRuntime:
     def agent_for(self, agent: Agent[Any], root: Path) -> Agent[Any]:
         """``WorkspaceSwitch.agent_for`` for the CLI: the directory's
         ``AGENTS.md`` and skills, by the agent's current settings."""
-        from ..builder import project_agent
+        from ..builder import instructions_policy, project_agent
 
-        return project_agent(agent, root, self.config, self._spec(agent))
+        return project_agent(
+            agent,
+            root,
+            self.config,
+            self._spec(agent),
+            instructions_policy(self.deployment),
+        )
 
     def agent_for_remote(self, agent: Agent[Any], ref: Any) -> Agent[Any]:
         """``WorkspaceSwitch.agent_for_remote`` for the CLI: the served

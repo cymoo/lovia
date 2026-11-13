@@ -234,6 +234,47 @@ async def test_policy_is_judged_where_the_files_are(host, tmp_path) -> None:
         await session.write_text("plain.txt", "x")
 
 
+async def test_project_instructions_are_found_where_the_project_is(
+    host, tmp_path
+) -> None:
+    # The op takes no path: the far side walks its own root's Git tree, judges
+    # each file by the session's explicit rules where it resolves to, and
+    # answers exactly what a local chat in that directory gets.
+    from lovia.workspace.local import instruction_files
+
+    repo = tmp_path.resolve() / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "pkg" / "sub").mkdir(parents=True)
+    (repo / "AGENTS.md").write_text("repo rules", encoding="utf-8")
+    (repo / "pkg" / "AGENTS.md").write_text("pkg rules", encoding="utf-8")
+    secret = tmp_path.resolve() / "secret.md"
+    secret.write_text("SECRET", encoding="utf-8")
+    (repo / "pkg" / "sub" / "AGENTS.md").symlink_to(secret)
+    where = repo / "pkg" / "sub"
+    policy = WorkspacePolicy.readonly(
+        denied_paths=(f"{repo.as_posix()}/AGENTS.md", secret.as_posix())
+    )
+    session = await host.open(str(where), policy=policy)
+
+    got = await session.read_instructions()
+    assert got == instruction_files(where, policy)
+    assert [(f.level, f.text, bool(f.skipped)) for f in got] == [
+        (2, "", True),
+        (1, "pkg rules", False),
+        (0, "", True),
+    ]
+    # Read-only denies reading outside the root, and the op leaves that be:
+    # only the rules decide what it loads.
+    session.set_policy(WorkspacePolicy.readonly())
+    assert [f.text for f in await session.read_instructions()] == [
+        "repo rules",
+        "pkg rules",
+        "SECRET",
+    ]
+    with pytest.raises(PermissionDeniedError):
+        await session.read_bytes(f"{repo.as_posix()}/AGENTS.md")
+
+
 async def test_one_connection_carries_many_sessions(host, tmp_path) -> None:
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()

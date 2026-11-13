@@ -362,6 +362,11 @@ export const api = {
   /** @param {{ agent?: string, path?: string }} [opts] */
   workspaceFiles: ({ agent, path } = {}) =>
     request(`/api/workspace/files${qs({ agent, path, ..._scope() })}`).then(_json),
+  // Every file under the root, root-relative and sorted (the agent's own
+  // globbed listing: git's ignore rules, no dotfiles, no denied paths):
+  // { paths, truncated }. Scoped like listSkills, so callers can key a cache.
+  /** @param {{ session?: string, agent?: string, root?: string }} [where] */
+  workspacePaths: (where = {}) => request(`/api/workspace/paths${qs(where)}`).then(_json),
   // The chat's own files (`paths`, as its tool calls spelled them), then —
   // in a git work tree — the other uncommitted changes: { git, truncated, files }.
   /** @param {{ agent?: string, paths?: string[] }} [opts] */

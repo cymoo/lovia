@@ -1260,24 +1260,33 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   margin: 4px 6px;
   background: var(--lv-border);
 }
-/* The composer's `/` menu (skill-menu.js): a popup menu that scrolls, its
-   rows a name over a one-line description. */
-.lv-skill-menu {
+/* The composer's `/` and `@` menus (composer-complete.js): a popup menu that
+   scrolls, its rows a name over a one-line description (a skill's, a file's
+   folder), and under them a note when the list is incomplete. */
+.lv-complete-menu {
   width: min(420px, calc(100vw - 16px));
   max-height: min(300px, 50vh);
   overflow-y: auto;
 }
-.lv-skill-menu-item {
+.lv-complete-menu-item {
   flex-direction: column;
   align-items: stretch;
   gap: 1px;
 }
-.lv-skill-menu-desc {
+.lv-complete-menu-desc {
   overflow: hidden;
   font-size: 12px;
   color: var(--lv-muted);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+.lv-complete-menu-desc:empty {
+  display: none;
+}
+.lv-complete-menu-note {
+  padding: 6px 10px 4px;
+  font-size: 12px;
+  color: var(--lv-muted-2);
 }
 
 /* ---- Main page ---------------------------------------------------------- */

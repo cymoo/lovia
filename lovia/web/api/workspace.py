@@ -72,6 +72,7 @@ from ..schemas import (
     WorkspaceFile,
     WorkspaceInfo,
     WorkspaceListing,
+    WorkspacePaths,
 )
 from ..workspaces import ChatBinding, WorkspaceRef, files_config, open_view
 from .deps import RouterDeps
@@ -148,6 +149,11 @@ def _root_name(cfg: FilesConfig) -> str:
     # Same normalization LocalWorkspaceSession applies to its root.
     return Path(cfg.root).expanduser().resolve().name or "workspace"
 
+
+# Entries one /api/workspace/paths asks the session for. Directories count
+# toward it (a glob lists the files' ancestors too), so it is a little more
+# than that many files; past it the composer's `@` menu says the list is cut.
+_PATHS_CAP = 20_000
 
 # Lines per /api/workspace/file page — small enough that the session's char
 # cap (50k) rarely clips within one page, so `truncated` ≈ "more lines exist".
@@ -336,6 +342,26 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             entries = await session.list_files(path)
         return WorkspaceListing(
             files=[entry_out(e) for e in entries],
+            truncated=getattr(entries, "truncated", False),
+        )
+
+    @router.get("/api/workspace/paths", response_model=WorkspacePaths)
+    async def list_paths(
+        agent: str | None = Query(None),
+        chat: str | None = Query(None, alias="session"),
+        root: str | None = Query(None, max_length=4096),
+    ) -> WorkspacePaths:
+        """Every file under the root, for the composer's ``@`` menu to match
+        against. The same listing the agent's ``list_files`` glob makes — git's
+        ignore rules in a work tree, no dotfiles, nothing ``denied_paths``
+        hide — run on the host for a remote chat."""
+        cfg = await require_cfg(agent, chat, root)
+        async with _view(cfg) as session:
+            entries = await session.list_files(
+                ".", pattern="**/*", max_results=_PATHS_CAP
+            )
+        return WorkspacePaths(
+            paths=[e.path for e in entries if not e.is_dir],
             truncated=getattr(entries, "truncated", False),
         )
 

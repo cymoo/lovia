@@ -179,6 +179,32 @@ test('a list fetched across a run ending is used once, not kept', async () => {
   assert.equal(fetches.length, 2);
 });
 
+test('a chat linked to a folder drops the list it had under the same id', async () => {
+  const { input, type, fetches, store, rows } = menu();
+  type('@');
+  fetches[0].resolve({ paths: ['default.txt'], truncated: false });
+  await settle();
+  input.fire('blur');
+  store.emit('workspace-scope-changed', '/linked');
+  type('@');
+  assert.equal(fetches.length, 2); // the old list is gone: fetched afresh
+  assert.deepEqual({ ...fetches[1].where }, { session: 's1' });
+  fetches[1].resolve({ paths: ['linked.txt'], truncated: false });
+  await settle();
+  assert.deepEqual(rows(), ['linked.txt']);
+});
+
+test('a fetch out when the folder changes is used once, not kept', async () => {
+  const { input, type, fetches, store } = menu();
+  type('@');
+  store.emit('workspace-scope-changed', '/linked');
+  fetches[0].resolve({ paths: ['default.txt'], truncated: false });
+  await settle();
+  input.fire('blur');
+  type('@');
+  assert.equal(fetches.length, 2);
+});
+
 test('each chat keeps its own list', async () => {
   const { input, type, fetches, store } = menu();
   type('@');

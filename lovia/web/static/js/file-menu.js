@@ -98,14 +98,18 @@ export function insertFile(text, caret, path) {
 }
 
 // The list is kept per chat (one at a time) and dropped at the end of every
-// run: the agent may have added files, through its tools or the shell.
+// run — the agent may have added files, through its tools or the shell —
+// and when the folder the workspace routes serve changes under the same
+// key: an old chat linked to a folder keeps its session id.
 /** @type {{ key: string, list: { items: string[], note: string | null } } | null} */
 let cached = null;
 let generation = 0;
-store.on('run-end', () => {
-  cached = null;
-  generation++;
-});
+for (const event of ['run-end', 'workspace-scope-changed']) {
+  store.on(event, () => {
+    cached = null;
+    generation++;
+  });
+}
 
 function hasWorkspace() {
   return !!store.agents.find((a) => a.name === store.agent)?.workspace;

@@ -36,7 +36,7 @@ home 里）。
 CLI 创建的默认 Agent 包含 Todo、Memory、时间与 HTTP Tool、Web 搜索、定时任务，以及以
 当前目录为根的 coding 模式 Workspace。它每次运行都从对话所在的目录读取：
 
-- `AGENTS.md`：作为 Agent instructions；
+- `AGENTS.md`：作为 Agent instructions，见[下文](#项目指令)；
 - `.agents/skills`：项目自己的技能，排在全局技能目录（默认 `~/.agents/skills`，在设置 → 技能中管理）之前。
 
 所以在另一个项目里的对话会遵循那个项目的 `AGENTS.md` 和技能。Web 搜索在配置 Tavily Key 后
@@ -53,6 +53,17 @@ CLI 创建的默认 Agent 包含 Todo、Memory、时间与 HTTP Tool、Web 搜�
     全部能力，包括编辑文件、执行 Shell 命令、打开其他目录和远程工作区——除此之外绑定地址不改变
     任何行为，因此应把 token 当作密码。允许其他设备访问时，用 `--readonly`、`--lock-workspace`
     或 `--no-workspace` 收紧；多用户部署请参阅[生产部署](deployment.md)。
+
+### 项目指令
+
+在 Git 仓库里，对话会加载从仓库根（向上第一个含 `.git` 的目录，worktree 或 submodule 的 `.git` 文件也算）
+到对话目录沿途的每一个 `AGENTS.md`，由外到内拼接，每段前一行标明来源路径。不在仓库里，或者就在仓库根时，
+只加载对话目录自己的 `AGENTS.md`，原样使用。加载了哪些文件会写进日志。
+
+- **大小。**合计 256 KB，从对话目录往外装：装不下的文件整份跳过，日志里会写明是哪个。
+- **权限。**这些文件是项目的指令，不是 Agent 去探索的内容，所以权限模式对"读取目录之外"的默认判定不适用：
+  "仅查看"模式下照样加载对话目录之上的仓库规则。显式规则照常生效（内置的凭据目录、服务自己的 `config.json`、
+  部署方配置的禁止路径），并且按文件的符号链接实际指向的位置判定，指向密钥的 `AGENTS.md` 会被跳过。
 
 ## 模型配置与切换
 
@@ -295,7 +306,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | --- | --- | --- |
 | **模型** → 模型的高级选项 | `models[].max_tokens` | 沿用 Provider 的默认值 |
 | **Agent** → 模型 | `agents[].model` | `null`：默认聊天模型 |
-| **Agent** → 自定义指令 | `agents[].instructions` | 空：使用对话所在目录的 `AGENTS.md`，没有就用通用提示；填写后 `AGENTS.md` 接在后面 |
+| **Agent** → 自定义指令 | `agents[].instructions` | 空：使用对话的[项目指令](#项目指令)，没有就用通用提示；填写后项目指令接在后面 |
 | **Agent** → 默认权限模式 | `agents[].mode` | `coding`，见[模式](workspace.md#模式)和[下文](#每个对话的权限模式) |
 | **Agent** → 不询问直接运行的命令（选“工作区内修改”时显示） | `agents[].auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
 | **Agent** → 高级 → 技能 | `agents[].skills` | `null`：全局技能目录；填列表则改用这些目录 |
@@ -320,7 +331,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 
 新对话默认使用这个标签页上次用过的目录，输入框里的目录按钮会显示是哪个（悬停显示完整路径）；发送前可以在那里换一个。
 对话的目录创建后不会再变，要在别处工作请新建对话。附件会保存到草稿所在的目录，所以草稿里有附件时目录按钮不能切换。
-文件面板显示当前对话的目录，Agent 也会读取这个目录的 `AGENTS.md` 和 `.agents/skills`。
+文件面板显示当前对话的目录，Agent 也会读取这个目录的 [`AGENTS.md`](#项目指令) 和 `.agents/skills`。
 
 **另一台机器上的目录。**只要没有用 `--lock-workspace`（或 `--no-workspace`）启动，添加对话框里就有三个标签页：
 **本机**、**SSH** 和**容器**。在后两个里填上主机（`~/.ssh/config` 里的别名，或 `user@host`；运行中的容器名，
@@ -328,7 +339,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 Agent 的文件和命令工具都作用在主机上，受对话的权限模式约束，侧栏用服务器图标标出这个目录。主机需要有
 `python3` 3.10 或更新版本，不用安装任何东西；SSH 必须能免密码登录（密钥或 agent）。文件面板显示的是主机上的这个目录，
 上传的文件和附件也保存在那里（和本机目录一样放在 `uploads/` 下）；大文件的快慢取决于到主机的链路。
-Agent 会读取主机上这个目录的 `AGENTS.md`（每次运行读一次）；目录里的技能目前还不加载，只有全局技能目录生效。连接断开时，进行中的运行会失败并说明原因，
+Agent 会按同样的规则读取主机上这个目录的 [`AGENTS.md`](#项目指令)（每次运行读一次）；目录里的技能目前还不加载，只有全局技能目录生效。连接断开时，进行中的运行会失败并说明原因，
 下一条消息会重新连接。详见[远程工作区](workspace.md#远程工作区)。
 
 早于工作区功能的旧对话归在 **未关联** 分组里。只是查看不需要做什么；第一次给它发消息时会先问它在哪个目录

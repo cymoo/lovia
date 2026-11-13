@@ -42,7 +42,7 @@ The default Agent includes Todo, Memory, time and HTTP Tools, web search,
 scheduling, and a coding-mode Workspace rooted at the current directory. From
 the directory each chat works in, on every run, it reads:
 
-- `AGENTS.md` as Agent instructions;
+- `AGENTS.md` as Agent instructions — see [below](#project-instructions);
 - `.agents/skills` as the project's own skills, ahead of the global skill
   directories (`~/.agents/skills` by default; Settings → Skills).
 
@@ -66,6 +66,24 @@ cheaper model. See [Memory](memory.md#sharp-edges) for the full cost boundary.
     and narrow the server with `--readonly`, `--lock-workspace` or
     `--no-workspace` when allowing other devices. For multi-user operation,
     see [Deployment](deployment.md).
+
+### Project instructions
+
+In a Git repository a chat loads every `AGENTS.md` from the repository's
+root (the first directory up that holds a `.git`, a worktree's or
+submodule's `.git` file included) down to its own directory, outermost
+first, each preceded by a line naming its path. Outside a repository, or at
+its root, it loads the directory's own `AGENTS.md` as it is. The log names
+every file loaded.
+
+- **Size.** 256 KB in all, filled from the chat's directory outwards: a file
+  that does not fit is left out whole, and the log says which.
+- **Permissions.** These files are the project's instructions, not something
+  the agent explores, so the permission mode's default for reads outside the
+  folder does not apply: Read-only still loads the repository's rules above
+  the chat. Explicit rules do — the built-in credential stores, the server's
+  own `config.json`, a deployment's denied paths — judged where a file's
+  links lead, so an `AGENTS.md` pointing at a secret is left out.
 
 ## Models and switching
 
@@ -403,7 +421,7 @@ finishes with what it started with.
 | --- | --- | --- |
 | **Models** → a model's advanced fields | `models[].max_tokens` | The provider's |
 | **Agents** → Model | `agents[].model` | `null`: the default chat model |
-| **Agents** → Custom instructions | `agents[].instructions` | Empty: the chat directory's `AGENTS.md`, else a generic prompt; set, `AGENTS.md` is appended |
+| **Agents** → Custom instructions | `agents[].instructions` | Empty: the chat's [project instructions](#project-instructions), else a generic prompt; set, they are appended |
 | **Agents** → Default permission mode | `agents[].mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
 | **Agents** → Commands that run without asking (shown for Edit in workspace) | `agents[].auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
 | **Agents** → Advanced → Skills | `agents[].skills` | `null`: the global directories; a list replaces them |
@@ -438,7 +456,8 @@ composer shows which, with the full path on hover; pick another there before
 sending. A chat keeps its folder for good: to work elsewhere, start a new
 chat. Attachments are saved into the draft's folder, so the chip locks while
 the draft holds some. The Files panel shows the open chat's folder, and the
-agent reads that folder's `AGENTS.md` and `.agents/skills`.
+agent reads that folder's [`AGENTS.md`](#project-instructions) and
+`.agents/skills`.
 
 **A folder on another machine.** Unless the server was started with
 `--lock-workspace` (or `--no-workspace`), the add dialog has three tabs:
@@ -452,7 +471,8 @@ or newer and nothing installed, and SSH must work without a password prompt
 (keys or an agent). The Files panel shows the host's folder, and uploads
 and attachments are saved there (under `uploads/`, as in a local one); a
 large file takes as long as the link to the host does. The agent reads the
-folder's `AGENTS.md` on the host, once per run. The folder's own skills are
+folder's [`AGENTS.md` files](#project-instructions) on the host, by the same
+rules, once per run. The folder's own skills are
 not loaded yet: only the global skill directories apply. If the
 connection drops, the run in progress fails and says so; the next message
 reconnects. See [Remote workspaces](workspace.md#remote-workspaces).

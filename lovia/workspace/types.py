@@ -151,6 +151,19 @@ class RootFacts:
     python: Literal["uv", "poetry", "pip"] = "pip"
 
 
+@dataclass(frozen=True, kw_only=True)
+class InstructionFile:
+    """One project instructions file (``AGENTS.md``) found for a root."""
+
+    path: str
+    """Where it sits on the way up: absolute, POSIX, not a link's target."""
+    level: int
+    """Directories above the root it sits in: 0 is the root's own."""
+    text: str = ""
+    skipped: str = ""
+    """Why it is left out; empty when ``text`` is in use."""
+
+
 @dataclass(frozen=True)
 class WorkspaceLimits:
     """Size and count caps for the workspace tools — one discoverable home.

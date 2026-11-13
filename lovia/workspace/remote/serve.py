@@ -46,6 +46,7 @@ _SESSION_METHODS = frozenset(
         "kill_process",
         "list_files",
         "read_bytes",
+        "read_instructions",
         "read_process_output",
         "read_text",
         "run",

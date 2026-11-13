@@ -52,6 +52,7 @@ from .types import (
     FileChange,
     FileContent,
     GrepMatch,
+    InstructionFile,
     ProcessOutput,
     ProcessStart,
     ProcessStatus,
@@ -193,6 +194,79 @@ def root_facts(root: Path) -> RootFacts:
         git=(root / ".git").exists(),
         python=_python_pkg_flavor(root),
     )
+
+
+INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
+"""A directory's project instructions, by convention; the first one present."""
+INSTRUCTIONS_MAX_BYTES = 256 * 1024
+"""The most project instructions that load, all files together."""
+
+
+def instruction_files(root: Path, policy: WorkspacePolicy) -> list[InstructionFile]:
+    """The project instructions for a chat in ``root``, outermost first.
+
+    One file per directory from the Git root (the first one up that holds a
+    ``.git``, a worktree's file too) down to ``root``; ``root``'s alone when
+    there is none. The walk starts from the resolved root, so its ancestors
+    are real directories. Each file is judged where it resolves to, by the
+    explicit rules only: the defaults decide what the agent may explore, not
+    what loads as its instructions, but a rule hiding a credential store
+    must hide it from the prompt too, however the file links there. Files
+    fill :data:`INSTRUCTIONS_MAX_BYTES` from ``root`` outwards; one that
+    does not fit is left out whole.
+    """
+    root = root.resolve()
+    ups = (root, *root.parents)
+    # os.path, not Path: its checks answer False on any OSError (EACCES too).
+    top = next((i for i, d in enumerate(ups) if os.path.exists(d / ".git")), 0)
+    room = INSTRUCTIONS_MAX_BYTES
+    found: list[InstructionFile] = []
+    for level, d in enumerate(ups[: top + 1]):
+        for name in INSTRUCTIONS_FILES:
+            path = d / name
+            try:
+                real = path.resolve()
+            except (OSError, RuntimeError):  # a link loop
+                continue
+            if not os.path.isfile(real):
+                continue
+            text, skipped = "", ""
+            if _rule_hides(policy, real, root):
+                skipped = "a workspace rule covers it"
+            else:
+                try:
+                    with real.open("rb") as fh:
+                        data = fh.read(room + 1)  # bounds memory too
+                except OSError as exc:
+                    skipped = f"cannot read it: {exc}"
+                else:
+                    if len(data) > room:
+                        skipped = (
+                            f"instructions are limited to "
+                            f"{INSTRUCTIONS_MAX_BYTES:,} bytes in all"
+                        )
+                    else:
+                        room -= len(data)
+                        text = data.decode("utf-8", errors="replace")
+            found.append(
+                InstructionFile(
+                    path=path.as_posix(), level=level, text=text, skipped=skipped
+                )
+            )
+            break
+    return found[::-1]
+
+
+def _rule_hides(policy: WorkspacePolicy, real: Path, root: Path) -> bool:
+    try:
+        rel: str | None = real.relative_to(root).as_posix()
+    except ValueError:
+        rel = None
+    abs_posix = real.as_posix()
+    if not policy.rule_bound(rel=rel, abs_posix=abs_posix, op="read"):
+        return False
+    # A rule decides, and only an explicit allow lets the file through.
+    return policy.decide_path(rel=rel, abs_posix=abs_posix, op="read").action != "allow"
 
 
 def _has_hidden_segment(rel: str) -> bool:
@@ -762,6 +836,16 @@ class LocalWorkspaceSession:
             return self._entry_for(rp.abs, is_dir=rp.abs.is_dir())
 
         return await asyncio.to_thread(_stat)
+
+    async def read_instructions(self) -> list[InstructionFile]:
+        """:func:`instruction_files` for this root, under this policy.
+
+        A read outside the root that ``read_outside`` does not stop: it takes
+        no path, so it can only reach the instructions files up the root's
+        own Git tree.
+        """
+        self._check_open()
+        return await asyncio.to_thread(instruction_files, self._root, self.policy)
 
     async def read_bytes(
         self,

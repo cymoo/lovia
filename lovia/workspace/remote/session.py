@@ -27,6 +27,7 @@ from ..types import (
     FileChange,
     FileContent,
     GrepMatch,
+    InstructionFile,
     ProcessOutput,
     ProcessStart,
     ProcessStatus,
@@ -92,6 +93,9 @@ class RemoteWorkspaceSession:
 
     async def stat(self, path: str) -> DirEntry:
         return await self._call("stat", path=path)
+
+    async def read_instructions(self) -> list[InstructionFile]:
+        return await self._call("read_instructions")
 
     async def read_bytes(
         self,

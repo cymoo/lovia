@@ -219,6 +219,62 @@ def test_resolve_instructions_generic_fallback(
     assert builder.resolve_instructions() == builder.GENERIC_INSTRUCTIONS
 
 
+def test_resolve_instructions_layers_a_repositorys_agents_md_files(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    repo = tmp_path.resolve() / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "pkg").mkdir()
+    (repo / "AGENTS.md").write_text("repo rules\n", encoding="utf-8")
+    # At the Git root: the file as it is, exactly as before.
+    assert builder.resolve_instructions("be terse", repo) == "be terse\n\nrepo rules\n"
+
+    # Below it, outermost first, each part saying where it comes from.
+    caplog.set_level("INFO", logger="lovia.web.builder")
+    assert builder.resolve_instructions("be terse", repo / "pkg") == (
+        f"be terse\n\nInstructions from {repo.as_posix()}/AGENTS.md:\nrepo rules"
+    )
+    (repo / "pkg" / "AGENTS.md").write_text("pkg rules", encoding="utf-8")
+    assert builder.resolve_instructions("", repo / "pkg") == (
+        f"Instructions from {repo.as_posix()}/AGENTS.md:\nrepo rules\n\n"
+        f"Instructions from {repo.as_posix()}/pkg/AGENTS.md:\npkg rules"
+    )
+    assert (
+        f"instructions from {repo.as_posix()}/AGENTS.md, "
+        f"{repo.as_posix()}/pkg/AGENTS.md" in caplog.text
+    )
+
+    # A file the rules hide is left out, and the log says so. The chat
+    # directory's own file alone then reads as it always has.
+    denied = builder.WorkspacePolicy(denied_paths=(f"{repo.as_posix()}/AGENTS.md",))
+    assert builder.resolve_instructions("", repo / "pkg", denied) == "pkg rules"
+    assert f"not using {repo.as_posix()}/AGENTS.md: a workspace rule" in caplog.text
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
+def test_an_agents_md_linking_to_this_servers_config_is_not_loaded(
+    tmp_path: Path,
+) -> None:
+    # `--home` elsewhere: its config.json holds the model keys. The rule that
+    # keeps the agent's tools off it keeps it out of the prompt too.
+    home = tmp_path.resolve() / "home"
+    home.mkdir()
+    (home / "config.json").write_text('{"key": "sk-SECRET"}', encoding="utf-8")
+    proj = tmp_path.resolve() / "proj"
+    proj.mkdir()
+    (proj / "AGENTS.md").symlink_to(home / "config.json")
+    deployment = builder.Deployment(workspace=str(proj), home=home)
+    policy = builder.instructions_policy(deployment)
+    assert (
+        builder.resolve_instructions("", proj, policy) == builder.GENERIC_INSTRUCTIONS
+    )
+    config = _agent_config(memory=False)
+    agent = builder.build_agent(
+        deployment, ChatStore.in_memory(), _provider(), config=config
+    )
+    assert "SECRET" not in str(agent.instructions)
+
+
 # ------------------------------------------------------------- workspace -
 
 

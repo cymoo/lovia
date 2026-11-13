@@ -37,8 +37,11 @@ from ..workspace import (
     WorkspaceError,
     WorkspaceMode,
 )
-from ..workspace.policy import CommandRule
+from ..workspace.local import LocalWorkspaceSession, instruction_files
+from ..workspace.policy import CommandRule, WorkspacePolicy
 from ..workspace.protocol import WorkspaceSession
+from ..workspace.remote.session import RemoteWorkspaceSession
+from ..workspace.types import InstructionFile
 from .charts import show_chart
 from ..context import Compaction
 from .config import (
@@ -62,7 +65,6 @@ from .vision import make_describe_image_tool
 log = logging.getLogger("lovia.web.builder")
 
 WORKSPACE_MODES: tuple[str, ...] = get_args(WorkspaceMode)
-INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
 # A configured agent's background child is ``<id>.sub``: ids have no dots,
 # so the part before one always names the agent whose settings apply.
 SUBAGENT_SUFFIX = ".sub"
@@ -296,23 +298,44 @@ def resolve_retry(max_retries: int | None) -> RetryPolicy:
     return RetryPolicy(max_attempts=max_retries + 1)
 
 
-def resolve_instructions(custom: str = "", root: str | Path = ".") -> str:
+def resolve_instructions(
+    custom: str = "",
+    root: str | Path = ".",
+    policy: WorkspacePolicy | None = None,
+) -> str:
     """An agent's system prompt for a chat working in ``root``.
 
-    ``custom`` (the agent's own, from Settings → Agents) comes first; the directory's
-    ``AGENTS.md`` (the cross-agent convention) is appended to it. Without
-    one the file alone serves, and without either a generic prompt. Read on
+    ``custom`` (the agent's own, from Settings → Agents) comes first; the
+    project's ``AGENTS.md`` files (the cross-agent convention) follow it,
+    from the Git root down to ``root`` (:func:`instruction_files`, whose
+    explicit rules come from ``policy``; default: the baseline). Without
+    one the files alone serve, and without either a generic prompt. Read on
     every build — and, with chats in several directories, on every run — so
     an edited ``AGENTS.md`` applies without a restart.
     """
-    project = ""
-    for name in INSTRUCTIONS_FILES:
-        path = Path(root) / name
-        if path.is_file():
-            log.debug("using instructions from %s", path)
-            project = path.read_text(encoding="utf-8")
-            break
-    return _compose(custom, project)
+    files = instruction_files(Path(root), policy or WorkspacePolicy())
+    return _compose(custom, _project_text(files))
+
+
+def instructions_policy(deployment: Deployment) -> WorkspacePolicy:
+    """The rules a project's ``AGENTS.md`` loads under on this machine: what
+    every chat's workspace holds whatever its mode (:func:`resolve_workspace`)."""
+    return WorkspacePolicy(denied_paths=_home_secrets(deployment))
+
+
+def _project_text(files: list[InstructionFile]) -> str:
+    """``files`` as one prompt section. The root's own file alone reads as
+    it always has; anything more says where each part comes from."""
+    for f in files:
+        if f.skipped:
+            log.warning("not using %s: %s", f.path, f.skipped)
+    used = [f for f in files if not f.skipped]
+    if not used:
+        return ""
+    log.info("instructions from %s", ", ".join(f.path for f in used))
+    if len(used) == 1 and used[0].level == 0:
+        return used[0].text
+    return "\n\n".join(f"Instructions from {f.path}:\n{f.text.strip()}" for f in used)
 
 
 def _compose(custom: str, project: str) -> str:
@@ -322,50 +345,36 @@ def _compose(custom: str, project: str) -> str:
     return custom or project or GENERIC_INSTRUCTIONS
 
 
-# A project file larger than this is not instructions; it is left out.
-_REMOTE_INSTRUCTIONS_MAX_BYTES = 256 * 1024
-
-
 def remote_instructions(custom: str = "") -> InstructionsFn:
     """:func:`resolve_instructions` for a chat on a remote host: the same
-    composition, with the project's ``AGENTS.md`` read where the project is.
+    composition, with the project's ``AGENTS.md`` files found and read where
+    the project is, under the chat's own policy's rules.
 
-    It is read through the run's own workspace session, so a file the chat's
-    policy denies is no instructions. One it would *ask* about is read: this
-    is the server loading the project's own file, as :func:`resolve_instructions`
-    does off the local disk with no policy at all, and an ``AGENTS.md`` that
-    links to a shared one above the root is ordinary. Once per run — the
-    caller builds one of these per run. Every later render in that run returns the
-    same text, which keeps the prompt prefix stable. A file that cannot be
-    read is treated as absent: the run then says what is wrong with the host
-    far better than a prompt could.
+    Once per run — the caller builds one of these per run. Every later
+    render in that run returns the same text, which keeps the prompt prefix
+    stable. Instructions that cannot be read are treated as absent: the run
+    then says what is wrong with the host far better than a prompt could.
     """
     rendered: str | None = None
 
     async def instructions(ctx: RunContext[Any]) -> str:
         nonlocal rendered
         if rendered is None:
-            rendered = _compose(custom, await _remote_project_file(ctx.workspace))
+            rendered = _compose(custom, await _remote_project_text(ctx.workspace))
         return rendered
 
     return instructions
 
 
-async def _remote_project_file(session: WorkspaceSession | None) -> str:
-    if session is None:
+async def _remote_project_text(session: WorkspaceSession | None) -> str:
+    if not isinstance(session, (LocalWorkspaceSession, RemoteWorkspaceSession)):
         return ""
-    for name in INSTRUCTIONS_FILES:
-        try:
-            got = await session.read_bytes(
-                name, max_bytes=_REMOTE_INSTRUCTIONS_MAX_BYTES
-            )
-        except FileNotFoundError:
-            continue
-        except (OSError, UserError, WorkspaceError) as exc:
-            log.warning("not using the remote %s: %s", name, exc)
-            continue
-        return got.data.decode("utf-8", errors="replace")
-    return ""
+    try:
+        files = await session.read_instructions()
+    except (OSError, UserError, WorkspaceError) as exc:
+        log.warning("not using the remote project's instructions: %s", exc)
+        return ""
+    return _project_text(files)
 
 
 def spec_id(name: str) -> str:
@@ -375,18 +384,23 @@ def spec_id(name: str) -> str:
 
 
 def project_agent(
-    agent: Agent[Any], root: Path, config: WebConfig, spec: AgentConfig
+    agent: Agent[Any],
+    root: Path,
+    config: WebConfig,
+    spec: AgentConfig,
+    policy: WorkspacePolicy | None = None,
 ) -> Agent[Any]:
     """``agent`` for a chat working in ``root`` — ``WorkspaceSwitch.agent_for``
-    for the CLI: that directory's ``AGENTS.md`` and ``.agents/skills`` (ahead
-    of ``spec``'s skill directories) in place of the launch directory's.
-    Read on every run; nothing is cached."""
+    for the CLI: that project's ``AGENTS.md`` files (read under ``policy``'s
+    rules, :func:`resolve_instructions`) and the directory's ``.agents/skills``
+    (ahead of ``spec``'s skill directories) in place of the launch
+    directory's. Read on every run; nothing is cached."""
     plugins: list[Plugin] = [p for p in agent.plugins if not isinstance(p, Skills)]
     dirs = resolve_skills_dirs(config.agent_skills(spec), root, quiet=True)
     if dirs:
         plugins.insert(0, Skills(*dirs))
     return agent.clone(
-        instructions=resolve_instructions(spec.instructions, root),
+        instructions=resolve_instructions(spec.instructions, root, policy),
         plugins=plugins,
     )
 
@@ -395,7 +409,7 @@ def remote_agent(agent: Agent[Any], config: WebConfig, spec: AgentConfig) -> Age
     """``agent`` for a chat on a remote host — ``WorkspaceSwitch.agent_for_remote``
     for the CLI. The served agent was built for the launch directory; a
     project on another machine gets neither that directory's ``AGENTS.md``
-    nor its skills. It gets ``spec``'s prompt with its own ``AGENTS.md``
+    nor its skills. It gets ``spec``'s prompt with its own ``AGENTS.md`` files
     (:func:`remote_instructions`), and ``spec``'s global skill directories —
     the skills plugin reads this machine's disk, so the project's own stay
     unloaded (#405)."""
@@ -475,7 +489,9 @@ def build_agent(
     policy = Compaction(context_window=profile.context_window if profile else None)
     retry = resolve_retry(spec.max_retries)
     root = Path(deployment.workspace or ".")
-    instructions = resolve_instructions(spec.instructions, root)
+    instructions = resolve_instructions(
+        spec.instructions, root, instructions_policy(deployment)
+    )
     skills_dirs = resolve_skills_dirs(config.agent_skills(spec), root)
     plugins: list[Plugin] = []
     if skills_dirs:

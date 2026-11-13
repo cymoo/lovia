@@ -521,7 +521,8 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   applies from the next run. Settings, chat history and memory live in one
   home (`~/.lovia`, or `--home DIR`), never in the launch directory; a
   project's own `AGENTS.md` and `.agents/skills` load in every chat working
-  there. Each chat works in a folder of its own — the
+  there (in a Git repository, every `AGENTS.md` from its root down to the
+  chat's folder). Each chat works in a folder of its own — the
   sidebar groups chats by folder, and each picks its permission mode
   (`create_app(workspaces=WorkspaceSwitch())` in your own app). The folder
   can be on an SSH host or in a running container: pick it in the add

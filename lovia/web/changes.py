@@ -255,6 +255,8 @@ async def file_diff(
     names = await _git(session, f"diff --no-renames --name-only -z HEAD -- {paths}")
     if not names.ok:
         return None
+    if names.truncated:  # a list cut in the middle can't vouch for what it lost
+        raise PermissionDeniedError("too many files to check for a diff")
     for name in filter(None, names.stdout.split("\0")):
         rel = _under(name, prefix)
         if rel is None or not await _readable(session, rel):

@@ -16,12 +16,14 @@ from fastapi.testclient import TestClient  # noqa: E402
 from lovia import Agent  # noqa: E402
 from lovia.workspace import (  # noqa: E402
     PermissionDeniedError,
+    Verdict,
     Workspace,
     WorkspaceError,
     WorkspaceLimits,
 )
+from lovia.workspace.types import CommandResult  # noqa: E402
 from lovia.web import create_app  # noqa: E402
-from lovia.web.changes import parse_numstat, parse_status  # noqa: E402
+from lovia.web.changes import file_diff, parse_numstat, parse_status  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 from lovia.web.workspaces import open_view  # noqa: E402
 
@@ -166,6 +168,30 @@ def test_a_denied_file_moved_to_a_readable_name_stays_denied(repo: Path) -> None
     # By its own name the file is readable, and git doesn't pair it.
     own = c.get("/api/workspace/diff", params={"path": "public.txt"})
     assert own.status_code == 200 and "rename from" not in own.json()["diff"]
+
+
+class _CutNames:
+    """A session whose file list for the precheck comes back clipped."""
+
+    def __init__(self) -> None:
+        self.ran: list[str] = []
+
+    def decide_path(self, path: str, *, write: bool = False):  # noqa: ANN201 - test double
+        return Verdict("allow")
+
+    async def run(self, command: str, **kw) -> CommandResult:  # noqa: ANN003 - test double
+        self.ran.append(command)
+        if "rev-parse" in command:
+            return CommandResult(exit_code=0, stdout="\n", stderr="")
+        return CommandResult(exit_code=0, stdout="a.txt\0", stderr="", truncated=True)
+
+
+async def test_a_clipped_file_list_refuses_the_diff() -> None:
+    """What the clip dropped was never judged: no diff rather than a guess."""
+    session = _CutNames()
+    with pytest.raises(PermissionDeniedError):
+        await file_diff(session, ".", limit=1000)  # type: ignore[arg-type]
+    assert not any("--no-ext-diff" in c for c in session.ran)
 
 
 @needs_git

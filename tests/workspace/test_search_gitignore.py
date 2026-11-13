@@ -143,6 +143,21 @@ async def test_submodule_and_nested_repository_files_stay(tmp_path) -> None:
     assert "sub/lib.py" in await _glob(session, "**/*.py")
 
 
+async def test_tracked_directory_swapped_for_a_symlink_is_not_entered(
+    tmp_path,
+) -> None:
+    # The index still lists pkg/mod.py; on disk pkg now leads outside the
+    # root. The walk never enters a symlinked directory, nor may git's list.
+    root = _project(tmp_path)
+    outside = tmp_path / "outside"
+    _write(outside, {"mod.py": "TOKEN\n"})
+    shutil.rmtree(root / "pkg")
+    (root / "pkg").symlink_to(outside, target_is_directory=True)
+    session = LocalWorkspaceSession(root=str(root))
+    assert await _grep(session) == ["top.py", "src/new.py"]
+    assert "pkg/mod.py" not in await _glob(session, "**/*")
+
+
 async def test_without_git_the_tree_is_walked(tmp_path, monkeypatch) -> None:
     root = _project(tmp_path)
     monkeypatch.setenv("PATH", "")

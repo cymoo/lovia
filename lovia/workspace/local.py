@@ -223,8 +223,21 @@ def _git_files(base: Path) -> list[str] | None:
     out — or ``base`` itself is ignored, since naming an ignored directory
     is asking to search it. A directory git lists whole (a submodule, a
     nested repository) is expanded the same way, so its files stay
-    searchable; entries gone from disk (deleted, not committed) are dropped.
+    searchable; entries gone from disk (deleted, not committed) are dropped,
+    and so are entries under a directory that is now a symlink — the index
+    still lists ``pkg/x`` after ``pkg`` became a link out of the root, and
+    no later check sees a symlinked *parent*. The walk never enters one.
     """
+    linked: dict[str, bool] = {}  # directory → it or an ancestor is a symlink
+
+    def under_link(rel: str) -> bool:
+        head = rel.rpartition("/")[0]
+        if not head:
+            return False
+        if head not in linked:
+            linked[head] = under_link(head) or os.path.islink(base / head)
+        return linked[head]
+
     try:
         if _git(base, "check-ignore", "-q", ".").returncode != 1:
             return None
@@ -236,7 +249,7 @@ def _git_files(base: Path) -> list[str] | None:
     files: list[str] = []
     for raw in set(out.stdout.split(b"\0")):
         rel = os.fsdecode(raw).rstrip("/")
-        if rel in ("", "."):  # an uninitialized submodule lists itself as "./"
+        if rel in ("", ".") or under_link(rel):  # "./": uninitialized submodule
             continue
         try:
             mode = os.lstat(base / rel).st_mode

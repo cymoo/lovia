@@ -534,6 +534,7 @@ function setMode(mode) {
   // A tab is also the way back to its list from a file covering the panel.
   if (state.viewing && !isWide()) closeViewer();
   state.mode = mode;
+  _mapSeq++; // a Browse map ask still out predates whatever this tab loads
   els.tabChanges.classList.toggle('lv-active', mode === 'changes');
   els.tabChanges.setAttribute('aria-selected', String(mode === 'changes'));
   els.tabBrowse.classList.toggle('lv-active', mode === 'browse');

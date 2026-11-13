@@ -118,7 +118,8 @@ def test_lovia_web_opens_remotes_wherever_chats_pick_a_directory() -> None:
 def test_a_chat_works_at_the_remote_location_it_was_opened_in(places) -> None:
     here, there = places
     far = _far()
-    agent = _agent(here, [_WRITE, text("one"), _WRITE, text("two")])
+    rewrite = call("write_file", {"path": "out.txt", "content": "again"})
+    agent = _agent(here, [_WRITE, text("one"), rewrite, text("two")])
     key = f"remote://far{there}"
     with _client(agent, WorkspaceSwitch(remotes={"far": far})) as c:
         try:
@@ -131,9 +132,8 @@ def test_a_chat_works_at_the_remote_location_it_was_opened_in(places) -> None:
             assert c.get(f"/api/sessions/{sid}").json()["workspace_root"] == key
 
             # The chat's next run is in the same place, on the same session.
-            (there / "out.txt").unlink()
             c.post("/api/chat", json={"message": "again", "session_id": sid})
-            assert (there / "out.txt").read_text() == "hi"
+            assert (there / "out.txt").read_text() == "again"
 
             # It is listed, by its host; the local one is not.
             listed = c.get("/api/workspaces").json()

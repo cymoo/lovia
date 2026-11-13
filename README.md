@@ -431,7 +431,8 @@ API keys and proxy settings are not inherited; pass required variables via
 
 In a git work tree, `grep_files` and globbed `list_files` skip what git
 ignores (`node_modules/`, `dist/`) — naming an ignored directory still
-searches it.
+searches it. `write_file` and `edit_file` refuse a file that changed on disk
+(or was deleted) since the session last read it, and ask for a fresh read.
 
 The workspace can also be a directory in a running container or on an SSH
 host — `Workspace.remote(RemoteHost.ssh("box"), "/srv/project")` — with the

@@ -202,6 +202,17 @@ Mutators default to `parallel=False`
 and process side effects never race within a turn; read-only tools stay
 parallel.
 
+`write_file` and `edit_file` refuse to change a file that changed on disk
+since the session last read or wrote it — the user edited it, a formatter
+ran through `shell`, someone deleted it — and say to read it again; a
+deleted file is not written back even as a create until a read has seen it
+gone. A file the session never read is written freely, so a restarted
+server or a resumed run raises no false alarm. The check compares
+modification time and size, so it is best-effort, and it lives in the
+session (`write_text` / `write_bytes` / `edit_text`): custom tools and
+remote workspaces get it too. It covers what one session saw — it detects
+earlier changes, it does not lock a file against other chats.
+
 Outputs are bounded at the tool layer by `WorkspaceLimits` (pass
 `limits=WorkspaceLimits(...)`): `max_file_read_chars=50_000` per read (page
 with `start`/`end`), `max_shell_output_chars=30_000` (head + tail kept),

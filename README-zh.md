@@ -395,7 +395,8 @@ Shell 命令继承最小环境，包括 Windows 系统、命令解释器、临�
 `Workspace.local(..., env={...})` 显式传入。
 
 在 Git 工作树里，`grep_files` 和带 glob 的 `list_files` 跳过 Git 忽略的内容（`node_modules/`、`dist/`）；
-点名一个被忽略的目录仍会搜它。
+点名一个被忽略的目录仍会搜它。会话上次读取某个文件之后，它在磁盘上被改过（或删除）时，`write_file` 和
+`edit_file` 拒绝改动，要求先重新读取。
 
 工作区也可以是运行中的容器或 SSH 主机上的一个目录：
 `Workspace.remote(RemoteHost.ssh("box"), "/srv/project")`。工具和策略都一样，在那一端执行；

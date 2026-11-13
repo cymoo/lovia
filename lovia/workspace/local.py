@@ -38,7 +38,7 @@ from .errors import (
     WorkspaceClosedError,
     WorkspaceError,
 )
-from .paths import ResolvedPath, resolve_path
+from .paths import FOLD_CASE, ResolvedPath, resolve_path
 from .policy import FileOp, Verdict, WorkspacePolicy, merge_verdicts
 
 if TYPE_CHECKING:
@@ -495,15 +495,20 @@ class LocalWorkspaceSession:
     id: str = field(default_factory=lambda: f"local-{uuid.uuid4().hex[:8]}")
     _root: Path = field(init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
-    # Per-path write locks keyed by the *resolved* absolute path, so a symlink
-    # and its target share one lock. Weak-valued so an entry disappears once no
-    # in-flight operation references its lock — the map can't grow without
-    # bound across a long-lived session.
+    # Per-path write locks keyed by _path_key, so a symlink and its target
+    # share one lock. Weak-valued so an entry disappears once no in-flight
+    # operation references its lock — the map can't grow without bound across
+    # a long-lived session.
     _locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = field(
         default_factory=weakref.WeakValueDictionary, init=False, repr=False
     )
     _locks_guard: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
+    )
+    # The stale-edit baselines: (st_mtime_ns, st_size) of each file as this
+    # session last read or wrote it, keyed like _locks. See _refuse_stale.
+    _seen: "dict[str, tuple[int, int]]" = field(
+        default_factory=dict, init=False, repr=False
     )
     # Live subprocesses, so close() (and only close()) can reap strays; each
     # run() also kills its own process on every exit path, including
@@ -689,13 +694,41 @@ class LocalWorkspaceSession:
         return self._display_and_rel(p)[1] is None
 
     async def _lock_for(self, rp: ResolvedPath) -> asyncio.Lock:
-        key = str(rp.abs)
+        key = _path_key(rp)
         async with self._locks_guard:
             lock = self._locks.get(key)
             if lock is None:
                 lock = asyncio.Lock()
                 self._locks[key] = lock
             return lock
+
+    def _refuse_stale(self, rp: ResolvedPath) -> None:
+        """Refuse to change a file that changed since this session last saw it.
+
+        Call under the path's lock. No baseline passes: a file never read
+        (or read before a restart) has nothing to be stale against.
+        """
+        seen = self._seen.get(_path_key(rp))
+        if seen is None:
+            return
+        try:
+            now: tuple[int, int] | None = _stamp(rp.abs.stat())
+        except OSError:
+            now = None
+        if now == seen:
+            return
+        if now is None:
+            raise WorkspaceError(
+                f"{rp.display()} was deleted after it was last read.",
+                hint=(
+                    "Read it again to see its current state; write it only if "
+                    "it should come back."
+                ),
+            )
+        raise WorkspaceError(
+            f"{rp.display()} changed after it was last read.",
+            hint="Read it again and redo the change against what is there now.",
+        )
 
     def _base_env(self) -> dict[str, str]:
         """Environment for shell commands.
@@ -748,6 +781,8 @@ class LocalWorkspaceSession:
         rp = self._resolve_checked(path, "read")
         p = rp.abs
         if not p.is_file():
+            # Seen gone: a write may now recreate it.
+            self._seen.pop(_path_key(rp), None)
             raise WorkspaceError(f"Not a file: {rp.display()}")
         if start is not None and start < 1:
             raise WorkspaceError("start must be >= 1.")
@@ -762,14 +797,14 @@ class LocalWorkspaceSession:
             # memory: read only a bounded prefix. Line ranges beyond that
             # prefix aren't reachable here — use the shell (e.g. sed -n) for
             # arbitrary ranges in very large files.
-            try:
-                oversized = p.stat().st_size > self.limits.max_file_read_bytes
-            except OSError:
-                oversized = False
             # Bytes, not text mode: text mode's universal newlines would
             # silently normalize CRLF to LF, so the model would edit content
             # that does not match the file on disk.
             with p.open("rb") as fh:
+                # The open file, before reading: the stale-edit baseline must
+                # be the version read, never a change that lands after it.
+                st = os.fstat(fh.fileno())
+                oversized = st.st_size > self.limits.max_file_read_bytes
                 raw = fh.read(self.limits.max_file_read_bytes if oversized else -1)
             # Refuse non-text instead of returning replacement-character soup:
             # it burns context (U+FFFD compresses terribly) and tells the model
@@ -811,6 +846,9 @@ class LocalWorkspaceSession:
                 # still fit under the char cap, so clip_text added no notice.
                 # Say so explicitly, or the model thinks it read the whole file.
                 content = f"{content}\n[... {hint}]"
+            # The whole file's, even for a page: an edit anywhere must see a
+            # change anywhere.
+            self._seen[_path_key(rp)] = _stamp(st)
             return FileContent(
                 path=rp.display(),
                 content=content,
@@ -906,6 +944,9 @@ class LocalWorkspaceSession:
             def _write() -> FileChange:
                 if p.is_dir():
                     raise WorkspaceError(f"Is a directory: {rp.display()}")
+                # Before create_only too: a read file deleted since must not
+                # quietly come back, even as a "create".
+                self._refuse_stale(rp)
                 p.parent.mkdir(parents=True, exist_ok=True)
                 if create_only:
                     # O_EXCL makes create-or-fail atomic (no exists() race).
@@ -923,11 +964,13 @@ class LocalWorkspaceSession:
                         )
                     with os.fdopen(fd, "wb") as fh:
                         fh.write(data)
+                        fh.flush()
+                        self._seen[_path_key(rp)] = _stamp(os.fstat(fd))
                     return FileChange(
                         path=rp.display(), action="created", bytes_written=len(data)
                     )
                 existed = p.exists()
-                _atomic_write(p, data)
+                self._seen[_path_key(rp)] = _stamp(_atomic_write(p, data))
                 return FileChange(
                     path=rp.display(),
                     action="updated" if existed else "created",
@@ -957,6 +1000,7 @@ class LocalWorkspaceSession:
         async with lock:
 
             def _edit() -> EditResult:
+                self._refuse_stale(rp)
                 try:
                     if p.stat().st_size > self.limits.max_file_read_bytes:
                         return EditResult(
@@ -1022,7 +1066,8 @@ class LocalWorkspaceSession:
                         ok=True, path=rp.display(), replacements=count, changed=False
                     )
                 updated = text.replace(old_text, new_text)
-                _atomic_write(p, updated.encode("utf-8"))
+                written = _atomic_write(p, updated.encode("utf-8"))
+                self._seen[_path_key(rp)] = _stamp(written)
                 return EditResult(
                     ok=True, path=rp.display(), replacements=count, changed=True
                 )
@@ -1690,11 +1735,24 @@ def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:
         proc.kill()
 
 
-def _atomic_write(p: Path, data: bytes) -> None:
+def _path_key(rp: ResolvedPath) -> str:
+    """One key per file for the locks and baselines: resolved, so a symlink
+    and its target agree, and case-folded where the volume ignores case."""
+    key = os.path.normcase(rp.abs)  # Windows: case and separators
+    return key.lower() if FOLD_CASE else key
+
+
+def _stamp(st: os.stat_result) -> tuple[int, int]:
+    return st.st_mtime_ns, st.st_size
+
+
+def _atomic_write(p: Path, data: bytes) -> os.stat_result:
     """Write ``data`` to ``p`` via a same-directory temp file + rename.
 
     A crash mid-write can no longer truncate the target, and the original
-    file mode survives the replacement.
+    file mode survives the replacement. Returns the written file's stat,
+    taken before the rename makes it visible, so no later change can be
+    mistaken for this write.
     """
     mode: int | None = None
     with contextlib.suppress(OSError):
@@ -1704,7 +1762,9 @@ def _atomic_write(p: Path, data: bytes) -> None:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
         os.chmod(tmp, mode if mode is not None else 0o644)
+        st = os.stat(tmp)
         os.replace(tmp, p)
+        return st
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)

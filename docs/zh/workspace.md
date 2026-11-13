@@ -146,6 +146,12 @@ policy = replace(WorkspacePolicy.coding(), read_outside="deny", allow_shell=Fals
 会修改状态的工具默认 `parallel=False`（[执行屏障](tools.md#并发执行与屏障)），避免文件和进程副作用在同一轮
 里互相竞态；只读工具保持并发。
 
+会话上次读取或写入某个文件之后，它在磁盘上变了（用户改过、`shell` 里跑了格式化、被人删了），
+`write_file` 和 `edit_file` 就拒绝改动，提示重新读取；读过的文件被删除后，即使这次写入是“创建”也拒绝，
+直到重新读取确认它已不在。会话从没读过的文件照常写入，所以服务重启、恢复 run 之后不会误报。
+检查只比对修改时间和大小，属于尽力检测；它放在会话里（`write_text` / `write_bytes` / `edit_text`），
+自定义工具和远程工作区同样生效。它只覆盖一个会话看到的内容：能发现此前的变化，不对其他聊天加锁。
+
 输出在工具层由 `WorkspaceLimits` 限制（传 `limits=WorkspaceLimits(...)`）：每次读取
 `max_file_read_chars=50_000`（用 `start`/`end` 分页），shell 输出
 `max_shell_output_chars=30_000`（保留头尾），另有读取/grep 字节上限，以及 list/grep 结果上限。

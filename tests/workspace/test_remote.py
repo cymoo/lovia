@@ -200,6 +200,20 @@ async def test_commands_and_background_processes(host, tmp_path) -> None:
     assert await _dead(started.pid)
 
 
+async def test_a_stale_edit_is_refused_over_there_too(host, tmp_path) -> None:
+    f = tmp_path / "f.txt"
+    f.write_text("a = 1\n", encoding="utf-8")
+    session = await host.open(str(tmp_path), policy=WorkspacePolicy.coding())
+    await session.read_text("f.txt")
+    f.write_text("a = 1\nb = 2\n", encoding="utf-8")
+    with pytest.raises(WorkspaceError, match="changed after it was last read") as e:
+        await session.edit_text("f.txt", "a = 1", "a = 10")
+    assert e.value.hint and "Read it again" in e.value.hint
+    await session.read_text("f.txt")
+    assert (await session.edit_text("f.txt", "a = 1", "a = 10")).ok
+    assert f.read_text(encoding="utf-8") == "a = 10\nb = 2\n"
+
+
 async def test_errors_arrive_as_the_same_exceptions(host, tmp_path) -> None:
     (tmp_path / "big.bin").write_bytes(b"x" * 100)
     session = await host.open(str(tmp_path), policy=WorkspacePolicy.readonly())

@@ -371,6 +371,136 @@ async def test_write_overwrite_and_unicode_roundtrip(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stale-edit check
+# ---------------------------------------------------------------------------
+
+
+def _touch_later(p) -> None:
+    """Change ``p`` behind the session's back without changing its size, so
+    only the mtime can tell."""
+    st = p.stat()
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+
+
+async def test_an_edit_after_an_outside_change_is_refused_until_reread(
+    tmp_path,
+) -> None:
+    f = tmp_path / "f.py"
+    f.write_text("a = 1\nb = 2\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    await session.read_text("f.py")
+    f.write_text("a = 1\nb = 20\n", encoding="utf-8")
+    with pytest.raises(WorkspaceError, match="changed after it was last read") as e:
+        await session.edit_text("f.py", "a = 1", "a = 10")
+    assert e.value.hint and "Read it again" in e.value.hint
+    assert f.read_text(encoding="utf-8") == "a = 1\nb = 20\n"
+
+    await session.read_text("f.py")
+    assert (await session.edit_text("f.py", "a = 1", "a = 10")).ok
+    assert f.read_text(encoding="utf-8") == "a = 10\nb = 20\n"
+
+
+async def test_a_write_after_an_outside_change_is_refused(tmp_path) -> None:
+    f = tmp_path / "f.txt"
+    f.write_text("mine", encoding="utf-8")
+    session = await _session(tmp_path)
+    await session.read_text("f.txt")
+    _touch_later(f)  # same size: the mtime alone gives it away
+    with pytest.raises(WorkspaceError, match="changed after it was last read"):
+        await session.write_text("f.txt", "over")
+    assert f.read_text(encoding="utf-8") == "mine"
+
+
+async def test_a_read_file_deleted_outside_is_not_written_back(tmp_path) -> None:
+    f = tmp_path / "f.txt"
+    f.write_text("x", encoding="utf-8")
+    session = await _session(tmp_path)
+    await session.read_text("f.txt")
+    f.unlink()
+    with pytest.raises(WorkspaceError, match="deleted after it was last read") as e:
+        await session.write_text("f.txt", "back")
+    assert e.value.hint
+    with pytest.raises(WorkspaceError, match="deleted"):
+        await session.write_text("f.txt", "back", create_only=True)
+    assert not f.exists()
+
+    # Reading it again sees it gone; then it may be created anew.
+    with pytest.raises(WorkspaceError, match="Not a file"):
+        await session.read_text("f.txt")
+    assert (await session.write_text("f.txt", "new")).action == "created"
+
+
+async def test_a_file_never_read_is_written_and_edited_freely(tmp_path) -> None:
+    f = tmp_path / "f.txt"
+    f.write_text("one two", encoding="utf-8")
+    session = await _session(tmp_path)
+    assert (await session.edit_text("f.txt", "one", "1")).ok
+    f.write_text("1 two three", encoding="utf-8")  # after the session's edit…
+    session2 = await _session(tmp_path)
+    # … a session that never saw it has no baseline to be stale against.
+    assert (await session2.write_text("f.txt", "fresh")).action == "updated"
+    f.unlink()
+    assert (await session2.write_text("g.txt", "g")).action == "created"
+
+
+async def test_own_writes_and_edits_move_the_baseline(tmp_path) -> None:
+    (tmp_path / "f.txt").write_text("a b c", encoding="utf-8")
+    session = await _session(tmp_path)
+    await session.read_text("f.txt")
+    assert (await session.edit_text("f.txt", "a", "A")).ok
+    assert (await session.edit_text("f.txt", "b", "B")).ok
+    await session.write_text("f.txt", "x y")
+    assert (await session.edit_text("f.txt", "x", "X")).ok
+    await session.write_text("new.txt", "n", create_only=True)
+    assert (await session.edit_text("new.txt", "n", "N")).ok
+    assert (tmp_path / "f.txt").read_text(encoding="utf-8") == "X y"
+
+
+async def test_a_paged_read_guards_the_whole_file(tmp_path) -> None:
+    f = tmp_path / "f.txt"
+    f.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    page = await session.read_text("f.txt", start=1, end=1)
+    assert page.content == "one\n" and page.truncated
+    f.write_text("one\ntwo\nTHREE!\n", encoding="utf-8")  # past the page read
+    with pytest.raises(WorkspaceError, match="changed"):
+        await session.edit_text("f.txt", "one", "1")
+
+
+async def test_every_spelling_of_a_file_shares_one_baseline(tmp_path) -> None:
+    f = tmp_path / "real.txt"
+    f.write_text("v1", encoding="utf-8")
+    (tmp_path / "link.txt").symlink_to(f)
+    session = await _session(tmp_path)
+    spellings = ["link.txt", str(f), "./sub/../real.txt"]
+    if (tmp_path / "REAL.TXT").exists():  # a case-insensitive volume
+        spellings.append("REAL.TXT")
+    for spelling in spellings:
+        await session.read_text(spelling)
+        _touch_later(f)
+        with pytest.raises(WorkspaceError, match="changed"):
+            await session.edit_text("real.txt", "v1", "v2")
+        await session.read_text("real.txt")
+        _touch_later(f)
+        with pytest.raises(WorkspaceError, match="changed"):
+            await session.write_text(spelling, "v2")
+        await session.read_text(spelling)
+    assert f.read_text(encoding="utf-8") == "v1"
+
+
+async def test_a_new_session_does_not_inherit_baselines(tmp_path) -> None:
+    # A restarted server, a resumed run: nothing read yet, nothing stale.
+    f = tmp_path / "f.txt"
+    f.write_text("a", encoding="utf-8")
+    first = await _session(tmp_path)
+    await first.read_text("f.txt")
+    await first.close()
+    f.write_text("ab", encoding="utf-8")
+    second = await _session(tmp_path)
+    assert (await second.edit_text("f.txt", "ab", "abc")).ok
+
+
+# ---------------------------------------------------------------------------
 # list_files: plain listing and glob mode
 # ---------------------------------------------------------------------------
 

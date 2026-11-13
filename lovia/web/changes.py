@@ -249,8 +249,10 @@ async def file_diff(
     paths = " ".join(quote(p) for p in (path, old) if p)
     # A pathspec may name a directory (`.`, `src`): git then diffs every file
     # under it, a denied one too. Each file the diff would carry is judged
-    # first, as the change list judges what it lists.
-    names = await _git(session, f"diff -M --name-only -z HEAD -- {paths}")
+    # first, as the change list judges what it lists — with renames split, so
+    # a denied file moved to a readable name is judged by both (its deleted
+    # lines would otherwise show under the new one).
+    names = await _git(session, f"diff --no-renames --name-only -z HEAD -- {paths}")
     if not names.ok:
         return None
     for name in filter(None, names.stdout.split("\0")):

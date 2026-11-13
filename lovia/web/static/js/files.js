@@ -1083,7 +1083,7 @@ async function loadDiff(v) {
 
 const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 // The header lines worth showing: the rest (index, ---/+++) repeat the path.
-const DIFF_META = /^(rename from|rename to|old mode|new mode) /;
+const DIFF_META = /^(rename from|rename to|old mode|new mode|deleted file mode|new file mode) /;
 
 function renderDiff(d) {
   if (d.binary) return viewerNote(t('files.diffBinary'));
@@ -1131,6 +1131,9 @@ function renderDiff(d) {
       line('', oldN++, newN++, text);
     }
   }
+  // Nothing git said is worth a row (a header shape not foreseen): say so,
+  // rather than an empty box.
+  if (!lines.childElementCount) return viewerNote(t('files.diffEmpty'));
   box.appendChild(lines);
   return box;
 }

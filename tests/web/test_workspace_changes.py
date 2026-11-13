@@ -153,6 +153,22 @@ def test_diff_is_the_file_against_head(repo: Path) -> None:
 
 
 @needs_git
+def test_a_denied_file_moved_to_a_readable_name_stays_denied(repo: Path) -> None:
+    """Paired as a rename, the diff of the new name would carry the denied
+    file's deleted lines: both names are judged."""
+    (repo / "secrets.env").write_text("".join(f"KEY{i}=v\n" for i in range(10)))
+    _git(repo, "commit", "-qam", "longer secrets")
+    _git(repo, "mv", "secrets.env", "public.txt")
+    (repo / "public.txt").write_text("".join(f"KEY{i}=v\n" for i in range(9)))
+    c = _client(repo)
+    res = c.get("/api/workspace/diff", params={"path": "."})
+    assert res.status_code == 403 and "KEY" not in res.text
+    # By its own name the file is readable, and git doesn't pair it.
+    own = c.get("/api/workspace/diff", params={"path": "public.txt"})
+    assert own.status_code == 200 and "rename from" not in own.json()["diff"]
+
+
+@needs_git
 def test_a_directory_of_readable_files_still_diffs(repo: Path) -> None:
     (repo / "secrets.env").write_text("old\nsame\n")  # back to HEAD
     (repo / "pic.bin").write_bytes(b"\x00\x01")  # (a binary marks the whole diff)

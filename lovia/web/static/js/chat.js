@@ -74,6 +74,14 @@ function emitWorkspaceTouch(name, path) {
   if (path) store.emit('workspace-file-touched', { path });
 }
 
+// A sent message's attachments are this chat's files too — the user brought
+// them in — so the Files panel lists them with what the assistant wrote.
+function emitAttachmentTouches(/** @type {any[] | null} */ attachments) {
+  for (const a of attachments || []) {
+    if (a?.path) store.emit('workspace-file-touched', { path: a.path, attached: true });
+  }
+}
+
 // Throttled streaming render: the first delta in a window arms the timer and
 // later ones ride along, so a model that never pauses for 60ms (a local vLLM
 // at 100+ tok/s) still repaints ~16×/s. A trailing debounce here (re-arming on
@@ -484,6 +492,7 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
   const bubble = node.querySelector('.lv-bubble');
   if (attachments && attachments.length) {
     appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
+    emitAttachmentTouches(attachments);
   }
   if (text) {
     const body = document.createElement('div');
@@ -2280,6 +2289,7 @@ function renderHistoryWindow({ stickBottom }) {
       // the previews from it and show the clean message — matching live send.
       const { text: bodyText, attachments } = splitAttachmentNote(contentText(it.content));
       if (attachments.length) appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
+      emitAttachmentTouches(attachments);
       if (bodyText) {
         const body = document.createElement('div');
         body.className = 'lv-body';
@@ -2324,16 +2334,17 @@ function renderHistoryWindow({ stickBottom }) {
       }
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
+          const result = pendingResults.get(call.id);
           // Replayed history counts too: "touched" means files THIS chat
-          // produced, whether live or reloaded.
-          emitWorkspaceTouch(call.name, toolPath(call.arguments));
+          // produced, whether live or reloaded — and, as live, only a write
+          // that landed (a denied or failing call never made the file).
+          if (result && !result.isError) emitWorkspaceTouch(call.name, toolPath(call.arguments));
           const todos = parseTodos(call.arguments);
           if (todos) {
             upsertTodoCard(todos); // render/update the session's checklist panel
             continue;
           }
           const node = buildToolNode(call);
-          const result = pendingResults.get(call.id);
           // Attached first, so a UI component renders into a laid-out card.
           appendBubbleContent(currentBubble, node);
           // Same renderer as the live path: highlighting, error styling, and

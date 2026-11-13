@@ -1,7 +1,8 @@
 """Workspace routes: the Files panel's read-only window into an agent's files.
 
-lovia web is a personal assistant, so the panel's first job is "where is the
-thing the assistant just made" — a recency-sorted flat list — with breadcrumb
+lovia web is a personal assistant, so the panel's first job is "what did the
+assistant change" — the chat's own files, plus what else git sees
+uncommitted (:mod:`lovia.web.changes`), each with its diff — with breadcrumb
 browsing, text content, and raw bytes (image preview / download) behind it.
 
 Every read runs through a session forced to a **readonly** policy built from
@@ -11,10 +12,10 @@ GET has no approval flow — under the readonly preset everything outside the
 root (and everything the agent's ``denied_paths`` hide, e.g. ``.env*``) is a
 plain ``deny``, which the session raises as :class:`PermissionDeniedError`.
 The panel can never see more than the agent itself could read without
-asking. That is the only access rule: what Recent *lists* is a separate,
-presentation-only filter (:data:`_RECENT_SKIPS`), so a path the panel
-doesn't surface — an inline image the assistant wrote under ``tmp/``, a tool
-card's "open in Files" — still opens when asked for by name.
+asking. That is the only access rule: what the change list leaves out (the
+scratch dir) is presentation, so a path the panel doesn't surface — an
+inline image the assistant wrote under ``tmp/``, a tool card's "open in
+Files" — still opens when asked for by name.
 
 The session is opened where the files are, so a chat working on a remote
 host is served by the same routes: nothing here touches this machine's disk
@@ -58,11 +59,15 @@ from ...workspace import (
 )
 from ...workspace.paths import resolve_path
 from ...workspace.protocol import WorkspaceSession
+from .. import changes
 from ..errors import WebError
 from ..media import is_preview_image, preview_image_mime
 from ..schemas import (
+    ChangesRequest,
     ProcessInfo,
     UploadedFile,
+    WorkspaceChanges,
+    WorkspaceDiff,
     WorkspaceEntry,
     WorkspaceFile,
     WorkspaceInfo,
@@ -71,29 +76,6 @@ from ..workspaces import ChatBinding, WorkspaceRef, files_config, open_view
 from .deps import RouterDeps
 
 FilesConfig = LocalWorkspace | RemoteWorkspace
-
-
-# What the Recent list leaves out — a presentation rule, not an access one:
-# regenerable environment/cache noise whose ever-fresh mtimes would otherwise
-# dominate the recency sort (and eat the walk's result cap before real files
-# do), plus the agent's scratch dir — instructed intermediates, not
-# deliverables. Dot-prefixed junk (.git, .venv) is already hidden by the
-# dotfile rule, and build *outputs* (dist/ etc.) stay listed: "take the file
-# the assistant made" is the panel's job. Same pattern language as
-# ``denied_paths``: a bare name matches the file or directory (and everything
-# beneath it) at any depth, while the scratch pattern carries a slash so it
-# anchors to the root — the convention is "under tmp/", and the panel's badge
-# applies the same root-relative test client-side. Browsing and reading are
-# not filtered: a directory listing is one level and can't be crowded, and a
-# path the user asks for by name — a tool card, an inline image — must open
-# regardless.
-_RECENT_SKIPS: tuple[str, ...] = (
-    "__pycache__",
-    "*.pyc",
-    "venv",
-    "node_modules",
-    f"{SCRATCH_DIR}/*",
-)
 
 
 def _io_error(exc: OSError) -> WebError:
@@ -107,16 +89,15 @@ def _io_error(exc: OSError) -> WebError:
 
 @asynccontextmanager
 async def _view(
-    cfg: FilesConfig, *, skip: tuple[str, ...] = (), write: bool = False
+    cfg: FilesConfig, *, write: bool = False, git: bool = False
 ) -> AsyncIterator[WorkspaceSession]:
     """A per-request :func:`~lovia.web.workspaces.open_view` session, with
     what goes wrong in it said as an HTTP error.
 
-    Only the Recent walk passes ``skip`` and only an upload ``write`` —
-    never a read.
+    Only an upload passes ``write``; only the change list and diff ``git``.
     """
     try:
-        session = await open_view(cfg, skip=skip, write=write)
+        session = await open_view(cfg, write=write, git=git)
     except UserError as exc:  # the root is gone (moved, deleted)
         raise WebError.from_exc(404, "file_not_found", exc) from exc
     except WorkspaceError as exc:  # no way through to the host
@@ -353,25 +334,47 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             entries = await session.list_files(path)
         return [entry_out(e) for e in entries]
 
-    @router.get("/api/workspace/recent", response_model=list[WorkspaceEntry])
-    async def recent_files(
+    @router.post("/api/workspace/changes", response_model=WorkspaceChanges)
+    async def list_changes(
+        body: ChangesRequest,
         agent: str | None = Query(None),
         chat: str | None = Query(None, alias="session"),
         root: str | None = Query(None, max_length=4096),
-        limit: int = Query(100, ge=1, le=500),
-    ) -> list[WorkspaceEntry]:
-        """Files across the whole workspace, newest first.
-
-        Approximate on huge workspaces: the underlying walk caps at the
-        workspace's ``max_list_results`` (500 by default) before sorting —
-        fine for the personal-assistant scale this UI targets.
-        """
+    ) -> WorkspaceChanges:
+        """The chat's own files (``paths``, as its tool calls spelled them),
+        then the work tree's other uncommitted changes when the root is in
+        git. Costs one ``stat`` per path and at most three git commands —
+        never a walk of the tree."""
         cfg = await require_cfg(agent, chat, root)
-        async with _view(cfg, skip=_RECENT_SKIPS) as session:
-            entries = await session.list_files(".", pattern="**/*")
-        files = [e for e in entries if not e.is_dir]
-        files.sort(key=lambda e: e.mtime or 0.0, reverse=True)
-        return [entry_out(e) for e in files[:limit]]
+        async with _view(cfg, git=True) as session:
+            return await changes.list_changes(session, body.paths)
+
+    @router.get("/api/workspace/diff", response_model=WorkspaceDiff)
+    async def file_diff(
+        agent: str | None = Query(None),
+        chat: str | None = Query(None, alias="session"),
+        root: str | None = Query(None, max_length=4096),
+        path: str = Query(..., max_length=4096),
+        old: str | None = Query(None, max_length=4096),
+    ) -> WorkspaceDiff:
+        """One file against ``HEAD``, unified, cut to the workspace's shell
+        output limit. ``old`` names a rename's former path."""
+        cfg = await require_cfg(agent, chat, root)
+        async with _view(cfg, git=True) as session:
+            await _must_read(session, path)
+            if old:
+                await _must_read(session, old)
+            diff = await changes.file_diff(
+                session,
+                path,
+                old=old,
+                limit=cfg.limits.max_shell_output_chars,
+                # A local workspace's commands run in this machine's shell.
+                windows=isinstance(cfg, LocalWorkspace) and os.name == "nt",
+            )
+        if diff is None:
+            raise WebError(404, "feature_unavailable", "no git history to diff against")
+        return diff
 
     @router.get("/api/workspace/file", response_model=WorkspaceFile)
     async def read_file(

@@ -361,10 +361,20 @@ export const api = {
   /** @param {{ agent?: string, path?: string }} [opts] */
   workspaceFiles: ({ agent, path } = {}) =>
     request(`/api/workspace/files${qs({ agent, path, ..._scope() })}`).then(_json),
-  // Whole-workspace flat list, newest first.
-  /** @param {{ agent?: string, limit?: number }} [opts] */
-  workspaceRecent: ({ agent, limit } = {}) =>
-    request(`/api/workspace/recent${qs({ agent, limit, ..._scope() })}`).then(_json),
+  // The chat's own files (`paths`, as its tool calls spelled them), then —
+  // in a git work tree — the other uncommitted changes: { git, truncated, files }.
+  /** @param {{ agent?: string, paths?: string[] }} [opts] */
+  workspaceChanges: ({ agent, paths = [] } = {}) =>
+    request(`/api/workspace/changes${qs({ agent, ..._scope() })}`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ paths }),
+    }).then(_json),
+  // One file against HEAD: { path, diff, binary, truncated }. `old`: a
+  // rename's former path, so git diffs the two instead of a new file.
+  /** @param {{ agent?: string, path?: string, old?: string }} [opts] */
+  workspaceDiff: ({ agent, path, old } = {}) =>
+    request(`/api/workspace/diff${qs({ agent, path, old, ..._scope() })}`).then(_json),
   // Paginated text content; `binary: true` means "don't render me".
   /** @param {{ agent?: string, path?: string, start?: number }} [opts] */
   workspaceFile: ({ agent, path, start } = {}) =>

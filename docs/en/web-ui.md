@@ -276,14 +276,23 @@ Uploads default to 25 MiB per file (`LOVIA_MAX_UPLOAD_MB`). Named extensions
 must match the built-in allowlist; override it with
 `LOVIA_UPLOAD_ALLOWED_EXT`, separated by commas or spaces, or use `*` for any.
 
+The Files panel opens on **Changes**: the files this chat wrote, plus the
+ones attached to its messages or uploaded from the panel, newest first. In a
+git work tree a folded second group lists the other uncommitted changes
+`git status` sees under the folder, and each row carries its line counts
+(`+12 −3`) or a *new* mark. A changed tracked file opens on its diff against
+the last commit, with a *File* tab beside it; a new file opens as itself.
+Outside git there is only the chat's own group, and no diff. Git runs on the
+host that holds the files, limited to `git rev-parse`, `git status` and
+`git diff`, and a path the agent could not read unasked never shows.
+
 A file uploaded from the Files panel is not automatically attached to the next
-message. The Recent list leaves out environment noise (`node_modules/`,
-`venv/`, `__pycache__/`, `*.pyc`) and the agent's scratch dir `tmp/`, and the
-"new files" badge counts only writes Recent would show; that is presentation
-only — browsing shows every directory, and any path the agent references (an
-inline image under `tmp/`, a tool card's *open in Files*) opens as long as
-the agent itself could read it. Deleting a chat does not remove files
-under `uploads/`; the application or user must clean them up.
+message. The change list leaves out the agent's scratch dir `tmp/`, and the
+"new files" badge counts only writes the list would show; that is
+presentation only — browsing shows every directory, and any path the agent
+references (an inline image under `tmp/`, a tool card's *open in Files*)
+opens as long as the agent itself could read it. Deleting a chat does not
+remove files under `uploads/`; the application or user must clean them up.
 
 Background processes belong to the chat rather than one Run. Finishing a Run
 does not stop them; deleting the chat or stopping the Web server reaps them,

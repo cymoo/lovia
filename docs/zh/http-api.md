@@ -176,7 +176,9 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/sessions/{id}/ui-data/{ref}` | UI 组件的完整 props，由本聊天运行中的 `put_ui_data` 保存（[详情](web-server.md#大块数据)） |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
 | `GET /api/schedules/{id}/runs` | 按时间倒序列出定时任务的运行记录 |
-| `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | 读取 Agent [工作区](workspace.md)中的文件；带 `?session=` 时读该对话的目录，带 `?root=` 时读还没发送的草稿的目录（按新对话的规则校验） |
+| `GET /api/workspace` · `/files` · `/file` · `/raw` | 读取 Agent [工作区](workspace.md)中的文件；带 `?session=` 时读该对话的目录，带 `?root=` 时读还没发送的草稿的目录（按新对话的规则校验） |
+| `POST /api/workspace/changes` | `{paths}`（最多 500 个，按对话里工具调用的写法）→ `{git, truncated, files: [{path, is_dir, touched, status, old_path, added, removed, size, mtime}]}`：仍然存在的路径按修改时间倒序（`touched: true`）；目录在 git 仓库里时，后面是 `git status` 在该目录下看到的其余未提交改动，最多 200 项（`truncated` 表示还有更多）。`status` 取 `modified`、`added`、`untracked`、`deleted`、`renamed` 或 `null`；`added` / `removed` 是相对 `HEAD` 的行数。`?session=` / `?root=` 同文件面板 |
+| `GET /api/workspace/diff?path=&old=` | `{path, diff, binary, truncated}`：该文件相对 `HEAD` 的 unified diff（`old` 是重命名前的路径，这样移动按一次改名比较），按工作区的 shell 输出上限截断。不在 git 仓库里或仓库还没有提交时返回 404 `feature_unavailable` |
 | `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束；`?session=` / `?root=` 同文件面板 |
 | `GET /api/workspaces` | 启用 `create_app(workspaces=)` 时：新对话可选的目录，`{workspaces: [{id, root, name, kind, last_used_at}], default, can_add, roots}`。`kind` 为 `"default"`（Agent 自己的目录，新标签页从这里开始）、`"general"`（通用工作区）或 `"added"`；前两种没有 `id`，始终在列表里。`can_add` 表示能否添加其他目录；只允许部分目录时，`roots` 列出允许的目录树 |
 | `POST /api/workspaces` · `DELETE /api/workspaces/{id}` | `{path}` → 该项：添加一个存在且允许的目录（解析符号链接）· 从列表移除一项（文件和对话都保留；之后在那里新建对话会重新加入列表） |

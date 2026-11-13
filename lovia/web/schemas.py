@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -98,6 +98,53 @@ class WorkspaceEntry(BaseModel):
     size: int | None = None
     mtime: float | None = None
     symlink_target: str | None = None
+
+
+class ChangesRequest(BaseModel):
+    """``POST /api/workspace/changes``: the paths this chat wrote."""
+
+    paths: list[Annotated[str, Field(max_length=4096)]] = Field(
+        default_factory=list, max_length=500
+    )
+
+
+class ChangedFile(BaseModel):
+    """One row of the Files panel's change list.
+
+    ``touched`` rows are the chat's own writes, stat-ed (``size`` /
+    ``mtime``); the rest come from ``git status`` alone. ``status`` is
+    ``None`` outside git, or for a file git sees no change in.
+    """
+
+    path: str
+    is_dir: bool = False
+    touched: bool = False
+    status: Literal["modified", "added", "untracked", "deleted", "renamed"] | None = (
+        None
+    )
+    old_path: str | None = None
+    added: int | None = None
+    removed: int | None = None
+    size: int | None = None
+    mtime: float | None = None
+
+
+class WorkspaceChanges(BaseModel):
+    """``POST /api/workspace/changes``: touched files first, newest first,
+    then the work tree's other uncommitted changes (``git`` only)."""
+
+    git: bool
+    truncated: bool = False
+    files: list[ChangedFile]
+
+
+class WorkspaceDiff(BaseModel):
+    """``GET /api/workspace/diff``: one file against ``HEAD``, unified."""
+
+    path: str
+    diff: str
+    binary: bool = False
+    truncated: bool = False
 
 
 class WorkspaceFile(BaseModel):

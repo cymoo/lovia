@@ -332,9 +332,7 @@ async function refresh() {
   let failure = null;
   try {
     if (state.mode === 'changes') {
-      // The server takes 500 at most: the most recently touched, in a chat that long.
-      const paths = [...state.touched].slice(-MAX_TOUCHED);
-      changes = await api.workspaceChanges({ agent: store.agent, paths });
+      changes = await fetchChanges();
       entries = changes.files;
     } else {
       entries = await api.workspaceFiles({ agent: store.agent, path: state.browsePath || '.' });
@@ -363,14 +361,44 @@ async function refresh() {
   }
   state.entries = entries;
   if (changes) {
-    state.git = changes.git;
     state.truncated = changes.truncated;
-    state.changes = new Map(changes.files.map((f) => [f.path, f]));
-    syncViewerViews(); // a file on screen may just have gained (or lost) a diff
+    applyChangeMap(changes);
   }
   renderCrumbs();
   renderList();
   void restoreViewing();
+}
+
+function fetchChanges() {
+  // The server takes 500 at most: the most recently touched, in a chat that long.
+  const paths = [...state.touched].slice(-MAX_TOUCHED);
+  return api.workspaceChanges({ agent: store.agent, paths });
+}
+
+/** Take a change list as what the viewer knows of diffs. */
+function applyChangeMap(changes) {
+  state.git = changes.git;
+  state.changes = new Map(changes.files.map((f) => [f.path, f]));
+  syncViewerViews(); // a file on screen may just have gained (or lost) a diff
+}
+
+// Browsing refreshes only the directory, so the change map would stay as the
+// Changes tab last left it — or empty, for a panel that opened on Browse —
+// and a changed file would open with no Diff tab. Opening (or reloading) a
+// file there asks for the map in the background; the file shows meanwhile.
+let _mapSeq = 0;
+async function refreshChangeMap() {
+  const seq = ++_mapSeq;
+  const scope = viewingScope();
+  let changes;
+  try {
+    changes = await fetchChanges();
+  } catch {
+    return; // the map stays as it was: at worst a tab missing, as before
+  }
+  // A newer ask, another agent or folder, or the Changes tab took over.
+  if (seq !== _mapSeq || scope !== viewingScope() || state.mode !== 'browse') return;
+  applyChangeMap(changes);
 }
 
 /** The list has nothing of the place just left to show while the new one loads. */
@@ -1189,6 +1217,7 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
   const diff = shown === 'diff' ? same?.diff : undefined;
   state.viewing = { path, kind, name, raw: same?.raw ?? false, view: shown, diff };
   if (!silent) renderList();
+  if (!silent && state.mode === 'browse') void refreshChangeMap();
   syncViewerViews();
   if (shown === 'diff') {
     const v = state.viewing;
@@ -1473,7 +1502,10 @@ function maybeReloadViewing(touchedPath) {
   if (!(v.path === touchedPath || touchedPath.endsWith(`/${v.path}`))) return;
   clearTimeout(_reloadTimer);
   _reloadTimer = setTimeout(() => {
-    if (state.viewing?.path === v.path) openFile(v.path, { silent: true });
+    if (state.viewing?.path !== v.path) return;
+    openFile(v.path, { silent: true });
+    // The write may have given the file a diff (Changes refreshes on its own).
+    if (state.mode === 'browse') void refreshChangeMap();
   }, 400);
 }
 

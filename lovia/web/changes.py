@@ -168,6 +168,36 @@ async def _stat_touched(
     return {f.path: f for f in found if f is not None}
 
 
+async def _shown(session: WorkspaceSession, entries: list[GitEntry]) -> list[GitEntry]:
+    """The entries the list may show: readable unasked, outside the scratch dir."""
+    ok = await asyncio.gather(*(_readable(session, e.path) for e in entries))
+    return [e for e, yes in zip(entries, ok) if yes and not _is_scratch(e.path)]
+
+
+async def _unfold(
+    session: WorkspaceSession,
+    prefix: str,
+    entries: list[GitEntry],
+    held: list[GitEntry],
+) -> list[GitEntry]:
+    """``entries`` with each of the ``held`` untracked directories — folded
+    ones that hold the chat's own files — replaced by the files inside it.
+    The chat's own then list once, as theirs, and a directory of nothing
+    else (an ``uploads/``) leaves the other group altogether. One more
+    ``git status``, run only when such a directory exists; a list it can't
+    give whole keeps the fold."""
+    full = await _git(session, "status --porcelain=v1 -z --untracked-files=all -- .")
+    if not full.ok or full.truncated:
+        return entries
+    dirs = tuple(f"{e.path}/" for e in held)
+    inside = [
+        e
+        for e in parse_status(full.stdout, prefix)
+        if e.status == "untracked" and e.path.startswith(dirs)
+    ]
+    return [e for e in entries if e not in held] + await _shown(session, inside)
+
+
 async def list_changes(
     session: WorkspaceSession, touched_paths: list[str]
 ) -> WorkspaceChanges:
@@ -187,8 +217,14 @@ async def list_changes(
     # No HEAD yet (a repository without a commit): no counts, every file new.
     counts = parse_numstat(numstat.stdout, prefix) if numstat.ok else {}
 
-    shown = await asyncio.gather(*(_readable(session, e.path) for e in entries))
-    entries = [e for e, ok in zip(entries, shown) if ok and not _is_scratch(e.path)]
+    entries = await _shown(session, entries)
+    held = [
+        e
+        for e in entries
+        if e.is_dir and any(p.startswith(f"{e.path}/") for p in touched)
+    ]
+    if held:
+        entries = await _unfold(session, prefix, entries, held)
     by_path = {e.path: e for e in entries}
     new_dirs = [e.path + "/" for e in entries if e.is_dir]
 

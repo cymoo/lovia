@@ -93,9 +93,10 @@ def test_changes_marks_the_chats_files_and_folds_in_the_rest(repo: Path) -> None
         2,
         1,
     )
-    # Inside an untracked directory, which git folds into one row.
+    # Inside an untracked directory of nothing else: the fold's row would
+    # only repeat it, so it goes.
     assert rows["newdir/f.txt"]["status"] == "untracked"
-    assert rows["newdir"]["is_dir"] is True and not rows["newdir"]["touched"]
+    assert "newdir" not in rows
     assert rows["b.txt"]["status"] == "deleted" and rows["b.txt"]["removed"] == 2
     assert rows["new.txt"]["status"] == "untracked"
     assert rows["pic.bin"]["status"] == "modified" and rows["pic.bin"]["added"] is None
@@ -105,6 +106,25 @@ def test_changes_marks_the_chats_files_and_folds_in_the_rest(repo: Path) -> None
     others = [f["path"] for f in res["files"] if not f["touched"]]
     assert others == sorted(others)
     assert res["files"].index(rows["a.txt"]) < res["files"].index(rows["b.txt"])
+
+
+@needs_git
+def test_an_untracked_directory_unfolds_only_around_the_chats_files(
+    repo: Path,
+) -> None:
+    (repo / "newdir" / "g.txt").write_text("g\n")  # beside the chat's f.txt
+    (repo / "newdir" / "sub").mkdir()
+    (repo / "newdir" / "sub" / "h.txt").write_text("h\n")
+    (repo / "other").mkdir()  # holds none of the chat's files
+    (repo / "other" / "x.txt").write_text("x\n")
+    files = _changes(_client(repo), ["newdir/f.txt"])["files"]
+    rows = {f["path"]: f for f in files}
+    assert rows["newdir/f.txt"]["touched"]
+    for path in ("newdir/g.txt", "newdir/sub/h.txt"):
+        assert rows[path]["status"] == "untracked" and not rows[path]["touched"]
+    assert "newdir" not in rows
+    assert rows["other"]["is_dir"] is True  # still folded
+    assert [f["path"] for f in files].count("newdir/f.txt") == 1
 
 
 @needs_git

@@ -35,10 +35,10 @@ import posixpath
 import re
 import shlex
 from dataclasses import dataclass
-from fnmatch import fnmatch
+from fnmatch import translate as fnmatch_translate
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 from ..approvals import Decision, Verdict, as_verdict, merge_verdicts
 from . import paths
@@ -77,9 +77,22 @@ _COMMAND_SPLIT = re.compile(
 
 def _glob(name: str, pattern: str) -> bool:
     """``fnmatch``, ignoring case where the file system does."""
-    if paths.FOLD_CASE:
-        name, pattern = name.lower(), pattern.lower()
-    return fnmatch(name, pattern)
+    fold = paths.FOLD_CASE
+    head, match = _glob_matcher(pattern, fold)
+    name = os.path.normcase(name.lower() if fold else name)
+    return name.startswith(head) and match(name) is not None
+
+
+@lru_cache(maxsize=1024)
+def _glob_matcher(pattern: str, fold: bool) -> tuple[str, Callable[[str], Any]]:
+    """``pattern`` prepared once for :func:`_glob`, which a bulk walk calls
+    for every entry and every rule: normalized as ``fnmatch`` normalizes it,
+    compiled, and its literal head — the text before the first wildcard,
+    which every match starts with — so most names are turned away by a
+    ``startswith`` before the regex runs."""
+    pat = os.path.normcase(pattern.lower() if fold else pattern)
+    head = re.split(r"[*?[]", pat, maxsplit=1)[0]
+    return head, re.compile(fnmatch_translate(pat)).match
 
 
 def _path_matches(rel_path: str, pattern: str) -> bool:

@@ -158,6 +158,39 @@ async def test_tracked_directory_swapped_for_a_symlink_is_not_entered(
     assert "pkg/mod.py" not in await _glob(session, "**/*")
 
 
+async def test_symlinks_git_lists_are_judged_by_their_targets(tmp_path) -> None:
+    # Git lists a symlink as a file of its own; the listing still follows it:
+    # hidden when it leads to a denied file, kept with its target when it
+    # merely leads outside, a directory when it leads to one.
+    from lovia.workspace import WorkspacePolicy
+
+    root = _project(tmp_path)
+    outside = tmp_path / "outside"
+    _write(outside, {"notes.txt": "x\n", "creds.env": "KEY=1\n"})
+    (root / "to-notes").symlink_to(outside / "notes.txt")
+    (root / "to-creds").symlink_to(outside / "creds.env")
+    (root / "to-pkg").symlink_to(root / "pkg", target_is_directory=True)
+    session = LocalWorkspaceSession(
+        root=str(root),
+        policy=WorkspacePolicy(denied_paths=("*.env",), read_outside="ask"),
+    )
+    entries = {e.path: e for e in await session.list_files(".", pattern="*")}
+    assert "to-creds" not in entries
+    notes = entries["to-notes"]
+    assert notes.symlink_target == (outside / "notes.txt").resolve().as_posix()
+    assert (notes.is_dir, notes.size) == (False, 2)
+    assert entries["to-pkg"].is_dir is True
+    # A plain file: its size and mtime as stat reports them.
+    top = entries["top.py"]
+    st = (root / "top.py").stat()
+    assert (top.is_dir, top.size, top.mtime, top.symlink_target) == (
+        False,
+        st.st_size,
+        st.st_mtime,
+        None,
+    )
+
+
 async def test_without_git_the_tree_is_walked(tmp_path, monkeypatch) -> None:
     root = _project(tmp_path)
     monkeypatch.setenv("PATH", "")

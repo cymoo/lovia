@@ -496,7 +496,8 @@ class LocalWorkspaceSession:
     _root: Path = field(init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     # Per-path write locks keyed by _path_key, so a symlink and its target
-    # share one lock. Weak-valued so an entry disappears once no in-flight
+    # (and, where the volume ignores case, every spelling) share one lock.
+    # Weak-valued so an entry disappears once no in-flight
     # operation references its lock — the map can't grow without bound across
     # a long-lived session.
     _locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = field(
@@ -1739,7 +1740,30 @@ def _path_key(rp: ResolvedPath) -> str:
     """One key per file for the locks and baselines: resolved, so a symlink
     and its target agree, and case-folded where the volume ignores case."""
     key = os.path.normcase(rp.abs)  # Windows: case and separators
-    return key.lower() if FOLD_CASE else key
+    return key.lower() if _ignores_case(rp.abs) else key
+
+
+# macOS's _PC_CASE_SENSITIVE, which os.pathconf_names leaves out.
+_PC_CASE_SENSITIVE = 11
+
+
+def _ignores_case(p: Path) -> bool:
+    """Whether the macOS volume holding ``p`` ignores case.
+
+    Asked of the volume, not assumed like :data:`FOLD_CASE`: on a
+    case-sensitive volume ``Foo`` and ``foo`` are two files, and a shared
+    baseline would let a read of one clear the other's.
+    """
+    if not FOLD_CASE:
+        return False
+    for d in (p, *p.parents):  # the nearest part that exists
+        try:
+            return os.pathconf(d, _PC_CASE_SENSITIVE) == 0
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:  # a file system that can't say: keep spellings apart
+            return False
+    return False
 
 
 def _stamp(st: os.stat_result) -> tuple[int, int]:

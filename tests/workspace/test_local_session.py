@@ -7,7 +7,9 @@ import contextlib
 import gc
 import os
 import shlex
+import shutil
 import signal
+import subprocess
 import sys
 
 import pytest
@@ -486,6 +488,57 @@ async def test_every_spelling_of_a_file_shares_one_baseline(tmp_path) -> None:
             await session.write_text(spelling, "v2")
         await session.read_text(spelling)
     assert f.read_text(encoding="utf-8") == "v1"
+
+
+@pytest.fixture
+def case_sensitive_dir(tmp_path):
+    """A directory on a case-sensitive volume: tmp_path where it already is
+    (Linux), a throwaway disk image on macOS."""
+    (tmp_path / "probe").touch()
+    if not (tmp_path / "PROBE").exists():
+        yield tmp_path
+        return
+    if sys.platform != "darwin" or not shutil.which("hdiutil"):
+        pytest.skip("no case-sensitive volume to test on")
+    image, mnt = tmp_path / "cs.dmg", tmp_path / "mnt"
+    made = subprocess.run(
+        ["hdiutil", "create", "-quiet", "-size", "8m", "-fs", "Case-sensitive APFS"]
+        + ["-volname", "lovia-cs", str(image)],
+        capture_output=True,
+    )
+    attached = made.returncode == 0 and (
+        subprocess.run(
+            ["hdiutil", "attach", "-quiet", "-nobrowse", "-mountpoint", str(mnt)]
+            + [str(image)],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+    if not attached:
+        pytest.skip("could not mount a case-sensitive disk image")
+    try:
+        yield mnt
+    finally:
+        subprocess.run(["hdiutil", "detach", "-quiet", "-force", str(mnt)])
+
+
+async def test_case_spellings_stay_apart_where_the_volume_minds_case(
+    case_sensitive_dir,
+) -> None:
+    # Foo.txt and foo.txt are two files here: reading the missing one must
+    # not clear the other's baseline.
+    f = case_sensitive_dir / "Foo.txt"
+    f.write_text("v1", encoding="utf-8")
+    session = await _session(case_sensitive_dir)
+    await session.read_text("Foo.txt")
+    f.write_text("outside", encoding="utf-8")
+    with pytest.raises(WorkspaceError, match="Not a file"):
+        await session.read_text("foo.txt")
+    with pytest.raises(WorkspaceError, match="changed after it was last read"):
+        await session.write_text("Foo.txt", "over")
+    assert f.read_text(encoding="utf-8") == "outside"
+    # … and the other file, never read, is its own.
+    assert (await session.write_text("foo.txt", "new")).action == "created"
 
 
 async def test_a_new_session_does_not_inherit_baselines(tmp_path) -> None:

@@ -17,6 +17,8 @@ import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { confirmDialog, copyToClipboard, openMenu, promptDialog, showDialog } from './ui.js';
+import { hasProjectMemory } from './memory.js';
+import { openSettings } from './settings.js';
 
 const PICK_KEY = 'lovia-workspace'; // sessionStorage: this tab's pick
 const COLLAPSED_KEY = 'lovia-workspace-collapsed'; // localStorage: folded groups
@@ -341,6 +343,11 @@ export function groupHeader(group, rerender) {
         ? []
         : [{ label: t('session.rename'), icon: icon('pencil', { size: 15 }), onSelect: () => void renameWorkspace(group) }]),
       { label: t('ws.copyPath'), icon: icon('copy', { size: 15 }), onSelect: () => void copyPath(root) },
+      // A folder's own memory, when an agent keeps one per project (General
+      // is no project).
+      ...(group.kind !== 'general' && hasProjectMemory()
+        ? [{ label: t('ws.memory'), icon: icon('brain', { size: 15 }), onSelect: () => void openSettings('memory', { root }) }]
+        : []),
       // The folders always listed can't be removed (they have no entry id).
       ...(group.workspace?.id
         ? [null, { label: t('ws.remove'), icon: icon('x', { size: 15 }), danger: true, onSelect: () => void removeWorkspace(group) }]

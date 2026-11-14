@@ -28,11 +28,11 @@ class AgentInfo(BaseModel):
     # True when the agent has a browsable local workspace (the Files panel
     # shows itself only for such agents).
     workspace: bool = False
-    # True when the agent carries a Memory plugin (the sidebar's Memory
-    # editor shows itself only for such agents).
+    # True when the agent carries a Memory plugin (Settings shows its Memory
+    # page only when some agent does).
     memory: bool = False
     # True when that Memory is split by the chat's project
-    # (``Memory(scope=chat_project)``): the editor adds a per-project tab.
+    # (``Memory(scope=chat_project)``): the page offers a project scope.
     memory_projects: bool = False
     # The model's context window in tokens (server override > agent policy >
     # provider-advertised), or None when unknown — the UI's context ring

@@ -62,7 +62,7 @@ def chat_project(ctx: RunContext[Any]) -> str | None:
     The key is the chat's workspace (``WorkspaceRef.key``: a resolved path,
     or ``ssh://…`` / ``docker://…``); ``None`` — the user's layer only — for
     a chat in the "General" catch-all, an agent without a workspace, or a run
-    the web server didn't start. The Memory editor's per-project tab shows
+    the web server didn't start. The Memory page's project scope shows
     only for a Memory scoped by this function: it is the key it looks up.
     """
     return RUN_PROJECT.get()

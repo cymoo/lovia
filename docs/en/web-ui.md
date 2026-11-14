@@ -195,10 +195,10 @@ The agent menu shows each agent's model and permission mode under its name.
   [Memory scopes](memory.md#scopes)): notes about you are one list, carried
   into chats in every project; notes about a project, and recall over its
   past chats, are kept per chat directory. A chat in "No project" has only
-  the first. The sidebar's **Memory** dialog has two tabs, "About me" and
-  "This project (name)" — the second only in a chat that belongs to a
-  project — and **Clear project memory** there deletes that project's notes
-  and recall for good; deleting chats never clears memory. A project is its
+  the first. **Settings → Memory** edits either scope, "About me" or a
+  project picked from the list — starting at the open chat's folder; a
+  sidebar folder's **⋯ → Project memory** opens it on that folder. **Clear project memory** there deletes that
+  project's notes and recall for good; deleting chats never clears memory. A project is its
   directory, so renaming or moving it starts a fresh one. Notes saved by
   earlier versions all stay under "About me"; move project facts by hand.
   Recall over chats from earlier versions stays at the top level, searched

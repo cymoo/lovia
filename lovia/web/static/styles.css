@@ -365,14 +365,20 @@ body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not
   object-fit: contain;
 }
 
-/* Top nav — app-level destinations (New chat, Memory, Scheduled runs):
-   icon + label rows above the chats section. */
+/* Top nav — app-level destinations (New chat, Scheduled runs): icon + label
+   rows above the chats section. */
 .lv-sidebar-nav {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 0 10px 8px;
+}
+/* Settings, at the bottom: under the chats, or under the rail's icons. */
+.lv-sidebar-foot {
+  margin-top: auto;
+  padding-top: 6px;
+  padding-bottom: 10px;
 }
 /* A deployer's links in the sidebar_nav block draw as items too (documented). */
 .lv-sidebar-nav-item,
@@ -396,9 +402,13 @@ body.lv-sidebar-collapsed .lv-sidebar-nav :is(.lv-sidebar-nav-item, a[href]):not
   background: var(--lv-sidebar-active);
   color: var(--lv-ink);
 }
+/* The open view: the neutral selection chat rows use, not the accent. */
 .lv-sidebar-nav a[aria-current='page'] {
-  background: var(--lv-accent-soft);
-  color: var(--lv-accent-text);
+  background: var(--lv-sidebar-active);
+  color: var(--lv-ink);
+}
+[data-theme="dark"] .lv-sidebar-nav a[aria-current='page'] {
+  background: var(--lv-surface-3);
 }
 .lv-sidebar-nav-item svg,
 .lv-sidebar-nav a[href] svg {
@@ -4675,51 +4685,43 @@ details[open] > summary.lv-sched-group-head svg {
   }
 }
 
-/* ---- Memory editor ------------------------------------------------------
+/* ---- Memory (a Settings page) ---------------------------------------------
    The agent's Notes (hot-tier memory), readable and editable as the same
-   "- fact" per line markdown it stores. */
-.lv-memory-panel {
+   "- fact" per line markdown it stores. The page fills the settings pane's
+   fixed height; the editor takes what the picks and the footer leave. */
+.lv-memory-pane {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  height: 100%;
 }
-.lv-memory-head {
+.lv-memory-scope {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-}
-.lv-memory-head h3 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-.lv-memory-tabs {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 8px;
-}
-.lv-memory-tabs .lv-files-tabs {
   min-width: 0;
 }
-.lv-memory-tab-project {
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.lv-memory-scope[hidden] {
+  display: none;
+}
+.lv-memory-scope .lv-settings-select {
+  max-width: 220px;
+  min-width: 0;
 }
 .lv-memory-clear {
   flex-shrink: 0;
+  margin-right: auto;
   white-space: nowrap;
   color: var(--lv-muted);
 }
 .lv-memory-hint {
+  flex-shrink: 0;
   margin: 0;
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--lv-muted);
-  /* Two lines held: the tabs' hints differ in length, the dialog mustn't jump. */
+  /* Two lines held: the scopes' hints differ in length, the editor mustn't jump. */
   min-height: calc(2 * 1.55em);
 }
 .lv-memory-hint code {
@@ -4730,19 +4732,19 @@ details[open] > summary.lv-sched-group-head svg {
   padding: 1px 4px;
 }
 .lv-memory-editor {
+  flex: 1;
   margin-top: 0;
-  height: 320px;
-  min-height: 280px;
-  max-height: 52vh;
-  resize: vertical;
+  min-height: 140px;
+  resize: none;
   font-family: var(--lv-mono);
   font-size: 12.5px;
   line-height: 1.75;
 }
 .lv-memory-foot {
   /* Meter above the buttons, always: side by side they wrap only when the
-     meter is long ("last tidied …"), and the dialog would change height
-     between tabs. */
+     meter is long ("last tidied …"), and the editor would change height
+     between scopes. */
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -4756,10 +4758,12 @@ details[open] > summary.lv-sched-group-head svg {
 .lv-memory-meter.lv-warn {
   color: var(--lv-warn);
 }
+.lv-memory-meter:empty::before {
+  content: "\00a0"; /* holds its line while the notes load */
+}
 .lv-memory-actions {
   display: flex;
   gap: 8px;
-  align-self: flex-end;
 }
 .lv-memory-actions .lv-btn {
   white-space: nowrap;
@@ -6871,9 +6875,15 @@ body.lv-files-resizing {
   font-size: 12px;
   color: var(--lv-muted);
 }
+/* The height of the segmented controls beside it; no input's top margin, or
+   it sits low in its row. */
 .lv-settings-select {
   width: auto;
   min-width: 150px;
+  height: 34px;
+  margin-top: 0;
+  padding-block: 0;
+  font-size: 13px;
 }
 
 .lv-settings-row:has(.lv-switch) {
@@ -7134,6 +7144,13 @@ body.lv-files-resizing {
   color: var(--lv-ink);
   font-weight: 570;
 }
+/* Between the groups: yours, the server's, About. */
+.lv-settings-rail-sep {
+  flex-shrink: 0;
+  height: 1px;
+  margin: 6px 11px;
+  background: var(--lv-border);
+}
 /* One height for every tab: switching tabs never resizes (and re-centers)
    the dialog; a longer pane scrolls inside it. */
 .lv-settings-pane-host {
@@ -7154,6 +7171,11 @@ body.lv-files-resizing {
   }
   .lv-settings-rail-item {
     white-space: nowrap;
+  }
+  .lv-settings-rail-sep {
+    width: 1px;
+    height: auto;
+    margin: 6px 4px;
   }
 }
 
@@ -7583,8 +7605,13 @@ body.lv-files-resizing {
   gap: 6px;
   margin-bottom: 12px;
 }
+/* Pulled left by its own padding: the chevron lines up with the form below. */
 .lv-cfg-back {
-  font-size: 18px;
+  width: 28px;
+  height: 28px;
+  margin-left: -6px;
+}
+.lv-cfg-form-head .lv-cfg-pane-title {
   line-height: 1;
 }
 .lv-cfg-field .lv-cfg-label {

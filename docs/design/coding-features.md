@@ -133,7 +133,7 @@ git -C <base> ls-files --cached --others --exclude-standard -z
 
 ## 6. MCP 配置页
 
-**配置。** `config.json` 加 `mcp` 列表，每项：名字、启用开关、stdio（命令、参数、环境变量）或 http（地址、请求头）。每个 agent 一个总开关，和 `search`、`memory` 同样的形式。没装 `lovia[mcp]` 时页面提示安装。
+**配置。** `config.json` 加 `mcp` 列表，每项：名字、启用开关、stdio（命令、参数、环境变量）或 http（地址、请求头）。每个 agent 一个总开关，和 `search`、`memory` 同样的形式。`mcp` SDK 随 `lovia[web]` 安装。
 
 **构建。** 启用的服务器在 `builder.py` 里变成 `MCP` 插件的条目，固定这些取值：
 
@@ -142,7 +142,7 @@ git -C <base> ls-files --cached --others --exclude-standard -z
 | `name` | 配置里的名字，必填且唯一 | 作为工具名前缀，避免多个服务器的同名工具冲突 |
 | `auto_reconnect` | `False` | 现在遇到连接错误会重连并**重新执行同一个调用**（`plugins/mcp.py:402`）。服务器已经完成"创建 issue"而响应途中断线时，重放会创建两次；审批拦不住，因为重放发生在同一个已批准的调用内部 |
 | `retries` | `0` | 同上 |
-| `permission` | `"ask"` | 核心默认是放行；MCP 工具可以改外部系统 |
+| `permission` | 每个工具：`"ask"`，带 `mcp:<工具名>` 授权范围；工作区 shell 默认放行（完全权限）时放行 | 核心默认是放行；MCP 工具可以改外部系统。完全权限下 shell 已能不经询问访问外部系统，再问拦不住什么 |
 | `close_after_run` | `True`（默认） | 每个 run 连接一次，不引入常驻连接的生命周期管理 |
 
 调用失败时错误信息要说明"操作可能已经发生"，由模型和用户判断下一步。
@@ -151,7 +151,7 @@ git -C <base> ls-files --cached --others --exclude-standard -z
 
 **单个服务器不可达。** 核心现在会让整个 MCP setup 失败，run 也就失败。web 里改为：跳过这个服务器，run 继续，并在聊天里明确提示哪个服务器没连上。初始化要有超时。
 
-**权限模式的说明。** 文档和 UI 都要写明：工作区的"仅查看"只约束文件和 shell，不约束 MCP 工具对外部系统的操作；后者靠默认询问。
+**权限模式的说明。** 文档和 UI 都要写明：工作区的"仅查看"只约束文件和 shell，不约束 MCP 工具对外部系统的操作；后者靠默认询问（完全权限除外）。
 
 **设置页。**
 

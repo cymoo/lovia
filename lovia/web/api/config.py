@@ -14,7 +14,6 @@ always exactly what the next message runs on.
 from __future__ import annotations
 
 import asyncio
-import importlib.metadata
 from dataclasses import asdict
 from typing import Any, Literal
 
@@ -229,17 +228,6 @@ def _status_out(status: MCPStatus | None) -> dict[str, object] | None:
     }
 
 
-def _mcp_installed() -> bool:
-    """Whether the ``mcp`` SDK is installed — by its distribution, which an
-    ``mcp/`` folder in the launch directory (on ``sys.path`` under
-    ``python -m``) can't pass for."""
-    try:
-        importlib.metadata.distribution("mcp")
-    except importlib.metadata.PackageNotFoundError:
-        return False
-    return True
-
-
 def _parsed(document: Any) -> list[MCPServerConfig]:
     try:
         return parse_servers(document)
@@ -360,8 +348,6 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
 
     def _mcp_out() -> dict[str, object]:
         return {
-            # Without the SDK every server is skipped; Settings says how to fix it.
-            "available": _mcp_installed(),
             "timeout": CONNECT_TIMEOUT,
             "servers": [
                 {

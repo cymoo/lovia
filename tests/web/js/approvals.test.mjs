@@ -26,6 +26,7 @@ test('the question uses the tool label, else names the tool', () => {
 
 test('scope chips: the command for shell, a verb for paths, else verbatim', () => {
   assert.equal(scopeLabel('shell:git push'), 'git push');
+  assert.equal(scopeLabel('mcp:github__create_issue'), 'github__create_issue');
   assert.equal(scopeLabel('read:~/notes'), 'read ~/notes');
   assert.equal(scopeLabel('write:src'), 'write src');
   assert.equal(scopeLabel('mail:external'), 'mail:external');

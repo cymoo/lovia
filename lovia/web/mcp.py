@@ -6,8 +6,10 @@ Each server is opened the same way (docs/design/coding-features.md §6):
 - no reconnect and no retries — after a lost connection the server may
   already have done what was asked, and replaying the call inside one
   approved tool call could do it twice, past any approval;
-- every tool asks first (``permission="ask"``): MCP tools act on outside
-  systems, which the workspace's permission mode does not govern;
+- every tool asks first, with "always allow" for that tool in the chat —
+  unless the workspace runs any shell command unasked ("full access"): a
+  shell free to ``curl`` or ``gh`` reaches the same outside systems, so a
+  prompt there would protect nothing (:func:`_permission`);
 - one connection per run, closed when the run ends.
 
 Unlike the core :class:`~lovia.plugins.mcp.MCP` plugin, a server that cannot
@@ -27,9 +29,10 @@ import sys
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
+from ..approvals import Verdict
 from ..exceptions import UserError
 from ..plugins.base import PluginInstance
 from ..plugins.mcp import (
@@ -193,6 +196,19 @@ def _usable(conn: MCPConnection) -> list[Tool]:
     return tools
 
 
+def _permission(name: str) -> Callable[[dict[str, Any], RunContext[Any]], Verdict]:
+    """``name``'s verdict, judged per call against the run's workspace."""
+    scope = (f"mcp:{name}",)
+
+    def decide(_args: dict[str, Any], ctx: RunContext[Any]) -> Verdict:
+        ws = ctx.workspace
+        if ws is not None and ws.policy.shell_default == "allow":
+            return Verdict("allow")
+        return Verdict("ask", scopes=scope)
+
+    return decide
+
+
 def _raw_names(conn: MCPConnection, tools: Sequence[Tool]) -> tuple[str, ...]:
     prefix = f"{conn.prefix}__" if conn.prefix else ""
     return tuple(t.name.removeprefix(prefix) for t in tools)
@@ -258,7 +274,7 @@ class SettingsMCP:
                     continue
                 opened.append(conn)
                 usable = _usable(conn)
-                tools.extend(usable)
+                tools.extend(replace(t, permission=_permission(t.name)) for t in usable)
                 self.book.record(
                     cfg,
                     MCPStatus(ok=True, at=time.time(), tools=_raw_names(conn, usable)),

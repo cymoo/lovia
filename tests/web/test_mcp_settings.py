@@ -174,7 +174,6 @@ def _servers(client: TestClient) -> dict[str, dict[str, Any]]:
 
 def test_add_edit_toggle_delete_keep_secrets_out_of_the_page(served, tmp_path) -> None:
     client, runtime, _ = served
-    assert client.get("/api/config").json()["mcp"]["available"] is True
     res = client.post(
         "/api/config/mcp", json={"document": {"mcpServers": {"stub": _stub()}}}
     )
@@ -349,6 +348,36 @@ async def test_the_model_hears_which_servers_failed_but_not_their_words() -> Non
     )
     # Said one by one, as each fails.
     assert [[n for n, _ in f] for f in told] == [["a"], ["b"]]
+
+
+async def test_tools_ask_with_a_grant_unless_the_shell_runs_unasked() -> None:
+    from types import SimpleNamespace
+
+    from lovia.run_context import RunContext
+    from lovia.web.mcp import MCPBook
+    from lovia.workspace import WorkspacePolicy
+
+    cfg = MCPServerConfig(name="stub", command=sys.executable, args=[STUB])
+    inst = await SettingsMCP([cfg], MCPBook()).setup(
+        RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
+    )
+    try:
+        add = next(t for t in inst.tools if t.name == "stub__add")
+
+        def verdict(policy: WorkspacePolicy | None) -> tuple[str, tuple[str, ...]]:
+            ws = None if policy is None else SimpleNamespace(policy=policy)
+            ctx = RunContext(deps=None, entries=[], agent=None, workspace=ws)  # type: ignore[arg-type]
+            v = add.decide({}, ctx)
+            return v.action, v.scopes  # type: ignore[union-attr]
+
+        assert verdict(WorkspacePolicy.trusted()) == ("allow", ())
+        asked = ("ask", ("mcp:stub__add",))
+        assert verdict(WorkspacePolicy.coding()) == asked
+        assert verdict(WorkspacePolicy.readonly()) == asked
+        assert verdict(None) == asked
+    finally:
+        assert inst.aclose is not None
+        await inst.aclose()
 
 
 def test_a_tool_whose_name_a_provider_refuses_is_left_out() -> None:

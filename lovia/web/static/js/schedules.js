@@ -149,6 +149,7 @@ async function remove(s) {
     if (err.status !== 404) toast(err.message || t('sched.deleteFailed'), { type: 'error' });
   }
   store.emit('schedules-changed'); // the top bar's list of the chat's schedules
+  store.emit('schedule-deleted', s.id); // a chat's origin link to it (sessions.js)
   openView(VIEW);
 }
 

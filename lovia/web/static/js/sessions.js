@@ -1389,6 +1389,12 @@ export function initSessions() {
   store.on('session-deleted', (id) => {
     if (_origin?.session_id === id) renderOrigin({ ..._origin, exists: false });
   });
+  // Likewise a schedule's chat, when its schedule goes.
+  store.on('schedule-deleted', (id) => {
+    if (_origin?.kind === 'schedule' && _origin.schedule_id === id) {
+      renderOrigin({ ..._origin, exists: false });
+    }
+  });
   // A start_session card opens the chat it started.
   document.addEventListener(OPEN_SESSION_EVENT, (e) => {
     switchSession(/** @type {CustomEvent<string>} */ (e).detail);

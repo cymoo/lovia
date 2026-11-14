@@ -3776,7 +3776,6 @@ button.lv-question-option:hover {
 .lv-btn svg,
 .lv-session-more svg,
 .lv-popup-menu-item svg,
-.lv-sched-item-actions button svg,
 .lv-mermaid-lightbox-btn svg,
 .lv-todo-mark svg,
 .lv-withdraw-btn svg,
@@ -3887,146 +3886,209 @@ dialog.lv-custom-dialog::backdrop {
   margin-top: 20px;
 }
 
-/* ---- Schedules -------------------------------------------------------------------------- */
-/* A master-detail modal: list → detail (actions + history) → create/edit form.
-   One view at a time; the head carries back/title/new. */
 .lv-custom-dialog.lv-dialog-wide {
   max-width: 580px;
 }
-.lv-schedules-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+
+/* ---- Scheduled runs page (schedules.js) ---------------------------------
+   A built-in view: the list, then one schedule with its history. The form
+   is a dialog over it. */
+.lv-sched-page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 28px 24px 64px;
 }
-.lv-schedules-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.lv-schedules-head-lead,
-.lv-schedules-head-actions {
-  display: flex;
+.lv-sched-page .lv-btn {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+.lv-sched-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.lv-sched-head-text {
   min-width: 0;
 }
 .lv-sched-title {
   margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  color: var(--lv-ink);
+  overflow-wrap: anywhere;
 }
-.lv-sched-new {
-  display: inline-flex;
+.lv-sched-sub {
+  display: flex;
   align-items: center;
-  gap: 5px;
-}
-/* The head buttons toggle with [hidden], which the display rules above (and
-   .lv-btn-icon's) would otherwise override. */
-.lv-schedules-head button[hidden] {
-  display: none;
-}
-.lv-sched-view {
-  min-height: 220px;
-  display: flex;
-  flex-direction: column;
-}
-.lv-sched-view > * {
-  animation: lv-sched-view-in 0.16s ease;
-}
-@keyframes lv-sched-view-in {
-  from {
-    opacity: 0;
-    transform: translateY(3px);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lv-sched-view > * {
-    animation: none;
-  }
-}
-
-/* -- list view -- */
-.lv-sched-list {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  max-height: 400px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.lv-sched-empty {
-  color: var(--lv-muted-2);
+  gap: 8px;
+  margin: 6px 0 0;
   font-size: 13.5px;
-  text-align: center;
-  padding: 42px 0;
-}
-.lv-sched-empty-hint {
-  max-width: 360px;
-  margin: 6px auto 0;
-  font-size: 12.5px;
-  line-height: 1.6;
-  text-wrap: pretty;
-}
-.lv-sched-item {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 11px;
-  padding: 10px 12px;
-  border: 1px solid var(--lv-border);
-  border-radius: var(--lv-radius-sm);
-  background: var(--lv-surface);
-  cursor: pointer;
-  transition:
-    border-color var(--lv-t-fast),
-    background var(--lv-t-fast);
-}
-[data-theme="dark"] .lv-sched-item {
-  background: var(--lv-surface-2);
-}
-.lv-sched-item:hover,
-.lv-sched-item:focus-visible {
-  border-color: var(--lv-border-strong);
-}
-.lv-sched-item.lv-paused .lv-sched-item-prompt,
-.lv-sched-item.lv-done .lv-sched-item-prompt {
   color: var(--lv-muted);
 }
-.lv-sched-item-main {
+.lv-sched-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.lv-sched-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--lv-muted);
+}
+.lv-sched-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 14px -4px;
+  padding: 2px 4px;
+  border-radius: var(--lv-radius-xs);
+  font-size: 13px;
+  color: var(--lv-muted);
+  text-decoration: none;
+}
+.lv-sched-back:hover {
+  color: var(--lv-ink);
+}
+.lv-sched-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  font-size: inherit;
+  color: var(--lv-accent-text);
+  text-align: left;
+}
+.lv-sched-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.lv-sched-muted {
+  color: var(--lv-muted-2);
+  font-size: 13px;
+}
+
+/* -- the list -- */
+.lv-sched-group {
+  margin-top: 22px;
+}
+.lv-sched-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--lv-muted);
+}
+.lv-sched-count {
+  font-weight: 500;
+  color: var(--lv-muted-2);
+  font-variant-numeric: tabular-nums;
+}
+summary.lv-sched-group-head {
+  cursor: pointer;
+  list-style: none;
+  padding-left: 8px;
+}
+summary.lv-sched-group-head::-webkit-details-marker {
+  display: none;
+}
+summary.lv-sched-group-head svg {
+  transition: transform var(--lv-t-fast);
+}
+details[open] > summary.lv-sched-group-head svg {
+  transform: rotate(90deg);
+}
+.lv-sched-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--lv-radius);
+  cursor: pointer;
+  transition: background var(--lv-t-fast);
+}
+.lv-sched-row:hover {
+  background: var(--lv-surface-2);
+}
+.lv-sched-row > .lv-sched-dot {
+  margin-top: 7px;
+}
+.lv-sched-row-main {
   min-width: 0;
 }
-.lv-sched-item-prompt {
-  font-size: 13.5px;
+.lv-sched-row-name {
+  font-size: 14.5px;
+  font-weight: 560;
   color: var(--lv-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.lv-sched-item-meta {
-  font-size: 11.5px;
+.lv-sched-row.lv-paused .lv-sched-row-name,
+.lv-sched-row.lv-done .lv-sched-row-name {
   color: var(--lv-muted);
-  margin-top: 2px;
-  font-family: var(--lv-mono);
-  font-variant-numeric: tabular-nums;
+}
+.lv-sched-row-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  margin-top: 3px;
+  font-size: 13px;
+  color: var(--lv-ink-2);
+}
+.lv-sched-sep {
+  color: var(--lv-muted-2);
+}
+.lv-sched-standing {
+  color: var(--lv-muted);
+}
+.lv-sched-standing.lv-running {
+  color: var(--lv-accent-text);
+}
+.lv-sched-row-facts {
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--lv-muted-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.lv-sched-item-side {
+.lv-sched-row-side {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
+  min-height: 24px;
 }
-.lv-sched-chevron {
+.lv-sched-last {
   display: inline-flex;
-  color: var(--lv-muted-2);
-  transition: color var(--lv-t-fast);
+  color: var(--lv-ok);
 }
-.lv-sched-item:hover .lv-sched-chevron {
-  color: var(--lv-ink-2);
+.lv-sched-last.lv-error {
+  color: var(--lv-danger);
+}
+.lv-sched-more {
+  opacity: 0;
+  transition: opacity var(--lv-t-fast);
+}
+.lv-sched-row:hover .lv-sched-more,
+.lv-sched-row:focus-within .lv-sched-more,
+.lv-sched-more[aria-expanded="true"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .lv-sched-more {
+    opacity: 1;
+  }
 }
 
 /* -- status dot: one glanceable lifecycle signal per row -- */
@@ -4067,234 +4129,361 @@ dialog.lv-custom-dialog::backdrop {
   }
 }
 
-
-/* -- detail view -- */
-.lv-sched-detail {
+/* -- empty -- */
+.lv-sched-empty {
+  margin-top: 40px;
+  text-align: center;
+  color: var(--lv-muted-2);
+}
+.lv-sched-empty-title {
+  margin: 12px 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--lv-ink);
+}
+.lv-sched-empty-text {
+  max-width: 440px;
+  margin: 0 auto;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--lv-muted);
+  text-wrap: pretty;
+}
+.lv-sched-templates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin: 24px 0 18px;
+  text-align: left;
+}
+.lv-sched-template {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid var(--lv-border);
+  border-radius: var(--lv-radius);
+  background: var(--lv-surface);
+  transition: border-color var(--lv-t-fast), background var(--lv-t-fast);
 }
-.lv-sched-detail-status {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
+.lv-sched-template:hover {
+  border-color: var(--lv-border-strong);
+  background: var(--lv-surface-2);
 }
-.lv-sched-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  flex-shrink: 0;
-  background: var(--lv-surface-3);
+.lv-sched-template-name {
+  font-size: 13.5px;
+  font-weight: 560;
+  color: var(--lv-ink);
+}
+.lv-sched-template-when {
+  font-size: 12.5px;
   color: var(--lv-muted);
 }
-.lv-sched-badge.lv-active,
-.lv-sched-badge.lv-running {
-  background: var(--lv-accent-soft);
+.lv-sched-empty-tip {
+  font-size: 12.5px;
+}
+
+/* -- a schedule -- */
+.lv-sched-note {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 20px;
+  padding: 10px 14px;
+  border-radius: var(--lv-radius-sm);
+  background: var(--lv-surface-2);
+  font-size: 13px;
+  color: var(--lv-ink-2);
+}
+.lv-sched-note-hint {
+  color: var(--lv-muted);
+}
+.lv-sched-section {
+  margin-top: 26px;
+}
+.lv-sched-section-title {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--lv-muted);
+}
+.lv-sched-prompt {
+  max-height: calc(1.6em * 12);
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--lv-ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lv-sched-prompt.lv-open {
+  max-height: none;
+}
+.lv-sched-prompt + .lv-sched-link {
+  margin-top: 6px;
+  font-size: 13px;
+}
+.lv-sched-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 24px;
+  margin: 0;
+  font-size: 13.5px;
+}
+.lv-sched-facts dt {
+  color: var(--lv-muted);
+}
+.lv-sched-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--lv-ink);
+  overflow-wrap: anywhere;
+}
+.lv-sched-runs {
+  display: flex;
+  flex-direction: column;
+}
+.lv-sched-run {
+  display: grid;
+  grid-template-columns: 16px 116px 64px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  font-size: 13px;
+  color: var(--lv-ink-2);
+  border-top: 1px solid var(--lv-border);
+}
+.lv-sched-run:first-child {
+  border-top: 0;
+}
+.lv-sched-run-mark {
+  display: inline-flex;
+  color: var(--lv-muted-2);
+}
+.lv-sched-run.lv-completed .lv-sched-run-mark {
+  color: var(--lv-ok);
+}
+.lv-sched-run.lv-failed .lv-sched-run-mark,
+.lv-sched-run.lv-failed .lv-sched-run-status {
+  color: var(--lv-danger);
+}
+.lv-sched-run.lv-running .lv-sched-run-mark {
   color: var(--lv-accent-text);
+  animation: lv-spin 1s linear infinite;
 }
-[data-theme="dark"] .lv-sched-badge.lv-active,
-[data-theme="dark"] .lv-sched-badge.lv-running {
-  background: color-mix(in srgb, var(--lv-accent) 18%, transparent);
+.lv-sched-run.lv-skipped,
+.lv-sched-run.lv-cancelled,
+.lv-sched-run.lv-interrupted {
+  color: var(--lv-muted);
 }
-.lv-sched-finished-reason {
-  font-size: 12px;
+.lv-sched-run-when {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.lv-sched-run-detail {
+  min-width: 0;
   color: var(--lv-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.lv-sched-detail-prompt {
-  font-size: 13.5px;
-  line-height: 1.55;
-  color: var(--lv-ink);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 132px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 10px 12px;
-  background: var(--lv-surface-2);
-  border-radius: var(--lv-radius-sm);
+.lv-sched-more-runs {
+  margin-top: 8px;
 }
-.lv-sched-facts {
-  margin: 0;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 18px;
-  row-gap: 5px;
-  padding: 0 2px;
-}
-.lv-sched-facts dt {
-  font-size: 12px;
-  color: var(--lv-muted-2);
-  white-space: nowrap;
-}
-.lv-sched-facts dd {
-  margin: 0;
-  font-size: 12.5px;
-  color: var(--lv-ink-2);
-  min-width: 0;
-  word-break: break-word;
-}
-.lv-sched-detail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.lv-sched-act {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.lv-sched-act.lv-danger {
-  color: var(--lv-danger);
-  margin-left: auto;
-}
-.lv-sched-act.lv-danger:hover {
-  background: var(--lv-danger-soft);
-  color: var(--lv-danger-hover);
-}
-.lv-sched-section-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--lv-muted);
-  border-top: 1px solid var(--lv-border);
-  padding-top: 10px;
-}
-.lv-sched-history {
-  display: flex;
-  flex-direction: column;
-  max-height: 220px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.lv-sched-run {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-shrink: 0; /* a max-height flex column would otherwise squash rows into each other */
-  padding: 6px 2px;
-  font-size: 12px;
-  font-family: var(--lv-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--lv-muted);
-  white-space: nowrap;
-  overflow: hidden;
-}
-.lv-sched-run + .lv-sched-run {
-  border-top: 1px solid var(--lv-border);
-}
-.lv-sched-run-status {
-  min-width: 64px;
-  flex-shrink: 0;
-}
-.lv-sched-run-tail {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 14px;
-}
-.lv-sched-run-status.lv-completed {
-  color: var(--lv-ok);
-}
-.lv-sched-run-status.lv-failed {
-  color: var(--lv-danger);
-  cursor: help; /* the tooltip carries the error */
-}
-.lv-sched-run-status.lv-cancelled,
-.lv-sched-run-status.lv-interrupted {
-  color: var(--lv-muted-2);
-}
-.lv-sched-run-status.lv-running {
-  color: var(--lv-accent-text);
-}
-.lv-sched-history-empty {
-  font-size: 12px;
-  color: var(--lv-muted-2);
-}
-.lv-sched-last-run {
-  padding: 0;
-  font-size: inherit;
-  font-family: var(--lv-sans);
-  color: var(--lv-accent-text);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--lv-accent-text) 40%, transparent);
-  text-underline-offset: 2px;
-}
-.lv-sched-last-run:hover {
-  color: var(--lv-accent);
-  text-decoration-color: currentColor;
+@media (max-width: 640px) {
+  .lv-sched-page {
+    padding: 20px 16px 48px;
+  }
+  .lv-sched-head {
+    flex-direction: column;
+  }
+  .lv-sched-run {
+    grid-template-columns: 16px auto 1fr auto;
+  }
+  .lv-sched-run-detail {
+    grid-column: 2 / -1;
+  }
 }
 
-/* -- form view -- */
+/* -- the form (a dialog) -- */
+.lv-custom-dialog.lv-sched-dialog {
+  max-width: 620px;
+}
 .lv-sched-form {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 16px;
+}
+.lv-sched-form-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+.lv-sched-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 570;
+  color: var(--lv-ink-2);
 }
 .lv-sched-form .lv-dialog-input {
   margin-top: 0;
 }
 .lv-sched-input {
   resize: vertical;
-  min-height: 110px;
+  min-height: 120px;
   font-family: var(--lv-sans);
-}
-.lv-sched-nets {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.lv-sched-net-field {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex: 1 1 180px;
-  min-width: 0;
-}
-.lv-sched-net-field > span {
-  font-size: 12px;
-  color: var(--lv-muted-2);
-  white-space: nowrap;
-}
-.lv-sched-net-field .lv-dialog-input {
-  flex: 1;
-  min-width: 0;
-}
-.lv-sched-row {
-  display: flex;
-  gap: 8px;
-  align-items: stretch;
-  flex-wrap: wrap;
-}
-.lv-sched-row .lv-sched-kind,
-.lv-sched-row .lv-sched-agent {
-  flex: 0 0 auto;
-  width: auto;
-}
-.lv-sched-expr-wrap {
-  flex: 1 1 140px;
-  display: flex;
-}
-.lv-sched-expr-wrap > * {
-  width: 100%;
+  line-height: 1.55;
 }
 .lv-sched-hint {
+  margin-top: 6px;
   font-size: 12px;
-  color: var(--lv-muted-2);
   line-height: 1.5;
-  padding-left: 2px;
+  color: var(--lv-muted-2);
+}
+.lv-sched-when {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+/* Every tab's panel holds the same height, so the dialog doesn't jump. */
+.lv-sched-panels {
+  width: 100%;
+  min-height: 84px;
+}
+.lv-sched-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.lv-sched-panel[hidden] {
+  display: none;
+}
+.lv-sched-panel > .lv-dialog-input {
+  max-width: 280px;
+}
+.lv-sched-panel > .lv-mono {
+  max-width: none;
+}
+.lv-sched-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lv-sched-inline-label {
+  font-size: 13px;
+  color: var(--lv-muted);
+}
+.lv-sched-inline .lv-dialog-input {
+  width: auto;
+}
+.lv-sched-inline input[type="number"] {
+  width: 84px;
+}
+.lv-sched-days {
+  display: flex;
+  gap: 4px;
+}
+.lv-sched-day {
+  width: 34px;
+  height: 30px;
+  border: 1px solid var(--lv-border);
+  border-radius: var(--lv-radius-sm);
+  font-size: 12.5px;
+  color: var(--lv-muted);
+  transition: background var(--lv-t-fast), color var(--lv-t-fast), border-color var(--lv-t-fast);
+}
+.lv-sched-day:hover {
+  border-color: var(--lv-border-strong);
+}
+.lv-sched-day[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--lv-accent-soft);
+  color: var(--lv-accent-text);
+  font-weight: 600;
+}
+.lv-sched-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lv-sched-pill {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--lv-surface-2);
+  font-size: 12px;
+  color: var(--lv-ink-2);
+}
+.lv-sched-pill:hover {
+  background: var(--lv-surface-3);
+}
+.lv-sched-preview {
+  min-height: 1.5em;
+  font-size: 12.5px;
+  color: var(--lv-ink-2);
+}
+.lv-sched-preview.lv-muted {
+  color: var(--lv-muted-2);
+}
+.lv-sched-preview.lv-error {
+  color: var(--lv-danger);
+}
+.lv-sched-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.lv-sched-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: 1px solid var(--lv-border);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--lv-ink-2);
+}
+.lv-sched-chip:hover {
+  border-color: var(--lv-border-strong);
+  background: var(--lv-surface-2);
+}
+.lv-sched-advanced > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+  color: var(--lv-muted);
+}
+.lv-sched-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+.lv-sched-advanced > summary svg {
+  transition: transform var(--lv-t-fast);
+}
+.lv-sched-advanced[open] > summary svg {
+  transform: rotate(90deg);
+}
+.lv-sched-advanced[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.lv-sched-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 .lv-sched-form-foot {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 2px;
 }
 
 /* ---- Memory editor ------------------------------------------------------

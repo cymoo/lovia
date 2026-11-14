@@ -119,6 +119,21 @@ export function draftWorkspaceMode() {
   return !store.sessionId && offer() ? _draft ?? undefined : undefined;
 }
 
+/**
+ * The modes a new chat may pick and the one it starts in, for another picker
+ * (a schedule's form); null when chats here can't pick one.
+ * @returns {{ modes: string[], initial: string | null } | null}
+ */
+export function modeChoices() {
+  const o = offer();
+  if (!o) return null;
+  const initial = store.sessionId ? effective(_current) : _draft ?? defaultMode();
+  return { modes: o.modes, initial };
+}
+
+export const modeLabel = label;
+export const modeGlyph = glyph;
+
 function render() {
   if (!_chip) return;
   const stored = shown();

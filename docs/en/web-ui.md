@@ -722,6 +722,26 @@ queued or steered. Send waits for any upload still in progress. A queued
 message can also go back to the composer for editing — text and attachments,
 when the composer and its tray are empty — or be withdrawn.
 
+## Scheduled runs
+
+**Scheduled runs** in the sidebar opens a page of the schedules
+(`?view=lovia-schedules`): active, paused, and ended (folded away), each with
+its name, when it runs next, its last outcome, and a pause switch. A schedule
+opens its own page with the instruction, its settings, and the run history —
+each run links to its chat; a fire skipped because the previous run was still
+going is listed too, with why.
+
+**New schedule** (or one of the examples on an empty page) opens a form: a
+name, the instruction, and when — **Once**, **Daily** (weekdays and a time),
+**Interval**, or a raw **Cron** expression — with the next three times shown
+before you save. Where a chat may pick a folder and permission mode, so may a
+schedule; its fires run unattended, so anything that needs approval is denied
+after the approval timeout. A stop condition and limits sit under the fold.
+Cron times follow the server's clock; the form says so when yours differs.
+
+A chat can also set one up: ask "every weekday at 9, summarize…" and approve
+the `schedule_run` call.
+
 ## Branching a chat
 
 **Branch in new chat**, on any finished reply, starts a new chat with

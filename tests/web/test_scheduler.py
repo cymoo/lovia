@@ -123,6 +123,39 @@ def test_validate_trigger_rejects_bad_cron() -> None:
     pytest.importorskip("croniter")
     with pytest.raises(ValueError):
         validate_trigger("cron", "not a cron expression")
+    # croniter's seconds and year fields: as often as the poll, or out of slots.
+    for expr in ("* * * * * */5", "0 0 1 1 * 0 2027"):
+        with pytest.raises(ValueError, match="5 fields"):
+            validate_trigger("cron", expr)
+
+
+async def test_a_cron_out_of_slots_ends_instead_of_firing_every_poll() -> None:
+    """A stored cron with a year field (from before cron was held to five
+    fields) whose last slot has passed: fired once, then ended — not left due,
+    which would fire it again on every poll."""
+    pytest.importorskip("croniter")
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("one"), text("two")]), store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(
+        _row(
+            id="s",
+            trigger_kind="cron",
+            trigger_expr="0 0 1 1 * 0 2026",
+            next_fire=now - 1,
+        )
+    )
+    sched = Scheduler(deps)
+    await sched.run_due()
+    await _drain_runs(deps)
+    await sched.run_due()
+    await _drain_runs(deps)
+
+    row = await store.get_schedule("s")
+    assert row is not None and not row.active
+    assert row.fire_count == 1
+    assert row.finished_reason == "no more fire times"
 
 
 def test_next_fire_every_and_at() -> None:
@@ -1428,3 +1461,4 @@ def test_api_preview_lists_the_next_fires() -> None:
 
     assert preview("cron", "not a cron").status_code == 422
     assert preview("every", "0").status_code == 422
+    assert preview("cron", "0 0 1 1 * 0 2027").status_code == 422  # not a 500

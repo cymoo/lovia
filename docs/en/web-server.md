@@ -1116,7 +1116,7 @@ The Web package stores durable schedules and supports three trigger forms:
 | --- | --- |
 | `at` | One ISO-8601 timestamp or epoch time |
 | `every` | Interval in seconds |
-| `cron` | Cron expression, matched against the server's local time; `croniter` ships with `lovia[web]` |
+| `cron` | Five-field cron expression, matched against the server's local time; `croniter` ships with `lovia[web]` |
 
 `Scheduling(store)` contributes the approval-gated `schedule_run` Tool. The
 model can propose a future run, but it is not created until a user approves the

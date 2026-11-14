@@ -76,6 +76,13 @@ def validate_trigger(kind: str, expr: str) -> None:
     elif kind == "every":
         _interval_seconds(expr)
     elif kind == "cron":
+        # Crontab's five fields only: croniter also takes a seconds and a year
+        # field, which would fire as often as the poll, or run out of slots.
+        if len(expr.split()) != 5:
+            raise ValueError(
+                f"invalid cron expression {expr!r}: use 5 fields "
+                "(minute hour day-of-month month day-of-week)"
+            )
         try:
             _croniter_next(expr, time.time())  # croniter validates the expression
         except RuntimeError:
@@ -98,15 +105,23 @@ def initial_next_fire(kind: str, expr: str, *, now: float) -> float:
 
 
 def advance_next_fire(kind: str, expr: str, *, now: float) -> float | None:
-    """The next ``next_fire`` after a fire, or ``None`` for a one-shot (``at``)
-    that should deactivate. Coalesced: always the first slot strictly after
-    ``now`` (missed slots are skipped)."""
+    """The next ``next_fire`` after a fire, or ``None`` when there is none —
+    a one-shot (``at``), or a cron with no slot left — and the schedule should
+    deactivate. Coalesced: always the first slot strictly after ``now``
+    (missed slots are skipped)."""
     if kind == "at":
         return None
     if kind == "every":
         return now + _interval_seconds(expr)
     if kind == "cron":
-        return _croniter_next(expr, now)
+        try:
+            return _croniter_next(expr, now)
+        except RuntimeError:
+            raise  # croniter not installed
+        except ValueError:
+            # Out of slots (an expression stored before cron was held to five
+            # fields). Raising here would leave next_fire due: a fire per poll.
+            return None
     raise ValueError(f"unknown trigger kind {kind!r}")
 
 
@@ -409,6 +424,11 @@ class Scheduler:
         tripped = (
             sched.max_fires is not None and sched.fire_count + 1 >= sched.max_fires
         )
+        reason = None
+        if tripped:
+            reason = "max fires reached"
+        elif nxt is None and sched.trigger_kind != "at":
+            reason = "no more fire times"
         await self.store.mark_fired(
             sched.id,
             next_fire=nxt if nxt is not None else now,  # one-shot: unused once inactive
@@ -416,5 +436,5 @@ class Scheduler:
             # (the polling loop only ever fires active rows, where it's a no-op).
             active=nxt is not None and sched.active and not tripped,
             last_session_id=last_session_id,
-            finished_reason="max fires reached" if tripped else None,
+            finished_reason=reason,
         )

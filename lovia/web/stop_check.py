@@ -17,11 +17,16 @@ import re
 
 __all__ = ["with_stop_check", "without_stop_check"]
 
-# Matches what with_stop_check writes, from its blank line to the end. Kept
-# word for word: transcripts already stored carry this exact wording.
+# Matches what with_stop_check writes, whole and only as the message's end —
+# so a block a user pastes mid-message, with their own words after it, is
+# left alone. Kept word for word: stored transcripts carry this wording.
 _CHECK = re.compile(
-    r"\n\n\[Fired by schedule [^\s\]]+\.\] After the task above, evaluate this "
-    r"stop condition: .*\Z",
+    r"\n\n\[Fired by schedule ([^\s\]]+)\.\] After the task above, evaluate this "
+    r"stop condition: .*?\n"
+    r"If it is met, call cancel_schedule\(schedule_id='\1', "
+    r"reason=<one line: what you observed>\) and state clearly that the "
+    r"schedule is now stopped\. If it is not met, do not call "
+    r"cancel_schedule and don't mention the condition\.\Z",
     re.DOTALL,
 )
 

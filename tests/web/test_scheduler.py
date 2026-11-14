@@ -534,6 +534,20 @@ async def test_fire_delivers_until_protocol_block() -> None:
     assert "cancel_schedule" not in meta.title
 
 
+def test_only_a_whole_trailing_stop_check_is_hidden() -> None:
+    from lovia.web.stop_check import with_stop_check, without_stop_check
+
+    fired = with_stop_check("check the log", "s1", "it says\nready")
+    assert without_stop_check(fired) == "check the log"
+    # A check pasted mid-message, with the user's own words after it, stays.
+    pasted = f"{fired}\n\nwhat does this block mean?"
+    assert without_stop_check(pasted) == pasted
+    # So does one cut short, or addressed to another schedule than it names.
+    assert without_stop_check(fired[:-1]) == fired[:-1]
+    other = fired.replace("schedule_id='s1'", "schedule_id='s2'")
+    assert without_stop_check(other) == other
+
+
 async def test_the_stop_check_is_the_agents_not_shown_in_the_chat() -> None:
     """The model reads the check (above); the chat, its export and a live
     injection show only the instruction the user wrote."""

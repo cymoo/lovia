@@ -87,7 +87,7 @@ _INSTRUCTIONS = (
     "the condition and cancel the schedule once met. You can also inspect and "
     "stop schedules yourself with `list_schedules` and "
     "`cancel_schedule(schedule_id, reason)` — stopping only deactivates (the "
-    "user can resume or delete it in the Scheduled-runs panel), so it needs "
+    "user can resume or delete it in the Scheduled runs page), so it needs "
     "no approval; deleting outright is the user's call, via the panel.\n"
     "To do something now but in its own chat — the user asks for a new or "
     "separate chat — call `start_session` instead: the chat starts at once and "
@@ -185,6 +185,11 @@ def _make_tool(store: ChatStore) -> Tool:
             "Safety net: deactivate the schedule at this time (same formats "
             "as an 'at' trigger).",
         ] = None,
+        name: Annotated[
+            str | None,
+            "A short name for the schedule (2-6 words, the user's language), "
+            "shown in the user's list of schedules.",
+        ] = None,
     ) -> str:
         text = instruction.strip()
         if not text:
@@ -253,6 +258,7 @@ def _make_tool(store: ChatStore) -> Tool:
         now = time.time()
         row = ScheduleRow(
             id=uuid.uuid4().hex,
+            name=(name.strip()[:200] or None) if name else None,
             # The active agent's name — concrete and registered in a real run; if
             # somehow absent, the scheduler resolves its default at fire time.
             agent=ctx.agent.name if ctx.agent is not None else None,
@@ -289,7 +295,7 @@ def _make_tool(store: ChatStore) -> Tool:
         return (
             f"Scheduled — first run at {when} ({_describe(trigger_kind, expr)}), "
             f"running {scope}{extra}. The user can manage it in the "
-            "Scheduled-runs panel."
+            "Scheduled runs page."
         )
 
     return schedule_run
@@ -318,6 +324,8 @@ def _make_list_tool(store: ChatStore) -> Tool:
             else:
                 status = "paused"
             summary = r.input if len(r.input) <= 80 else r.input[:77] + "…"
+            if r.name:
+                summary = f"[{r.name}] {summary}"
             line = (
                 f"- {r.id}: {summary} — "
                 f"{_describe(r.trigger_kind, r.trigger_expr)}, {status}"
@@ -336,7 +344,7 @@ def _make_list_tool(store: ChatStore) -> Tool:
 
 _CANCEL_DESCRIPTION = (
     "Stop a scheduled run. This only deactivates it — the user can resume or "
-    "delete it in the Scheduled-runs panel — so no approval is needed. Use it "
+    "delete it in the Scheduled runs page — so no approval is needed. Use it "
     "when a schedule's stop condition is met, or when the user asks for a "
     "schedule to be stopped."
 )
@@ -370,7 +378,7 @@ def _make_cancel_tool(store: ChatStore) -> Tool:
         return (
             f"Schedule {row.id} stopped: {why}. It is deactivated, not "
             "deleted — the user can resume or delete it in the "
-            "Scheduled-runs panel."
+            "Scheduled runs page."
         )
 
     return cancel_schedule

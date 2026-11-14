@@ -455,12 +455,15 @@ class SessionOrigin(BaseModel):
     the chat alone (unlike ``parent_id``, which deletes with its chat)."""
 
     # "fork": copied from the source. "spawn": started by the source's agent
-    # (the start_session tool), with none of its history.
-    kind: Literal["fork", "spawn"]
-    session_id: str
+    # (the start_session tool), with none of its history. "schedule": created
+    # by a schedule's fire — the source is ``schedule_id``, not a chat.
+    kind: Literal["fork", "spawn", "schedule"]
+    session_id: str | None = None
+    schedule_id: str | None = None
     # The source's user message a fork was cut before; None for a whole copy.
     ref: str | None = None
-    # The source as it is now: its title, and whether it still exists.
+    # The source as it is now: its title (a schedule's name), and whether it
+    # still exists.
     title: str | None = None
     exists: bool = True
 
@@ -479,7 +482,8 @@ class SessionDetail(BaseModel):
     # Set on a subagent task session: the chat that spawned it — the UI's
     # "back to parent chat" affordance.
     parent_id: str | None = None
-    # Set on a fork or a spawn: the chat it came from — the UI's link back.
+    # Set on a fork, a spawn or a schedule's chat: where it came from — the
+    # UI's link back.
     origin: SessionOrigin | None = None
     # The chat's permission mode as stored (None: the agent's own workspace);
     # a server that offers fewer modes runs a wider one capped down.
@@ -510,8 +514,9 @@ class ChatSessionInfo(BaseModel):
     # "failed", "cancelled", …) — the sidebar's badge for finished tasks.
     last_run_status: str | None = None
     # Where the chat came from (see SessionDetail.origin). The sidebar marks
-    # a "fork", since a branch starts with its source's title.
-    origin_kind: Literal["fork", "spawn"] | None = None
+    # a "fork", since a branch starts with its source's title, and a
+    # "schedule"'s chat.
+    origin_kind: Literal["fork", "spawn", "schedule"] | None = None
     # See SessionDetail.workspace_mode / workspace_mode_rev / workspace_root.
     workspace_mode: str | None = None
     workspace_mode_rev: int = 0
@@ -545,7 +550,10 @@ class RunRecordInfo(BaseModel):
     agent: str | None = None
     # What started the run: "user" | "schedule:<id>".
     source: str
-    status: Literal["running", "completed", "failed", "cancelled", "interrupted"]
+    # "skipped": a schedule's fire that started nothing (``error`` says why).
+    status: Literal[
+        "running", "completed", "failed", "cancelled", "interrupted", "skipped"
+    ]
     error: str | None = None
     started_at: float
     finished_at: float | None = None
@@ -562,8 +570,14 @@ class ScheduleSpec(BaseModel):
     """
 
     input: str = Field(max_length=10_000_000)
+    # Shown in place of the input's first line; None or blank: no name.
+    name: str | None = Field(default=None, max_length=200)
     agent: str | None = None
     session_id: str | None = None
+    # Where a fire's fresh chat works, as for a new chat (ChatRequest's
+    # ``workspace`` / ``workspace_mode``); a continued chat keeps its own.
+    workspace_root: str | None = Field(default=None, max_length=4096)
+    workspace_mode: Literal["readonly", "coding", "trusted"] | None = None
     trigger_kind: Literal["cron", "every", "at"]
     trigger_expr: str = Field(max_length=200)
     # Stop condition: natural language, evaluated by each fired run itself
@@ -586,12 +600,17 @@ class SchedulePatch(BaseModel):
     clears ``finished_reason`` (the schedule is live again, not "done").
     Passing ``session_id: null`` explicitly detaches the schedule (fresh
     session per fire); the same explicit-null-clears rule applies to
-    ``until``, ``max_fires`` and ``expires_at``; omitting a field keeps it.
+    ``name``, ``until``, ``max_fires`` and ``expires_at``; omitting a field
+    keeps it. A new ``agent``, ``workspace_root`` or ``workspace_mode`` is
+    checked as for a new chat.
     """
 
     input: str | None = Field(default=None, max_length=10_000_000)
+    name: str | None = Field(default=None, max_length=200)
     agent: str | None = None
     session_id: str | None = None
+    workspace_root: str | None = Field(default=None, max_length=4096)
+    workspace_mode: Literal["readonly", "coding", "trusted"] | None = None
     trigger_kind: Literal["cron", "every", "at"] | None = None
     trigger_expr: str | None = Field(default=None, max_length=200)
     active: bool | None = None
@@ -602,9 +621,16 @@ class SchedulePatch(BaseModel):
 
 class ScheduleInfo(BaseModel):
     id: str
+    name: str | None = None
     agent: str | None = None
     input: str
     session_id: str | None = None
+    # The continued chat's title (None: untitled, or not stored yet).
+    session_title: str | None = None
+    # Where a fire's fresh chat works (None: the agent's own directory /
+    # policy). A continued chat works where it always has.
+    workspace_root: str | None = None
+    workspace_mode: str | None = None
     trigger_kind: str
     trigger_expr: str
     next_fire: float
@@ -626,6 +652,22 @@ class ScheduleInfo(BaseModel):
     expires_at: float | None = None
     fire_count: int = 0
     finished_reason: str | None = None
+
+
+class SchedulePreviewRequest(BaseModel):
+    trigger_kind: Literal["cron", "every", "at"]
+    trigger_expr: str = Field(max_length=200)
+
+
+class SchedulePreview(BaseModel):
+    """A trigger's next fires if it were saved now, so a form shows them
+    before saving."""
+
+    # Epoch seconds, soonest first; one for an ``at``.
+    next_fires: list[float]
+    # The server's offset from UTC now, in seconds east: cron fields match
+    # the server's wall clock, which a page in another zone should say.
+    utc_offset: int
 
 
 class RewindRequest(BaseModel):

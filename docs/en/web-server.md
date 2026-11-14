@@ -1124,7 +1124,17 @@ Tool call. With `continue_session=True`, a fire joins the same chat and injects
 its instruction into an active Run; deleting that chat deletes the schedule
 with it. With `continue_session=False`, each fire
 starts a new Session and is skipped rather than queued while the previous fire
-is still running. After downtime, multiple missed fire times coalesce into one.
+is still running; the skip shows in the schedule's history as a `skipped` run
+record. Each chat a fire creates this way links back to its schedule
+(`origin.kind == "schedule"`, `origin.schedule_id`). After downtime, multiple
+missed fire times coalesce into one.
+
+A schedule may carry a `name` (the tool takes one too; the UI otherwise shows
+the instruction's first line). One created over HTTP may pick where its fresh
+chats work — `workspace_root` and `workspace_mode`, checked as for a new chat;
+`schedule_run` uses the calling chat's. `POST /api/schedules/preview` returns
+a trigger's next three fire times before it is saved, plus the server's UTC
+offset, since cron fields match the server's clock.
 
 A repeating schedule can carry a stop condition (`until`, natural language):
 each fire is then told to evaluate it after doing the task and cancel the

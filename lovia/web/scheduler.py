@@ -245,6 +245,13 @@ class Scheduler:
             if prev is not None and self.deps.supervisor.get(prev) is not None:
                 log.info("schedule %s: previous run still active; skipping", sched.id)
                 await self._advance(sched, now, last_session_id=prev)
+                await self._record(
+                    sched,
+                    now,
+                    agent_name,
+                    "skipped",
+                    "the previous run was still going",
+                )
                 return None
             target = uuid.uuid4().hex
             meta = None
@@ -301,6 +308,8 @@ class Scheduler:
                     target,
                     agent=agent_name,  # registry key — the identity pick() speaks
                     title=title,
+                    # A fixed chat is the user's even when this fire creates it.
+                    scheduled_by=sched.id if sched.session_id is None else None,
                     workspace_root=binding.root if is_new else None,
                     workspace_mode=binding.mode if is_new else None,
                 )
@@ -361,9 +370,19 @@ class Scheduler:
         """A fire that started no run: advance past it and record why."""
         log.warning("schedule %s: %s; advancing", sched.id, detail)
         await self._advance(sched, now, last_session_id=sched.last_session_id)
-        # No run ever started, so the supervisor writes no record — file a
-        # zero-length failed one so the schedule's history shows the miss.
-        # Best-effort bookkeeping: never let it break the fire loop.
+        await self._record(sched, now, agent_name, "failed", detail)
+
+    async def _record(
+        self,
+        sched: ScheduleRow,
+        now: float,
+        agent_name: str | None,
+        status: str,
+        detail: str,
+    ) -> None:
+        """File a zero-length run record for a fire that started no run (the
+        supervisor writes none), so the schedule's history shows it.
+        Best-effort bookkeeping: never let it break the fire loop."""
         try:
             await self.store.start_run(
                 RunRow(
@@ -371,7 +390,7 @@ class Scheduler:
                     session_id=None,
                     agent=agent_name,
                     source=f"schedule:{sched.id}",
-                    status="failed",
+                    status=status,
                     error=detail,
                     started_at=now,
                     finished_at=now,

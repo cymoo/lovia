@@ -367,6 +367,18 @@ async def test_scheduler_skips_when_previous_run_active() -> None:
         assert list(deps.supervisor._controllers) == [s1]  # no second run
         again = await store.get_schedule("s")
         assert again is not None and again.last_session_id == s1
+        # The skip is in the history, with its reason — but it is no outcome.
+        skipped = [
+            r
+            for r in await store.list_runs(source="schedule:s")
+            if r.status == "skipped"
+        ]
+        assert len(skipped) == 1
+        assert skipped[0].session_id is None and "still going" in (
+            skipped[0].error or ""
+        )
+        last = await store.latest_run_for("schedule:s")
+        assert last is not None and last.status == "running"
     finally:
         release.set()
         await _drain_runs(deps)
@@ -1280,6 +1292,7 @@ async def test_pre_0_8_34_db_gains_stop_condition_columns(tmp_path) -> None:
     )
     got = await store.get_schedule("s2")
     assert got is not None and got.until == "done" and got.max_fires == 1
+    assert row.name is None
 
 
 async def test_cancelled_fire_records_cancelled_status() -> None:
@@ -1308,3 +1321,110 @@ async def test_cancelled_fire_records_cancelled_status() -> None:
     rec = await _wait_outcome(store, "schedule:s")
     assert rec.status == "cancelled"
     assert rec.error == "cancelled"
+
+
+# --------------------------------------------------------------------------- #
+# names, provenance, preview
+# --------------------------------------------------------------------------- #
+
+
+def test_api_schedule_name_roundtrip() -> None:
+    c = TestClient(_app(_agent([text("hi")]), ChatStore.in_memory()))
+    base = {"input": "ping", "trigger_kind": "every", "trigger_expr": "300"}
+
+    named = c.post("/api/schedules", json={**base, "name": "  Daily ping "}).json()
+    assert named["name"] == "Daily ping"
+    assert c.post("/api/schedules", json={**base, "name": " "}).json()["name"] is None
+
+    sid = named["id"]
+    kept = c.patch(f"/api/schedules/{sid}", json={"input": "pong"}).json()
+    assert kept["name"] == "Daily ping"
+    renamed = c.patch(f"/api/schedules/{sid}", json={"name": "Pong"}).json()
+    assert renamed["name"] == "Pong"
+    cleared = c.patch(f"/api/schedules/{sid}", json={"name": None}).json()
+    assert cleared["name"] is None
+
+
+async def test_a_fresh_fire_chat_links_back_to_its_schedule() -> None:
+    import httpx
+
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("hi")]), store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(_row(id="s", name="Morning brief", next_fire=now - 1))
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+    row = await store.get_schedule("s")
+    assert row is not None and row.last_session_id is not None
+    chat = row.last_session_id
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        listed = (await ac.get("/api/sessions")).json()
+        assert next(s for s in listed if s["id"] == chat)["origin_kind"] == "schedule"
+        origin = (await ac.get(f"/api/sessions/{chat}")).json()["origin"]
+        assert origin["kind"] == "schedule" and origin["schedule_id"] == "s"
+        assert origin["title"] == "Morning brief" and origin["exists"] is True
+        assert origin["session_id"] is None
+
+        # Provenance only: deleting the schedule leaves the chat, marked gone.
+        assert (await ac.delete("/api/schedules/s")).status_code == 200
+        origin = (await ac.get(f"/api/sessions/{chat}")).json()["origin"]
+        assert origin["exists"] is False and origin["title"] is None
+
+
+async def test_a_fixed_chat_the_fire_creates_has_no_schedule_origin() -> None:
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("hi")]), store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(_row(id="s", session_id="mine", next_fire=now - 1))
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+    meta = await store.get("mine")
+    assert meta is not None and meta.origin_kind is None
+
+
+def test_schedule_info_carries_the_continued_chat_title() -> None:
+    store = ChatStore.in_memory()
+    asyncio.run(store.upsert("c1", agent="bot", title="Release prep"))
+    c = TestClient(_app(_agent([text("hi")]), store))
+    made = c.post(
+        "/api/schedules",
+        json={
+            "input": "check",
+            "trigger_kind": "every",
+            "trigger_expr": "300",
+            "session_id": "c1",
+        },
+    ).json()
+    assert made["session_title"] == "Release prep"
+    fresh = c.patch(f"/api/schedules/{made['id']}", json={"session_id": None}).json()
+    assert fresh["session_id"] is None and fresh["session_title"] is None
+
+
+def test_api_preview_lists_the_next_fires() -> None:
+    c = TestClient(_app(_agent([text("hi")]), ChatStore.in_memory()))
+
+    def preview(kind: str, expr: str):
+        return c.post(
+            "/api/schedules/preview", json={"trigger_kind": kind, "trigger_expr": expr}
+        )
+
+    before = time.time()
+    every = preview("every", "600").json()
+    first, second, third = every["next_fires"]
+    assert before + 600 <= first and second - first == 600 and third - second == 600
+    assert isinstance(every["utc_offset"], int)
+
+    at = str(int(before) + 3600)
+    assert preview("at", at).json()["next_fires"] == [float(at)]
+
+    cron = preview("cron", "0 9 * * 1-5").json()["next_fires"]
+    assert len(cron) == 3 and cron == sorted(set(cron))
+    assert all(time.localtime(t).tm_hour == 9 for t in cron)
+
+    assert preview("cron", "not a cron").status_code == 422
+    assert preview("every", "0").status_code == 422

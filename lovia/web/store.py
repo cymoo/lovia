@@ -53,7 +53,7 @@ _SCHED_COLS = (
     "id, agent, input, session_id, trigger_kind, trigger_expr, "
     "next_fire, active, last_session_id, created_at, updated_at, "
     "until, max_fires, expires_at, fire_count, finished_reason, context_json, "
-    "workspace_mode, workspace_root"
+    "workspace_mode, workspace_root, name"
 )
 
 
@@ -308,6 +308,13 @@ def _archived(conn: sqlite3.Connection) -> None:
         )
 
 
+def _schedule_name(conn: sqlite3.Connection) -> None:
+    """A schedule's own name (0.9.200); NULL reads as its input's first line."""
+    present = {r[1] for r in conn.execute("PRAGMA table_info(chat_schedules)")}
+    if "name" not in present:
+        conn.execute("ALTER TABLE chat_schedules ADD COLUMN name TEXT")
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     _reconcile_unversioned,
     _fork_origin,
@@ -317,6 +324,7 @@ _MIGRATIONS: tuple[Migration, ...] = (
     _workspace_mode_rev,
     _workspace_list,
     _archived,
+    _schedule_name,
 )
 
 
@@ -334,14 +342,14 @@ class ChatMeta:
     """Set on a subagent task session: the chat that spawned it. The UI
     groups such sessions under a Tasks section instead of the chat list."""
     origin_kind: str | None = None
-    """Where the chat came from — ``"fork"`` (a copy) or ``"spawn"`` (started
-    by the source chat's agent) — or None. Provenance only:
-    unlike ``parent_id`` it never cascades a delete, and the source may be
-    gone."""
+    """Where the chat came from — ``"fork"`` (a copy), ``"spawn"`` (started
+    by the source chat's agent) or ``"schedule"`` (created by a schedule's
+    fire) — or None. Provenance only: unlike ``parent_id`` it never cascades
+    a delete, and the source may be gone."""
     origin_session_id: str | None = None
     origin_ref: str | None = None
     """For a fork: the source's user message the fork was cut before (None
-    for a whole-chat copy)."""
+    for a whole-chat copy). For a schedule's chat: the schedule's id."""
     workspace_root: str | None = None
     """The resolved workspace root the chat was created in; None for a chat
     from before 0.9.147 (not associated yet) or an agent without one."""
@@ -488,6 +496,7 @@ class ScheduleRow:
     # The directory its fresh chats work in: likewise the chat's that made
     # it (None: the agent's own).
     workspace_root: str | None = None
+    name: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "ScheduleRow":
@@ -511,6 +520,7 @@ class ScheduleRow:
             context=json.loads(row[16]) if row[16] else None,
             workspace_mode=row[17],
             workspace_root=row[18],
+            name=row[19],
         )
 
     def to_dict(self) -> JsonObject:
@@ -534,6 +544,7 @@ class ScheduleRow:
             "context": self.context,
             "workspace_mode": self.workspace_mode,
             "workspace_root": self.workspace_root,
+            "name": self.name,
         }
 
 
@@ -555,7 +566,9 @@ class RunRow:
     session_id: str | None  # NULL → the run never reached a session (bad fire)
     agent: str | None
     source: str
-    status: str  # "running" | "completed" | "failed" | "cancelled" | "interrupted"
+    # "running" | "completed" | "failed" | "cancelled" | "interrupted", or
+    # "skipped": a schedule's fire that started nothing (no session).
+    status: str
     error: str | None
     started_at: float
     finished_at: float | None
@@ -706,6 +719,7 @@ class ChatStore:
         title: str | None = None,
         parent_id: str | None = None,
         spawned_from: str | None = None,
+        scheduled_by: str | None = None,
         workspace_root: str | None = None,
         workspace_mode: str | None = None,
         unarchive: bool = False,
@@ -720,16 +734,19 @@ class ChatStore:
         background-generated title is never clobbered. ``parent_id`` likewise
         sticks from the insert — a session's task-ness never changes later —
         and so does ``spawned_from``, the chat whose agent started this one
-        (``origin_kind = "spawn"``). The workspace binding too is set on
-        insert only — :meth:`set_workspace_mode` is the one way to change it.
+        (``origin_kind = "spawn"``), and ``scheduled_by``, the schedule whose
+        fire created it (``origin_kind = "schedule"``). The workspace binding
+        too is set on insert only — :meth:`set_workspace_mode` is the one way
+        to change it.
         """
         now = time.time()
+        kind = "spawn" if spawned_from else "schedule" if scheduled_by else None
         await self._write(
             """
             INSERT INTO chat_sessions (id, title, agent, created_at, updated_at,
                                        parent_id, origin_kind, origin_session_id,
-                                       workspace_root, workspace_mode)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       origin_ref, workspace_root, workspace_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 updated_at = excluded.updated_at,
                 agent = COALESCE(chat_sessions.agent, excluded.agent),
@@ -742,8 +759,9 @@ class ChatStore:
                 now,
                 now,
                 parent_id,
-                "spawn" if spawned_from else None,
+                kind,
                 spawned_from,
+                scheduled_by,
                 workspace_root,
                 workspace_mode,
                 unarchive,
@@ -1288,7 +1306,7 @@ class ChatStore:
     async def add_schedule(self, row: ScheduleRow) -> None:
         await self._write(
             f"INSERT INTO chat_schedules ({_SCHED_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row.id,
                 row.agent,
@@ -1309,6 +1327,7 @@ class ChatStore:
                 _dumps_context(row.context),
                 row.workspace_mode,
                 row.workspace_root,
+                row.name,
             ),
         )
 
@@ -1337,7 +1356,8 @@ class ChatStore:
             "UPDATE chat_schedules SET agent = ?, input = ?, session_id = ?, "
             "trigger_kind = ?, trigger_expr = ?, next_fire = ?, active = ?, "
             "last_session_id = ?, updated_at = ?, until = ?, max_fires = ?, "
-            "expires_at = ?, finished_reason = ? WHERE id = ?",
+            "expires_at = ?, finished_reason = ?, name = ?, workspace_root = ?, "
+            "workspace_mode = ? WHERE id = ?",
             (
                 row.agent,
                 row.input,
@@ -1352,6 +1372,9 @@ class ChatStore:
                 row.max_fires,
                 row.expires_at,
                 row.finished_reason,
+                row.name,
+                row.workspace_root,
+                row.workspace_mode,
                 row.id,
             ),
         )
@@ -1571,10 +1594,11 @@ class ChatStore:
         return out
 
     async def latest_run_for(self, source: str) -> RunRow | None:
-        """The most recent run started by ``source`` (a schedule's last outcome)."""
+        """The most recent run started by ``source`` (a schedule's last
+        outcome). A ``skipped`` record is no outcome, so it never counts."""
         return await self._read_one(
             f"SELECT {_RUN_COLS} FROM chat_runs WHERE source = ? "
-            "ORDER BY started_at DESC LIMIT 1",
+            "AND status != 'skipped' ORDER BY started_at DESC LIMIT 1",
             (source,),
             RunRow.from_row,
         )

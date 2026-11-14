@@ -116,24 +116,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                     "or POST /api/sessions/associate",
                 )
             return deps.chat_binding(agent, meta)
-        mode = req.workspace_mode
-        if mode is not None and (switch is None or mode not in switch.modes):
-            offered = ", ".join(switch.modes) if switch else "none"
-            raise WebError(
-                400,
-                "invalid_request",
-                f"mode {mode!r} is not available on this server",
-                hint=f"offered: {offered}",
-            )
-        if req.workspace is not None and switch is None:
-            raise WebError(
-                400,
-                "invalid_request",
-                "this server doesn't let a chat pick its directory",
-                hint="leave out workspace: chats work in the agent's own",
-            )
-        asked = mode or (switch.default_mode if switch else None)
-        return deps.new_chat_binding(agent, asked, req.workspace)
+        mode = req.workspace_mode or (switch.default_mode if switch else None)
+        return deps.requested_binding(agent, mode, req.workspace)
 
     def resolve_agent(meta: ChatMeta | None, requested: str | None) -> Agent[Any]:
         """The agent that runs this turn, given the session's metadata (if any).

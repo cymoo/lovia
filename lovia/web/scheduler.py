@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 from .errors import WebError
 from .run_deps import RunTrigger, build_run_deps
 from .sse import SessionCreatedData
+from .stop_check import with_stop_check
 from .store import RunRow
 from .titles import provisional_title
 
@@ -143,15 +144,7 @@ def fire_input(sched: ScheduleRow) -> str:
     """
     if not sched.until:
         return sched.input
-    return (
-        f"{sched.input}\n\n"
-        f"[Fired by schedule {sched.id}.] After the task above, evaluate this "
-        f"stop condition: {sched.until}\n"
-        f"If it is met, call cancel_schedule(schedule_id='{sched.id}', "
-        f"reason=<one line: what you observed>) and state clearly that the "
-        f"schedule is now stopped. If it is not met, do not call "
-        f"cancel_schedule and don't mention the condition."
-    )
+    return with_stop_check(sched.input, sched.id, sched.until)
 
 
 # --------------------------------------------------------------------------- #

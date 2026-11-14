@@ -25,6 +25,7 @@ from ...transcript import (
     entries_to_messages,
 )
 from ..schemas import ChatSessionInfo, MessageOut, RunRecordInfo, ToolImageOut
+from ..stop_check import without_stop_check
 from ..store import ChatMeta, RunRow
 
 
@@ -103,13 +104,20 @@ def _content(m: Message) -> Any:
         getattr(p, "type", "text") != "text" for p in content
     ):
         return [asdict(p) for p in content]
-    return m.text or content
+    text = m.text or content
+    return _as_written(m, text) if isinstance(text, str) else text
 
 
 def display_text(m: Message) -> str:
     """Stringified display text for plain-text / markdown export."""
     val = m.text or m.content
-    return val if isinstance(val, str) else str(val or "")
+    return _as_written(m, val) if isinstance(val, str) else str(val or "")
+
+
+def _as_written(m: Message, text: str) -> str:
+    """A user turn as its author wrote it: a schedule's stop check is the
+    agent's, not theirs (see :mod:`lovia.web.stop_check`)."""
+    return without_stop_check(text) if m.role == "user" else text
 
 
 def tool_image_stubs(parts: list[Any] | None) -> list[ToolImageOut]:

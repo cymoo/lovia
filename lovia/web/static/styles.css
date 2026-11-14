@@ -4310,131 +4310,248 @@ details[open] > summary.lv-sched-group-head svg {
   }
 }
 
-/* -- the form (a dialog) -- */
+/* -- the form (a dialog): a fixed head and foot around fields that scroll -- */
 .lv-custom-dialog.lv-sched-dialog {
-  max-width: 620px;
+  max-width: 600px;
+}
+.lv-sched-dialog .lv-dialog-content {
+  padding: 0;
 }
 .lv-sched-form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  max-height: min(86vh, 820px);
+  line-height: 1.5;
+}
+.lv-sched-form-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 18px 16px 24px;
+}
+.lv-sched-form-titles {
+  min-width: 0;
 }
 .lv-sched-form-title {
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.lv-sched-form-sub {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--lv-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lv-sched-form-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 2px 24px 24px;
+}
+.lv-sched-form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.lv-sched-form-section + .lv-sched-form-section,
+.lv-sched-form-section + .lv-sched-advanced {
+  padding-top: 22px;
+  border-top: 1px solid var(--lv-border);
+}
+.lv-sched-form-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--lv-border);
+}
+.lv-sched-form-foot .lv-btn {
+  min-width: 80px;
+  justify-content: center;
+}
+.lv-sched-field {
+  display: flex;
+  flex-direction: column;
+}
+.lv-sched-field[hidden] {
+  display: none;
 }
 .lv-sched-label {
-  display: block;
-  margin-bottom: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lv-ink);
+}
+.lv-sched-optional {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--lv-muted-2);
+}
+.lv-sched-hint {
+  margin-top: 7px;
   font-size: 12.5px;
-  font-weight: 570;
-  color: var(--lv-ink-2);
+  color: var(--lv-muted);
 }
 .lv-sched-form .lv-dialog-input {
   margin-top: 0;
 }
 .lv-sched-input {
   resize: vertical;
-  min-height: 120px;
+  min-height: 112px;
   font-family: var(--lv-sans);
-  line-height: 1.55;
+  line-height: 1.6;
 }
-.lv-sched-hint {
-  margin-top: 6px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--lv-muted-2);
-}
+
+/* when: kind tabs over a card of labelled rows, the next runs at its foot */
 .lv-sched-when {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
   gap: 10px;
 }
-/* Every tab's panel holds the same height, so the dialog doesn't jump. */
+.lv-sched-when > .lv-files-tabs {
+  display: flex;
+}
+.lv-sched-when > .lv-files-tabs .lv-files-tab {
+  flex: 1;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+.lv-sched-card {
+  border-radius: var(--lv-radius);
+  background: var(--lv-surface-2);
+}
 .lv-sched-panels {
-  width: 100%;
-  min-height: 84px;
+  padding: 14px 16px 12px;
 }
 .lv-sched-panel {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
+  gap: 10px;
 }
 .lv-sched-panel[hidden] {
   display: none;
 }
-.lv-sched-panel > .lv-dialog-input {
-  max-width: 280px;
-}
-.lv-sched-panel > .lv-mono {
-  max-width: none;
-}
-.lv-sched-inline {
-  display: flex;
+.lv-sched-card-row {
+  display: grid;
+  grid-template-columns: 48px 1fr;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+  min-height: 34px;
 }
-.lv-sched-inline-label {
+.lv-sched-card-label {
   font-size: 13px;
   color: var(--lv-muted);
 }
-.lv-sched-inline .lv-dialog-input {
-  width: auto;
+.lv-sched-card-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  min-width: 0;
 }
-.lv-sched-inline input[type="number"] {
+.lv-sched-card-hint {
+  font-size: 12.5px;
+  color: var(--lv-muted);
+}
+.lv-sched-card .lv-dialog-input {
+  width: auto;
+  padding: 6px 10px;
+  background: var(--lv-surface);
+}
+.lv-sched-card input[type="number"] {
   width: 84px;
+}
+.lv-sched-card .lv-mono {
+  flex: 1;
+  min-width: 0;
+}
+.lv-sched-card .lv-files-tabs {
+  background: var(--lv-surface-3);
 }
 .lv-sched-days {
   display: flex;
-  gap: 4px;
+  gap: 5px;
 }
 .lv-sched-day {
-  width: 34px;
-  height: 30px;
-  border: 1px solid var(--lv-border);
-  border-radius: var(--lv-radius-sm);
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--lv-border-strong);
+  border-radius: 50%;
+  background: var(--lv-surface);
   font-size: 12.5px;
-  color: var(--lv-muted);
-  transition: background var(--lv-t-fast), color var(--lv-t-fast), border-color var(--lv-t-fast);
+  color: var(--lv-ink-2);
+  transition:
+    background var(--lv-t-fast),
+    color var(--lv-t-fast),
+    border-color var(--lv-t-fast);
 }
 .lv-sched-day:hover {
-  border-color: var(--lv-border-strong);
+  border-color: var(--lv-muted-2);
 }
 .lv-sched-day[aria-pressed="true"] {
-  border-color: transparent;
-  background: var(--lv-accent-soft);
-  color: var(--lv-accent-text);
+  border-color: var(--lv-ink);
+  background: var(--lv-ink);
+  color: var(--lv-surface);
   font-weight: 600;
 }
 .lv-sched-quick {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 2px;
 }
 .lv-sched-pill {
-  padding: 3px 10px;
-  border-radius: 999px;
-  background: var(--lv-surface-2);
-  font-size: 12px;
-  color: var(--lv-ink-2);
+  padding: 3px 8px;
+  border-radius: var(--lv-radius-xs);
+  font-size: 12.5px;
+  color: var(--lv-muted);
+  transition:
+    background var(--lv-t-fast),
+    color var(--lv-t-fast);
 }
 .lv-sched-pill:hover {
   background: var(--lv-surface-3);
+  color: var(--lv-ink);
 }
 .lv-sched-preview {
-  min-height: 1.5em;
-  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px;
+  padding: 11px 0 12px;
+  border-top: 1px solid var(--lv-border);
+  font-size: 13px;
   color: var(--lv-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.lv-sched-preview svg {
+  flex-shrink: 0;
+  color: var(--lv-muted);
+}
+.lv-sched-preview-text {
+  min-width: 0;
+  min-height: 1.5em;
 }
 .lv-sched-preview.lv-muted {
   color: var(--lv-muted-2);
 }
-.lv-sched-preview.lv-error {
+.lv-sched-preview.lv-error,
+.lv-sched-preview.lv-error svg {
   color: var(--lv-danger);
 }
+
+/* where: menu chips, and what unattended runs mean */
 .lv-sched-chips {
   display: flex;
   flex-wrap: wrap;
@@ -4443,49 +4560,119 @@ details[open] > summary.lv-sched-group-head svg {
 .lv-sched-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 11px;
+  gap: 7px;
+  height: 34px;
+  padding: 0 9px 0 12px;
   border: 1px solid var(--lv-border);
-  border-radius: 999px;
-  font-size: 13px;
-  color: var(--lv-ink-2);
+  border-radius: var(--lv-radius-sm);
+  background: var(--lv-surface);
+  font-size: 13.5px;
+  color: var(--lv-ink);
+  transition:
+    border-color var(--lv-t-fast),
+    background var(--lv-t-fast);
 }
 .lv-sched-chip:hover {
   border-color: var(--lv-border-strong);
   background: var(--lv-surface-2);
 }
+.lv-sched-chip[aria-expanded="true"] {
+  border-color: var(--lv-muted);
+}
+.lv-sched-chip > svg:last-child {
+  color: var(--lv-muted-2);
+}
+.lv-sched-chip-text {
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lv-sched-caution {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 9px 12px;
+  border-radius: var(--lv-radius-sm);
+  background: var(--lv-warn-soft);
+  font-size: 12.5px;
+  color: var(--lv-ink-2);
+}
+.lv-sched-caution[hidden] {
+  display: none;
+}
+.lv-sched-caution svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--lv-warn);
+}
+
+/* the stop condition and limits, folded behind a row that says what is set */
 .lv-sched-advanced > summary {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   cursor: pointer;
   list-style: none;
-  font-size: 13px;
-  color: var(--lv-muted);
 }
 .lv-sched-advanced > summary::-webkit-details-marker {
   display: none;
 }
 .lv-sched-advanced > summary svg {
+  flex-shrink: 0;
+  color: var(--lv-muted);
   transition: transform var(--lv-t-fast);
 }
 .lv-sched-advanced[open] > summary svg {
   transform: rotate(90deg);
 }
-.lv-sched-advanced[open] {
+.lv-sched-advanced-title {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lv-ink);
+}
+.lv-sched-advanced-set {
+  margin-left: auto;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--lv-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lv-sched-advanced[open] .lv-sched-advanced-set {
+  visibility: hidden; /* open, the fields say it */
+}
+.lv-sched-advanced-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
+  padding-top: 16px;
 }
 .lv-sched-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: 16px;
 }
-.lv-sched-form-foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+@media (max-width: 560px) {
+  .lv-sched-form-head {
+    padding: 18px 14px 14px 18px;
+  }
+  .lv-sched-form-body {
+    padding: 2px 18px 20px;
+  }
+  .lv-sched-form-foot {
+    padding: 12px 18px;
+  }
+  .lv-sched-pair {
+    grid-template-columns: 1fr;
+  }
+  .lv-sched-card-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
 }
 
 /* ---- Memory editor ------------------------------------------------------

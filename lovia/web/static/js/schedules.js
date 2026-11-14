@@ -669,19 +669,36 @@ function fromLocalInput(value) {
   return value ? Math.floor(new Date(value).getTime() / 1000) : NaN;
 }
 
+let _fieldIds = 0;
+
 /**
- * @param {string} labelText @param {HTMLElement} control @param {string} [hint]
+ * A labelled field: label (with "optional" when it is), control, hint.
+ * @param {string} labelText @param {HTMLElement} control
+ * @param {{ hint?: string, optional?: boolean }} [opts]
  */
-function field(labelText, control, hint) {
+function field(labelText, control, { hint, optional = false } = {}) {
   const wrap = el('div', 'lv-sched-field');
   const label = /** @type {HTMLLabelElement} */ (el('label', 'lv-sched-label', labelText));
+  if (optional) label.append(el('span', 'lv-sched-optional', t('sched.optional')));
   if (control.matches('input, textarea, select')) {
-    control.id ||= `sched-field-${Math.random().toString(36).slice(2, 8)}`;
+    control.id ||= `sched-field-${++_fieldIds}`;
     label.htmlFor = control.id;
   }
   wrap.append(label, control);
   if (hint) wrap.append(el('div', 'lv-sched-hint', hint));
   return wrap;
+}
+
+/**
+ * One row of the "when" card: a short label, then its controls.
+ * @param {string} labelText @param {...(Node | string)} controls
+ */
+function cardRow(labelText, ...controls) {
+  const row = el('div', 'lv-sched-card-row');
+  const body = el('div', 'lv-sched-card-controls');
+  body.append(...controls);
+  row.append(el('span', 'lv-sched-card-label', labelText), body);
+  return row;
 }
 
 /** @param {string} type @param {string} [cls] */
@@ -704,6 +721,16 @@ function chip(label) {
 }
 
 /**
+ * Fill a chip: its glyph, its value, and the caret that says it opens a menu.
+ * @param {HTMLButtonElement} b @param {string} glyph svg markup @param {string} text
+ */
+function drawChip(b, glyph, text) {
+  b.innerHTML = glyph;
+  b.append(el('span', 'lv-sched-chip-text', text));
+  b.insertAdjacentHTML('beforeend', icon('chevron-down', { size: 13 }));
+}
+
+/**
  * Create a schedule, or edit one. `preset` fills a new one (a template, a
  * copy, or the chat it should continue).
  * @param {{ editing?: Row | null, preset?: Partial<Row> | null, onSaved?: () => void }} opts
@@ -712,8 +739,18 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
   const src = editing ?? preset ?? {};
   const form = /** @type {HTMLFormElement} */ (el('form', 'lv-sched-form'));
   form.noValidate = true;
-  const head = el('div', 'lv-sched-form-head');
-  head.append(el('h3', 'lv-sched-form-title', editing ? t('sched.editTitle') : t('sched.newTitle')));
+  const head = el('header', 'lv-sched-form-head');
+  const titles = el('div', 'lv-sched-form-titles');
+  titles.append(
+    el('h3', 'lv-sched-form-title', editing ? t('sched.editTitle') : t('sched.newTitle')),
+    el('p', 'lv-sched-form-sub', editing ? displayName(editing) : t('sched.formSub')),
+  );
+  const close = /** @type {HTMLButtonElement} */ (el('button', 'lv-btn-icon'));
+  close.type = 'button';
+  close.innerHTML = icon('x', { size: 16 });
+  close.setAttribute('aria-label', t('sched.cancel'));
+  close.addEventListener('click', () => dialog.close());
+  head.append(titles, close);
 
   const name = input('text');
   name.maxLength = 200;
@@ -721,7 +758,7 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
   name.value = src.name ?? '';
 
   const prompt = /** @type {HTMLTextAreaElement} */ (el('textarea', 'lv-dialog-input lv-sched-input'));
-  prompt.rows = 6;
+  prompt.rows = 5;
   prompt.placeholder = t('sched.promptPlaceholder');
   prompt.value = src.input ?? '';
 
@@ -788,6 +825,7 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
     );
   daysPreset(t('cron.everyDay'), [0, 1, 2, 3, 4, 5, 6]);
   daysPreset(t('cron.weekdays'), [1, 2, 3, 4, 5]);
+  daysPreset(t('cron.weekends'), [0, 6]);
   const time = input('time');
   time.step = '60';
   const pad = (/** @type {number} */ n) => String(n).padStart(2, '0');
@@ -822,14 +860,17 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
     interval: el('div', 'lv-sched-panel'),
     cron: el('div', 'lv-sched-panel'),
   });
-  panels.once.append(once, onceQuick);
-  const dailyRow = el('div', 'lv-sched-inline');
-  dailyRow.append(el('span', 'lv-sched-inline-label', t('sched.at')), time);
-  panels.daily.append(dayChips, daysQuick, dailyRow);
-  const everyRow = el('div', 'lv-sched-inline');
-  everyRow.append(el('span', 'lv-sched-inline-label', t('sched.everyLabel')), every, units);
-  panels.interval.append(everyRow);
-  panels.cron.append(cron, el('div', 'lv-sched-hint', t('sched.hintCron')));
+  // Two rows each, so switching tabs never moves what is below.
+  panels.once.append(cardRow(t('sched.date'), once), cardRow(t('sched.quick'), onceQuick));
+  panels.daily.append(cardRow(t('sched.repeat'), dayChips, daysQuick), cardRow(t('sched.at'), time));
+  panels.interval.append(
+    cardRow(t('sched.everyLabel'), every, units),
+    cardRow('', el('span', 'lv-sched-card-hint', t('sched.intervalHint'))),
+  );
+  panels.cron.append(
+    cardRow(t('sched.expr'), cron),
+    cardRow('', el('span', 'lv-sched-card-hint', t('sched.hintCron'))),
+  );
   const panelHost = el('div', 'lv-sched-panels');
   panelHost.append(...Object.values(panels));
   const showPanel = () => {
@@ -859,10 +900,15 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
     },
     t('sched.trigger'),
   );
-  const preview = el('div', 'lv-sched-preview');
-  preview.setAttribute('aria-live', 'polite');
+  const preview = el('span', 'lv-sched-preview-text');
+  const previewRow = el('div', 'lv-sched-preview');
+  previewRow.setAttribute('aria-live', 'polite');
+  previewRow.innerHTML = icon('calendar-clock', { size: 14 });
+  previewRow.append(preview);
+  const card = el('div', 'lv-sched-card');
+  card.append(panelHost, previewRow);
   const when = el('div', 'lv-sched-when');
-  when.append(kinds, panelHost, preview);
+  when.append(kinds, card);
 
   /** The trigger as the API takes it; throws with what to fix. */
   function trigger() {
@@ -889,6 +935,12 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
 
   let previewSeq = 0;
   let previewTimer = 0;
+  /** @param {string} text @param {'' | 'muted' | 'error'} [tone] */
+  const showPreview = (text, tone = '') => {
+    previewRow.classList.toggle('lv-muted', tone === 'muted');
+    previewRow.classList.toggle('lv-error', tone === 'error');
+    preview.textContent = text;
+  };
   function changed() {
     clearTimeout(previewTimer);
     previewTimer = setTimeout(async () => {
@@ -897,8 +949,7 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
       try {
         trig = trigger();
       } catch (err) {
-        preview.className = 'lv-sched-preview lv-muted';
-        preview.textContent = err.message;
+        showPreview(err.message, 'muted');
         return;
       }
       const human = trig.kind === 'cron' && tab === 'cron' ? humanizeCron(trig.expr) : null;
@@ -914,12 +965,10 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
           const h = res.utc_offset / 3600;
           text += ` ${t('sched.serverTz', { tz: `UTC${h >= 0 ? '+' : ''}${h}` })}`;
         }
-        preview.className = 'lv-sched-preview';
-        preview.textContent = text;
+        showPreview(text, trig.kind === 'at' && res.next_fires[0] * 1000 < Date.now() ? 'error' : '');
       } catch (err) {
         if (seq !== previewSeq) return;
-        preview.className = 'lv-sched-preview lv-error';
-        preview.textContent = err.message || t('sched.invalidTrigger');
+        showPreview(err.message || t('sched.invalidTrigger'), 'error');
       }
     }, 300);
   }
@@ -936,12 +985,15 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
   const whereRow = el('div', 'lv-sched-chips');
   const rootChip = chip(t('sched.folder'));
   const modeChip = chip(t('sched.mode'));
+  const unattended = el('p', 'lv-sched-caution');
+  unattended.innerHTML = icon('shield-alert', { size: 14 });
+  unattended.append(el('span', '', t('sched.unattended')));
   const drawWhere = () => {
-    rootChip.innerHTML = icon('folder', { size: 14 });
-    rootChip.append(el('span', '', where.root ? workspaceName(where.root) : t('sched.ownDir')));
+    drawChip(rootChip, icon('folder', { size: 14 }), where.root ? workspaceName(where.root) : t('sched.ownDir'));
     rootChip.title = where.root ?? t('sched.ownDirTitle');
-    modeChip.innerHTML = modeGlyph(where.mode);
-    modeChip.append(el('span', '', modeLabel(where.mode)));
+    drawChip(modeChip, modeGlyph(where.mode), modeLabel(where.mode));
+    // Full access needs no approval: nothing to warn about.
+    unattended.hidden = where.mode === 'trusted';
   };
   rootChip.addEventListener('click', () => {
     /** @type {(import('./ui.js').MenuItem | null)[]} */
@@ -987,9 +1039,8 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
   if (workspacesOn()) whereRow.append(rootChip);
   if (modes) whereRow.append(modeChip);
   drawWhere();
-  const whereField = whereRow.childElementCount
-    ? field(t('sched.where'), whereRow, t('sched.unattended'))
-    : null;
+  const whereField = whereRow.childElementCount ? field(t('sched.where'), whereRow) : null;
+  whereField?.append(unattended);
 
   // ---- results: only a schedule tied to a chat has a choice to make
   const boundTo = src.session_id ?? null;
@@ -1023,10 +1074,7 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
   expires.value = src.expires_at != null ? localInput(src.expires_at) : '';
   let agent = src.agent ?? store.agent ?? store.agents[0]?.name ?? null;
   const agentChip = chip(t('sched.agentLabel'));
-  const drawAgent = () => {
-    agentChip.innerHTML = icon('bot', { size: 14 });
-    agentChip.append(el('span', '', agent ?? ''));
-  };
+  const drawAgent = () => drawChip(agentChip, icon('bot', { size: 14 }), agent ?? '');
   agentChip.addEventListener('click', () => {
     openMenu(
       agentChip,
@@ -1042,37 +1090,64 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
     );
   });
   drawAgent();
+  // Folded, the row still says what is set — a stop condition shouldn't
+  // hide behind a closed disclosure.
   const advanced = /** @type {HTMLDetailsElement} */ (el('details', 'lv-sched-advanced'));
   advanced.open = !!(src.until || src.max_fires != null || src.expires_at != null);
   const summary = el('summary', '');
+  const summaryText = el('span', 'lv-sched-advanced-set');
   summary.innerHTML = icon('chevron-right', { size: 14 });
-  summary.append(el('span', '', t('sched.advanced')));
+  summary.append(el('span', 'lv-sched-advanced-title', t('sched.advanced')), summaryText);
+  const drawSummary = () => {
+    const set = [];
+    if (until.value.trim()) set.push(t('sched.untilShort', { cond: until.value.trim() }));
+    if (maxFires.value.trim()) set.push(t('sched.capShort', { n: maxFires.value.trim() }));
+    const expiry = fromLocalInput(expires.value);
+    if (Number.isFinite(expiry)) set.push(t('sched.expiresAt', { time: formatWhen(expiry) }));
+    summaryText.textContent = set.length ? set.join(' · ') : t('sched.advancedNone');
+  };
+  for (const n of [until, maxFires, expires]) n.addEventListener('input', drawSummary);
+  drawSummary();
   const nets = el('div', 'lv-sched-pair');
-  nets.append(field(t('sched.maxFires'), maxFires), field(t('sched.expires'), expires));
-  advanced.append(summary, field(t('sched.untilLabel'), until, t('sched.untilHint')), nets);
-  if (store.agents.length > 1) advanced.append(field(t('sched.agentLabel'), agentChip));
+  nets.append(
+    field(t('sched.maxFires'), maxFires, { optional: true }),
+    field(t('sched.expires'), expires, { optional: true }),
+  );
+  const advancedBody = el('div', 'lv-sched-advanced-body');
+  advancedBody.append(field(t('sched.untilLabel'), until, { hint: t('sched.untilHint'), optional: true }), nets);
+  if (store.agents.length > 1) advancedBody.append(field(t('sched.agentLabel'), agentChip));
+  advanced.append(summary, advancedBody);
 
   // ---- foot
-  const foot = el('div', 'lv-sched-form-foot');
-  const cancel = button(t('sched.cancel'), null, () => dialog.close(), 'lv-btn lv-btn-ghost lv-btn-sm');
-  const submit = /** @type {HTMLButtonElement} */ (el('button', 'lv-btn lv-btn-primary lv-btn-sm', editing ? t('sched.save') : t('sched.add')));
+  const foot = el('footer', 'lv-sched-form-foot');
+  const cancel = button(t('sched.cancel'), null, () => dialog.close(), 'lv-btn lv-btn-ghost');
+  const submit = /** @type {HTMLButtonElement} */ (el('button', 'lv-btn lv-btn-primary', editing ? t('sched.save') : t('sched.add')));
   submit.type = 'submit';
   foot.append(cancel, submit);
 
-  form.append(
-    head,
-    field(t('sched.name'), name),
-    field(t('sched.instruction'), prompt),
-    field(t('sched.trigger'), when),
+  // Header and footer stay put; the fields between them scroll.
+  const body = el('div', 'lv-sched-form-body');
+  const task = el('section', 'lv-sched-form-section');
+  task.append(
+    field(t('sched.name'), name, { optional: true }),
+    field(t('sched.instruction'), prompt, { hint: t('sched.promptHint') }),
   );
+  const timing = el('section', 'lv-sched-form-section');
+  timing.append(field(t('sched.trigger'), when));
+  body.append(task, timing);
   // A continued chat works where it always has: the folder and mode are a
   // fresh chat's.
-  if (results) form.append(field(t('sched.results'), results));
-  if (whereField) {
-    whereField.hidden = continues;
-    form.append(whereField);
+  if (results || whereField) {
+    const place = el('section', 'lv-sched-form-section');
+    if (results) place.append(field(t('sched.results'), results));
+    if (whereField) {
+      whereField.hidden = continues;
+      place.append(whereField);
+    }
+    body.append(place);
   }
-  form.append(advanced, foot);
+  body.append(advanced);
+  form.append(head, body, foot);
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();

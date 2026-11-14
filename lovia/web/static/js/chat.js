@@ -4540,6 +4540,37 @@ export function initComposer() {
     }
   });
 
+  // ↑ in an empty composer recalls this chat's earlier messages, newest
+  // first, as a shell's history does; ↓ walks back, past the newest to empty.
+  // Only while the text is the recalled one, untouched, and the caret is on
+  // its first line (↑) or last line (↓): otherwise the keys move the caret.
+  // The completion menu claims the arrows first (composer-complete.js).
+  let recalled = -1; // index into sentMessages(); -1: not browsing
+  const sentMessages = () =>
+    [...document.querySelectorAll('#transcript .lv-turn.lv-user:not(.lv-queued) .lv-body')]
+      .map((body) => body.textContent ?? '')
+      .filter(Boolean)
+      .reverse();
+  promptEl?.addEventListener('keydown', (e) => {
+    const up = e.key === 'ArrowUp';
+    if ((!up && e.key !== 'ArrowDown') || e.isComposing) return;
+    if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
+    const sent = sentMessages();
+    const text = promptEl.value;
+    if (!(recalled >= 0 && text === sent[recalled])) recalled = -1;
+    if (text && recalled < 0) return; // the user's own text
+    const onEdge = up
+      ? !text.slice(0, promptEl.selectionStart).includes('\n')
+      : !text.slice(promptEl.selectionEnd).includes('\n');
+    if (!onEdge) return;
+    const next = recalled + (up ? 1 : -1);
+    if (next >= sent.length || (!up && recalled < 0)) return;
+    e.preventDefault();
+    recalled = next;
+    setDraft(next < 0 ? '' : sent[next]);
+    promptEl.setSelectionRange(promptEl.value.length, promptEl.value.length);
+  });
+
   // Example prompts (server-rendered or renderEmptyState's) fill the
   // composer for editing — clicking must not fire a send behind your back.
   document.getElementById('transcript')?.addEventListener('click', (e) => {

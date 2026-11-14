@@ -666,8 +666,13 @@ function buildRow(s, { age = false, folder = false } = {}) {
     main.type = 'button';
     main.className = 'lv-session-main';
     main.title = sidebarTooltip(s);
+    const title = document.createElement('span');
+    title.className = 'lv-session-title';
+    title.textContent = s.title || t('session.newChat');
+    main.appendChild(title);
     // A branch starts with its source's title, and a schedule's chat repeats
-    // it run after run: mark both apart.
+    // it run after run: mark both apart — after the title, so every row's
+    // title starts at the same edge.
     if (s.origin_kind === 'fork' || s.origin_kind === 'schedule') {
       const mark = document.createElement('span');
       mark.className = 'lv-session-branch';
@@ -675,10 +680,6 @@ function buildRow(s, { age = false, folder = false } = {}) {
       mark.innerHTML = icon(s.origin_kind === 'fork' ? 'git-branch' : 'clock', { size: 12 });
       main.appendChild(mark);
     }
-    const title = document.createElement('span');
-    title.className = 'lv-session-title';
-    title.textContent = s.title || t('session.newChat');
-    main.appendChild(title);
     // Which brain a chat belongs to — only worth pixels when there's a choice.
     if (store.agents.length > 1 && s.agent) {
       const chip = document.createElement('span');
@@ -981,14 +982,6 @@ function chatActions(s) {
           label: t('session.branch'),
           icon: icon('git-branch', { size: 14 }),
           onSelect: () => void forkChat(s.id),
-        }]),
-    // schedules.js answers it (where the server schedules) with its form.
-    ...(s.parent_id || !store.canSchedule
-      ? []
-      : [{
-          label: t('session.schedule'),
-          icon: icon('clock', { size: 14 }),
-          onSelect: () => store.emit('schedule-chat', { id: s.id, title: s.title, agent: s.agent }),
         }]),
     // Out of the list without deleting it (the view menu shows the archive).
     ...(s.parent_id

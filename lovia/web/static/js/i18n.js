@@ -77,7 +77,6 @@ const MESSAGES = {
     'session.startSourceGone': '发起对话已删除',
     'session.scheduledBy': '来自定时任务「{title}」',
     'session.scheduleGone': '定时任务已删除',
-    'session.schedule': '为这个对话创建定时任务',
     'sched.chatCount': '{n} 个定时任务',
     'sched.chatCountTitle': '在这个对话里运行的定时任务',
     // ---- welcome (ChatUI's empty_* override these)
@@ -916,7 +915,6 @@ const EN = {
   'session.startSourceGone': 'Starting chat deleted',
   'session.scheduledBy': 'From schedule “{title}”',
   'session.scheduleGone': 'Schedule deleted',
-  'session.schedule': 'Schedule in this chat…',
   'sched.chatCount': '{n} scheduled',
   'sched.chatCountTitle': 'Schedules that run in this chat',
   'welcome.title': 'Where shall we begin?',

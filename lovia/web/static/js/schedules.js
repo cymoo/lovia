@@ -1279,15 +1279,6 @@ export function enableSchedules() {
     render,
   });
   document.getElementById('schedules-btn')?.classList.remove('lv-hidden');
-  store.canSchedule = true;
-  // The chat menu's "schedule in this chat" (sessions.js).
-  // Its runs continue that chat, so they take its agent — not the one the
-  // page has open (the menu may be a sidebar row's).
-  store.on('schedule-chat', (/** @type {{ id: string, title?: string, agent?: string | null }} */ chat) =>
-    openScheduleForm({
-      preset: { session_id: chat.id, session_title: chat.title, agent: chat.agent ?? null },
-    }),
-  );
   store.on('session-id', drawChatChip);
   store.on('schedules-changed', reloadChatSchedulesSoon);
   // A schedule_run approved in a chat shows up once its run ends.

@@ -10,7 +10,7 @@ import { exportSessionHtml, exportFilename } from './export.js';
 import { notificationsEnabled, playCompletionSound } from './settings.js';
 import { dateBucket, formatDateTime, shortAge } from './util.js';
 import { addWorkspaceDialog, canAddWorkspace, groupHeader, sidebarGroups, workspaceName } from './workspaces.js';
-import { closeView, currentView } from './views.js';
+import { closeView, currentView, openView } from './views.js';
 import { OPEN_SESSION_EVENT } from './builtin-views.js';
 
 const sessionsList = document.getElementById('sessions-list');
@@ -665,12 +665,13 @@ function buildRow(s, { age = false, folder = false } = {}) {
     main.type = 'button';
     main.className = 'lv-session-main';
     main.title = sidebarTooltip(s);
-    // A branch starts with its source's title: mark it apart.
-    if (s.origin_kind === 'fork') {
+    // A branch starts with its source's title, and a schedule's chat repeats
+    // it run after run: mark both apart.
+    if (s.origin_kind === 'fork' || s.origin_kind === 'schedule') {
       const mark = document.createElement('span');
       mark.className = 'lv-session-branch';
       mark.setAttribute('aria-hidden', 'true');
-      mark.innerHTML = icon('git-branch', { size: 12 });
+      mark.innerHTML = icon(s.origin_kind === 'fork' ? 'git-branch' : 'clock', { size: 12 });
       main.appendChild(mark);
     }
     const title = document.createElement('span');
@@ -980,6 +981,14 @@ function chatActions(s) {
           icon: icon('git-branch', { size: 14 }),
           onSelect: () => void forkChat(s.id),
         }]),
+    // schedules.js answers it (where the server schedules) with its form.
+    ...(s.parent_id || !store.canSchedule
+      ? []
+      : [{
+          label: t('session.schedule'),
+          icon: icon('clock', { size: 14 }),
+          onSelect: () => store.emit('schedule-chat', { id: s.id, title: s.title }),
+        }]),
     // Out of the list without deleting it (the view menu shows the archive).
     ...(s.parent_id
       ? []
@@ -1042,35 +1051,44 @@ function rowActions(s, /** @type {HTMLElement} */ row) {
   return more;
 }
 
-/** @typedef {{ kind: 'fork' | 'spawn' | 'schedule', session_id: string, title?: string | null, exists?: boolean }} Origin */
+/**
+ * @typedef {{ kind: 'fork' | 'spawn' | 'schedule', session_id?: string | null,
+ *   schedule_id?: string | null, title?: string | null, exists?: boolean }} Origin
+ */
 
 /** @type {Origin | null} */
 let _origin = null;
 
+/** Each origin kind's glyph and wording: [icon, label, label once the source is gone]. */
+const ORIGIN_TEXT = {
+  fork: ['git-branch', 'session.branchedFrom', 'session.branchSourceGone'],
+  spawn: ['square-pen', 'session.startedFrom', 'session.startSourceGone'],
+  schedule: ['clock', 'session.scheduledBy', 'session.scheduleGone'],
+};
+
 /**
- * The topbar link back to the chat this one came from — branched from it, or
- * started by its agent — a session detail's `origin`, or null to hide it. A
- * deleted source stays named, inert.
+ * The topbar link back to where this chat came from — the chat it branched
+ * from or whose agent started it, or the schedule that made it — a session
+ * detail's `origin`, or null to hide it. A deleted source stays named, inert.
  * @param {Origin | null | undefined} origin
  */
 function renderOrigin(origin) {
-  // A schedule's chat links to its schedule, not to a chat: not drawn here.
-  if (origin?.kind === 'schedule') origin = null;
   _origin = origin ?? null;
   if (!originBtn) return;
   originBtn.hidden = !origin;
   if (!origin) return;
-  const spawned = origin.kind === 'spawn';
+  const [glyph, here, gone] = ORIGIN_TEXT[origin.kind] ?? ORIGIN_TEXT.fork;
   const label = document.createElement('span');
   const title = origin.title || t('session.newChat');
-  label.textContent = spawned
-    ? t(origin.exists ? 'session.startedFrom' : 'session.startSourceGone', { title })
-    : t(origin.exists ? 'session.branchedFrom' : 'session.branchSourceGone', { title });
+  label.textContent = t(origin.exists ? here : gone, { title });
   originBtn.title = label.textContent;
-  originBtn.innerHTML = icon(spawned ? 'square-pen' : 'git-branch', { size: 14 });
+  originBtn.innerHTML = icon(glyph, { size: 14 });
   originBtn.append(label);
   originBtn.disabled = !origin.exists;
-  originBtn.onclick = () => switchSession(origin.session_id);
+  originBtn.onclick = () => {
+    if (origin.kind === 'schedule') openView(`lovia-schedules/${origin.schedule_id}`);
+    else if (origin.session_id) void switchSession(origin.session_id);
+  };
 }
 
 /**

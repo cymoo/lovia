@@ -985,6 +985,9 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
   if (workspacesOn()) whereRow.append(rootChip);
   if (modes) whereRow.append(modeChip);
   drawWhere();
+  const whereField = whereRow.childElementCount
+    ? field(t('sched.where'), whereRow, t('sched.unattended'))
+    : null;
 
   // ---- results: only a schedule tied to a chat has a choice to make
   const boundTo = src.session_id ?? null;
@@ -998,6 +1001,7 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
         continues ? 'continue' : 'fresh',
         (v) => {
           continues = v === 'continue';
+          if (whereField) whereField.hidden = continues;
         },
         t('sched.results'),
       )
@@ -1059,8 +1063,13 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
     field(t('sched.instruction'), prompt),
     field(t('sched.trigger'), when),
   );
-  if (whereRow.childElementCount) form.append(field(t('sched.where'), whereRow, t('sched.unattended')));
+  // A continued chat works where it always has: the folder and mode are a
+  // fresh chat's.
   if (results) form.append(field(t('sched.results'), results));
+  if (whereField) {
+    whereField.hidden = continues;
+    form.append(whereField);
+  }
   form.append(advanced, foot);
 
   form.addEventListener('submit', async (e) => {
@@ -1113,7 +1122,7 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
     if (boundTo) body.session_id = continues ? boundTo : null;
     // An edit sends where it works only when changed: an unchanged one is
     // left as stored, even where this server would no longer offer it.
-    if (!editing || where.touched) {
+    if ((!editing || where.touched) && !continues) {
       if (workspacesOn() && where.root) body.workspace_root = where.root;
       else if (editing && workspacesOn()) body.workspace_root = null;
       if (modes && where.mode) body.workspace_mode = where.mode;
@@ -1146,6 +1155,44 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
   return dialog;
 }
 
+// ---- the open chat's schedules (topbar) ----------------------------------------
+
+/** chat id → the schedules that continue it. */
+let _byChat = new Map();
+let _chipTimer = 0;
+
+function drawChatChip() {
+  const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById('chat-schedules-btn'));
+  if (!btn) return;
+  const mine = (store.sessionId && _byChat.get(store.sessionId)) || [];
+  btn.hidden = !mine.length;
+  if (!mine.length) return;
+  btn.innerHTML = icon('clock', { size: 14 });
+  btn.append(el('span', '', mine.length === 1 ? displayName(mine[0]) : t('sched.chatCount', { n: mine.length })));
+  btn.title = t('sched.chatCountTitle');
+  btn.onclick = () => openView(mine.length === 1 ? `${VIEW}/${mine[0].id}` : VIEW);
+}
+
+async function loadChatSchedules() {
+  try {
+    /** @type {Row[]} */
+    const rows = await api.listSchedules();
+    _byChat = new Map();
+    for (const s of rows) {
+      if (!s.session_id || isDone(s)) continue;
+      _byChat.set(s.session_id, [...(_byChat.get(s.session_id) ?? []), s]);
+    }
+  } catch {
+    return; // keep what the chip showed
+  }
+  drawChatChip();
+}
+
+function reloadChatSchedulesSoon() {
+  clearTimeout(_chipTimer);
+  _chipTimer = setTimeout(loadChatSchedules, 300);
+}
+
 /** Serve the page: on a server with scheduling (main.js, from /api/info). */
 export function enableSchedules() {
   registerBuiltinView(VIEW, {
@@ -1155,4 +1202,14 @@ export function enableSchedules() {
     render,
   });
   document.getElementById('schedules-btn')?.classList.remove('lv-hidden');
+  store.canSchedule = true;
+  // The chat menu's "schedule in this chat" (sessions.js).
+  store.on('schedule-chat', (/** @type {{ id: string, title?: string }} */ chat) =>
+    openScheduleForm({ preset: { session_id: chat.id, session_title: chat.title } }),
+  );
+  store.on('session-id', drawChatChip);
+  store.on('schedules-changed', reloadChatSchedulesSoon);
+  // A schedule_run approved in a chat shows up once its run ends.
+  store.on('runs-changed', reloadChatSchedulesSoon);
+  loadChatSchedules();
 }

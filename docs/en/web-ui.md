@@ -740,7 +740,10 @@ after the approval timeout. A stop condition and limits sit under the fold.
 Cron times follow the server's clock; the form says so when yours differs.
 
 A chat can also set one up: ask "every weekday at 9, summarize…" and approve
-the `schedule_run` call.
+the `schedule_run` call. Or pick **Schedule in this chat…** from a chat's ⋯
+menu: its runs then continue that chat, which shows its schedules in the top
+bar. A chat a schedule's run created carries a clock in the sidebar and links
+back to its schedule.
 
 ## Branching a chat
 

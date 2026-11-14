@@ -29,6 +29,7 @@ import { initWorkspaces } from './workspaces.js';
 import { initAgentChip } from './agent-chip.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
+import { createBuildCheck } from './build-check.js';
 import { loadExtensions } from './extensions.js';
 import { configureLovia, emitLovia, lovia, markReady } from './lovia.js';
 import {
@@ -135,6 +136,21 @@ store.on('reset-chat-view', resetChatForNewSession);
 
 store.on('reconnect', (sessionId) => {
   if (!store.streaming) runReconnect(sessionId);
+});
+
+// A server restart drops the event stream, so its reconnect is the moment to
+// ask whether the server came back on another build; a return to the tab
+// covers servers without the stream.
+const checkBuild = createBuildCheck({
+  base: pageConfig.static_base,
+  onStale: () => toast(t('toast.newBuild'), {
+    timeout: 0,
+    action: { label: t('toast.reload'), run: () => location.reload() },
+  }),
+});
+store.on('events-open', checkBuild);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') checkBuild();
 });
 
 // Switching sessions / starting a new chat detaches the live stream without

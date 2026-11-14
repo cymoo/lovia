@@ -127,3 +127,36 @@ test('a notice dismissed before its animation frame never reappears', async (t) 
   tick(0);
   assert.ok(!el.classList.contains('lv-show'));
 });
+
+test('a timeout of 0 stays up, and ordinary notices do not evict it', async (t) => {
+  const { toast, pills, tick } = await fixture(t);
+  const sticky = toast('updated', { timeout: 0 });
+  tick(60_000);
+  assert.ok(pills().includes(sticky));
+  toast('a');
+  toast('b');
+  assert.deepEqual(pills().map((el) => el.textContent), ['updated', 'b']);
+  sticky.fire('click');
+  tick(400);
+  assert.ok(!pills().includes(sticky));
+});
+
+test('an action notice carries a button and is never merged into another', async (t) => {
+  const { toast, pills } = await fixture(t);
+  let ran = 0;
+  const el = toast('updated', { timeout: 0, action: { label: 'Reload', run: () => ran++ } });
+  const [btn] = el.children;
+  assert.equal(btn.textContent, 'Reload');
+  assert.equal(btn.className, 'lv-toast-action');
+  btn.fire('click');
+  assert.equal(ran, 1);
+  assert.notEqual(toast('updated', { timeout: 0, action: { label: 'Reload', run() {} } }), el);
+  assert.equal(pills().length, 2);
+});
+
+test('a keyed notice never overwrites an action notice’s button', async (t) => {
+  const { toast } = await fixture(t);
+  const el = toast('updated', { key: 'k', timeout: 0, action: { label: 'Reload', run() {} } });
+  assert.notEqual(toast('other', { key: 'k' }), el);
+  assert.equal(el.children.length, 1);
+});

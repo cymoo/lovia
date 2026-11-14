@@ -29,6 +29,7 @@ from ..transcript import (
     TranscriptEntry,
 )
 from .errors import RunErrorCode, run_error_code
+from .stop_check import without_stop_check
 
 # ---- chat stream payloads (POST /api/chat/stream, /api/chat/reconnect) ----
 
@@ -371,7 +372,7 @@ def _text_parts(content: str | list[ContentPart]) -> str:
     """A steer's text, without ``text_of``'s ``[image]`` markers: the client
     splits the attachment note back into previews, as for history."""
     if isinstance(content, str):
-        return content
+        return without_stop_check(content)  # a schedule's fire into a live run
     return "".join(p.text for p in content if isinstance(p, TextPart))
 
 

@@ -1139,6 +1139,8 @@ offset, since cron fields match the server's clock.
 A repeating schedule can carry a stop condition (`until`, natural language):
 each fire is then told to evaluate it after doing the task and cancel the
 schedule once it is met — "check the log every minute until it says ready".
+That instruction is the agent's: the model reads it, while the chat, its
+exports and the API's messages show the user's own instruction only.
 Deterministic safety nets (`max_fires`, `expires_at`) deactivate the schedule
 even if the condition is never met; the tool requires one when `until` is set.
 The plugin also contributes `list_schedules` and `cancel_schedule`, which need

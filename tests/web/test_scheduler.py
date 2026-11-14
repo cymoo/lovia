@@ -534,6 +534,48 @@ async def test_fire_delivers_until_protocol_block() -> None:
     assert "cancel_schedule" not in meta.title
 
 
+async def test_the_stop_check_is_the_agents_not_shown_in_the_chat() -> None:
+    """The model reads the check (above); the chat, its export and a live
+    injection show only the instruction the user wrote."""
+    import httpx
+
+    from lovia import events
+    from lovia.web.sse import event_to_sse
+
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("checked")]), store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(
+        _row(
+            id="s",
+            input="check the log",
+            until="it says ready",
+            max_fires=3,
+            next_fire=now - 1,
+        )
+    )
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+    row = await store.get_schedule("s")
+    assert row is not None and row.last_session_id is not None
+    chat = row.last_session_id
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        detail = (await ac.get(f"/api/sessions/{chat}")).json()
+        users = [m["content"] for m in detail["entries"] if m["role"] == "user"]
+        assert users == ["check the log"]
+        for fmt in ("md", "txt", "json"):
+            exported = (await ac.get(f"/api/sessions/{chat}/export?format={fmt}")).text
+            assert "check the log" in exported and "cancel_schedule" not in exported
+
+    frame = event_to_sse(events.UserMessageInjected(content=fire_input(row), turn=1))
+    assert frame is not None
+    assert "check the log" in frame["data"] and "cancel_schedule" not in frame["data"]
+
+
 async def test_scheduler_advances_past_unavailable_agent() -> None:
     store = ChatStore.in_memory()
     app = _app(_agent([text("hi")]), store)

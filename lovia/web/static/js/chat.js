@@ -3663,6 +3663,46 @@ const autoresize = () => {
  * prompt does, and window.lovia.setDraft.
  * @param {string} text
  */
+/**
+ * Whether the caret is on the textarea's first displayed line (`up`) or its
+ * last — counting the lines a long paragraph wraps into, not just its line
+ * breaks. A hidden copy with the textarea's text width and type measures the
+ * text up to the caret, carried to the end of the word it is in (a word
+ * wraps whole, so a cut word could fit a line the real one doesn't).
+ * @param {HTMLTextAreaElement} ta
+ * @param {boolean} up
+ */
+function caretOnEdgeLine(ta, up) {
+  const text = ta.value;
+  const caret = up ? ta.selectionStart : ta.selectionEnd;
+  const head = text.slice(0, caret) + (text.slice(caret).match(/^\S*/)?.[0] ?? '');
+  const cs = getComputedStyle(ta);
+  const copy = document.createElement('div');
+  for (const p of /** @type {const} */ ([
+    'paddingLeft', 'paddingRight', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle',
+    'letterSpacing', 'wordSpacing', 'lineHeight', 'tabSize', 'overflowWrap', 'wordBreak',
+  ])) copy.style[p] = cs[p];
+  Object.assign(copy.style, {
+    position: 'absolute',
+    visibility: 'hidden',
+    left: '-9999px',
+    top: '0',
+    boxSizing: 'border-box',
+    width: `${ta.clientWidth}px`, // the text's width: no border, no scrollbar
+    whiteSpace: 'pre-wrap',
+  });
+  document.body.appendChild(copy);
+  // The trailing space gives a final empty line (text ending in a line
+  // break) its height; a space never wraps on its own.
+  const height = (s) => {
+    copy.textContent = `${s} `;
+    return copy.offsetHeight;
+  };
+  const onEdge = up ? height(head) <= height('') : height(head) >= height(text);
+  copy.remove();
+  return onEdge;
+}
+
 export function setDraft(text) {
   if (!promptEl) return;
   promptEl.value = String(text ?? '');
@@ -4543,8 +4583,9 @@ export function initComposer() {
   // ↑ in an empty composer recalls this chat's earlier messages, newest
   // first, as a shell's history does; ↓ walks back, past the newest to empty.
   // Only while the text is the recalled one, untouched, and the caret is on
-  // its first line (↑) or last line (↓): otherwise the keys move the caret.
-  // The completion menu claims the arrows first (composer-complete.js).
+  // its first displayed line (↑) or last (↓): otherwise the keys move the
+  // caret, through wrapped lines too. The completion menu claims the arrows
+  // first (composer-complete.js).
   let recalled = -1; // index into sentMessages(); -1: not browsing
   const sentMessages = () =>
     [...document.querySelectorAll('#transcript .lv-turn.lv-user:not(.lv-queued) .lv-body')]
@@ -4559,10 +4600,7 @@ export function initComposer() {
     const text = promptEl.value;
     if (!(recalled >= 0 && text === sent[recalled])) recalled = -1;
     if (text && recalled < 0) return; // the user's own text
-    const onEdge = up
-      ? !text.slice(0, promptEl.selectionStart).includes('\n')
-      : !text.slice(promptEl.selectionEnd).includes('\n');
-    if (!onEdge) return;
+    if (!caretOnEdgeLine(promptEl, up)) return;
     const next = recalled + (up ? 1 : -1);
     if (next >= sent.length || (!up && recalled < 0)) return;
     e.preventDefault();

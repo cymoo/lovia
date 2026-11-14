@@ -1095,6 +1095,20 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
       max_fires: cap ? Number(cap) : null,
       expires_at: Number.isFinite(expiry) ? expiry : null,
     };
+    // Saving an ended schedule runs it again — what its page's "Edit to run
+    // again" offers — once nothing would end it again at once.
+    if (editing && isDone(editing)) {
+      const stop =
+        (trig.kind === 'at' && Number(trig.expr) * 1000 <= Date.now() && t('sched.inPast')) ||
+        (body.max_fires != null && (editing.fire_count ?? 0) >= Number(body.max_fires) && t('sched.maxFiresHint')) ||
+        (body.expires_at != null && Number(body.expires_at) * 1000 <= Date.now() && t('sched.expiresPast'));
+      if (stop) {
+        advanced.open = trig.kind !== 'at';
+        toast(stop, { type: 'error' });
+        return;
+      }
+      body.active = true;
+    }
     if (store.agents.length > 1 && agent) body.agent = agent;
     if (boundTo) body.session_id = continues ? boundTo : null;
     // An edit sends where it works only when changed: an unchanged one is

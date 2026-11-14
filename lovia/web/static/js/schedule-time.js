@@ -239,5 +239,6 @@ export function statusOf(s, firing, now = Date.now()) {
 export function finishedReason(reason) {
   if (reason === 'max fires reached') return t('sched.reasonMaxFires');
   if (reason === 'expired') return t('sched.reasonExpired');
+  if (reason === 'no more fire times') return t('sched.reasonNoMoreFires');
   return reason;
 }

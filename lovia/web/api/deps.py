@@ -400,6 +400,29 @@ class RouterDeps:
         where = own.as_posix() if root is None else self.admit(agent, root, mode)
         return ChatBinding(where, mode)
 
+    def requested_binding(
+        self, agent: Agent[Any], mode: str | None, root: str | None
+    ) -> ChatBinding:
+        """:meth:`new_chat_binding` for a directory and mode a client asked
+        for, which must be ones this server offers — else a 400."""
+        switch = self.workspace_switch
+        if mode is not None and (switch is None or mode not in switch.modes):
+            offered = ", ".join(switch.modes) if switch else "none"
+            raise WebError(
+                400,
+                "invalid_request",
+                f"mode {mode!r} is not available on this server",
+                hint=f"offered: {offered}",
+            )
+        if root is not None and switch is None:
+            raise WebError(
+                400,
+                "invalid_request",
+                "this server doesn't let a chat pick its directory",
+                hint="leave out the workspace: chats work in the agent's own",
+            )
+        return self.new_chat_binding(agent, mode, root)
+
     def chat_binding(self, agent: Agent[Any], meta: ChatMeta | None) -> ChatBinding:
         """Where and how a stored chat of ``agent`` runs, checked against
         this server's constraints now (a 409 when its directory isn't

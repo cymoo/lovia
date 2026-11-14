@@ -1,4 +1,4 @@
-"""Schedule routes: list / fetch / create / edit / delete / run-now.
+"""Schedule routes: list / fetch / create / edit / delete / run-now / preview.
 
 The scheduler loop itself lives in :mod:`lovia.web.scheduler` and is started by
 ``create_app``'s lifespan; these endpoints persist the schedule rows it polls
@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import replace
+from datetime import datetime
 from typing import Any
 
 try:
@@ -20,14 +21,30 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ..errors import WebError
-from ..scheduler import Scheduler, initial_next_fire, validate_trigger
-from ..schemas import RunRecordInfo, ScheduleInfo, SchedulePatch, ScheduleSpec
+from ..scheduler import (
+    Scheduler,
+    advance_next_fire,
+    initial_next_fire,
+    validate_trigger,
+)
+from ..schemas import (
+    RunRecordInfo,
+    ScheduleInfo,
+    SchedulePatch,
+    SchedulePreview,
+    SchedulePreviewRequest,
+    ScheduleSpec,
+)
 from ..store import RunRow, ScheduleRow
 from .deps import RouterDeps
 from .serialization import run_record
 
+_PREVIEW_FIRES = 3
 
-def _info(row: ScheduleRow, last: RunRow | None = None) -> ScheduleInfo:
+
+def _info(
+    row: ScheduleRow, last: RunRow | None = None, session_title: str | None = None
+) -> ScheduleInfo:
     """Project a schedule row (+ its latest run record) onto the wire shape.
 
     ``last_status``/``last_error`` are derived, not stored: the run records
@@ -41,9 +58,13 @@ def _info(row: ScheduleRow, last: RunRow | None = None) -> ScheduleInfo:
         last_error = last.error
     return ScheduleInfo(
         id=row.id,
+        name=row.name,
         agent=row.agent,
         input=row.input,
         session_id=row.session_id,
+        session_title=session_title,
+        workspace_root=row.workspace_root,
+        workspace_mode=row.workspace_mode,
         trigger_kind=row.trigger_kind,
         trigger_expr=row.trigger_expr,
         next_fire=row.next_fire,
@@ -87,6 +108,10 @@ def _validated_next_fire(kind: str, expr: str) -> float:
         raise WebError.from_exc(422, "invalid_request", exc) from exc
 
 
+def _name(value: str | None) -> str | None:
+    return (value.strip() or None) if value else None
+
+
 def build_schedules_router(deps: RouterDeps) -> APIRouter:
     router = APIRouter()
     store = deps.store
@@ -95,7 +120,27 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
     fire_scheduler = Scheduler(deps)
 
     async def _with_last(row: ScheduleRow) -> ScheduleInfo:
-        return _info(row, await store.latest_run_for(f"schedule:{row.id}"))
+        chat = await store.get(row.session_id) if row.session_id else None
+        return _info(
+            row,
+            await store.latest_run_for(f"schedule:{row.id}"),
+            chat.title if chat else None,
+        )
+
+    def _binding(
+        agent_name: str, mode: str | None, root: str | None
+    ) -> tuple[str | None, str | None]:
+        """The ``(workspace_root, workspace_mode)`` to store, checked as for a
+        new chat. A root is stored only when one was asked for, so a schedule
+        without one follows its agent's directory."""
+        # schedule_run stores the agent's own name, which may not be its key.
+        agent = deps.agents.get(agent_name) or next(
+            (a for a in deps.agents.values() if a.name == agent_name), None
+        )
+        if agent is None:
+            raise WebError(404, "agent_not_found", f"unknown agent {agent_name!r}")
+        binding = deps.requested_binding(agent, mode, root)
+        return (binding.root if root is not None else None), binding.mode
 
     @router.get("/api/schedules", response_model=list[ScheduleInfo])
     async def list_schedules() -> list[ScheduleInfo]:
@@ -125,10 +170,17 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
             raise WebError(422, "invalid_request", "empty input")
         agent_name = _resolve_agent_name(deps, spec.agent)
         next_fire = _validated_next_fire(spec.trigger_kind, spec.trigger_expr)
+        switch = deps.workspace_switch
+        root, mode = _binding(
+            agent_name,
+            spec.workspace_mode or (switch.default_mode if switch else None),
+            spec.workspace_root,
+        )
 
         now = time.time()
         row = ScheduleRow(
             id=uuid.uuid4().hex,
+            name=_name(spec.name),
             agent=agent_name,
             input=message,
             session_id=spec.session_id,
@@ -143,9 +195,11 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
             max_fires=spec.max_fires,
             expires_at=spec.expires_at,
             context=spec.context,
+            workspace_root=root,
+            workspace_mode=mode,
         )
         await store.add_schedule(row)
-        return _info(row)
+        return await _with_last(row)
 
     @router.delete("/api/schedules/{schedule_id}")
     async def delete_schedule(schedule_id: str) -> dict[str, bool]:
@@ -166,8 +220,21 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
             if not message:
                 raise WebError(422, "invalid_request", "empty input")
             changes["input"] = message
+        if "name" in provided:
+            changes["name"] = _name(patch.name)
         if patch.agent is not None:
             changes["agent"] = _resolve_agent_name(deps, patch.agent)
+        if provided & {"workspace_root", "workspace_mode"}:
+            # Explicit null: the agent's own directory / policy.
+            changes["workspace_root"], changes["workspace_mode"] = _binding(
+                changes.get("agent") or row.agent or _resolve_agent_name(deps, None),
+                patch.workspace_mode
+                if "workspace_mode" in provided
+                else row.workspace_mode,
+                patch.workspace_root
+                if "workspace_root" in provided
+                else row.workspace_root,
+            )
         if "session_id" in provided:
             # Explicit null detaches (fresh session per fire); omitted keeps.
             changes["session_id"] = patch.session_id
@@ -217,5 +284,21 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
                 "or at the concurrency cap",
             )
         return {"ok": True, "session_id": target}
+
+    @router.post("/api/schedules/preview", response_model=SchedulePreview)
+    async def preview_schedule(req: SchedulePreviewRequest) -> SchedulePreview:
+        """The trigger's next fires were it saved now; 422 when it's invalid."""
+        kind, expr = req.trigger_kind, req.trigger_expr
+        fires = [_validated_next_fire(kind, expr)]
+        while len(fires) < _PREVIEW_FIRES:
+            nxt = advance_next_fire(kind, expr, now=fires[-1])
+            if nxt is None:  # a one-shot
+                break
+            fires.append(nxt)
+        offset = datetime.now().astimezone().utcoffset()
+        return SchedulePreview(
+            next_fires=fires,
+            utc_offset=int(offset.total_seconds()) if offset else 0,
+        )
 
     return router

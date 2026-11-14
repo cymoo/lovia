@@ -1042,7 +1042,7 @@ function rowActions(s, /** @type {HTMLElement} */ row) {
   return more;
 }
 
-/** @typedef {{ kind: 'fork' | 'spawn', session_id: string, title?: string | null, exists?: boolean }} Origin */
+/** @typedef {{ kind: 'fork' | 'spawn' | 'schedule', session_id: string, title?: string | null, exists?: boolean }} Origin */
 
 /** @type {Origin | null} */
 let _origin = null;
@@ -1054,6 +1054,8 @@ let _origin = null;
  * @param {Origin | null | undefined} origin
  */
 function renderOrigin(origin) {
+  // A schedule's chat links to its schedule, not to a chat: not drawn here.
+  if (origin?.kind === 'schedule') origin = null;
   _origin = origin ?? null;
   if (!originBtn) return;
   originBtn.hidden = !origin;

@@ -167,7 +167,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/runs` | 正在运行的服务端托管任务。`run_id` 与该 Run 的生命周期事件和运行记录一致，自动续跑和恢复后都不变 |
 | `GET /api/runs/history?session_id=&source=&since=&run_id=&limit=&offset=` | 查询持久化的运行记录，包括结果、错误、时长和 token 用量；`since` 按结束时间过滤，`run_id` 查询单个 Run |
 | `GET /api/events` | **SSE**：订阅进程级生命周期事件（不重放历史事件） |
-| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名、置顶、归档或切换 `workspace_mode`；删除（连同其后台任务和绑定它的定时任务）。`{"archived": true}` 把对话收起来而不删除任何内容（同时取消置顶）；置顶它，或用户再发一条消息，就会恢复。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null`。每次 Run 的最后一条回答带 `duration`（秒）；记录了用时的 Run，其消息时间戳为真实时间。来自另一个对话的聊天带 `origin`：`kind` 为 `"fork"`（分支）或 `"spawn"`（由那个对话的 agent 用 `start_session` 启动）；列表中的 `origin_kind` 与之一致。存储里没有的 id（来自另一个数据库，或已删除）也返回一份空占位，带 `exists: false`；用它发第一条消息就是新开一个对话 |
+| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名、置顶、归档或切换 `workspace_mode`；删除（连同其后台任务和绑定它的定时任务）。`{"archived": true}` 把对话收起来而不删除任何内容（同时取消置顶）；置顶它，或用户再发一条消息，就会恢复。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null`。每次 Run 的最后一条回答带 `duration`（秒）；记录了用时的 Run，其消息时间戳为真实时间。来自另一个对话的聊天带 `origin`：`kind` 为 `"fork"`（分支）或 `"spawn"`（由那个对话的 agent 用 `start_session` 启动）；定时任务触发时新建的对话为 `"schedule"`（带 `schedule_id` 而不是 `session_id`，`title` 是任务名称）；列表中的 `origin_kind` 与之一致。存储里没有的 id（来自另一个数据库，或已删除）也返回一份空占位，带 `exists: false`；用它发第一条消息就是新开一个对话 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
 | `POST /api/sessions/{id}/followups` | 生成追问建议，返回 `{followups: [...]}`；功能未启用或建议器未返回内容时为 `[]`。该操作可能消耗模型 token，因此使用 POST |
 | `POST /api/sessions/{id}/rewind` | 从某条用户消息起删除后续内容；用它的 `ref` 指定，或用 `user_turn`（它在用户消息中的索引，从 0 开始）；`ref` 已不在聊天中时返回 404，运行中返回 409，不支持 `rewind` 时返回 501 |
@@ -177,7 +177,8 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出聊天 |
 | `GET /api/sessions/{id}/ui-data/{ref}` | UI 组件的完整 props，由本聊天运行中的 `put_ui_data` 保存（[详情](web-server.md#大块数据)） |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
-| `GET /api/schedules/{id}/runs` | 按时间倒序列出定时任务的运行记录 |
+| `GET /api/schedules/{id}/runs` | 按时间倒序列出定时任务的运行记录；因上一次运行仍在进行而跳过的触发，`status` 为 `"skipped"` |
+| `POST /api/schedules/preview` | `{trigger_kind, trigger_expr}` → `{next_fires, utc_offset}`：假如现在保存，接下来三次的触发时间，以及服务器的 UTC 偏移（秒）；触发器无效时返回 422 |
 | `GET /api/workspace` · `/files` · `/file` · `/raw` | 读取 Agent [工作区](workspace.md)中的文件；带 `?session=` 时读该对话的目录，带 `?root=` 时读还没发送的草稿的目录（按新对话的规则校验） |
 | `GET /api/workspace/paths` | 目录下的所有文件 → `{paths, truncated}`：相对根目录、已排序，就是输入框 `@` 菜单的列表。经文件面板的只读视图调用 Agent 自己的 `list_files('.', pattern='**/*')`——在 Git 工作区里遵守忽略规则，不含点开头的文件、`denied_paths` 屏蔽的文件和目录；远程对话在远端主机上执行。上限 20000 条（目录也计入），被截掉时 `truncated` 为真。`?session=` / `?root=` 同文件面板 |
 | `POST /api/workspace/changes` | `{paths}`（最多 500 个，按对话里工具调用的写法）→ `{git, truncated, files: [{path, is_dir, touched, status, old_path, added, removed, size, mtime}]}`：仍然存在的路径按修改时间倒序（`touched: true`）；目录在 git 仓库里时，后面是 `git status` 在该目录下看到的其余未提交改动，最多 200 项（`truncated` 表示还有更多）。`status` 取 `modified`、`added`、`untracked`、`deleted`、`renamed` 或 `null`；`added` / `removed` 是相对 `HEAD` 的行数。`?session=` / `?root=` 同文件面板 |

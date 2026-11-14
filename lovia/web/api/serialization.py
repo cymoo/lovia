@@ -49,9 +49,13 @@ def session_info(
     )
 
 
-def origin_kind(value: str | None) -> Literal["fork", "spawn"] | None:
+OriginKind = Literal["fork", "spawn", "schedule"]
+_ORIGIN_KINDS: tuple[OriginKind, ...] = ("fork", "spawn", "schedule")
+
+
+def origin_kind(value: str | None) -> OriginKind | None:
     """A stored ``origin_kind`` as the API speaks it; an unknown one is None."""
-    return "fork" if value == "fork" else "spawn" if value == "spawn" else None
+    return next((k for k in _ORIGIN_KINDS if k == value), None)
 
 
 def run_record(row: RunRow) -> RunRecordInfo:

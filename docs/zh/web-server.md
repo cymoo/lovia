@@ -961,13 +961,20 @@ Web 包会持久化定时任务，支持三种触发方式：
 | --- | --- |
 | `at` | ISO-8601 时间戳或 Unix 时间戳 |
 | `every` | 秒数间隔 |
-| `cron` | Cron 表达式，按服务器本地时间匹配；`lovia[web]` 已包含 `croniter` |
+| `cron` | 五段式 Cron 表达式，按服务器本地时间匹配；`lovia[web]` 已包含 `croniter` |
 
 `Scheduling(store)` 提供需要审批的 `schedule_run` 工具。模型可以建议创建定时任务，
 但只有用户批准工具调用后才会保存。`continue_session=True` 会把结果追加到同一对话；
 如果该对话正有 Run 在执行，定时指令会直接注入当前 Run；删除该对话时，定时任务也会一并删除。设置
 `continue_session=False` 后，每次触发都会创建新的 Session；如果上一次定时 Run 尚未结束，
-本次触发会直接跳过，不会排队。服务停机期间错过多个触发时刻时，恢复后只补发一次。
+本次触发会直接跳过，不会排队，并在任务的运行历史里留下一条 `skipped` 记录。这样新建的对话会链接回
+它的定时任务（`origin.kind == "schedule"`，`origin.schedule_id`）。服务停机期间错过多个触发时刻时，
+恢复后只补发一次。
+
+定时任务可以有 `name`（工具也接受这个参数；没有名称时，界面显示指令的第一行）。通过 HTTP 创建的任务
+可以指定新对话的工作位置：`workspace_root` 和 `workspace_mode`，校验规则与新建对话相同；
+`schedule_run` 沿用发起调用的对话的设置。`POST /api/schedules/preview` 在保存前返回触发器接下来的
+三次触发时间，以及服务器的 UTC 偏移，因为 cron 按服务器时钟匹配。
 
 重复任务可以设置自然语言停止条件 `until`，例如“每分钟检查日志，直到出现 ready”。
 每次运行完成任务后，模型都会收到检查该条件的指令；如果条件满足，它会调用

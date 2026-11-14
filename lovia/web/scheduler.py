@@ -76,6 +76,13 @@ def validate_trigger(kind: str, expr: str) -> None:
     elif kind == "every":
         _interval_seconds(expr)
     elif kind == "cron":
+        # Crontab's five fields only: croniter also takes a seconds and a year
+        # field, which would fire as often as the poll, or run out of slots.
+        if len(expr.split()) != 5:
+            raise ValueError(
+                f"invalid cron expression {expr!r}: use 5 fields "
+                "(minute hour day-of-month month day-of-week)"
+            )
         try:
             _croniter_next(expr, time.time())  # croniter validates the expression
         except RuntimeError:
@@ -98,15 +105,23 @@ def initial_next_fire(kind: str, expr: str, *, now: float) -> float:
 
 
 def advance_next_fire(kind: str, expr: str, *, now: float) -> float | None:
-    """The next ``next_fire`` after a fire, or ``None`` for a one-shot (``at``)
-    that should deactivate. Coalesced: always the first slot strictly after
-    ``now`` (missed slots are skipped)."""
+    """The next ``next_fire`` after a fire, or ``None`` when there is none —
+    a one-shot (``at``), or a cron with no slot left — and the schedule should
+    deactivate. Coalesced: always the first slot strictly after ``now``
+    (missed slots are skipped)."""
     if kind == "at":
         return None
     if kind == "every":
         return now + _interval_seconds(expr)
     if kind == "cron":
-        return _croniter_next(expr, now)
+        try:
+            return _croniter_next(expr, now)
+        except RuntimeError:
+            raise  # croniter not installed
+        except ValueError:
+            # Out of slots (an expression stored before cron was held to five
+            # fields). Raising here would leave next_fire due: a fire per poll.
+            return None
     raise ValueError(f"unknown trigger kind {kind!r}")
 
 
@@ -245,6 +260,13 @@ class Scheduler:
             if prev is not None and self.deps.supervisor.get(prev) is not None:
                 log.info("schedule %s: previous run still active; skipping", sched.id)
                 await self._advance(sched, now, last_session_id=prev)
+                await self._record(
+                    sched,
+                    now,
+                    agent_name,
+                    "skipped",
+                    "the previous run was still going",
+                )
                 return None
             target = uuid.uuid4().hex
             meta = None
@@ -301,6 +323,8 @@ class Scheduler:
                     target,
                     agent=agent_name,  # registry key — the identity pick() speaks
                     title=title,
+                    # A fixed chat is the user's even when this fire creates it.
+                    scheduled_by=sched.id if sched.session_id is None else None,
                     workspace_root=binding.root if is_new else None,
                     workspace_mode=binding.mode if is_new else None,
                 )
@@ -361,9 +385,19 @@ class Scheduler:
         """A fire that started no run: advance past it and record why."""
         log.warning("schedule %s: %s; advancing", sched.id, detail)
         await self._advance(sched, now, last_session_id=sched.last_session_id)
-        # No run ever started, so the supervisor writes no record — file a
-        # zero-length failed one so the schedule's history shows the miss.
-        # Best-effort bookkeeping: never let it break the fire loop.
+        await self._record(sched, now, agent_name, "failed", detail)
+
+    async def _record(
+        self,
+        sched: ScheduleRow,
+        now: float,
+        agent_name: str | None,
+        status: str,
+        detail: str,
+    ) -> None:
+        """File a zero-length run record for a fire that started no run (the
+        supervisor writes none), so the schedule's history shows it.
+        Best-effort bookkeeping: never let it break the fire loop."""
         try:
             await self.store.start_run(
                 RunRow(
@@ -371,7 +405,7 @@ class Scheduler:
                     session_id=None,
                     agent=agent_name,
                     source=f"schedule:{sched.id}",
-                    status="failed",
+                    status=status,
                     error=detail,
                     started_at=now,
                     finished_at=now,
@@ -390,6 +424,11 @@ class Scheduler:
         tripped = (
             sched.max_fires is not None and sched.fire_count + 1 >= sched.max_fires
         )
+        reason = None
+        if tripped:
+            reason = "max fires reached"
+        elif nxt is None and sched.trigger_kind != "at":
+            reason = "no more fire times"
         await self.store.mark_fired(
             sched.id,
             next_fire=nxt if nxt is not None else now,  # one-shot: unused once inactive
@@ -397,5 +436,5 @@ class Scheduler:
             # (the polling loop only ever fires active rows, where it's a no-op).
             active=nxt is not None and sched.active and not tripped,
             last_session_id=last_session_id,
-            finished_reason="max fires reached" if tripped else None,
+            finished_reason=reason,
         )

@@ -45,6 +45,7 @@ from ..schemas import (
     TodosResponse,
 )
 from ..supervisor import agent_grant_context
+from ..titles import provisional_title
 from ..workspaces import ChatBinding
 from .deps import RouterDeps
 from .serialization import (
@@ -228,7 +229,15 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         )
         origin = None
         kind = origin_kind(meta.origin_kind) if meta is not None else None
-        if meta is not None and kind is not None and meta.origin_session_id:
+        if meta is not None and kind == "schedule" and meta.origin_ref:
+            sched = await store.get_schedule(meta.origin_ref)
+            origin = SessionOrigin(
+                kind=kind,
+                schedule_id=meta.origin_ref,
+                title=(sched.name or provisional_title(sched.input)) if sched else None,
+                exists=sched is not None,
+            )
+        elif meta is not None and kind is not None and meta.origin_session_id:
             source = await store.get(meta.origin_session_id)
             origin = SessionOrigin(
                 kind=kind,

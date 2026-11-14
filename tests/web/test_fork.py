@@ -260,6 +260,7 @@ async def test_fork_route_cuts_before_the_message_and_links_back() -> None:
         assert detail["origin"] == {
             "kind": "fork",
             "session_id": "src",
+            "schedule_id": None,
             "ref": "r2:0",
             "title": "Source",
             "exists": True,

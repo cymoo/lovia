@@ -115,7 +115,18 @@ async def test_creates_one_schedule_row() -> None:
     assert row.session_id == "s1"  # continues THIS conversation by default
     assert row.last_session_id is None
     assert row.next_fire == pytest.approx(row.created_at + 300, abs=2.0)
+    assert row.name is None
     assert "Scheduled" in out
+
+
+async def test_a_named_schedule_keeps_its_name() -> None:
+    store = ChatStore.in_memory()
+    args = {"instruction": "x", "trigger_kind": "every", "trigger_expr": "300"}
+    await _invoke(store, {**args, "name": " Plant care "})
+    (row,) = await store.list_schedules()
+    assert row.name == "Plant care"
+    listed = await _make_list_tool(store).invoke({}, _ctx())
+    assert "[Plant care]" in listed
 
 
 @pytest.mark.asyncio

@@ -379,6 +379,56 @@ async def test_a_schedule_fire_works_in_the_schedule_directory(
     assert (other / "out.txt").is_file()
 
 
+def test_a_schedule_picks_its_directory_and_mode_like_a_new_chat(
+    dirs: tuple[Path, Path], tmp_path: Path
+) -> None:
+    launch, other = dirs
+    c = _client(
+        _agent(launch, []),
+        WorkspaceSwitch(roots=[str(launch), str(other)], default_mode="coding"),
+    )
+    base = {"input": "tick", "trigger_kind": "every", "trigger_expr": "3600"}
+
+    # No directory asked: none stored (the agent's own), the default mode.
+    plain = c.post("/api/schedules", json=base).json()
+    assert plain["workspace_root"] is None and plain["workspace_mode"] == "coding"
+
+    made = c.post(
+        "/api/schedules",
+        json={**base, "workspace_root": str(other), "workspace_mode": "readonly"},
+    )
+    assert made.status_code == 200, made.text
+    sid = made.json()["id"]
+    assert made.json()["workspace_root"] == other.resolve().as_posix()
+    assert made.json()["workspace_mode"] == "readonly"
+
+    outside = {**base, "workspace_root": str(tmp_path)}
+    assert c.post("/api/schedules", json=outside).status_code == 409
+    wider = {**base, "workspace_mode": "trusted"}
+    assert c.post("/api/schedules", json=wider).status_code == 400
+
+    # A patch is checked the same way; a root left out is kept.
+    moded = c.patch(f"/api/schedules/{sid}", json={"workspace_mode": "coding"}).json()
+    assert moded["workspace_root"] == other.resolve().as_posix()
+    assert moded["workspace_mode"] == "coding"
+    patch_out = c.patch(f"/api/schedules/{sid}", json={"workspace_root": str(tmp_path)})
+    assert patch_out.status_code == 409
+    own = c.patch(f"/api/schedules/{sid}", json={"workspace_root": None}).json()
+    assert own["workspace_root"] is None and own["workspace_mode"] == "coding"
+
+
+def test_a_schedule_cannot_pick_a_directory_without_a_switch(
+    dirs: tuple[Path, Path],
+) -> None:
+    launch, other = dirs
+    c = _client(_agent(launch, []), None)
+    base = {"input": "tick", "trigger_kind": "every", "trigger_expr": "3600"}
+    plain = c.post("/api/schedules", json=base).json()
+    assert plain["workspace_root"] is None and plain["workspace_mode"] is None
+    asked = {**base, "workspace_root": str(other)}
+    assert c.post("/api/schedules", json=asked).status_code == 400
+
+
 def test_a_live_run_hands_on_its_directory(dirs: tuple[Path, Path]) -> None:
     from lovia.web.api.deps import RouterDeps
 

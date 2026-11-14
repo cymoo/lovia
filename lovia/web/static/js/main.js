@@ -21,7 +21,7 @@ import {
   startNewChat,
   switchSession,
 } from './sessions.js';
-import { initSchedules } from './schedules.js';
+import { enableSchedules } from './schedules.js';
 import { initFiles } from './files.js';
 import { initMemory } from './memory.js';
 import { initModelConfig } from './model-config.js';
@@ -291,7 +291,6 @@ window.lovia = lovia;
   initSidebarToggle();
   initComposer();
   initSessions();
-  initSchedules();
   initFiles();
   initMemory();
   initSettings();
@@ -305,9 +304,7 @@ window.lovia = lovia;
   document.getElementById('prompt')?.focus();
 
   const info = await infoPromise;
-  if (info?.features?.scheduling) {
-    document.getElementById('schedules-btn')?.classList.remove('lv-hidden');
-  }
+  if (info?.features?.scheduling) enableSchedules();
   if (info) store.canRewind = !!info.features?.rewind;
   if (info) store.canSuggest = !!info.features?.followups;
   if (info) {

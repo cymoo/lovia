@@ -95,6 +95,21 @@ export function registerView(id, view) {
   if (!view || typeof view.render !== 'function') {
     throw new TypeError('lovia.registerView: expected a view with render(el, ctx)');
   }
+  return add(id, view);
+}
+
+/**
+ * One of lovia's own pages, under the reserved `lovia…` ids (not exposed on
+ * `window.lovia`).
+ * @param {string} id
+ * @param {View} view
+ */
+export function registerBuiltinView(id, view) {
+  return add(id, view);
+}
+
+/** @param {string} id @param {View} view */
+function add(id, view) {
   const redraw = () => {
     if (open?.id !== id) return;
     if (views.has(id)) show(open);

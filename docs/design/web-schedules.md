@@ -1,6 +1,6 @@
 # 定时任务：从弹窗到页面
 
-> 状态：已定稿，实施中（第 1 个 PR：v0.9.200） · 2026-11-14 · 范围：`lovia/web`（`scheduler.py`、`scheduling.py`、`store.py`、`schemas.py`、`api/schedules.py`、`static/js/schedules.js`、`views.js`、`sessions.js`）。core 与 workspace 引擎不改。
+> 状态：已定稿，实施中（第 1 个 PR：v0.9.200；第 2 个 PR：v0.9.201） · 2026-11-14 · 范围：`lovia/web`（`scheduler.py`、`scheduling.py`、`store.py`、`schemas.py`、`api/schedules.py`、`static/js/schedules.js`、`views.js`、`sessions.js`）。core 与 workspace 引擎不改。
 >
 > 行号指向 `main`（`afec54b7`，v0.9.199）。
 
@@ -63,7 +63,7 @@
 - 列表：`?view=lovia-schedules`
 - 详情：`?view=lovia-schedules/<id>`
 
-浏览器后退可用，链接可以分享。视图盖在对话上方，下面的对话照常运行，语义和 `web-views.md` §3.2 一致。`views.js` 需要一个内部的 `registerBuiltinView`，跳过保留前缀检查；部署方的 `registerView` 不变。
+链接可以分享和收藏（视图用 `replaceState` 写 URL，所以浏览器后退不在列表和详情之间切换；详情页有返回链接）。视图盖在对话上方，下面的对话照常运行，语义和 `web-views.md` §3.2 一致。`views.js` 需要一个内部的 `registerBuiltinView`，跳过保留前缀检查；部署方的 `registerView` 不变。
 
 ### 3.2 列表页
 

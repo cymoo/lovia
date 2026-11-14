@@ -1,186 +1,64 @@
-// Scheduled runs: a master-detail modal over /api/schedules, opened from the
-// clock button in the topbar (shown only when the server advertises the
-// `scheduling` feature). Three views, shown one at a time:
-//   list   — each schedule as a calm row: status dot, prompt, meta line, and a
-//            pause/resume switch (the one high-frequency action); click a row
-//            to drill in.
-//   detail — the full prompt, trigger/stop-condition facts, every action
-//            (run now / pause / edit / delete), and the fire history.
-//   form   — create or edit, with room to write a real prompt.
-// While the dialog is open it re-fetches on the `runs-changed` store event
-// (relayed from the /api/events stream by sessions.js), so a firing schedule
-// shows a live "running" state that resolves into its outcome by itself.
+// schedules.js — the Scheduled runs page, lovia's own view (views.js):
+// `?view=lovia-schedules` lists the schedules, `?view=lovia-schedules/<id>`
+// shows one with its history. Creating and editing happen in a dialog over
+// the page. Design: docs/design/web-schedules.md.
+//
+// The page re-reads on the `runs-changed` store event (relayed from the
+// /api/events stream by sessions.js), so a firing schedule shows a live
+// "running" state that settles into its outcome by itself.
 import { t } from './i18n.js';
 import { api } from './api.js';
 import { store } from './store.js';
-import { showDialog, confirmDialog } from './ui.js';
+import { showDialog, confirmDialog, openMenu } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { formatDateTime } from './util.js';
 import { switchSession } from './sessions.js';
 import { collectContext } from './lovia.js';
+import { openView, registerBuiltinView } from './views.js';
+import {
+  addWorkspaceDialog,
+  canAddWorkspace,
+  scopeRoot,
+  workspaceChoices,
+  workspaceName,
+  workspacesOn,
+} from './workspaces.js';
+import { modeChoices, modeGlyph, modeLabel } from './workspace-mode.js';
+import {
+  WEEK,
+  dailyCron,
+  describeTrigger,
+  displayName,
+  finishedReason,
+  formatWhen,
+  humanizeCron,
+  isDone,
+  parseDaily,
+  splitInterval,
+  statusOf,
+  unitSeconds,
+} from './schedule-time.js';
 
-function humanizeEvery(expr) {
-  const secs = Number(expr);
-  if (!Number.isFinite(secs)) return `every ${expr}`;
-  if (secs % 3600 === 0) return t('sched.everyH', { n: secs / 3600 });
-  if (secs % 60 === 0) return t('sched.everyM', { n: secs / 60 });
-  return t('sched.everyS', { n: secs });
-}
+const VIEW = 'lovia-schedules';
+const HISTORY_PAGE = 20;
 
-// ---- Cron in plain words --------------------------------------------------
-// Covers the patterns people actually write (fixed minute/hour, day-of-week
-// lists/ranges, */N steps, day-of-month); anything fancier returns null and
-// the raw expression is shown instead. Deliberately hand-rolled: a full cron
-// describer is a dependency for five lines of benefit.
-const dayName = (d) => t(`cron.day${d % 7}`);
+/**
+ * @typedef {import('./schedule-time.js').Schedule & {
+ *   agent?: string | null, session_id?: string | null, session_title?: string | null,
+ *   workspace_root?: string | null, workspace_mode?: string | null,
+ *   last_status?: string | null, last_error?: string | null,
+ *   until?: string | null, max_fires?: number | null, expires_at?: number | null,
+ *   fire_count?: number, created_at: number }} Row
+ * @typedef {{ rows: Row[], firing: Map<string, string> }} Data `firing`: the
+ *   schedules with a live fired run → the chat it runs in.
+ */
 
-function dayLabel(field) {
-  if (field === '1-5') return t('cron.weekdays');
-  if (field === '0,6' || field === '6,0') return t('cron.weekends');
-  const names = [];
-  for (const part of field.split(',')) {
-    const range = part.match(/^([0-7])-([0-7])$/);
-    if (range) {
-      const [from, to] = [Number(range[1]), Number(range[2])];
-      if (from > to) return null;
-      for (let d = from; d <= to; d++) names.push(dayName(d));
-    } else if (/^[0-7]$/.test(part)) {
-      names.push(dayName(Number(part)));
-    } else {
-      return null;
-    }
-  }
-  return names.length ? names.join(', ') : null;
-}
-
-export function humanizeCron(expr) {
-  const fields = expr.trim().split(/\s+/);
-  if (fields.length !== 5) return null;
-  const [min, hour, dom, month, dow] = fields;
-  if (month !== '*') return null; // month constraints: show the raw expression
-  const pad = (n) => String(n).padStart(2, '0');
-  const isNum = (s) => /^\d{1,2}$/.test(s);
-  const step = (s) => (/^\*\/\d+$/.test(s) ? s.slice(2) : null);
-
-  if (min === '*' && hour === '*' && dom === '*' && dow === '*') {
-    return t('cron.everyMinute');
-  }
-  if (step(min) && hour === '*' && dom === '*' && dow === '*') {
-    return t('cron.everyNMin', { n: step(min) });
-  }
-  if (isNum(min) && step(hour) && dom === '*' && dow === '*') {
-    return t('cron.everyNHours', { n: step(hour), m: pad(min) });
-  }
-  if (isNum(min) && hour === '*' && dom === '*' && dow === '*') {
-    return t('cron.hourlyAt', { m: pad(min) });
-  }
-  if (isNum(min) && isNum(hour)) {
-    const hm = `${pad(hour)}:${pad(min)}`;
-    if (dom === '*' && dow === '*') return t('cron.dailyAt', { t: hm });
-    if (dom === '*') {
-      const days = dayLabel(dow);
-      return days ? t('cron.daysAt', { days, t: hm }) : null;
-    }
-    if (isNum(dom) && dow === '*') return t('cron.monthlyAt', { d: dom, t: hm });
-  }
-  return null;
-}
-
-function describeTrigger(s) {
-  if (s.trigger_kind === 'every') return humanizeEvery(s.trigger_expr);
-  if (s.trigger_kind === 'cron') {
-    return humanizeCron(s.trigger_expr) || `cron ${s.trigger_expr}`;
-  }
-  if (s.trigger_kind === 'at') {
-    return t('sched.atTime', { time: formatDateTime(Number(s.trigger_expr)) });
-  }
-  return `${s.trigger_kind} ${s.trigger_expr}`;
-}
-
-// One-line format reminder per trigger kind, shown under the form.
-const TRIGGER_HINTS = {
-  get every() { return t('sched.hintEvery'); },
-  get cron() { return t('sched.hintCron'); },
-  get at() { return t('sched.hintAt'); },
-};
-
-// ---- the adaptive trigger-expression input -------------------------------
-// `every` → integer seconds, `cron` → a cron string, `at` → a local datetime
-// (converted to an epoch timestamp on submit).
-function buildExprInput(kind) {
-  const el = document.createElement('input');
-  el.className = 'lv-dialog-input lv-sched-expr';
-  if (kind === 'every') {
-    el.type = 'number';
-    el.min = '1';
-    el.step = '1';
-    el.value = '3600';
-    el.placeholder = 'seconds';
-  } else if (kind === 'cron') {
-    el.type = 'text';
-    el.placeholder = '*/5 * * * *';
-  } else {
-    el.type = 'datetime-local';
-  }
-  return el;
-}
-
-// Read the raw input back as the API's `trigger_expr` string (or throw).
-function exprValue(kind, input) {
-  if (kind === 'at') {
-    if (!input.value) throw new Error(t('sched.pickTime'));
-    const epoch = Math.floor(new Date(input.value).getTime() / 1000);
-    if (!Number.isFinite(epoch)) throw new Error(t('sched.invalidDate'));
-    return String(epoch);
-  }
-  const v = input.value.trim();
-  if (!v) throw new Error(t('sched.enterExpr'));
-  return v;
-}
-
-// The inverse, for editing: epoch-seconds string → datetime-local value.
-function epochToLocalInput(expr) {
-  const d = new Date(Number(expr) * 1000);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = (n) => String(n).padStart(2, '0');
-  return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
-  );
-}
-
-// ---- display helpers ------------------------------------------------------
-// A one-shot `at` that's no longer active and whose time has passed has already
-// fired (or was missed): it's done, not paused. Resuming it would only re-run a
-// moment in the past, so it gets neither a switch nor a resume action.
-function isDone(s) {
-  return (
-    !s.active &&
-    s.trigger_kind === 'at' &&
-    Number(s.trigger_expr) * 1000 <= Date.now()
-  );
-}
-
-/** Lifecycle state for display; `firing` holds ids with a live fired run. */
-function statusOf(s, firing) {
-  if (firing.has(s.id)) return 'running';
-  if (s.active) return 'active';
-  return (s.finished_reason || isDone(s)) ? 'done' : 'paused';
-}
-
-function statusLabel(st) {
-  return {
-    running: t('sched.stRunningNow'),
-    active: t('sched.stActive'),
-    paused: t('sched.paused'),
-    done: t('sched.done'),
-  }[st];
-}
-
-const clip = (txt, n) => (txt.length > n ? txt.slice(0, n - 1) + '…' : txt);
-
-/** Create an element with a class and optional text content. */
+/**
+ * @param {string} tag
+ * @param {string} [cls]
+ * @param {string} [text]
+ */
 function el(tag, cls = '', text) {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -188,568 +66,1079 @@ function el(tag, cls = '', text) {
   return n;
 }
 
-// One line of a schedule's fire history (a persisted run record):
-// time · outcome on the left, duration/tokens/open-chat on the right.
-function runLine(r, onOpenSession) {
-  const line = el('div', 'lv-sched-run');
-  const when = el('span', 'lv-sched-run-when', formatDateTime(r.started_at));
-  const status = el('span', `lv-sched-run-status lv-${r.status}`);
-  status.textContent =
+/**
+ * @param {string} label
+ * @param {string | null} glyph
+ * @param {() => void} onClick
+ * @param {string} [cls]
+ */
+function button(label, glyph, onClick, cls = 'lv-btn lv-btn-ghost lv-btn-sm') {
+  const b = /** @type {HTMLButtonElement} */ (el('button', cls));
+  b.type = 'button';
+  if (glyph) b.innerHTML = icon(glyph, { size: 14 });
+  b.append(el('span', '', label));
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+/** @param {boolean} on @param {string} label @param {(on: boolean) => void} onChange */
+function toggle(on, label, onChange) {
+  const sw = el('button', 'lv-switch');
+  sw.setAttribute('type', 'button');
+  sw.setAttribute('role', 'switch');
+  sw.setAttribute('aria-checked', String(on));
+  sw.setAttribute('aria-label', label);
+  sw.title = label;
+  sw.append(el('span', 'lv-switch-knob'));
+  sw.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onChange(sw.getAttribute('aria-checked') !== 'true');
+  });
+  return sw;
+}
+
+/** @returns {Promise<Data>} */
+async function load() {
+  const [rows, runs] = await Promise.all([
+    api.listSchedules(),
+    api.listRuns().catch(() => []),
+  ]);
+  const firing = new Map();
+  for (const r of runs) {
+    const src = String(r.source || '');
+    if (src.startsWith('schedule:')) firing.set(src.slice('schedule:'.length), r.session_id);
+  }
+  return { rows, firing };
+}
+
+/** @param {string} sid */
+function openChat(sid) {
+  switchSession(sid).catch(() => {});
+}
+
+// ---- actions shared by the list and a schedule's page ------------------------
+
+/** @param {Row} s @param {boolean} on @param {() => void} done */
+async function setActive(s, on, done) {
+  try {
+    await api.setScheduleActive(s.id, on);
+  } catch (err) {
+    toast(err.message || t('sched.updateFailed'), { type: 'error' });
+  }
+  done();
+}
+
+/** @param {Row} s @param {() => void} done */
+async function runNow(s, done) {
+  try {
+    await api.runSchedule(s.id);
+    toast(t('sched.fired'));
+  } catch (err) {
+    toast(err.message || t('sched.runFailed'), { type: 'error' });
+  }
+  done();
+}
+
+/** @param {Row} s */
+async function remove(s) {
+  if (!(await confirmDialog(t('sched.deleteConfirm', { name: displayName(s) })))) return;
+  try {
+    await api.deleteSchedule(s.id);
+  } catch (err) {
+    // A 404 means it is gone already: the list will agree.
+    if (err.status !== 404) toast(err.message || t('sched.deleteFailed'), { type: 'error' });
+  }
+  openView(VIEW);
+}
+
+/** @param {Row} s */
+function duplicate(s) {
+  const { id: _id, ...rest } = s;
+  openScheduleForm({ preset: { ...rest, name: t('sched.copyName', { name: displayName(s) }) } });
+}
+
+/**
+ * The ⋯ menu: what a row or a schedule's page doesn't show as a button.
+ * @param {HTMLElement} at @param {Row} s @param {() => void} done
+ * @param {{ run?: boolean }} [opts]
+ */
+function moreMenu(at, s, done, { run = true } = {}) {
+  /** @type {(import('./ui.js').MenuItem | null)[]} */
+  const items = [];
+  if (run) {
+    items.push({ label: t('sched.runNow'), icon: icon('play', { size: 15 }), onSelect: () => runNow(s, done) });
+  }
+  items.push(
+    { label: t('sched.edit'), icon: icon('pencil', { size: 15 }), onSelect: () => openScheduleForm({ editing: s, onSaved: done }) },
+    { label: t('sched.duplicate'), icon: icon('copy', { size: 15 }), onSelect: () => duplicate(s) },
+    null,
+    { label: t('sched.delete'), icon: icon('trash-2', { size: 15 }), danger: true, onSelect: () => remove(s) },
+  );
+  openMenu(at, items);
+}
+
+/** @param {string} st */
+function statusLabel(st) {
+  return {
+    running: t('sched.stRunning'),
+    active: t('sched.stActive'),
+    paused: t('sched.stPaused'),
+    done: t('sched.stDone'),
+  }[st];
+}
+
+/** @param {string} st */
+function dot(st) {
+  const d = el('span', `lv-sched-dot lv-${st}`);
+  d.title = statusLabel(st) ?? '';
+  return d;
+}
+
+/**
+ * The quiet facts under a schedule's name: where it works, where results go,
+ * when it stops. Only what was set.
+ * @param {Row} s
+ */
+function extraFacts(s) {
+  const parts = [];
+  if (s.workspace_root && workspacesOn()) parts.push(workspaceName(s.workspace_root));
+  if (s.session_id) {
+    parts.push(t('sched.continuesShort', { title: s.session_title || t('session.newChat') }));
+  }
+  if (s.until) parts.push(t('sched.untilShort', { cond: s.until }));
+  if (s.max_fires != null) parts.push(t('sched.firesOf', { n: s.fire_count ?? 0, m: s.max_fires }));
+  return parts;
+}
+
+/**
+ * Where a schedule stands, in one phrase: when it runs next, that it is
+ * running, paused, or why it ended. Null for a pending one-shot, whose
+ * trigger already says when.
+ * @param {Row} s @param {string} st
+ * @returns {string | null}
+ */
+function standing(s, st) {
+  if (st === 'running') return t('sched.runningNow');
+  if (st === 'active' && s.trigger_kind === 'at') return null;
+  if (st === 'active') return t('sched.next', { time: formatWhen(s.next_fire) });
+  if (st === 'done') {
+    return s.finished_reason
+      ? t('sched.endedWhy', { why: finishedReason(s.finished_reason) })
+      : t('sched.stDone');
+  }
+  return t('sched.stPaused');
+}
+
+// ---- the list ---------------------------------------------------------------
+
+let _doneOpen = false;
+
+/** @param {Row} s @param {Data} data @param {() => void} refresh */
+function rowEl(s, data, refresh) {
+  const st = statusOf(s, data.firing);
+  const row = el('div', `lv-sched-row lv-${st}`);
+  row.tabIndex = 0;
+  row.setAttribute('role', 'link');
+  row.setAttribute('aria-label', displayName(s));
+
+  const main = el('div', 'lv-sched-row-main');
+  main.append(el('div', 'lv-sched-row-name', displayName(s)));
+  const line = el('div', 'lv-sched-row-line');
+  line.append(el('span', '', describeTrigger(s)));
+  const now = standing(s, st);
+  if (now) {
+    const where = el('span', `lv-sched-standing lv-${st}`, now);
+    if (st === 'active') where.title = formatDateTime(s.next_fire);
+    line.append(el('span', 'lv-sched-sep', '·'), where);
+  }
+  const live = data.firing.get(s.id);
+  if (st === 'running' && live) {
+    const watch = button(t('sched.watch'), null, () => openChat(live), 'lv-sched-link');
+    watch.addEventListener('click', (e) => e.stopPropagation()); // not the row's click
+    line.append(watch);
+  }
+  main.append(line);
+  const facts = extraFacts(s);
+  if (facts.length) main.append(el('div', 'lv-sched-row-facts', facts.join(' · ')));
+
+  const side = el('div', 'lv-sched-row-side');
+  if (s.last_status === 'ok' || s.last_status === 'error') {
+    const ok = s.last_status === 'ok';
+    const last = el('span', `lv-sched-last lv-${ok ? 'ok' : 'error'}`);
+    last.innerHTML = icon(ok ? 'check' : 'x', { size: 13 });
+    last.title = ok ? t('sched.lastOk') : t('sched.lastError', { error: s.last_error || '' });
+    side.append(last);
+  }
+  if (!isDone(s)) {
+    side.append(toggle(s.active, s.active ? t('sched.pause') : t('sched.resume'), (on) => setActive(s, on, refresh)));
+  }
+  const more = /** @type {HTMLButtonElement} */ (el('button', 'lv-btn-icon lv-sched-more'));
+  more.type = 'button';
+  more.innerHTML = icon('ellipsis', { size: 16 });
+  more.setAttribute('aria-label', t('sched.more'));
+  more.setAttribute('aria-haspopup', 'menu');
+  more.addEventListener('click', (e) => {
+    e.stopPropagation();
+    moreMenu(more, s, refresh);
+  });
+  side.append(more);
+
+  row.append(dot(st), main, side);
+  const open = () => openView(`${VIEW}/${s.id}`);
+  row.addEventListener('click', open);
+  row.addEventListener('keydown', (e) => {
+    if (e.target === row && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      open();
+    }
+  });
+  return row;
+}
+
+/** Ready-made starting points for an empty page. */
+function templates() {
+  const tomorrow9 = new Date();
+  tomorrow9.setDate(tomorrow9.getDate() + 1);
+  tomorrow9.setHours(9, 0, 0, 0);
+  return [
     {
-      completed: t('sched.stCompleted'),
-      failed: t('sched.failed'),
-      cancelled: t('sched.stCancelled'),
-      interrupted: t('sched.stInterrupted'),
-      running: t('sched.stRunning'),
-    }[r.status] || r.status;
-  if (r.error) status.title = r.error;
-  const tail = el('span', 'lv-sched-run-tail');
-  if (r.finished_at && r.finished_at > r.started_at) {
-    const secs = r.finished_at - r.started_at;
-    tail.append(
-      el('span', '', secs >= 90 ? `${Math.round(secs / 60)}m` : `${Math.round(secs)}s`),
+      name: t('sched.tplDigestName'),
+      input: t('sched.tplDigestInput'),
+      trigger_kind: 'cron',
+      trigger_expr: '0 9 * * 1-5',
+    },
+    {
+      name: t('sched.tplWatchName'),
+      input: t('sched.tplWatchInput'),
+      trigger_kind: 'every',
+      trigger_expr: '1800',
+      until: t('sched.tplWatchUntil'),
+      max_fires: 24,
+    },
+    {
+      name: t('sched.tplRemindName'),
+      input: t('sched.tplRemindInput'),
+      trigger_kind: 'at',
+      trigger_expr: String(Math.floor(tomorrow9.getTime() / 1000)),
+    },
+  ];
+}
+
+function emptyState() {
+  const wrap = el('div', 'lv-sched-empty');
+  wrap.innerHTML = icon('clock', { size: 28 });
+  wrap.append(
+    el('h3', 'lv-sched-empty-title', t('sched.none')),
+    el('p', 'lv-sched-empty-text', t('sched.noneHint')),
+  );
+  const list = el('div', 'lv-sched-templates');
+  for (const tpl of templates()) {
+    const card = el('button', 'lv-sched-template');
+    card.setAttribute('type', 'button');
+    card.append(
+      el('span', 'lv-sched-template-name', tpl.name),
+      el('span', 'lv-sched-template-when', describeTrigger(/** @type {any} */ (tpl))),
     );
+    card.addEventListener('click', () => openScheduleForm({ preset: tpl }));
+    list.append(card);
   }
-  if (r.usage?.total_tokens) {
-    tail.append(el('span', '', `${r.usage.total_tokens.toLocaleString()} tok`));
+  wrap.append(list, el('p', 'lv-sched-empty-tip', t('sched.chatTip')));
+  return wrap;
+}
+
+/** @param {Data} data @param {() => void} refresh */
+function listPage(data, refresh) {
+  const page = el('div', 'lv-sched-page');
+  const head = el('header', 'lv-sched-head');
+  head.append(
+    el('h2', 'lv-sched-title', t('sched.title')),
+    button(t('sched.new'), 'plus', () => openScheduleForm({}), 'lv-btn lv-btn-primary lv-btn-sm'),
+  );
+  page.append(head);
+  if (!data.rows.length) {
+    page.append(emptyState());
+    return page;
   }
+  /** @type {Record<string, Row[]>} */
+  const groups = { active: [], paused: [], done: [] };
+  for (const s of data.rows) {
+    const st = statusOf(s, data.firing);
+    groups[st === 'running' ? 'active' : st].push(s);
+  }
+  // Soonest first while it runs; the rest newest first, as listed.
+  groups.active.sort((a, b) => a.next_fire - b.next_fire);
+  for (const key of ['active', 'paused']) {
+    if (!groups[key].length) continue;
+    const section = el('section', 'lv-sched-group');
+    const h = el('h3', 'lv-sched-group-head');
+    h.append(el('span', '', t(`sched.group.${key}`)), el('span', 'lv-sched-count', String(groups[key].length)));
+    section.append(h, ...groups[key].map((s) => rowEl(s, data, refresh)));
+    page.append(section);
+  }
+  if (groups.done.length) {
+    const details = /** @type {HTMLDetailsElement} */ (el('details', 'lv-sched-group lv-sched-done'));
+    details.open = _doneOpen;
+    details.addEventListener('toggle', () => {
+      _doneOpen = details.open;
+    });
+    const summary = el('summary', 'lv-sched-group-head');
+    summary.innerHTML = icon('chevron-right', { size: 14 });
+    summary.append(el('span', '', t('sched.group.done')), el('span', 'lv-sched-count', String(groups.done.length)));
+    details.append(summary, ...groups.done.map((s) => rowEl(s, data, refresh)));
+    page.append(details);
+  }
+  return page;
+}
+
+// ---- a schedule ----------------------------------------------------------------
+
+/** @param {any} r a run record */
+function runEl(r) {
+  const line = el('div', `lv-sched-run lv-${r.status}`);
+  const glyph = {
+    completed: 'check',
+    failed: 'x',
+    skipped: 'minus',
+    cancelled: 'square',
+    interrupted: 'pause',
+    running: 'loader-circle',
+  }[r.status] || 'minus';
+  const mark = el('span', 'lv-sched-run-mark');
+  mark.innerHTML = icon(glyph, { size: 13 });
+  const when = el('span', 'lv-sched-run-when', formatWhen(r.started_at));
+  when.title = formatDateTime(r.started_at, { seconds: true });
+  const label = el('span', 'lv-sched-run-status', t(`sched.run.${r.status}`) || r.status);
+  const detail = el('span', 'lv-sched-run-detail');
+  if (r.error) {
+    detail.textContent = r.error;
+    detail.title = r.error;
+  } else {
+    const bits = [];
+    if (r.finished_at && r.finished_at > r.started_at) {
+      const secs = Math.round(r.finished_at - r.started_at);
+      bits.push(secs >= 90 ? t('sched.mins', { n: Math.round(secs / 60) }) : t('sched.secs', { n: secs }));
+    }
+    if (r.usage?.total_tokens) bits.push(t('sched.tokens', { n: r.usage.total_tokens.toLocaleString() }));
+    detail.textContent = bits.join(' · ');
+  }
+  line.append(mark, when, label, detail);
   if (r.session_id) {
-    const link = el('button', 'lv-sched-last-run', '↗');
-    link.type = 'button';
-    link.title = t('sched.lastRunTitle');
-    link.setAttribute('aria-label', t('sched.lastRunTitle'));
-    link.addEventListener('click', () => onOpenSession(r.session_id));
-    tail.append(link);
+    line.append(button(t('sched.openChat'), null, () => openChat(r.session_id), 'lv-sched-link'));
   }
-  line.append(when, status, tail);
   return line;
 }
 
-/** Open the Schedules dialog: list, inspect, create, edit, and run schedules. */
-export async function openSchedulesDialog() {
-  const panel = el('div', 'lv-schedules-panel');
-  panel.innerHTML = `
-    <div class="lv-schedules-head">
-      <div class="lv-schedules-head-lead">
-        <button type="button" class="lv-btn-icon lv-sched-back" hidden aria-label="${t('sched.back')}">${icon('chevron-left', { size: 16 })}</button>
-        <h3 class="lv-sched-title"></h3>
-      </div>
-      <div class="lv-schedules-head-actions">
-        <button type="button" class="lv-btn lv-btn-ghost lv-btn-sm lv-sched-new">${icon('plus', { size: 14 })}<span>${t('sched.new')}</span></button>
-        <button type="button" class="lv-btn-icon lv-sched-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
-      </div>
-    </div>
-    <div class="lv-sched-view"></div>`;
+/**
+ * @param {Row} s @param {Data} data @param {any[] | null} history
+ * @param {{ refresh: () => void, more: () => void, limit: number }} ctx
+ */
+function detailPage(s, data, history, ctx) {
+  const st = statusOf(s, data.firing);
+  const page = el('div', 'lv-sched-page lv-sched-detail');
 
-  const backBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.lv-sched-back'));
-  const newBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.lv-sched-new'));
-  const titleEl = panel.querySelector('.lv-sched-title');
-  const viewEl = panel.querySelector('.lv-sched-view');
+  const back = /** @type {HTMLAnchorElement} */ (el('a', 'lv-sched-back'));
+  back.href = `?view=${VIEW}`;
+  back.innerHTML = icon('chevron-left', { size: 14 });
+  back.append(el('span', '', t('sched.title')));
 
-  /** @type {any[]} */
-  let rows = [];
-  /** @type {Set<string>} */
-  let firing = new Set();
-  let loaded = false;
-  /** @type {{name: 'list'} | {name: 'detail', id: string} | {name: 'form', editing: any}} */
-  let view = { name: 'list' };
+  const head = el('header', 'lv-sched-head');
+  const titles = el('div', 'lv-sched-head-text');
+  titles.append(el('h2', 'lv-sched-title', displayName(s)));
+  const sub = el('p', 'lv-sched-sub');
+  const now = standing(s, st);
+  sub.append(dot(st), el('span', '', now ? `${describeTrigger(s)} · ${now}` : describeTrigger(s)));
+  titles.append(sub);
+  const actions = el('div', 'lv-sched-actions');
+  actions.append(button(t('sched.runNow'), 'play', () => runNow(s, ctx.refresh)));
+  if (!isDone(s)) {
+    const label = el('label', 'lv-sched-switch');
+    label.append(
+      el('span', '', s.active ? t('sched.stActive') : t('sched.stPaused')),
+      toggle(s.active, s.active ? t('sched.pause') : t('sched.resume'), (on) => setActive(s, on, ctx.refresh)),
+    );
+    actions.append(label);
+  }
+  const more = /** @type {HTMLButtonElement} */ (el('button', 'lv-btn-icon'));
+  more.type = 'button';
+  more.innerHTML = icon('ellipsis', { size: 16 });
+  more.setAttribute('aria-label', t('sched.more'));
+  more.setAttribute('aria-haspopup', 'menu');
+  more.addEventListener('click', () => moreMenu(more, s, ctx.refresh, { run: false }));
+  actions.append(more);
+  head.append(titles, actions);
+  page.append(back, head);
 
-  const openSession = (sid) => {
-    dialog.close();
-    switchSession(sid).catch(() => {});
+  if (st === 'running' && data.firing.get(s.id)) {
+    const live = /** @type {string} */ (data.firing.get(s.id));
+    const note = el('div', 'lv-sched-note');
+    note.append(el('span', '', t('sched.runningNote')), button(t('sched.watch'), null, () => openChat(live), 'lv-sched-link'));
+    page.append(note);
+  } else if (st === 'done') {
+    const note = el('div', 'lv-sched-note');
+    const why = s.finished_reason ? finishedReason(s.finished_reason) : t('sched.onceDone');
+    note.append(el('span', '', t('sched.endedNote', { why })));
+    if (s.finished_reason === 'max fires reached') note.append(el('span', 'lv-sched-note-hint', t('sched.maxFiresHint')));
+    note.append(button(t('sched.editToResume'), 'pencil', () => openScheduleForm({ editing: s, onSaved: ctx.refresh }), 'lv-sched-link'));
+    page.append(note);
+  }
+
+  // The instruction, folded past a dozen lines.
+  const prompt = el('section', 'lv-sched-section');
+  prompt.append(el('h3', 'lv-sched-section-title', t('sched.instruction')));
+  const text = el('div', 'lv-sched-prompt', s.input);
+  prompt.append(text);
+  requestAnimationFrame(() => {
+    if (text.scrollHeight <= text.clientHeight + 2) return;
+    const expand = button(t('sched.showAll'), null, () => {
+      text.classList.add('lv-open');
+      expand.remove();
+    }, 'lv-sched-link');
+    prompt.append(expand);
+  });
+  page.append(prompt);
+
+  const settings = el('section', 'lv-sched-section');
+  settings.append(el('h3', 'lv-sched-section-title', t('sched.settings')));
+  const facts = el('dl', 'lv-sched-facts');
+  /** @param {string} label @param {string | Node} value @param {string} [title] */
+  const fact = (label, value, title) => {
+    const dd = el('dd');
+    dd.append(value);
+    if (title) dd.title = title;
+    facts.append(el('dt', '', label), dd);
   };
-
-  async function loadData() {
-    const [schedules, runs] = await Promise.all([
-      api.listSchedules(),
-      api.listRuns().catch(() => []),
-    ]);
-    rows = schedules;
-    firing = new Set(
-      runs
-        .map((r) => String(r.source || ''))
-        .filter((src) => src.startsWith('schedule:'))
-        .map((src) => src.slice('schedule:'.length)),
-    );
-    loaded = true;
+  const raw = s.trigger_kind === 'at' ? formatDateTime(Number(s.trigger_expr)) : `${s.trigger_kind} ${s.trigger_expr}`;
+  fact(t('sched.trigger'), describeTrigger(s), raw);
+  if (workspacesOn() || s.workspace_mode) {
+    const where = [];
+    if (workspacesOn()) where.push(s.workspace_root ? workspaceName(s.workspace_root) : t('sched.ownDir'));
+    if (s.workspace_mode) where.push(modeLabel(s.workspace_mode));
+    fact(t('sched.where'), where.join(' · '), s.workspace_root ?? undefined);
   }
-
-  // ---- list view ----------------------------------------------------------
-
-  function rowMeta(s, st) {
-    const parts = [describeTrigger(s)];
-    if (st === 'running') {
-      parts.push(t('sched.stRunningNow'));
-    } else if (st === 'active') {
-      parts.push(t('sched.next', { time: formatDateTime(s.next_fire) }));
-    } else if (st === 'done') {
-      parts.push(
-        s.finished_reason
-          ? `${t('sched.done')} — ${clip(s.finished_reason, 48)}`
-          : t('sched.done'),
-      );
-    } else {
-      parts.push(t('sched.paused'));
-    }
-    if (s.until && st !== 'done') {
-      parts.push(t('sched.until', { cond: clip(s.until, 30) }));
-    }
-    return parts.join(' · ');
+  if (s.session_id) {
+    const sid = s.session_id;
+    const link = button(t('sched.continuesShort', { title: s.session_title || t('session.newChat') }), null, () => openChat(sid), 'lv-sched-link');
+    fact(t('sched.results'), link);
+  } else {
+    fact(t('sched.results'), t('sched.freshChat'));
   }
+  if (store.agents.length > 1 && s.agent) fact(t('sched.agentLabel'), s.agent);
+  if (s.until) fact(t('sched.untilLabel'), s.until);
+  const nets = [];
+  if (s.max_fires != null) nets.push(t('sched.firesOf', { n: s.fire_count ?? 0, m: s.max_fires }));
+  if (s.expires_at != null) nets.push(t('sched.expiresAt', { time: formatDateTime(s.expires_at) }));
+  if (nets.length) fact(t('sched.safetyNet'), nets.join(' · '));
+  fact(t('sched.created'), formatDateTime(s.created_at));
+  settings.append(facts);
+  page.append(settings);
 
-  function rowEl(s) {
-    const st = statusOf(s, firing);
-    const item = el('div', `lv-sched-item lv-${st}`);
-    item.tabIndex = 0;
-    item.setAttribute('role', 'button');
-
-    const dot = el('span', `lv-sched-dot lv-${st}`);
-    dot.title = statusLabel(st);
-
-    const main = el('div', 'lv-sched-item-main');
-    const prompt = el('div', 'lv-sched-item-prompt', s.input);
-    prompt.title = s.input;
-    const meta = el('div', 'lv-sched-item-meta', rowMeta(s, st));
-    main.append(prompt, meta);
-
-    const side = el('div', 'lv-sched-item-side');
-    // Pause/resume — the one action worth keeping on the row; everything else
-    // lives in the detail view. A lapsed one-shot gets no switch (see isDone).
-    if (!isDone(s)) {
-      const sw = el('button', 'lv-switch');
-      sw.type = 'button';
-      sw.setAttribute('role', 'switch');
-      sw.setAttribute('aria-checked', String(s.active));
-      sw.title = s.active ? t('sched.pause') : t('sched.resume');
-      sw.setAttribute('aria-label', sw.title);
-      sw.append(el('span', 'lv-switch-knob'));
-      sw.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        try {
-          await api.setScheduleActive(s.id, !s.active);
-        } catch (err) {
-          toast(err.message || t('sched.updateFailed'), { type: 'error' });
-        }
-        refresh();
-      });
-      side.append(sw);
-    }
-    const chev = el('span', 'lv-sched-chevron');
-    chev.innerHTML = icon('chevron-right', { size: 14 });
-    side.append(chev);
-
-    item.append(dot, main, side);
-    const open = () => {
-      view = { name: 'detail', id: s.id };
-      render();
-    };
-    item.addEventListener('click', open);
-    item.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        open();
-      }
-    });
-    return item;
-  }
-
-  function listView() {
-    const wrap = el('div', 'lv-sched-list');
-    if (!rows.length) {
-      if (loaded) {
-        const empty = el('div', 'lv-sched-empty', t('sched.none'));
-        empty.append(el('div', 'lv-sched-empty-hint', t('sched.noneHint')));
-        wrap.append(empty);
-      }
-      return wrap;
-    }
-    for (const s of rows) wrap.append(rowEl(s));
-    return wrap;
-  }
-
-  // ---- detail view ---------------------------------------------------------
-
-  function detailView(s) {
-    const st = statusOf(s, firing);
-    const wrap = el('div', 'lv-sched-detail');
-
-    const statusRow = el('div', 'lv-sched-detail-status');
-    const badge = el('span', `lv-sched-badge lv-${st}`);
-    badge.append(el('span', `lv-sched-dot lv-${st}`), document.createTextNode(statusLabel(st)));
-    statusRow.append(badge);
-    if (st === 'done' && s.finished_reason) {
-      const why = el('span', 'lv-sched-finished-reason', s.finished_reason);
-      why.title = s.finished_reason;
-      statusRow.append(why);
-    }
-
-    const prompt = el('div', 'lv-sched-detail-prompt', s.input);
-
-    const facts = el('dl', 'lv-sched-facts');
-    const fact = (label, value, title) => {
-      const dd = el('dd', '', value);
-      if (title) dd.title = title;
-      facts.append(el('dt', '', label), dd);
-    };
-    fact(t('sched.trigger'), describeTrigger(s), `${s.trigger_kind} ${s.trigger_expr}`);
-    if (s.active) fact(t('sched.nextRun'), formatDateTime(s.next_fire));
-    if (s.until) fact(t('sched.untilLabel'), s.until);
-    const nets = [];
-    if (s.max_fires != null) {
-      nets.push(t('sched.firesOf', { n: s.fire_count ?? 0, m: s.max_fires }));
-    }
-    if (s.expires_at != null) {
-      nets.push(t('sched.expiresAt', { time: formatDateTime(s.expires_at) }));
-    }
-    if (nets.length) fact(t('sched.safetyNet'), nets.join(' · '));
-    if (store.agents.length > 1 && s.agent) fact(t('sched.agentLabel'), s.agent);
-
-    const actions = el('div', 'lv-sched-detail-actions');
-    const act = (label, iconName, fn, cls = '') => {
-      const b = el('button', `lv-btn lv-btn-ghost lv-btn-sm lv-sched-act ${cls}`);
-      b.type = 'button';
-      b.innerHTML = icon(iconName, { size: 14 });
-      b.append(el('span', '', label));
-      b.addEventListener('click', fn);
-      actions.append(b);
-    };
-    act(t('sched.runNow'), 'zap', async () => {
-      try {
-        await api.runSchedule(s.id);
-        toast(t('sched.fired'));
-      } catch (err) {
-        toast(err.message || t('sched.runFailed'), { type: 'error' });
-      }
-      refresh();
-    });
-    if (!isDone(s)) {
-      act(
-        s.active ? t('sched.pause') : t('sched.resume'),
-        s.active ? 'pause' : 'play',
-        async () => {
-          try {
-            await api.setScheduleActive(s.id, !s.active);
-          } catch (err) {
-            toast(err.message || t('sched.updateFailed'), { type: 'error' });
-          }
-          refresh();
-        },
-      );
-    }
-    act(t('sched.edit'), 'pencil', () => {
-      view = { name: 'form', editing: s };
-      render();
-    });
-    act(
-      t('sched.delete'),
-      'trash-2',
-      async () => {
-        if (!(await confirmDialog(t('sched.deleteConfirm')))) return;
-        try {
-          await api.deleteSchedule(s.id);
-        } catch (err) {
-          toast(err.message || t('sched.deleteFailed'), { type: 'error' });
-        }
-        view = { name: 'list' };
-        refresh(); // a 404 just means it's already gone — the list will agree
-      },
-      'lv-danger',
-    );
-
-    const history = el('div', 'lv-sched-history');
-    api
-      .scheduleRuns(s.id)
-      .then((runs) => {
-        if (!wrap.isConnected) return; // the view moved on meanwhile
-        history.replaceChildren(...runs.map((r) => runLine(r, openSession)));
-        if (!runs.length) {
-          history.append(el('div', 'lv-sched-history-empty', t('sched.historyNone')));
-        }
-      })
-      .catch(() => {
-        if (!wrap.isConnected) return;
-        history.append(el('div', 'lv-sched-history-empty', t('sched.historyFailed')));
-      });
-
-    wrap.append(
-      statusRow,
-      prompt,
-      facts,
-      actions,
-      el('div', 'lv-sched-section-title', t('sched.history')),
-      history,
-    );
-    return wrap;
-  }
-
-  // ---- form view -----------------------------------------------------------
-
-  function formView(editing) {
-    const form = el('form', 'lv-sched-form');
-    const input = /** @type {HTMLTextAreaElement} */ (
-      el('textarea', 'lv-dialog-input lv-sched-input')
-    );
-    input.rows = 5;
-    input.required = true;
-    input.placeholder = t('sched.promptPlaceholder');
-
-    const untilInput = /** @type {HTMLInputElement} */ (
-      el('input', 'lv-dialog-input lv-sched-until')
-    );
-    untilInput.type = 'text';
-    untilInput.maxLength = 2000;
-    untilInput.placeholder = t('sched.untilPlaceholder');
-
-    // Safety nets, both optional (empty = unbounded). Editing these is the
-    // release valve for a schedule whose max_fires ran out — resuming alone
-    // would re-trip after one fire (fire_count never rewinds).
-    const nets = el('div', 'lv-sched-nets');
-    const netField = (labelText, input) => {
-      const label = el('label', 'lv-sched-net-field');
-      label.append(el('span', '', labelText), input);
-      nets.append(label);
-      return input;
-    };
-    const maxFiresInput = /** @type {HTMLInputElement} */ (
-      el('input', 'lv-dialog-input lv-sched-max-fires')
-    );
-    maxFiresInput.type = 'number';
-    maxFiresInput.min = '1';
-    maxFiresInput.step = '1';
-    maxFiresInput.placeholder = t('sched.unlimited');
-    netField(t('sched.maxFires'), maxFiresInput);
-    const expiresInput = /** @type {HTMLInputElement} */ (
-      el('input', 'lv-dialog-input lv-sched-expires')
-    );
-    expiresInput.type = 'datetime-local';
-    netField(t('sched.expires'), expiresInput);
-
-    const row = el('div', 'lv-sched-row');
-    const agentSel = /** @type {HTMLSelectElement} */ (
-      el('select', 'lv-dialog-input lv-sched-agent')
-    );
-    agentSel.hidden = true;
-    agentSel.setAttribute('aria-label', t('sched.agentLabel'));
-    if (store.agents.length > 1) {
-      agentSel.hidden = false;
-      agentSel.replaceChildren(
-        ...store.agents.map((a) => {
-          const opt = document.createElement('option');
-          opt.value = a.name;
-          opt.textContent = a.name;
-          return opt;
-        }),
-      );
-      agentSel.value = store.agent ?? store.agents[0].name;
-    }
-    const kindSel = /** @type {HTMLSelectElement} */ (
-      el('select', 'lv-dialog-input lv-sched-kind')
-    );
-    kindSel.setAttribute('aria-label', t('sched.triggerKind'));
-    for (const kind of ['every', 'cron', 'at']) {
-      const opt = document.createElement('option');
-      opt.value = kind;
-      opt.textContent = t(`sched.${kind}`);
-      kindSel.append(opt);
-    }
-    const exprWrap = el('span', 'lv-sched-expr-wrap');
-    row.append(agentSel, kindSel, exprWrap);
-
-    const hintEl = el('div', 'lv-sched-hint');
-    // Live preview: while typing a cron expression, the hint line leads with
-    // its plain-words reading ("weekdays at 09:00 — min hour …").
-    const syncHint = () => {
-      let hint = TRIGGER_HINTS[kindSel.value] || '';
-      if (kindSel.value === 'cron') {
-        const human = humanizeCron(exprInput.value);
-        if (human) hint = `→ ${human} · ${hint}`;
-      }
-      hintEl.textContent = hint;
-    };
-    const attachExpr = (input_) => {
-      input_.addEventListener('input', syncHint);
-      return input_;
-    };
-    let exprInput = attachExpr(buildExprInput(kindSel.value));
-    exprWrap.append(exprInput);
-    kindSel.addEventListener('change', () => {
-      exprInput = attachExpr(buildExprInput(kindSel.value));
-      exprWrap.replaceChildren(exprInput);
-      syncHint();
-    });
-
-    const foot = el('div', 'lv-sched-form-foot');
-    const cancelBtn = el('button', 'lv-btn lv-btn-ghost lv-btn-sm', t('sched.cancel'));
-    cancelBtn.type = 'button';
-    const submitBtn = el(
-      'button',
-      'lv-btn lv-btn-primary lv-btn-sm',
-      editing ? t('sched.save') : t('sched.add'),
-    );
-    submitBtn.type = 'submit';
-    foot.append(cancelBtn, submitBtn);
-
-    const goBack = () => {
-      view = editing ? { name: 'detail', id: editing.id } : { name: 'list' };
-      render();
-    };
-    cancelBtn.addEventListener('click', goBack);
-
-    if (editing) {
-      input.value = editing.input;
-      untilInput.value = editing.until || '';
-      maxFiresInput.value = editing.max_fires != null ? String(editing.max_fires) : '';
-      expiresInput.value =
-        editing.expires_at != null ? epochToLocalInput(String(editing.expires_at)) : '';
-      if (store.agents.length > 1 && editing.agent) agentSel.value = editing.agent;
-      kindSel.value = editing.trigger_kind;
-      exprInput = attachExpr(buildExprInput(editing.trigger_kind));
-      exprInput.value =
-        editing.trigger_kind === 'at'
-          ? epochToLocalInput(editing.trigger_expr)
-          : editing.trigger_expr;
-      exprWrap.replaceChildren(exprInput);
-    }
-    syncHint();
-
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const message = input.value.trim();
-      if (!message) return;
-      let trigger_expr;
-      try {
-        trigger_expr = exprValue(kindSel.value, exprInput);
-      } catch (err) {
-        toast(err.message, { type: 'error' });
-        return;
-      }
-      const body = { input: message, trigger_kind: kindSel.value, trigger_expr };
-      if (store.agents.length > 1) body.agent = agentSel.value;
-      const until = untilInput.value.trim();
-      if (until) body.until = until;
-      else if (editing) body.until = null; // clearing the field clears the condition
-      const maxFires = maxFiresInput.value.trim();
-      if (maxFires) {
-        const n = Number(maxFires);
-        if (!Number.isInteger(n) || n < 1) {
-          maxFiresInput.reportValidity(); // the input's own min/step message
-          return;
-        }
-        body.max_fires = n;
-      } else if (editing) {
-        body.max_fires = null;
-      }
-      if (expiresInput.value) {
-        const epoch = Math.floor(new Date(expiresInput.value).getTime() / 1000);
-        if (!Number.isFinite(epoch)) {
-          toast(t('sched.invalidDate'), { type: 'error' });
-          return;
-        }
-        body.expires_at = epoch;
-      } else if (editing) {
-        body.expires_at = null;
-      }
-      try {
-        if (editing) {
-          await api.updateSchedule(editing.id, body);
-          view = { name: 'detail', id: editing.id };
-        } else {
-          // A schedule is a deferred message: its fires get the page's
-          // context, as a message sent now would.
-          await api.createSchedule({ ...body, context: collectContext() });
-          view = { name: 'list' };
-        }
-        refresh();
-      } catch (err) {
-        toast(err.message || t('sched.saveFailed'), { type: 'error' });
-      }
-    });
-
-    form.append(input, untilInput, nets, row, hintEl, foot);
-    return form;
-  }
-
-  // ---- view switching + live refresh ---------------------------------------
-
-  function render() {
-    const isList = view.name === 'list';
-    backBtn.hidden = isList;
-    newBtn.hidden = !isList;
-    titleEl.textContent =
-      view.name === 'detail'
-        ? t('sched.detail')
-        : view.name === 'form'
-          ? view.editing
-            ? t('sched.editTitle')
-            : t('sched.newTitle')
-          : t('sched.title');
-    if (view.name === 'detail') {
-      const id = view.id;
-      const s = rows.find((r) => r.id === id);
-      if (!s) {
-        // Deleted (possibly elsewhere) — fall back to the list.
-        view = { name: 'list' };
-        render();
-        return;
-      }
-      viewEl.replaceChildren(detailView(s));
-    } else if (view.name === 'form') {
-      viewEl.replaceChildren(formView(view.editing));
-      /** @type {HTMLTextAreaElement} */ (viewEl.querySelector('.lv-sched-input'))?.focus();
-    } else {
-      const prevScroll = viewEl.querySelector('.lv-sched-list')?.scrollTop ?? 0;
-      viewEl.replaceChildren(listView());
-      viewEl.querySelector('.lv-sched-list').scrollTop = prevScroll;
+  const runs = el('section', 'lv-sched-section');
+  runs.append(el('h3', 'lv-sched-section-title', t('sched.history')));
+  if (history === null) {
+    runs.append(el('p', 'lv-sched-muted', t('sched.historyFailed')));
+  } else if (!history.length) {
+    runs.append(el('p', 'lv-sched-muted', t('sched.historyNone')));
+  } else {
+    const list = el('div', 'lv-sched-runs');
+    list.append(...history.map(runEl));
+    runs.append(list);
+    if (history.length >= ctx.limit && ctx.limit < 200) {
+      runs.append(button(t('sched.loadMore'), null, ctx.more, 'lv-btn lv-btn-ghost lv-btn-sm lv-sched-more-runs'));
     }
   }
-
-  let refreshTimer = 0;
-  async function refresh() {
-    try {
-      await loadData();
-    } catch {
-      if (view.name === 'list' && !loaded) {
-        viewEl.replaceChildren(el('div', 'lv-sched-empty', t('sched.loadFailed')));
-      }
-      return;
-    }
-    if (view.name !== 'form') render(); // never clobber a form being typed in
-  }
-  const refreshSoon = () => {
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(refresh, 150); // coalesce event bursts
-  };
-
-  backBtn.addEventListener('click', () => {
-    view =
-      view.name === 'form' && view.editing
-        ? { name: 'detail', id: view.editing.id }
-        : { name: 'list' };
-    render();
-  });
-  newBtn.addEventListener('click', () => {
-    view = { name: 'form', editing: null };
-    render();
-  });
-
-  const offRuns = store.on('runs-changed', refreshSoon);
-  const dialog = showDialog({
-    body: panel,
-    onClose: () => {
-      offRuns();
-      clearTimeout(refreshTimer);
-    },
-  });
-  dialog.classList.add('lv-dialog-wide');
-  panel.querySelector('.lv-sched-close').addEventListener('click', () => dialog.close());
-
-  render(); // paint the shell immediately…
-  refresh(); // …then fill it
+  page.append(runs);
+  return page;
 }
 
-/** Wire up the Schedules button in the sidebar. */
-export function initSchedules() {
-  document
-    .getElementById('schedules-btn')
-    ?.addEventListener('click', openSchedulesDialog);
+// ---- the view -------------------------------------------------------------------
+
+/** @param {HTMLElement} root @param {{ path: string }} ctx */
+function render(root, { path }) {
+  const id = path || null;
+  let alive = true;
+  let limit = HISTORY_PAGE;
+  let timer = 0;
+  const scroller = document.getElementById('view');
+
+  /** @param {Node} node */
+  const paint = (node) => {
+    const top = scroller?.scrollTop ?? 0;
+    root.replaceChildren(node);
+    if (scroller) scroller.scrollTop = top;
+  };
+
+  async function draw() {
+    let data;
+    try {
+      data = await load();
+    } catch {
+      if (alive && !root.childElementCount) paint(el('p', 'lv-sched-muted lv-sched-page', t('sched.loadFailed')));
+      return;
+    }
+    if (!alive) return;
+    if (!id) {
+      paint(listPage(data, refresh));
+      return;
+    }
+    const s = data.rows.find((r) => r.id === id);
+    if (!s) {
+      openView(VIEW); // deleted, here or elsewhere
+      return;
+    }
+    const history = await api.scheduleRuns(id, { limit }).catch(() => null);
+    if (!alive) return;
+    paint(
+      detailPage(s, data, history, {
+        refresh,
+        limit,
+        more: () => {
+          limit = Math.min(200, limit + HISTORY_PAGE);
+          refresh();
+        },
+      }),
+    );
+  }
+  function refresh() {
+    clearTimeout(timer);
+    timer = setTimeout(draw, 150); // coalesce event bursts
+  }
+
+  const offRuns = store.on('runs-changed', refresh);
+  const offSaved = store.on('schedules-changed', refresh);
+  draw();
+  return () => {
+    alive = false;
+    clearTimeout(timer);
+    offRuns();
+    offSaved();
+  };
+}
+
+// ---- the form -----------------------------------------------------------------
+
+/** @typedef {'once' | 'daily' | 'interval' | 'cron'} Tab */
+
+/**
+ * A strip of a few fixed choices (the Files panel's look).
+ * @param {[string, string][]} options value, label
+ * @param {string} value
+ * @param {(value: string) => void} onChange
+ * @param {string} label
+ */
+function tabs(options, value, onChange, label) {
+  const strip = el('div', 'lv-files-tabs');
+  strip.setAttribute('role', 'tablist');
+  strip.setAttribute('aria-label', label);
+  /** @type {HTMLButtonElement[]} */
+  const buttons = [];
+  const select = (/** @type {string} */ v) => {
+    for (const b of buttons) {
+      const on = b.dataset.value === v;
+      b.classList.toggle('lv-active', on);
+      b.setAttribute('aria-selected', String(on));
+    }
+  };
+  for (const [v, text] of options) {
+    const b = /** @type {HTMLButtonElement} */ (el('button', 'lv-files-tab', text));
+    b.type = 'button';
+    b.dataset.value = v;
+    b.setAttribute('role', 'tab');
+    b.addEventListener('click', () => {
+      select(v);
+      onChange(v);
+    });
+    buttons.push(b);
+    strip.append(b);
+  }
+  select(value);
+  return Object.assign(strip, { select });
+}
+
+/** @param {number} epoch seconds → a datetime-local value */
+function localInput(epoch) {
+  const d = new Date(epoch * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (/** @type {number} */ n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** @param {string} value a datetime-local value → epoch seconds, or NaN */
+function fromLocalInput(value) {
+  return value ? Math.floor(new Date(value).getTime() / 1000) : NaN;
+}
+
+/**
+ * @param {string} labelText @param {HTMLElement} control @param {string} [hint]
+ */
+function field(labelText, control, hint) {
+  const wrap = el('div', 'lv-sched-field');
+  const label = /** @type {HTMLLabelElement} */ (el('label', 'lv-sched-label', labelText));
+  if (control.matches('input, textarea, select')) {
+    control.id ||= `sched-field-${Math.random().toString(36).slice(2, 8)}`;
+    label.htmlFor = control.id;
+  }
+  wrap.append(label, control);
+  if (hint) wrap.append(el('div', 'lv-sched-hint', hint));
+  return wrap;
+}
+
+/** @param {string} type @param {string} [cls] */
+function input(type, cls = '') {
+  const n = /** @type {HTMLInputElement} */ (el('input', `lv-dialog-input ${cls}`.trim()));
+  n.type = type;
+  return n;
+}
+
+/**
+ * A chip that opens a menu of choices (the composer's folder and mode chips).
+ * @param {string} label
+ */
+function chip(label) {
+  const b = /** @type {HTMLButtonElement} */ (el('button', 'lv-sched-chip'));
+  b.type = 'button';
+  b.setAttribute('aria-haspopup', 'menu');
+  b.setAttribute('aria-label', label);
+  return b;
+}
+
+/**
+ * Create a schedule, or edit one. `preset` fills a new one (a template, a
+ * copy, or the chat it should continue).
+ * @param {{ editing?: Row | null, preset?: Partial<Row> | null, onSaved?: () => void }} opts
+ */
+export function openScheduleForm({ editing = null, preset = null, onSaved } = {}) {
+  const src = editing ?? preset ?? {};
+  const form = /** @type {HTMLFormElement} */ (el('form', 'lv-sched-form'));
+  form.noValidate = true;
+  const head = el('div', 'lv-sched-form-head');
+  head.append(el('h3', 'lv-sched-form-title', editing ? t('sched.editTitle') : t('sched.newTitle')));
+
+  const name = input('text');
+  name.maxLength = 200;
+  name.placeholder = t('sched.namePlaceholder');
+  name.value = src.name ?? '';
+
+  const prompt = /** @type {HTMLTextAreaElement} */ (el('textarea', 'lv-dialog-input lv-sched-input'));
+  prompt.rows = 6;
+  prompt.placeholder = t('sched.promptPlaceholder');
+  prompt.value = src.input ?? '';
+
+  // ---- when
+  const kind = src.trigger_kind;
+  const expr = src.trigger_expr ?? '';
+  const daily = kind === 'cron' ? parseDaily(expr) : null;
+  /** @type {Tab} */
+  let tab = kind === 'at' ? 'once' : kind === 'every' ? 'interval' : kind === 'cron' && !daily ? 'cron' : 'daily';
+
+  const once = input('datetime-local');
+  once.value = kind === 'at' ? localInput(Number(expr)) : '';
+  const onceQuick = el('div', 'lv-sched-quick');
+  /** @param {string} label @param {() => Date} at */
+  const quick = (label, at) => {
+    onceQuick.append(
+      button(label, null, () => {
+        once.value = localInput(at().getTime() / 1000);
+        changed();
+      }, 'lv-sched-pill'),
+    );
+  };
+  quick(t('sched.inHour'), () => new Date(Date.now() + 3600_000));
+  quick(t('sched.tomorrow9'), () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    return d;
+  });
+
+  const days = new Set(daily?.days ?? [0, 1, 2, 3, 4, 5, 6]);
+  const dayChips = el('div', 'lv-sched-days');
+  dayChips.setAttribute('role', 'group');
+  dayChips.setAttribute('aria-label', t('sched.days'));
+  const syncDays = () => {
+    for (const b of dayChips.querySelectorAll('button')) {
+      b.setAttribute('aria-pressed', String(days.has(Number(/** @type {HTMLElement} */ (b).dataset.day))));
+    }
+  };
+  for (const d of WEEK) {
+    const b = /** @type {HTMLButtonElement} */ (el('button', 'lv-sched-day', t(`cron.dayShort${d}`)));
+    b.type = 'button';
+    b.dataset.day = String(d);
+    b.setAttribute('aria-label', t(`cron.day${d}`));
+    b.addEventListener('click', () => {
+      if (days.has(d)) days.delete(d);
+      else days.add(d);
+      syncDays();
+      changed();
+    });
+    dayChips.append(b);
+  }
+  syncDays();
+  const daysQuick = el('div', 'lv-sched-quick');
+  /** @param {string} label @param {number[]} set */
+  const daysPreset = (label, set) =>
+    daysQuick.append(
+      button(label, null, () => {
+        days.clear();
+        set.forEach((d) => days.add(d));
+        syncDays();
+        changed();
+      }, 'lv-sched-pill'),
+    );
+  daysPreset(t('cron.everyDay'), [0, 1, 2, 3, 4, 5, 6]);
+  daysPreset(t('cron.weekdays'), [1, 2, 3, 4, 5]);
+  const time = input('time');
+  time.step = '60';
+  const pad = (/** @type {number} */ n) => String(n).padStart(2, '0');
+  time.value = daily ? `${pad(daily.hour)}:${pad(daily.minute)}` : '09:00';
+
+  const split = kind === 'every' && Number(expr) > 0 ? splitInterval(Number(expr)) : { n: 30, unit: /** @type {const} */ ('minute') };
+  const every = input('number');
+  every.min = '1';
+  every.step = '1';
+  every.value = String(split.n);
+  let unit = split.unit;
+  /** @type {[string, string][]} */
+  const unitOptions = [
+    ['minute', t('sched.unit.minute')],
+    ['hour', t('sched.unit.hour')],
+    ['day', t('sched.unit.day')],
+  ];
+  if (unit === 'second') unitOptions.unshift(['second', t('sched.unit.second')]);
+  const units = tabs(unitOptions, unit, (v) => {
+    unit = /** @type {any} */ (v);
+    changed();
+  }, t('sched.unit'));
+
+  const cron = input('text', 'lv-mono');
+  cron.placeholder = '0 9 * * 1-5';
+  cron.value = kind === 'cron' && !daily ? expr : '';
+  cron.spellcheck = false;
+
+  const panels = /** @type {Record<Tab, HTMLElement>} */ ({
+    once: el('div', 'lv-sched-panel'),
+    daily: el('div', 'lv-sched-panel'),
+    interval: el('div', 'lv-sched-panel'),
+    cron: el('div', 'lv-sched-panel'),
+  });
+  panels.once.append(once, onceQuick);
+  const dailyRow = el('div', 'lv-sched-inline');
+  dailyRow.append(el('span', 'lv-sched-inline-label', t('sched.at')), time);
+  panels.daily.append(dayChips, daysQuick, dailyRow);
+  const everyRow = el('div', 'lv-sched-inline');
+  everyRow.append(el('span', 'lv-sched-inline-label', t('sched.everyLabel')), every, units);
+  panels.interval.append(everyRow);
+  panels.cron.append(cron, el('div', 'lv-sched-hint', t('sched.hintCron')));
+  const panelHost = el('div', 'lv-sched-panels');
+  panelHost.append(...Object.values(panels));
+  const showPanel = () => {
+    for (const [k, p] of Object.entries(panels)) p.hidden = k !== tab;
+  };
+  showPanel();
+  const kinds = tabs(
+    [
+      ['once', t('sched.tab.once')],
+      ['daily', t('sched.tab.daily')],
+      ['interval', t('sched.tab.interval')],
+      ['cron', t('sched.tab.cron')],
+    ],
+    tab,
+    (v) => {
+      // Carry a daily pick over into the Cron tab, so it starts from it.
+      if (v === 'cron' && !cron.value.trim() && tab === 'daily') {
+        try {
+          cron.value = trigger().expr;
+        } catch {
+          /* nothing valid to carry */
+        }
+      }
+      tab = /** @type {Tab} */ (v);
+      showPanel();
+      changed();
+    },
+    t('sched.trigger'),
+  );
+  const preview = el('div', 'lv-sched-preview');
+  preview.setAttribute('aria-live', 'polite');
+  const when = el('div', 'lv-sched-when');
+  when.append(kinds, panelHost, preview);
+
+  /** The trigger as the API takes it; throws with what to fix. */
+  function trigger() {
+    if (tab === 'once') {
+      const epoch = fromLocalInput(once.value);
+      if (!Number.isFinite(epoch)) throw new Error(t('sched.pickTime'));
+      return { kind: 'at', expr: String(epoch) };
+    }
+    if (tab === 'daily') {
+      if (!days.size) throw new Error(t('sched.pickDays'));
+      const [h, m] = time.value.split(':').map(Number);
+      if (!Number.isInteger(h) || !Number.isInteger(m)) throw new Error(t('sched.pickTime'));
+      return { kind: 'cron', expr: dailyCron({ days: [...days], hour: h, minute: m }) };
+    }
+    if (tab === 'interval') {
+      const n = Number(every.value);
+      if (!Number.isInteger(n) || n < 1) throw new Error(t('sched.pickInterval'));
+      return { kind: 'every', expr: String(n * unitSeconds(unit)) };
+    }
+    const value = cron.value.trim();
+    if (!value) throw new Error(t('sched.enterExpr'));
+    return { kind: 'cron', expr: value };
+  }
+
+  let previewSeq = 0;
+  let previewTimer = 0;
+  function changed() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(async () => {
+      const seq = ++previewSeq;
+      let trig;
+      try {
+        trig = trigger();
+      } catch (err) {
+        preview.className = 'lv-sched-preview lv-muted';
+        preview.textContent = err.message;
+        return;
+      }
+      const human = trig.kind === 'cron' && tab === 'cron' ? humanizeCron(trig.expr) : null;
+      try {
+        const res = await api.previewSchedule(trig.kind, trig.expr);
+        if (seq !== previewSeq) return;
+        const fires = res.next_fires.map((/** @type {number} */ f) => formatWhen(f)).join(' · ');
+        let text = human ? `${human} — ${t('sched.upcoming', { fires })}` : t('sched.upcoming', { fires });
+        if (trig.kind === 'at' && res.next_fires[0] * 1000 < Date.now()) text = t('sched.inPast');
+        // Cron fields match the server's clock: say so where this page's differs.
+        const here = -new Date().getTimezoneOffset() * 60;
+        if (trig.kind === 'cron' && res.utc_offset !== here) {
+          const h = res.utc_offset / 3600;
+          text += ` ${t('sched.serverTz', { tz: `UTC${h >= 0 ? '+' : ''}${h}` })}`;
+        }
+        preview.className = 'lv-sched-preview';
+        preview.textContent = text;
+      } catch (err) {
+        if (seq !== previewSeq) return;
+        preview.className = 'lv-sched-preview lv-error';
+        preview.textContent = err.message || t('sched.invalidTrigger');
+      }
+    }, 300);
+  }
+  for (const n of [once, time, every, cron]) n.addEventListener('input', changed);
+
+  // ---- where
+  const choices = workspaceChoices();
+  const modes = modeChoices();
+  const where = {
+    root: editing ? editing.workspace_root ?? null : src.workspace_root ?? scopeRoot() ?? null,
+    mode: editing ? editing.workspace_mode ?? null : src.workspace_mode ?? modes?.initial ?? null,
+    touched: false,
+  };
+  const whereRow = el('div', 'lv-sched-chips');
+  const rootChip = chip(t('sched.folder'));
+  const modeChip = chip(t('sched.mode'));
+  const drawWhere = () => {
+    rootChip.innerHTML = icon('folder', { size: 14 });
+    rootChip.append(el('span', '', where.root ? workspaceName(where.root) : t('sched.ownDir')));
+    rootChip.title = where.root ?? t('sched.ownDirTitle');
+    modeChip.innerHTML = modeGlyph(where.mode);
+    modeChip.append(el('span', '', modeLabel(where.mode)));
+  };
+  rootChip.addEventListener('click', () => {
+    /** @type {(import('./ui.js').MenuItem | null)[]} */
+    const items = choices.map((/** @type {any} */ w) => ({
+      label: workspaceName(w.root),
+      icon: icon('folder', { size: 15 }),
+      checked: w.root === where.root,
+      onSelect: () => {
+        Object.assign(where, { root: w.root, touched: true });
+        drawWhere();
+      },
+    }));
+    if (canAddWorkspace()) {
+      items.push(null, {
+        label: t('ws.add'),
+        icon: icon('plus', { size: 15 }),
+        onSelect: async () => {
+          const added = await addWorkspaceDialog();
+          if (added) {
+            Object.assign(where, { root: added.root, touched: true });
+            drawWhere();
+          }
+        },
+      });
+    }
+    openMenu(rootChip, items, { align: 'start' });
+  });
+  modeChip.addEventListener('click', () => {
+    openMenu(
+      modeChip,
+      (modes?.modes ?? []).map((m) => ({
+        label: modeLabel(m),
+        icon: modeGlyph(m),
+        checked: m === where.mode,
+        onSelect: () => {
+          Object.assign(where, { mode: m, touched: true });
+          drawWhere();
+        },
+      })),
+      { align: 'start' },
+    );
+  });
+  if (workspacesOn()) whereRow.append(rootChip);
+  if (modes) whereRow.append(modeChip);
+  drawWhere();
+
+  // ---- results: only a schedule tied to a chat has a choice to make
+  const boundTo = src.session_id ?? null;
+  let continues = !!boundTo;
+  const results = boundTo
+    ? tabs(
+        [
+          ['fresh', t('sched.freshChat')],
+          ['continue', t('sched.continuesShort', { title: src.session_title || t('session.newChat') })],
+        ],
+        continues ? 'continue' : 'fresh',
+        (v) => {
+          continues = v === 'continue';
+        },
+        t('sched.results'),
+      )
+    : null;
+
+  // ---- advanced
+  const until = input('text');
+  until.maxLength = 2000;
+  until.placeholder = t('sched.untilPlaceholder');
+  until.value = src.until ?? '';
+  const maxFires = input('number');
+  maxFires.min = '1';
+  maxFires.step = '1';
+  maxFires.placeholder = t('sched.unlimited');
+  maxFires.value = src.max_fires != null ? String(src.max_fires) : '';
+  const expires = input('datetime-local');
+  expires.value = src.expires_at != null ? localInput(src.expires_at) : '';
+  let agent = src.agent ?? store.agent ?? store.agents[0]?.name ?? null;
+  const agentChip = chip(t('sched.agentLabel'));
+  const drawAgent = () => {
+    agentChip.innerHTML = icon('bot', { size: 14 });
+    agentChip.append(el('span', '', agent ?? ''));
+  };
+  agentChip.addEventListener('click', () => {
+    openMenu(
+      agentChip,
+      store.agents.map((/** @type {any} */ a) => ({
+        label: a.name,
+        checked: a.name === agent,
+        onSelect: () => {
+          agent = a.name;
+          drawAgent();
+        },
+      })),
+      { align: 'start' },
+    );
+  });
+  drawAgent();
+  const advanced = /** @type {HTMLDetailsElement} */ (el('details', 'lv-sched-advanced'));
+  advanced.open = !!(src.until || src.max_fires != null || src.expires_at != null);
+  const summary = el('summary', '');
+  summary.innerHTML = icon('chevron-right', { size: 14 });
+  summary.append(el('span', '', t('sched.advanced')));
+  const nets = el('div', 'lv-sched-pair');
+  nets.append(field(t('sched.maxFires'), maxFires), field(t('sched.expires'), expires));
+  advanced.append(summary, field(t('sched.untilLabel'), until, t('sched.untilHint')), nets);
+  if (store.agents.length > 1) advanced.append(field(t('sched.agentLabel'), agentChip));
+
+  // ---- foot
+  const foot = el('div', 'lv-sched-form-foot');
+  const cancel = button(t('sched.cancel'), null, () => dialog.close(), 'lv-btn lv-btn-ghost lv-btn-sm');
+  const submit = /** @type {HTMLButtonElement} */ (el('button', 'lv-btn lv-btn-primary lv-btn-sm', editing ? t('sched.save') : t('sched.add')));
+  submit.type = 'submit';
+  foot.append(cancel, submit);
+
+  form.append(
+    head,
+    field(t('sched.name'), name),
+    field(t('sched.instruction'), prompt),
+    field(t('sched.trigger'), when),
+  );
+  if (whereRow.childElementCount) form.append(field(t('sched.where'), whereRow, t('sched.unattended')));
+  if (results) form.append(field(t('sched.results'), results));
+  form.append(advanced, foot);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const message = prompt.value.trim();
+    if (!message) {
+      toast(t('sched.needInstruction'), { type: 'error' });
+      prompt.focus();
+      return;
+    }
+    let trig;
+    try {
+      trig = trigger();
+    } catch (err) {
+      toast(err.message, { type: 'error' });
+      return;
+    }
+    const cap = maxFires.value.trim();
+    if (cap && !(Number.isInteger(Number(cap)) && Number(cap) >= 1)) {
+      advanced.open = true;
+      maxFires.reportValidity();
+      return;
+    }
+    const expiry = fromLocalInput(expires.value);
+    /** @type {Record<string, unknown>} */
+    const body = {
+      name: name.value.trim() || null,
+      input: message,
+      trigger_kind: trig.kind,
+      trigger_expr: trig.expr,
+      until: until.value.trim() || null,
+      max_fires: cap ? Number(cap) : null,
+      expires_at: Number.isFinite(expiry) ? expiry : null,
+    };
+    if (store.agents.length > 1 && agent) body.agent = agent;
+    if (boundTo) body.session_id = continues ? boundTo : null;
+    // An edit sends where it works only when changed: an unchanged one is
+    // left as stored, even where this server would no longer offer it.
+    if (!editing || where.touched) {
+      if (workspacesOn() && where.root) body.workspace_root = where.root;
+      else if (editing && workspacesOn()) body.workspace_root = null;
+      if (modes && where.mode) body.workspace_mode = where.mode;
+    }
+    submit.disabled = true;
+    try {
+      let saved;
+      if (editing) {
+        saved = await api.updateSchedule(editing.id, body);
+      } else {
+        for (const k of Object.keys(body)) if (body[k] === null) delete body[k];
+        // A schedule is a deferred message: its fires get the page's context.
+        saved = await api.createSchedule({ ...body, context: collectContext() });
+      }
+      dialog.close();
+      store.emit('schedules-changed');
+      if (editing) onSaved?.();
+      else openView(`${VIEW}/${saved.id}`);
+    } catch (err) {
+      toast(err.message || t('sched.saveFailed'), { type: 'error' });
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
+  const dialog = showDialog({ body: form });
+  dialog.classList.add('lv-dialog-wide', 'lv-sched-dialog');
+  changed();
+  (src.input ? name : prompt).focus();
+  return dialog;
+}
+
+/** Serve the page: on a server with scheduling (main.js, from /api/info). */
+export function enableSchedules() {
+  registerBuiltinView(VIEW, {
+    get title() {
+      return t('sched.title');
+    },
+    render,
+  });
+  document.getElementById('schedules-btn')?.classList.remove('lv-hidden');
 }

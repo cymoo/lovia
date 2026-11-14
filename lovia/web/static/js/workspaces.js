@@ -76,6 +76,11 @@ export function canAddWorkspace() {
   return !!_list?.can_add;
 }
 
+/** The directories a new chat may pick, in the list's order. */
+export function workspaceChoices() {
+  return _list?.workspaces ?? [];
+}
+
 /** @param {string | null | undefined} root */
 function entry(root) {
   return root ? _list?.workspaces.find((w) => w.root === root) : undefined;

@@ -313,8 +313,11 @@ export const api = {
 
   // ---- schedules ----
   listSchedules: () => request('/api/schedules').then(_json),
-  // Create a scheduled run. `body`: { input, agent?, session_id?, trigger_kind,
-  // trigger_expr, until?, max_fires?, expires_at? }.
+  /** @param {string} id */
+  getSchedule: (id) => request(`/api/schedules/${encodeURIComponent(id)}`).then(_json),
+  // Create a scheduled run. `body`: { input, name?, agent?, session_id?,
+  // workspace_root?, workspace_mode?, trigger_kind, trigger_expr, until?,
+  // max_fires?, expires_at?, context? }.
   createSchedule: (body) =>
     request('/api/schedules', {
       method: 'POST',
@@ -325,9 +328,8 @@ export const api = {
     request(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(
       _json,
     ),
-  // Partial update: any subset of { input, agent, session_id, trigger_kind,
-  // trigger_expr, active, until, max_fires, expires_at } — the server
-  // revalidates and recomputes next_fire; explicit null clears a field.
+  // Partial update: any subset of createSchedule's fields plus `active` — the
+  // server revalidates and recomputes next_fire; explicit null clears a field.
   updateSchedule: (id, body) =>
     request(`/api/schedules/${encodeURIComponent(id)}`, {
       method: 'PATCH',
@@ -352,6 +354,15 @@ export const api = {
     request(`/api/schedules/${encodeURIComponent(id)}/runs${qs({ limit })}`).then(
       _json,
     ),
+  // A trigger's next fires were it saved now → { next_fires, utc_offset };
+  // rejects (422) with the reason when the trigger is invalid.
+  /** @param {string} trigger_kind @param {string} trigger_expr */
+  previewSchedule: (trigger_kind, trigger_expr) =>
+    request('/api/schedules/preview', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ trigger_kind, trigger_expr }),
+    }).then(_json),
 
   // ---- workspace (Files panel; read-only) ----
   /** @param {{ agent?: string }} [opts] */

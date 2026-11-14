@@ -347,6 +347,9 @@ downloads it otherwise; either way the conversation stays put. Inside the Files
 panel the same link opens in the viewer instead. External links in a reply also
 open in a new tab.
 
+In an empty composer, ↑ brings back this chat's earlier messages, newest
+first, to send again or edit; ↓ goes the other way, back to empty.
+
 To point the Agent at a file without attaching it, type `@` at the start of the
 message or after a space: the composer lists the chat folder's files, matched
 as you type — file names first, then folders, then the letters in order. ↑/↓
@@ -740,9 +743,8 @@ after the approval timeout. A stop condition and limits sit under the fold.
 Cron times follow the server's clock; the form says so when yours differs.
 
 A chat can also set one up: ask "every weekday at 9, summarize…" and approve
-the `schedule_run` call. Or pick **Schedule in this chat…** from a chat's ⋯
-menu: its runs then continue that chat, which shows its schedules in the top
-bar. A chat a schedule's run created carries a clock in the sidebar and links
+the `schedule_run` call. Its runs then continue that chat (unless you ask for
+a new chat each time), which shows its schedules in the top bar. A chat a schedule's run created carries a clock in the sidebar and links
 back to its schedule.
 
 ## Branching a chat

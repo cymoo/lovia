@@ -765,10 +765,16 @@ body.lv-sidebar-resizing {
   }
 }
 /* The chat's agent, at the row's end — shown only when there's a choice. */
+/* The mark follows the title's text: the title shrinks to it, and the mark
+   pushes what's left (agent, age) to the row's end. */
+.lv-session-title:has(+ .lv-session-branch) {
+  flex: 0 1 auto;
+}
 .lv-session-branch {
   display: inline-flex;
   flex-shrink: 0;
-  margin-right: -2px; /* the row's 8px gap is too loose for an inline mark */
+  margin-left: -3px; /* the row's 8px gap is too loose for an inline mark */
+  margin-right: auto;
   color: var(--lv-muted-2);
 }
 .lv-session-agent,

@@ -1330,6 +1330,8 @@ body.lv-view-open #composer {
 }
 body.lv-view-open #files-panel,
 body.lv-view-open #chat-title,
+body.lv-view-open #origin-btn,
+body.lv-view-open #chat-schedules-btn,
 body.lv-view-open #tasks-wrap,
 body.lv-view-open #chat-menu-btn,
 body.lv-view-open #files-btn {

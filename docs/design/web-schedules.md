@@ -1,6 +1,6 @@
 # 定时任务：从弹窗到页面
 
-> 状态：已定稿，实施中（第 1 个 PR：v0.9.200；第 2 个 PR：v0.9.201） · 2026-11-14 · 范围：`lovia/web`（`scheduler.py`、`scheduling.py`、`store.py`、`schemas.py`、`api/schedules.py`、`static/js/schedules.js`、`views.js`、`sessions.js`）。core 与 workspace 引擎不改。
+> 状态：已定稿，已实施（三个 PR：v0.9.200、v0.9.201、v0.9.202） · 2026-11-14 · 范围：`lovia/web`（`scheduler.py`、`scheduling.py`、`store.py`、`schemas.py`、`api/schedules.py`、`static/js/schedules.js`、`views.js`、`sessions.js`）。core 与 workspace 引擎不改。
 >
 > 行号指向 `main`（`afec54b7`，v0.9.199）。
 

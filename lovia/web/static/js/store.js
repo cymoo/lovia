@@ -28,6 +28,8 @@ export const store = {
   // produce them — the opposite default to canRewind, since asking a server
   // that has the feature disabled burns a request per run for nothing.
   canSuggest: false,
+  // The server runs schedules (features.scheduling): the chat menu offers one.
+  canSchedule: false,
   // The model connection is editable in Settings (features.model_config).
   // Off by default: embedder apps configure their agents in code.
   canConfigureModels: false,

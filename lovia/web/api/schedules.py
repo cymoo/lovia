@@ -168,7 +168,13 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
         message = spec.input.strip()
         if not message:
             raise WebError(422, "invalid_request", "empty input")
-        agent_name = _resolve_agent_name(deps, spec.agent)
+        asked = spec.agent
+        if asked is None and spec.session_id:
+            # Its fires continue that chat: by default, as the agent it has.
+            chat = await store.get(spec.session_id)
+            if chat is not None and chat.agent in deps.agents:
+                asked = chat.agent
+        agent_name = _resolve_agent_name(deps, asked)
         next_fire = _validated_next_fire(spec.trigger_kind, spec.trigger_expr)
         switch = deps.workspace_switch
         root, mode = _binding(

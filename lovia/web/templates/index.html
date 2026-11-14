@@ -113,6 +113,8 @@
       {% block topbar_actions %}{% endblock %}
       <!-- The chat this one was branched from; shown only on a branch. -->
       <button id="origin-btn" class="lv-btn lv-btn-ghost lv-btn-sm lv-origin-link" type="button" hidden data-part="origin"></button>
+      <!-- The schedules that continue this chat; shown only when it has any. -->
+      <button id="chat-schedules-btn" class="lv-btn lv-btn-ghost lv-btn-sm lv-origin-link" type="button" hidden data-part="chat-schedules"></button>
       <!-- This chat's background subagent tasks; shown only when it has any. -->
       <div class="lv-tasks-wrap" id="tasks-wrap" style="display:none" data-part="tasks">
         <button id="tasks-btn" class="lv-btn lv-btn-ghost lv-btn-sm" type="button" aria-haspopup="menu" aria-controls="tasks-popover" aria-expanded="false"></button>

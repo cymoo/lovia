@@ -13,6 +13,7 @@ import { api } from './api.js';
 import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { confirmDialog, segmented } from './ui.js';
+import { icon } from './icons.js';
 import {
   backButton,
   cfg,
@@ -57,6 +58,10 @@ function switchRow(labelText, control, hintText) {
   if (hintText) text.appendChild(el('div', 'lv-cfg-hint', hintText));
   control.setAttribute('aria-label', labelText);
   row.append(text, control);
+  // The whole row toggles, as on the General page.
+  row.addEventListener('click', (e) => {
+    if (!control.contains(/** @type {Node} */ (e.target))) control.click();
+  });
   return row;
 }
 
@@ -224,16 +229,26 @@ export function buildAgentsPane() {
     back.addEventListener('click', toList);
     head.append(back, el('span', 'lv-cfg-pane-title', id ? t('agent.edit') : t('agent.new')));
     box.appendChild(head);
-    const form = el('div', 'lv-cfg-form');
+    // Sections divided by a rule, switch lists on a card: the schedule
+    // form's layout.
+    const form = el('div', 'lv-cfg-form lv-agent-form');
+    const section = () => form.appendChild(el('section', 'lv-agent-section'));
+    /** A grey card around a mode note or a list of switch rows. @param {HTMLElement[]} rows */
+    const card = (...rows) => {
+      const c = el('div', 'lv-agent-card');
+      c.append(...rows);
+      return c;
+    };
 
     // ---- who it is
+    const who = section();
     const nameIn = input(a.name || '', { placeholder: id || t('agent.namePlaceholder') });
-    form.appendChild(field(t('agent.name'), nameIn));
+    who.appendChild(field(t('agent.name'), nameIn));
     const prompt = /** @type {HTMLTextAreaElement} */ (el('textarea', 'lv-dialog-input lv-cfg-input'));
     prompt.rows = 5;
     prompt.value = a.instructions || '';
     prompt.placeholder = t('cfg.instructionsPlaceholder');
-    form.appendChild(field(t('cfg.instructions'), prompt, t('cfg.instructionsHint')));
+    who.appendChild(field(t('cfg.instructions'), prompt, t('cfg.instructionsHint')));
 
     // ---- what it runs on
     const model = /** @type {HTMLSelectElement} */ (el('select', 'lv-dialog-input'));
@@ -251,16 +266,18 @@ export function buildAgentsPane() {
       model.appendChild(opt);
     }
     model.value = a.model || '';
-    form.appendChild(field(t('agent.model'), model, t('agent.modelHint')));
+    const runs = section();
+    runs.appendChild(field(t('agent.model'), model, t('agent.modelHint')));
 
-    // ---- permissions (left out when the launch fixed them)
+    // ---- permissions (left out when the launch fixed them): the mode's
+    // tabs over a card that says what it allows
     let mode = a.mode;
     /** @type {Map<string, () => boolean>} */
     const bundles = new Map();
     if (perms.lock) {
-      form.appendChild(notice(t(`cfg.wsLock_${perms.lock}`)));
+      runs.appendChild(notice(t(`cfg.wsLock_${perms.lock}`)));
     } else {
-      const modeHint = el('div', 'lv-cfg-hint');
+      const modeHint = el('div', 'lv-agent-card-note');
       const modeCtl = segmented(
         perms.modes.map((/** @type {string} */ m) => [m, modeLabel(m)]),
         mode,
@@ -269,24 +286,25 @@ export function buildAgentsPane() {
           sync();
         },
       );
-      const modeField = field(t('agent.mode'), modeCtl);
-      modeField.appendChild(modeHint);
-      form.appendChild(modeField);
-      const rows = el('div', 'lv-cfg-switches');
+      const group = el('div', 'lv-agent-card-group');
+      group.setAttribute('role', 'group');
+      group.setAttribute('aria-label', t('cfg.autoAllow'));
+      group.appendChild(el('div', 'lv-agent-card-head', t('cfg.autoAllow')));
       for (const name of perms.bundles) {
         const sw = switchControl(a.auto_allow.includes(name));
         bundles.set(name, sw.value);
-        rows.appendChild(switchRow(t(`cfg.bundle_${name}`), sw.node, t(`cfg.bundleHint_${name}`)));
+        group.appendChild(switchRow(t(`cfg.bundle_${name}`), sw.node, t(`cfg.bundleHint_${name}`)));
       }
-      const bundleField = field(t('cfg.autoAllow'), rows, t('cfg.autoAllowHint'));
-      form.appendChild(bundleField);
+      const modeField = field(t('agent.mode'), modeCtl);
+      modeField.appendChild(card(modeHint, group));
+      runs.appendChild(modeField);
       // Auto-allowed commands mean something in coding mode only: the other
       // modes never ask (trusted) or never run one (read-only). Hidden there,
       // not greyed — a dimmed list reads as a setting that still applies.
       // Its choices are kept, and saved, either way.
       const sync = () => {
         modeHint.textContent = t('agent.modeHint', { mode: t(`cfg.modeHint_${mode}`) });
-        bundleField.hidden = mode !== 'coding';
+        group.hidden = mode !== 'coding';
       };
       sync();
     }
@@ -297,10 +315,9 @@ export function buildAgentsPane() {
     const memory = switchControl(a.memory);
     const subagents = switchControl(a.subagents);
     const followups = switchControl(a.followups);
-    const switches = el('div', 'lv-cfg-switches');
     const servers = c.mcp?.servers || [];
     const enabled = servers.filter((/** @type {any} */ s) => s.enabled).length;
-    switches.append(
+    const abilities = card(
       switchRow(t('agent.search'), search.node, t('agent.searchHint')),
       switchRow(
         t('agent.mcp'),
@@ -311,13 +328,19 @@ export function buildAgentsPane() {
       switchRow(t('cfg.subagents'), subagents.node, t('cfg.subagentsHint')),
       switchRow(t('cfg.followups'), followups.node, t('cfg.followupsHint')),
     );
-    form.appendChild(field(t('agent.abilities'), switches));
+    section().appendChild(field(t('agent.abilities'), abilities));
 
-    // ---- Advanced: what few change. Open when it holds a change already,
-    // so a setting never hides behind a closed fold.
-    const adv = /** @type {HTMLDetailsElement} */ (el('details', 'lv-cfg-advanced'));
-    adv.appendChild(el('summary', '', t('cfg.advanced')));
+    // ---- Advanced: what few change. Folded, its row says what is set; open
+    // when that is a change already, so a setting never hides behind a fold.
+    const adv = /** @type {HTMLDetailsElement} */ (el('details', 'lv-agent-advanced'));
+    const summary = el('summary');
+    summary.innerHTML = icon('chevron-right', { size: 14 });
+    const summaryText = el('span', 'lv-agent-advanced-set');
+    summary.append(el('span', 'lv-agent-advanced-title', t('cfg.advanced')), summaryText);
+    adv.appendChild(summary);
     adv.open = a.skills != null || a.max_turns !== DEFAULT_MAX_TURNS || a.max_retries != null;
+    const advBody = el('div', 'lv-agent-advanced-body');
+    adv.appendChild(advBody);
     form.appendChild(adv);
 
     // skills: the global directories, or its own list
@@ -335,23 +358,39 @@ export function buildAgentsPane() {
       (/** @type {string} */ val) => {
         ownSkills = val === 'own';
         dirsIn.hidden = !ownSkills;
+        drawSummary();
       },
     );
     dirsIn.hidden = !ownSkills;
     const skillsField = field(t('settings.tabSkills'), skillsSeg, t('agent.skillsHint'));
     skillsField.appendChild(dirsIn);
-    adv.appendChild(skillsField);
+    advBody.appendChild(skillsField);
 
-    // run limits
+    // run limits, side by side
     const turns = input(String(a.max_turns));
     turns.inputMode = 'numeric';
-    adv.appendChild(field(t('cfg.maxTurns'), turns, t('cfg.maxTurnsHint')));
     // Empty means the core default: say how many that is.
+    const defaultRetries = c.defaults?.max_retries ?? 4;
     const retries = input(a.max_retries == null ? '' : String(a.max_retries), {
-      placeholder: t('cfg.maxRetriesAuto', { n: c.defaults?.max_retries ?? 4 }),
+      placeholder: t('cfg.maxRetriesAuto', { n: defaultRetries }),
     });
     retries.inputMode = 'numeric';
-    adv.appendChild(field(t('cfg.maxRetries'), retries, t('cfg.maxRetriesHint')));
+    const limits = el('div', 'lv-agent-pair');
+    limits.append(
+      field(t('cfg.maxTurns'), turns, t('cfg.maxTurnsHint')),
+      field(t('cfg.maxRetries'), retries, t('cfg.maxRetriesHint')),
+    );
+    advBody.appendChild(limits);
+
+    function drawSummary() {
+      const dirs = dirsIn.value.split('\n').filter((d) => d.trim()).length;
+      const parts = [ownSkills ? t('agent.skillsOwnShort', { n: dirs }) : t('agent.skillsGlobal')];
+      if (turns.value.trim()) parts.push(t('agent.turnsShort', { n: turns.value.trim() }));
+      parts.push(t('agent.retriesShort', { n: retries.value.trim() || defaultRetries }));
+      summaryText.textContent = parts.join(' · ');
+    }
+    for (const n of [dirsIn, turns, retries]) n.addEventListener('input', drawSummary);
+    drawSummary();
 
     if (!c.writable) {
       for (const ctl of form.querySelectorAll('input, textarea, select, button')) {

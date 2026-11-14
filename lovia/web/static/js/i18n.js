@@ -516,9 +516,7 @@ const MESSAGES = {
     'settings.tabAbout': '关于',
 
     'mcp.title': 'MCP 服务器',
-    'mcp.intro':
-      'Agent 可以使用这些服务器提供的工具。每条消息开始时连接，回复结束后断开；每次调用工具前都会先问你。工作区的“仅查看”只限制文件和 shell，管不到 MCP 工具对外部系统的操作。',
-    'mcp.notInstalled': '还没有安装 MCP 支持，所有服务器都会被跳过。安装后重启 lovia web：',
+    'mcp.intro': 'Agent 可用这些服务器的工具；除“完全权限”外，调用前都会先问你。',
     'mcp.empty': '还没有添加服务器。可以直接粘贴 Claude Desktop、Cursor 等客户端的 mcpServers 配置。',
     'mcp.add': '添加服务器',
     'mcp.newTitle': '添加 MCP 服务器',
@@ -1254,9 +1252,7 @@ const EN = {
   'settings.tabAbout': 'About',
 
   'mcp.title': 'MCP servers',
-  'mcp.intro':
-    'Agents can use the tools these servers offer. Each message connects to them as it starts and disconnects when the reply is done; every tool call asks you first. A workspace’s read-only mode limits files and the shell — not what MCP tools do to outside systems.',
-  'mcp.notInstalled': 'MCP support isn’t installed, so every server is skipped. Install it, then restart lovia web:',
+  'mcp.intro': 'Agents can use these servers’ tools; each call asks you first, except in Full access.',
   'mcp.empty': 'No servers yet. You can paste the mcpServers JSON from Claude Desktop, Cursor and other clients as it is.',
   'mcp.add': 'Add server',
   'mcp.newTitle': 'Add MCP servers',

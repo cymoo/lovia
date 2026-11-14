@@ -257,9 +257,11 @@ prefixes its tools (`docs__search`), so it is letters, digits, `-` and `_`.
 - **Connected per message.** Each run connects to the servers as it starts,
   one after another, and closes them when it ends — an `npx` server makes
   every message start a little later. Nothing stays running between runs.
-- **Every tool call asks first**, whatever the chat's permission mode: the
-  workspace modes govern files and the shell, not what an MCP tool does to
-  an outside system. Remembered approvals work as for any tool.
+- **Every tool call asks first**, except in **Full access**: View only and
+  Edit in workspace govern files and the shell, not what an MCP tool does to an
+  outside system, while a Full access shell already reaches those systems
+  unasked (`curl`, `gh`), so a prompt there would protect nothing. The card
+  offers **Always allow in this chat** for that tool, as for a command.
 - **No replays.** A call whose connection drops fails; the server may still
   have done it, and the error says so instead of trying again.
 - **A server that can't be reached is skipped.** It has 30 seconds to start
@@ -277,8 +279,7 @@ prefixes its tools (`docs__search`), so it is letters, digits, `-` and `_`.
   and `url` are shown as written, so a token belongs in `env` or `headers`,
   not in an argument or the URL's query.
 
-Without the `mcp` extra installed (`pip install 'lovia[mcp]'`), the page says
-so and every server is skipped. Servers are saved in `config.json` as `mcp`.
+MCP support comes with the `web` extra. Servers are saved in `config.json` as `mcp`.
 Background subagent tasks don't get MCP tools: no one is there to approve
 their calls.
 

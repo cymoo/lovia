@@ -9,7 +9,7 @@ import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { confirmDialog } from './ui.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
-import { cfg, el, field, ghostBtn, loadConfig, notice, readOnlyNotice, scopeFootnote } from './model-config.js';
+import { cfg, el, field, ghostBtn, loadConfig, readOnlyNotice, scopeFootnote } from './model-config.js';
 import { switchControl } from './agent-config.js';
 
 /** @typedef {{ ok: boolean, at: number, tools: string[], error: string | null }} McpStatus */
@@ -158,12 +158,6 @@ export function buildMcpPane() {
     }
     box.appendChild(head);
     box.appendChild(el('div', 'lv-cfg-hint lv-mcp-intro', t('mcp.intro')));
-
-    if (!mcp.available) {
-      const box2 = notice(t('mcp.notInstalled'));
-      box2.appendChild(el('code', 'lv-mcp-install', "pip install 'lovia[mcp]'"));
-      box.appendChild(box2);
-    }
 
     if (!servers.length) {
       const empty = el('div', 'lv-mcp-empty');

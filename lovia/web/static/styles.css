@@ -6961,17 +6961,6 @@ body.lv-files-resizing {
   margin-bottom: 14px;
   line-height: 1.55;
 }
-.lv-mcp-install {
-  display: block;
-  width: fit-content;
-  margin-top: 6px;
-  padding: 2px 7px;
-  font-family: var(--lv-mono);
-  font-size: 12px;
-  background: var(--lv-surface-2);
-  border-radius: var(--lv-radius-sm);
-  user-select: all;
-}
 .lv-mcp-empty {
   display: flex;
   flex-direction: column;

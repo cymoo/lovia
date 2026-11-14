@@ -16,9 +16,9 @@ export function approvalHeading(name) {
 }
 
 /**
- * A grant scope as a person reads it: the command for `shell:` (the card
- * already says it is about commands), "read ~/notes" for a path scope, and
- * anything else — a deployer's own kinds — verbatim.
+ * A grant scope as a person reads it: the command for `shell:` and the tool
+ * for `mcp:` (the card already says what kind it is), "read ~/notes" for a
+ * path scope, and anything else — a deployer's own kinds — verbatim.
  * @param {string} scope
  */
 export function scopeLabel(scope) {
@@ -26,7 +26,7 @@ export function scopeLabel(scope) {
   const kind = scope.slice(0, i);
   const what = scope.slice(i + 1);
   if (i > 0 && what) {
-    if (kind === 'shell') return what;
+    if (kind === 'shell' || kind === 'mcp') return what;
     if (kind === 'read') return t('approval.scopeRead', { path: what });
     if (kind === 'write') return t('approval.scopeWrite', { path: what });
   }

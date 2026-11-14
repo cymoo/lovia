@@ -148,6 +148,7 @@ async function remove(s) {
     // A 404 means it is gone already: the list will agree.
     if (err.status !== 404) toast(err.message || t('sched.deleteFailed'), { type: 'error' });
   }
+  store.emit('schedules-changed'); // the top bar's list of the chat's schedules
   openView(VIEW);
 }
 
@@ -1204,8 +1205,12 @@ export function enableSchedules() {
   document.getElementById('schedules-btn')?.classList.remove('lv-hidden');
   store.canSchedule = true;
   // The chat menu's "schedule in this chat" (sessions.js).
-  store.on('schedule-chat', (/** @type {{ id: string, title?: string }} */ chat) =>
-    openScheduleForm({ preset: { session_id: chat.id, session_title: chat.title } }),
+  // Its runs continue that chat, so they take its agent — not the one the
+  // page has open (the menu may be a sidebar row's).
+  store.on('schedule-chat', (/** @type {{ id: string, title?: string, agent?: string | null }} */ chat) =>
+    openScheduleForm({
+      preset: { session_id: chat.id, session_title: chat.title, agent: chat.agent ?? null },
+    }),
   );
   store.on('session-id', drawChatChip);
   store.on('schedules-changed', reloadChatSchedulesSoon);

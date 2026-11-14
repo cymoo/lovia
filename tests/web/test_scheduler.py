@@ -719,6 +719,23 @@ def test_api_create_defaults_to_the_first_agent() -> None:
     assert r.json()["agent"] == "alpha"
 
 
+def test_api_a_schedule_continuing_a_chat_defaults_to_its_agent() -> None:
+    agents = {
+        "alpha": _agent([text("a")], name="alpha"),
+        "beta": _agent([text("b")], name="beta"),
+    }
+    store = ChatStore.in_memory()
+    asyncio.run(store.upsert("c1", agent="beta", title="Beta's chat"))
+    c = TestClient(create_app(agents, store=store, titles=False))
+    base = {"input": "x", "trigger_kind": "every", "trigger_expr": "60"}
+    bound = c.post("/api/schedules", json={**base, "session_id": "c1"}).json()
+    assert bound["agent"] == "beta"
+    # Asked for, an agent still wins; a fresh-chat schedule keeps the default.
+    asked = {**base, "session_id": "c1", "agent": "alpha"}
+    assert c.post("/api/schedules", json=asked).json()["agent"] == "alpha"
+    assert c.post("/api/schedules", json=base).json()["agent"] == "alpha"
+
+
 # --------------------------------------------------------------------------- #
 # concurrency cap
 # --------------------------------------------------------------------------- #

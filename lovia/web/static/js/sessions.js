@@ -987,7 +987,7 @@ function chatActions(s) {
       : [{
           label: t('session.schedule'),
           icon: icon('clock', { size: 14 }),
-          onSelect: () => store.emit('schedule-chat', { id: s.id, title: s.title }),
+          onSelect: () => store.emit('schedule-chat', { id: s.id, title: s.title, agent: s.agent }),
         }]),
     // Out of the list without deleting it (the view menu shows the archive).
     ...(s.parent_id

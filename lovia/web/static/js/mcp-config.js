@@ -9,7 +9,7 @@ import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { confirmDialog } from './ui.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
-import { cfg, el, field, ghostBtn, loadConfig, readOnlyNotice, scopeFootnote } from './model-config.js';
+import { backButton, cfg, el, field, ghostBtn, loadConfig, readOnlyNotice, scopeFootnote } from './model-config.js';
 import { switchControl } from './agent-config.js';
 
 /** @typedef {{ ok: boolean, at: number, tools: string[], error: string | null }} McpStatus */
@@ -243,9 +243,7 @@ export function buildMcpPane() {
     const box = el('div');
 
     const head = el('div', 'lv-cfg-form-head');
-    const back = el('button', 'lv-btn-icon lv-cfg-back', '‹');
-    back.setAttribute('type', 'button');
-    back.setAttribute('aria-label', t('cfg.backLabel'));
+    const back = backButton();
     const leave = () => {
       view = { name: 'list' };
       render();

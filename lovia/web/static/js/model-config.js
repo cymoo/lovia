@@ -69,6 +69,15 @@ export function el(tag, className, text) {
   return node;
 }
 
+/** A form's way back to its list: the head's leading chevron. */
+export function backButton() {
+  const back = el('button', 'lv-btn-icon lv-cfg-back');
+  back.setAttribute('type', 'button');
+  back.setAttribute('aria-label', t('cfg.backLabel'));
+  back.innerHTML = icon('chevron-left', { size: 16 });
+  return back;
+}
+
 /** A plain note above a settings form. */
 export function notice(text) {
   const box = el('div', 'lv-cfg-notice', text);
@@ -426,9 +435,7 @@ export function buildModelsPane() {
     const box = el('div');
 
     const head = el('div', 'lv-cfg-form-head');
-    const back = el('button', 'lv-btn-icon lv-cfg-back', '‹');
-    back.setAttribute('type', 'button');
-    back.setAttribute('aria-label', t('cfg.backLabel'));
+    const back = backButton();
     back.addEventListener('click', () => {
       view = { name: 'list' };
       render();

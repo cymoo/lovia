@@ -192,7 +192,7 @@ Served with `lovia.web`, `scope=chat_project` splits memory by the chat's
 directory — what `lovia web` does. Its key is the chat's workspace (a
 resolved path, or `ssh://…` / `docker://…`), and a chat in the
 `WorkspaceSwitch(general=)` catch-all, or without a workspace, has no scope.
-The Memory dialog's per-project tab shows only for a Memory scoped by it:
+The project scope in Settings → Memory shows only for a Memory scoped by it:
 
 ```python
 from lovia.web import chat_project

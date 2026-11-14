@@ -17,13 +17,12 @@ import {
 import {
   initSessions,
   initEventStream,
-  loadSessions,
+  loadFirstSessions,
   startNewChat,
   switchSession,
 } from './sessions.js';
 import { enableSchedules } from './schedules.js';
 import { initFiles } from './files.js';
-import { initMemory } from './memory.js';
 import { initModelConfig } from './model-config.js';
 import { initWorkspaceMode } from './workspace-mode.js';
 import { initWorkspaces } from './workspaces.js';
@@ -292,7 +291,6 @@ window.lovia = lovia;
   initComposer();
   initSessions();
   initFiles();
-  initMemory();
   initSettings();
   initKeyboardShortcuts();
   initViews();
@@ -332,7 +330,7 @@ window.lovia = lovia;
   // Restore session from URL query string (?session=xxx).
   // Wait for the initial session list to land so the sidebar
   // is populated before we mark one as active.
-  await loadSessions();
+  await loadFirstSessions();
   const sid = store.readSessionFromURL();
   if (sid) {
     await switchSession(sid).catch(() => {});

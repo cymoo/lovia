@@ -173,7 +173,7 @@ def resolve_memory(enabled: bool, root: str | Path) -> Memory | None:
     log.info("memory enabled at %s", path)
     # Long-lived server: curation must not hold back each run's final event.
     # Split by project: notes about the user everywhere, the rest per chat
-    # directory (the Memory editor's two tabs).
+    # directory (the Memory page's two scopes).
     return Memory(
         str(path),
         curate_in_background=True,

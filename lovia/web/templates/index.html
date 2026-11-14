@@ -69,25 +69,18 @@
     </div>
   </div>
   <!-- App-level destinations up top (the ChatGPT/Claude pattern): starting a
-       chat, what the agent remembers, what it runs on a schedule. All
-       cross-chat concerns — the per-chat topbar stays chat-scoped. -->
+       chat, what runs on a schedule. Cross-chat concerns — the per-chat
+       topbar stays chat-scoped. Settings (memory included) sits at the
+       bottom, where it is looked for. -->
   <nav class="lv-sidebar-nav" aria-label="App" data-part="sidebar-nav">
     <button id="new-chat" class="lv-sidebar-nav-item" type="button" title="New chat" aria-label="New chat" data-part="new-chat" data-i18n-title="nav.newChat" data-i18n-aria="nav.newChat">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>
       <span data-i18n="nav.newChat">New chat</span>
     </button>
-    <button id="memory-btn" class="lv-sidebar-nav-item lv-hidden" type="button" title="What the agent remembers about you" aria-haspopup="dialog" data-part="memory" data-i18n-title="nav.memoryTitle">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg>
-      <span data-i18n="nav.memory">Memory</span>
-    </button>
     <a id="schedules-btn" class="lv-sidebar-nav-item lv-hidden" href="?view=lovia-schedules" title="Runs on a schedule" data-part="schedules" data-i18n-title="nav.schedulesTitle">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       <span data-i18n="nav.schedules">Scheduled runs</span>
     </a>
-    <button id="settings-btn" class="lv-sidebar-nav-item" type="button" title="Settings" aria-haspopup="dialog" data-part="settings" data-i18n-title="nav.settings">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-      <span data-i18n="nav.settings">Settings</span>
-    </button>
     {% block sidebar_nav %}{% endblock %}
   </nav>
   <div class="lv-sidebar-section-label" data-part="sessions-label" data-i18n="nav.chats">Chats</div>
@@ -95,6 +88,14 @@
     <input type="search" id="session-search" class="lv-search-input" placeholder="Filter…" aria-label="Filter chats" autocomplete="off" data-i18n-placeholder="nav.filterChats" data-i18n-aria="nav.filterChats" />
   </div>
   <nav id="sessions-list" class="lv-sessions-list" aria-label="Chat sessions" data-part="sessions"></nav>
+  <!-- Kept in the collapsed rail like the nav (it shares the nav's class),
+       pinned to the bottom. -->
+  <div class="lv-sidebar-nav lv-sidebar-foot">
+    <button id="settings-btn" class="lv-sidebar-nav-item" type="button" title="Settings" aria-haspopup="dialog" data-part="settings" data-i18n-title="nav.settings">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span data-i18n="nav.settings">Settings</span>
+    </button>
+  </div>
   {% block sidebar_footer %}{% endblock %}
   <div id="sidebar-resizer" class="lv-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar (arrow keys; double-click resets)" aria-controls="sidebar" tabindex="0" data-i18n-aria="nav.resize"></div>
 </aside>

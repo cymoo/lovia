@@ -14,6 +14,7 @@ import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { confirmDialog, segmented } from './ui.js';
 import {
+  backButton,
   cfg,
   el,
   field,
@@ -215,9 +216,7 @@ export function buildAgentsPane() {
     };
     const box = el('div');
     const head = el('div', 'lv-cfg-form-head');
-    const back = el('button', 'lv-btn-icon lv-cfg-back', '‹');
-    back.setAttribute('type', 'button');
-    back.setAttribute('aria-label', t('cfg.backLabel'));
+    const back = backButton();
     const toList = () => {
       view = { name: 'list' };
       render();

@@ -1,16 +1,19 @@
-// settings.js — the Settings dialog: a left-rail shell (General / Models /
-// Web search / Skills / MCP / Agents / About) in a wide dialog. General holds
-// the client-side preferences (localStorage: language, theme, text size,
-// Enter behavior, notifications, sound); the server panes edit config.json
-// through model-config.js and agent-config.js and appear only when the
-// server reports features.model_config.
+// settings.js — the Settings dialog: a left-rail shell in a wide dialog, its
+// tabs in three groups. Yours: General (this browser's preferences in
+// localStorage — language, theme, text size, Enter behavior, notifications,
+// sound) and Memory (memory.js; when an agent has it). The server's, shared
+// by everyone on it, shown only when it reports features.model_config:
+// Models, Agents, Skills, MCP, Web search (config.json through
+// model-config.js, agent-config.js, mcp-config.js). Then About.
 import { segmented, showDialog, setThemePref, themePref } from './ui.js';
 import { t, languages, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
+import { icon } from './icons.js';
 import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
 import { buildAgentsPane } from './agent-config.js';
 import { buildMcpPane } from './mcp-config.js';
+import { hasMemory, memoryPane } from './memory.js';
 
 const NOTIF_KEY = 'lovia-notify';
 const SOUND_KEY = 'lovia-sound';
@@ -217,18 +220,23 @@ function buildGeneralPane() {
   );
   panel.appendChild(field(t('settings.textSize'), textSize));
 
-  // Enter behavior — read live by the composer, so no reload needed.
-  const enter = select(
+  // Enter behavior — read live by the composer, so no reload needed. The
+  // hint spells out the other key of the pair.
+  const enterHint = (v) => t(v === 'send' ? 'settings.enterSendHint' : 'settings.enterNewlineHint');
+  const enterNow = enterToSend() ? 'send' : 'newline';
+  const enter = segmented(
     [
       ['send', t('settings.enterSend')],
       ['newline', t('settings.enterNewline')],
     ],
-    enterToSend() ? 'send' : 'newline',
+    enterNow,
+    (v) => {
+      localStorage.setItem(ENTER_KEY, v === 'send' ? '1' : '0');
+      enterRow.querySelector('.lv-settings-hint').textContent = enterHint(v);
+    },
   );
-  enter.addEventListener('change', () => {
-    localStorage.setItem(ENTER_KEY, enter.value === 'send' ? '1' : '0');
-  });
-  panel.appendChild(field(t('settings.enterBehavior'), enter));
+  const enterRow = field(t('settings.enterBehavior'), enter, enterHint(enterNow));
+  panel.appendChild(enterRow);
 
   // Desktop notifications for finished background runs.
   if (typeof Notification !== 'undefined') {
@@ -270,24 +278,33 @@ function buildGeneralPane() {
 
 /**
  * Open the Settings dialog on a given tab.
- * @param {'general' | 'models' | 'search' | 'skills' | 'mcp' | 'agents' | 'about'} [initialTab]
+ * @param {'general' | 'memory' | 'models' | 'agents' | 'skills' | 'mcp' | 'search' | 'about'} [initialTab]
+ * @param {{ root?: string }} [opts] For Memory: open on this directory's project memory.
  */
-export function openSettings(initialTab = 'general') {
-  const tabs = [
-    { id: 'general', label: t('settings.tabGeneral'), build: buildGeneralPane },
-  ];
-  if (store.canConfigureModels) {
-    tabs.push(
-      // What the agents connect to, what they can know, then who they are.
-      // One page per service.
-      { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
-      { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
-      { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
-      { id: 'mcp', label: t('settings.tabMcp'), build: buildMcpPane },
-      { id: 'agents', label: t('settings.tabAgents'), build: buildAgentsPane },
-    );
-  }
-  tabs.push({ id: 'about', label: t('settings.tabAbout'), build: buildAboutPane });
+export function openSettings(initialTab = 'general', opts = {}) {
+  /** @typedef {{ id: string, label: string, build: () => HTMLElement }} Tab */
+  /** @type {Tab[][]} */
+  const groups = [
+    [
+      { id: 'general', label: t('settings.tabGeneral'), build: buildGeneralPane },
+      ...(hasMemory()
+        ? [{ id: 'memory', label: t('settings.tabMemory'), build: memoryPane(opts) }]
+        : []),
+    ],
+    // The server's configuration: what the agents run on first (nothing
+    // works without a model), then who they are and what they can use.
+    store.canConfigureModels
+      ? [
+          { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
+          { id: 'agents', label: t('settings.tabAgents'), build: buildAgentsPane },
+          { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
+          { id: 'mcp', label: t('settings.tabMcp'), build: buildMcpPane },
+          { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
+        ]
+      : [],
+    [{ id: 'about', label: t('settings.tabAbout'), build: buildAboutPane }],
+  ].filter((g) => g.length);
+  const tabs = groups.flat();
 
   const shell = document.createElement('div');
   shell.className = 'lv-settings-shell';
@@ -300,7 +317,7 @@ export function openSettings(initialTab = 'general') {
   close.type = 'button';
   close.className = 'lv-btn-icon lv-settings-close';
   close.setAttribute('aria-label', t('dialog.close'));
-  close.textContent = '✕';
+  close.innerHTML = icon('x', { size: 16 });
   head.append(h, close);
   shell.appendChild(head);
 
@@ -326,18 +343,26 @@ export function openSettings(initialTab = 'general') {
     const tab = tabs.find((item) => item.id === id);
     pane.replaceChildren(tab ? tab.build() : document.createElement('div'));
   };
-  for (const tab of tabs) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'lv-settings-rail-item';
-    btn.id = `settings-tab-${tab.id}`;
-    btn.setAttribute('role', 'tab');
-    btn.setAttribute('aria-controls', 'settings-pane');
-    btn.textContent = tab.label;
-    btn.addEventListener('click', () => activate(tab.id));
-    buttons.set(tab.id, btn);
-    rail.appendChild(btn);
-  }
+  groups.forEach((group, i) => {
+    if (i) {
+      const sep = document.createElement('div');
+      sep.className = 'lv-settings-rail-sep';
+      sep.setAttribute('role', 'presentation');
+      rail.appendChild(sep);
+    }
+    for (const tab of group) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'lv-settings-rail-item';
+      btn.id = `settings-tab-${tab.id}`;
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-controls', 'settings-pane');
+      btn.textContent = tab.label;
+      btn.addEventListener('click', () => activate(tab.id));
+      buttons.set(tab.id, btn);
+      rail.appendChild(btn);
+    }
+  });
   body.append(rail, pane);
   shell.appendChild(body);
 

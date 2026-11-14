@@ -165,7 +165,7 @@ await mem.clear_scope("/srv/app")          # 不可撤销
 
 用 `lovia.web` 提供服务时，`scope=chat_project` 按对话所在的目录分层，`lovia web` 就是这样做的。
 键是对话的工作区（解析后的路径，或 `ssh://…` / `docker://…`）；在 `WorkspaceSwitch(general=)`
-那个"无项目"目录里的对话、没有工作区的对话，都不属于任何作用域。记忆对话框的"本项目"标签
+那个"无项目"目录里的对话、没有工作区的对话，都不属于任何作用域。设置 → 记忆里的"项目"范围
 只对用它分层的 `Memory` 出现：
 
 ```python

@@ -186,8 +186,8 @@ only the blocks you need:
 | --- | --- |
 | `head` | End of `<head>`: meta tags, preloads |
 | `sidebar_header` | Top of the sidebar; wraps the title (or `logo`), so filling it replaces both — a logo with a name beside it, say |
-| `sidebar_nav` | End of the sidebar's navigation, under Settings: links of your own |
-| `sidebar_footer` | Bottom of the sidebar: a user menu, a sign-out link |
+| `sidebar_nav` | End of the sidebar's navigation, under Scheduled runs: links of your own |
+| `sidebar_footer` | Bottom of the sidebar, under Settings: a user menu, a sign-out link |
 | `topbar_actions` | Start of the top bar's button group |
 | `composer_actions` | In the composer's bar under the message, beside the attach button: a mode switch, a picker |
 | `welcome` | The blank chat state's content; `{{ super() }}` keeps the default title, description and examples. The page restores it on "New chat" |
@@ -248,7 +248,7 @@ internal; select regions by `data-part`.
 
 | Region | `data-part` |
 | --- | --- |
-| Sidebar | `sidebar`, `sidebar-header`, `sidebar-toggle`, `sidebar-nav`, `new-chat`, `memory`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
+| Sidebar | `sidebar`, `sidebar-header`, `sidebar-toggle`, `sidebar-nav`, `new-chat`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
 | Top bar | `topbar`, `chat-title`, `topbar-actions`, `tasks`, `chat-menu` (the open chat's pin / rename / branch / export / delete), `files-toggle` |
 | Views | `view` (the container an open [view](#views) draws in) |
 | Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"` and `data-status`: `running`, `awaiting` the user — a question — then `done` or `error`), `activity` (two or more consecutive reasoning / tool steps folded under one summary line; it closes once the reply's text starts), `message-actions` (a message's [actions](#message-actions); each button has `data-action="<id>"`) |

@@ -372,6 +372,7 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
         .finally(() => { pending.loading = false; });
     }
     _runsPrimed = true;
+    _listLoaded = true;
     renderSessions();
     loadCurrentTasks();
     // Each snapshot (after a reconnect too) carries per-chat state that
@@ -1341,13 +1342,27 @@ export function initSearch() {
 }
 
 // ---- Init ----------------------------------------------------------------
-/** Boot the session sidebar: initial load, search, and background-run polling/notifications. */
+// The runs watermark as the page opened, for the catch-up after the first list.
+let _bootSeen = NaN;
+// Whether a list has landed: until then the sidebar draws nothing.
+let _listLoaded = false;
+
+/**
+ * The first chat list, with the catch-up on runs that finished while no page
+ * was open (after it, so their titles resolve). main.js calls it once the
+ * workspace list has booted: drawn earlier, the list would show flat, then
+ * regroup by folder.
+ */
+export async function loadFirstSessions() {
+  await loadSessions();
+  void checkMissedRuns(_bootSeen);
+}
+
+/** Boot the session sidebar: search, and background-run polling/notifications. */
 export function initSessions() {
-  // Catch-up runs after the first session load so titles are resolvable.
-  // Capture the watermark before loading: a live completion must not advance
-  // it past older, unseen results while the initial request is in flight.
-  const seen = _readRunsSeen();
-  loadSessions().then(() => checkMissedRuns(seen));
+  // Captured now, before anything loads: a live completion must not advance
+  // it past older, unseen results while the first list is in flight.
+  _bootSeen = _readRunsSeen();
   initSearch();
 
   document.getElementById('new-chat')?.addEventListener('click', startNewChat);
@@ -1381,9 +1396,12 @@ export function initSessions() {
     _workspacesRev++;
     void loadSessions();
   });
-  // Agents usually land after the first session render — the signature covers
-  // the flip, so this redraws exactly once to add the agent chips.
-  store.on('agents-loaded', renderSessions);
+  // Agents may land after the first list — the signature covers the flip, so
+  // this redraws exactly once to add the agent chips. Before the first list
+  // there is nothing to redraw ("No chats yet" would be a guess).
+  store.on('agents-loaded', () => {
+    if (_listLoaded) renderSessions();
+  });
   // The open branch's source deleted from this tab: its link goes inert now,
   // not on the next load.
   store.on('session-deleted', (id) => {

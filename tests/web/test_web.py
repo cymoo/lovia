@@ -266,7 +266,7 @@ def test_index_at_the_root_has_no_base_path() -> None:
 # in web-server.md); renaming one is a breaking change.
 _PUBLIC_PARTS = (
     "sidebar", "sidebar-header", "sidebar-toggle",
-    "sidebar-nav", "new-chat", "memory", "schedules", "settings",
+    "sidebar-nav", "new-chat", "schedules", "settings",
     "sessions-label", "sessions-search", "sessions", "topbar", "chat-title",
     "topbar-actions", "tasks", "chat-menu",
     "files-toggle", "view", "transcript", "welcome", "todo-panel", "composer",

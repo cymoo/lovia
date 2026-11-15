@@ -349,8 +349,8 @@ export function groupHeader(group, rerender) {
       ...(group.kind !== 'general' && hasProjectMemory()
         ? [{ label: t('ws.memory'), icon: icon('brain', { size: 15 }), onSelect: () => void openSettings('memory', { root }) }]
         : []),
-      // The servers its .mcp.json names, on this machine's folders only.
-      ...(group.kind !== 'general' && store.canConfigure && !group.workspace?.host
+      // Its MCP servers: what its .mcp.json names, and Settings' as it has them.
+      ...(group.kind !== 'general' && store.canConfigure
         ? [{ label: t('ws.mcp'), icon: icon('server', { size: 15 }), onSelect: () => void openProjectMcp(root) }]
         : []),
       // The folders always listed can't be removed (they have no entry id).

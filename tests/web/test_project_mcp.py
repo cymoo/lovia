@@ -261,6 +261,106 @@ def test_the_chats_own_project_is_the_one_asked_about(served) -> None:
     assert res.json()["detail"]["code"] == "mcp_server_not_found"
 
 
+def test_a_project_has_global_servers_on_or_off_for_itself(served) -> None:
+    client, provider, project = served
+    res = client.post(
+        "/api/config/mcp",
+        json={"document": {"always": _stub(), "rarely": {**_stub(), "disabled": True}}},
+    )
+    assert res.status_code == 201, res.text
+
+    def as_here() -> dict[str, tuple[bool, bool]]:
+        return {
+            s["name"]: (s["enabled"], s["on"]) for s in client.get(URL).json()["global"]
+        }
+
+    # Each follows its own switch until this project says otherwise.
+    assert as_here() == {"always": (True, True), "rarely": (False, False)}
+    assert {t.split("__")[0] for t in _chat(client, provider)} == {"always"}
+
+    for name, on in (("always", False), ("rarely", True)):
+        res = client.put(URL, json={"name": name, "on": on, "source": "global"})
+        assert res.status_code == 200, res.text
+    assert as_here() == {"always": (True, False), "rarely": (False, True)}
+    assert {t.split("__")[0] for t in _chat(client, provider)} == {"rarely"}
+    # Settings itself is untouched: every other project sees what it did.
+    config = client.get("/api/config").json()["mcp"]["servers"]
+    assert {s["name"]: s["enabled"] for s in config} == {
+        "always": True,
+        "rarely": False,
+    }
+
+    # Back on its own switch: nothing is remembered, so it follows it again.
+    client.put(URL, json={"name": "always", "on": True, "source": "global"})
+    client.put("/api/config/mcp/always/enabled", json={"enabled": False})
+    assert as_here()["always"] == (False, False)
+
+    res = client.put(URL, json={"name": "nope", "on": True, "source": "global"})
+    assert res.status_code == 404
+
+
+def test_what_a_project_said_of_a_server_goes_with_the_server(served) -> None:
+    client, _provider, _project = served
+    doc = {"db": {**_stub(), "disabled": True}}
+    assert client.post("/api/config/mcp", json={"document": doc}).status_code == 201
+    client.put(URL, json={"name": "db", "on": True, "source": "global"})
+
+    def on_here() -> dict[str, bool]:
+        return {s["name"]: s["on"] for s in client.get(URL).json()["global"]}
+
+    # Renamed: it is the same server, on in this project as before.
+    renamed = {"store": {**_stub(), "disabled": True}}
+    res = client.put("/api/config/mcp/db", json={"document": renamed})
+    assert res.status_code == 200, res.text
+    assert on_here() == {"store": True}
+    # Deleted, and another server takes the name later: it starts as that
+    # server's own switch says, not as the old one was left here.
+    assert client.delete("/api/config/mcp/store").status_code == 200
+    again = {"store": {**_stub(), "disabled": True}}
+    assert client.post("/api/config/mcp", json={"document": again}).status_code == 201
+    assert on_here() == {"store": False}
+
+
+def test_a_global_server_is_replaced_only_by_one_a_run_starts(served) -> None:
+    client, _provider, project = served
+    assert (
+        client.post("/api/config/mcp", json={"document": {"db": _stub()}}).status_code
+        == 201
+    )
+
+    def replaced() -> bool:
+        (server,) = client.get(URL).json()["global"]
+        return server["replaced"]
+
+    _write(project, {"db": _stub()})
+    assert not replaced()  # undecided: the global one still runs
+    client.put(URL, json={"name": "db", "on": True})
+    assert replaced()
+    # Turned on, but no longer usable as written: runs skip it, and so the
+    # global one is what they start.
+    _write(project, {"db": {**_stub(), "env": {"K": "${NOT_SET_ANYWHERE_XYZ}"}}})
+    client.put(URL, json={"name": "db", "on": True})
+    assert not replaced()
+
+
+def test_the_record_keeps_both_kinds_of_decision_apart(tmp_path: Path) -> None:
+    project, book = tmp_path / "p", ProjectMCP(tmp_path / "home")
+    project.mkdir()
+    key = str(project)
+    _write(project, {"db": {"command": "x"}})
+    (server,) = read_project_servers(project)[0]
+    book.decide(key, server, True)
+    # A global server named like the project's own: its own entry.
+    book.override(key, "db", False)
+    assert book.states(key, [server]) == {"db": "on"}
+    assert book.overrides(key) == {"db": False}
+    book.override(key, "db", None)
+    assert book.overrides(key) == {}
+    assert book.states(key, [server]) == {"db": "on"}
+    saved = json.loads((tmp_path / "home" / "mcp-projects.json").read_text())
+    assert saved["global"] == {} and list(saved["projects"]) == [key]
+
+
 def test_a_projects_server_stands_in_for_a_global_one_of_its_name(served) -> None:
     client, provider, project = served
     res = client.post(

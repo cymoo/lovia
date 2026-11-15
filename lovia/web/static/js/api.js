@@ -524,9 +524,11 @@ export const api = {
   /** @param {string} name */
   deleteMcpServer: (name) =>
     request(`/api/config/mcp/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(_json),
-  // The servers a chat's project names in its .mcp.json, and whether each
-  // is on there: { project, error, servers: [{ name, spec, state, error }] }.
-  // The project is chat `session`'s, or the directory `root` a draft opens in.
+  // The MCP servers of a chat's project: { project, local, error, servers:
+  // [{ name, spec, state, error }] } — the ones its .mcp.json names and
+  // whether each is on there — and global: [{ name, spec, enabled, on,
+  // replaced }], Settings' servers as this project has them. The project is
+  // chat `session`'s, or the directory `root` a draft opens in.
   /** @param {{ session?: string | null, root?: string }} scope */
   getProjectMcp: (scope) => {
     const p = new URLSearchParams();
@@ -534,7 +536,8 @@ export const api = {
     else if (scope.root) p.set('root', scope.root);
     return request(`/api/config/project/mcp?${p}`).then(_json);
   },
-  /** @param {{ session?: string | null, root?: string, name: string, on: boolean }} body */
+  // `source` says which server `name` is: the project's own, or a global one.
+  /** @param {{ session?: string | null, root?: string, source: 'project' | 'global', name: string, on: boolean }} body */
   setProjectMcp: (body) =>
     request('/api/config/project/mcp', {
       method: 'PUT',

@@ -178,7 +178,7 @@ to something the page already does:
 | --- | --- |
 | `/model` | Opens the model menu |
 | `/mode` | Opens this chat's permission-mode menu |
-| `/mcp` | Shows the chat's project's [MCP servers](#a-projects-own-servers) and turns them on or off |
+| `/mcp` | Shows the MCP servers this chat can use — [the project's own](#a-projects-own-servers) and [Settings'](#servers-for-one-project) — and turns each on or off for the project |
 | `/init` | Asks the assistant to read the project and write (or update) its `AGENTS.md` |
 | `/memory` | Opens [Memory](#the-assistant) |
 | `/rename New title` | Renames the chat; without a title it asks |
@@ -345,6 +345,26 @@ with the repository, so **a server in it stays off until you turn it on**:
 
 Once on, its tools behave like any MCP tool's: they ask before each call
 except in Full access.
+
+### Servers for one project
+
+The same dialog — `/mcp` in a chat, or a sidebar folder's **⋯ → Project MCP
+servers** — lists the servers of Settings → MCP under **From Settings**, each
+with a switch for *this project*:
+
+- A server that is off in Settings can be on here, and one that is on can be
+  off here. Other projects, and Settings itself, stay as they are. That is
+  how a server becomes this project's alone without going into the
+  repository: add it in Settings switched off, and turn it on here.
+- A project that says nothing follows the server's own switch, including
+  later changes to it.
+- These are your own entries, so there is nothing to approve; the record is
+  the same `mcp-projects.json`.
+- A chat on another machine has these switches too: the servers still run on
+  the lovia web host. A chat in "No project" follows Settings.
+- Fewer servers on means fewer tools in every request of the project's
+  chats — each server's tools are sent to the model whether or not they are
+  used.
 
 ## Serve your own Agent
 

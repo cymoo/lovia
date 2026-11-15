@@ -45,7 +45,7 @@ from ..config.schema import MCPServerConfig
 from ..config.skills import scan_skills_status
 from ..errors import WebError
 from ..mcp import CONNECT_TIMEOUT, MCPStatus, probe
-from ..project_mcp import read_project_servers
+from ..project_mcp import ProjectServer, read_project_servers
 from ..workspaces import WorkspaceRef
 from .deps import RouterDeps
 
@@ -160,13 +160,15 @@ class MCPEnabledIn(BaseModel):
 
 
 class ProjectMCPIn(BaseModel):
-    """Turn a server of a project's ``.mcp.json`` on or off: the project is
-    chat ``session``'s, or the directory ``root`` a draft is opening in."""
+    """Turn a server on or off for a project — chat ``session``'s, or the
+    directory ``root`` a draft is opening in. ``source`` says which server
+    ``name`` is: one the project's ``.mcp.json`` names, or a global one."""
 
     session: str | None = None
     root: str | None = Field(default=None, max_length=4096)
     name: str
     on: bool
+    source: Literal["project", "global"] = "project"
 
 
 class MCPTestIn(BaseModel):
@@ -613,6 +615,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             await _apply_servers(
                 [server if s.name == name else s for s in runtime.config.mcp]
             )
+            if server.name != name:
+                runtime.project_mcp.renamed(name, server.name)
         return _config_out()
 
     @router.put("/mcp/{name}/enabled")
@@ -633,6 +637,7 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         async with mcp_lock:
             _stored_server(name)
             await _apply_servers([s for s in runtime.config.mcp if s.name != name])
+            runtime.project_mcp.renamed(name, None)
         return _config_out()
 
     @router.post("/mcp/test")
@@ -653,12 +658,12 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             results = list(zip((s.name for s in servers), statuses))
         return {"results": [{"name": n, **(_status_out(s) or {})} for n, s in results]}
 
-    # ---- a project's own servers (.mcp.json) ------------------------------
+    # ---- a project's servers: its own (.mcp.json), and the global ones ----
 
     async def _project(session: str | None, root: str | None) -> str | None:
-        """The local project of chat ``session`` — or of a draft opening in
-        ``root`` — whose ``.mcp.json`` its runs read; ``None``: it has none
-        (no workspace, "No project", or a project on another machine)."""
+        """The project of chat ``session`` — or of a draft opening in
+        ``root`` — as its runs know it; ``None``: it has none (no
+        workspace, or "No project")."""
         if session is not None:
             meta = await deps.store.get(session)
             if meta is None:
@@ -666,18 +671,26 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             binding = deps.chat_binding(deps.pick(deps.agent_of(meta)), meta)
         else:
             binding = deps.new_chat_binding(deps.pick(None), None, root)
-        key = deps.project_of(binding)
+        return deps.project_of(binding)
+
+    def _own_servers(key: str | None) -> tuple[list[ProjectServer], str | None]:
+        """The project's ``.mcp.json`` — read on this machine only."""
         if key is None or WorkspaceRef.parse(key).remote:
-            return None
-        return key
+            return [], None
+        return read_project_servers(Path(key))
 
     def _project_out(key: str | None) -> dict[str, object]:
-        if key is None:
-            return {"project": None, "error": None, "servers": []}
-        servers, error = read_project_servers(Path(key))
-        states = runtime.project_mcp.states(key, servers)
+        servers, error = _own_servers(key)
+        book = runtime.project_mcp
+        states = book.states(key, servers) if key is not None else {}
+        here = book.overrides(key) if key is not None else {}
+        # A project's server that a run starts stands in for a global one of
+        # its name: asked of the rule the run itself uses.
+        standing_in = {s.name for s in book.approved(key)} if servers and key else set()
         return {
             "project": key,
+            # Whether the project could have a .mcp.json read here at all.
+            "local": key is not None and not WorkspaceRef.parse(key).remote,
             "error": error,
             "servers": [
                 {
@@ -692,6 +705,18 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                 }
                 for s in servers
             ],
+            # Settings → MCP's servers as this project has them.
+            "global": [
+                {
+                    "name": s.name,
+                    "spec": spec_of(s),
+                    "enabled": s.enabled,
+                    "on": here.get(s.name, s.enabled),
+                    "replaced": s.name in standing_in,
+                    "status": _status_out(runtime.mcp.get(s)),
+                }
+                for s in runtime.config.mcp
+            ],
         }
 
     @router.get("/project/mcp")
@@ -700,8 +725,9 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         session: str | None = Query(None),
         root: str | None = Query(None, max_length=4096),
     ) -> dict[str, object]:
-        """The servers the chat's project names in its ``.mcp.json``, and
-        whether each is on here. Read from disk every time."""
+        """The MCP servers of a chat's project: the ones its ``.mcp.json``
+        names and whether each is on, and the global ones as this project
+        has them. Read from disk every time."""
         response.headers["Cache-Control"] = "no-store"
         return _project_out(await _project(session, root))
 
@@ -709,19 +735,38 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
     async def decide_project_mcp(
         body: ProjectMCPIn, request: Request
     ) -> dict[str, object]:
-        """Turn one of the project's servers on or off, as it is written
-        now. On is what lets a repository's command run, and the record
-        lives in the home beside ``config.json``: guarded like a config
-        write. It applies from the chat's next run."""
+        """Turn a server on or off for the chat's project: one of its own
+        (``source: "project"``), as it is written now, or a global one
+        (``"global"``) whatever its switch in Settings says. Turning a
+        project's own on is what lets a repository's command run, and the
+        record lives in the home beside ``config.json``: guarded like a
+        config write. It applies from the chat's next run."""
         _guard_write(request)
         key = await _project(body.session, body.root)
-        servers = read_project_servers(Path(key))[0] if key is not None else []
-        server = next((s for s in servers if s.name == body.name), None)
-        if key is None or server is None:
-            raise WebError(
-                404, "mcp_server_not_found", f"unknown MCP server {body.name!r}"
+        missing = WebError(
+            404, "mcp_server_not_found", f"unknown MCP server {body.name!r}"
+        )
+        if body.source == "global":
+            stored = next((s for s in runtime.config.mcp if s.name == body.name), None)
+            if stored is None:
+                raise missing
+            if key is None:
+                raise WebError(
+                    400,
+                    "invalid_request",
+                    "this chat belongs to no project",
+                    hint="turn the server on or off for every chat in Settings → MCP",
+                )
+            # Back on its own switch: nothing to remember.
+            choice = None if body.on == stored.enabled else body.on
+            runtime.project_mcp.override(key, body.name, choice)
+        else:
+            server = next(
+                (s for s in _own_servers(key)[0] if s.name == body.name), None
             )
-        runtime.project_mcp.decide(key, server, body.on)
+            if key is None or server is None:
+                raise missing
+            runtime.project_mcp.decide(key, server, body.on)
         return _project_out(key)
 
     @router.post("/test")

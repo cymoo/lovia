@@ -1,13 +1,17 @@
-// project-mcp.js — the MCP servers a project names in its own .mcp.json: a
-// line over the composer while the chat's project has any undecided, and
-// the dialog that turns each on or off for that project (also behind a
-// sidebar folder's ⋯ menu, to look again later).
+// project-mcp.js — the MCP servers of a chat's project: the dialog that
+// turns them on or off there (`/mcp`, and a sidebar folder's ⋯ menu), and a
+// line over the composer while the project's own are undecided.
 //
-// A server runs only once it was turned on here, for the entry as written:
-// the file arrives with the repository, and it names commands to run. An
-// edited entry is undecided again. Nothing waits on the answer — the chat
-// runs without a server that isn't on — and a change applies from the next
-// run (lovia/web/project_mcp.py).
+// Two kinds of server, one switch each:
+//
+// - the project's own, from its .mcp.json. One runs only once it was turned
+//   on here, for the entry as written: the file arrives with the repository
+//   and names commands to run. An edited entry is undecided again.
+// - the global ones (Settings → MCP), which a project can have on or off
+//   for itself whatever their own switch says.
+//
+// Nothing waits on an answer — the chat runs without a server that isn't
+// on — and a change applies from the next run (lovia/web/project_mcp.py).
 import { api } from './api.js';
 import { store } from './store.js';
 import { t } from './i18n.js';
@@ -18,7 +22,8 @@ import { draftWorkspaceRoot } from './workspaces.js';
 import { switchControl } from './assistant-config.js';
 
 /** @typedef {{ name: string, spec: any, state: 'on' | 'off' | 'pending', error: string | null }} ProjectServer */
-/** @typedef {{ project: string | null, error: string | null, servers: ProjectServer[] }} Listing */
+/** @typedef {{ name: string, spec: any, enabled: boolean, on: boolean, replaced: boolean }} GlobalServer */
+/** @typedef {{ project: string | null, local: boolean, error: string | null, servers: ProjectServer[], global: GlobalServer[] }} Listing */
 /** Whose project: a chat's, or the directory a draft opens in. @typedef {{ session?: string, root?: string }} Scope */
 
 /** The open chat's project, for the composer line. @type {Listing | null} */
@@ -72,34 +77,39 @@ function renderNote() {
   note.insertAdjacentHTML('afterbegin', icon('server', { size: 15 }));
 }
 
+/** @param {string} className @param {string} [text] */
+function el(className, text) {
+  const node = document.createElement('div');
+  node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
 /**
- * @param {ProjectServer} s
+ * One server: its name, what it runs, a note or two, and its switch.
+ * @param {object} s
+ * @param {string} s.name
+ * @param {any} s.spec
+ * @param {boolean} s.on
+ * @param {string} [s.badge] Beside the name.
+ * @param {string} [s.note] Under what it runs: how this project differs.
+ * @param {string | null} [s.error] Why it can't be used; the switch is off limits then.
+ * @param {boolean} [s.fixed] The switch can't be used here.
  * @param {(on: boolean) => void} decide
  */
 function row(s, decide) {
-  const item = document.createElement('div');
-  item.className = 'lv-pmcp-row';
-  const main = document.createElement('div');
-  main.className = 'lv-pmcp-main';
-  const head = document.createElement('div');
-  head.className = 'lv-pmcp-name';
-  head.textContent = s.name;
-  if (s.state === 'pending' && !s.error) {
+  const item = el('lv-pmcp-row');
+  const main = el('lv-pmcp-main');
+  const head = el('lv-pmcp-name', s.name);
+  if (s.badge) {
     const badge = document.createElement('span');
     badge.className = 'lv-badge';
-    badge.textContent = t('pmcp.undecided');
+    badge.textContent = s.badge;
     head.appendChild(badge);
   }
-  const what = document.createElement('div');
-  what.className = 'lv-pmcp-target';
-  what.textContent = target(s.spec);
-  main.append(head, what);
-  if (s.error) {
-    const why = document.createElement('div');
-    why.className = 'lv-pmcp-error';
-    why.textContent = s.error;
-    main.appendChild(why);
-  }
+  main.append(head, el('lv-pmcp-target', target(s.spec)));
+  if (s.note) main.appendChild(el('lv-pmcp-note', s.note));
+  if (s.error) main.appendChild(el('lv-pmcp-error', s.error));
   // The whole entry, as written: what turning it on agrees to.
   const detail = document.createElement('details');
   detail.className = 'lv-pmcp-detail';
@@ -110,9 +120,9 @@ function row(s, decide) {
   detail.append(summary, code);
   main.appendChild(detail);
 
-  const sw = switchControl(s.state === 'on');
+  const sw = switchControl(s.on);
   sw.node.setAttribute('aria-label', t('pmcp.switch', { name: s.name }));
-  sw.node.toggleAttribute('disabled', !!s.error);
+  sw.node.toggleAttribute('disabled', !!s.error || !!s.fixed);
   sw.node.addEventListener('change', () => decide(sw.value()));
   item.append(main, sw.node);
   return item;
@@ -123,13 +133,12 @@ function row(s, decide) {
  * @param {Listing} listing
  */
 function openDialog(scope, listing) {
-  const body = document.createElement('div');
-  body.className = 'lv-pmcp';
+  const body = el('lv-pmcp');
 
-  /** @param {string} name @param {boolean} on */
-  async function decide(name, on) {
+  /** @param {'project' | 'global'} source @param {string} name @param {boolean} on */
+  async function decide(source, name, on) {
     try {
-      listing = await api.setProjectMcp({ ...scope, name, on });
+      listing = await api.setProjectMcp({ ...scope, source, name, on });
     } catch (err) {
       toast(String(err.message || err), { type: 'error' });
     }
@@ -137,72 +146,109 @@ function openDialog(scope, listing) {
     refresh(); // the composer line counts what is still undecided
   }
 
-  function draw() {
-    const title = document.createElement('h3');
-    title.className = 'lv-pmcp-title';
-    title.textContent = t('pmcp.title');
-    const nodes = [title];
+  /** The project's own: what its .mcp.json names. */
+  function own() {
+    const nodes = [el('lv-pmcp-heading', t('pmcp.own'))];
     // Nothing listed: there is no file — unless the error below says it
     // is there and unreadable.
     if (listing.servers.length || !listing.error) {
-      const intro = document.createElement('p');
-      intro.className = 'lv-pmcp-intro';
-      intro.textContent = listing.servers.length
-        ? t('pmcp.intro', { file: `${listing.project}/.mcp.json` })
-        : t(listing.project ? 'pmcp.none' : 'pmcp.noProject');
-      nodes.push(intro);
+      nodes.push(
+        el(
+          'lv-pmcp-intro',
+          listing.servers.length
+            ? t('pmcp.intro', { file: `${listing.project}/.mcp.json` })
+            : t('pmcp.none'),
+        ),
+      );
     }
-    const list = document.createElement('div');
-    list.className = 'lv-pmcp-list';
-    for (const s of listing.servers) list.appendChild(row(s, (on) => decide(s.name, on)));
-    nodes.push(list);
-    if (listing.error) {
-      const problem = document.createElement('div');
-      problem.className = 'lv-pmcp-error';
-      problem.textContent = listing.error;
-      nodes.push(problem);
+    for (const s of listing.servers) {
+      nodes.push(
+        row(
+          {
+            name: s.name,
+            spec: s.spec,
+            on: s.state === 'on',
+            badge: s.state === 'pending' && !s.error ? t('pmcp.undecided') : undefined,
+            error: s.error,
+          },
+          (on) => decide('project', s.name, on),
+        ),
+      );
     }
-    if (listing.servers.length) {
-      const foot = document.createElement('div');
-      foot.className = 'lv-cfg-footnote';
-      foot.textContent = t('pmcp.applies');
-      nodes.push(foot);
+    if (listing.error) nodes.push(el('lv-pmcp-error', listing.error));
+    return nodes;
+  }
+
+  /** Settings → MCP's, as this project has them. */
+  function everywhere() {
+    const nodes = [
+      el('lv-pmcp-heading', t('pmcp.global')),
+      el('lv-pmcp-intro', t(listing.project ? 'pmcp.globalIntro' : 'pmcp.globalNoProject')),
+    ];
+    for (const s of listing.global) {
+      let note;
+      if (s.replaced) note = t('pmcp.replaced');
+      else if (s.on !== s.enabled) note = t(s.on ? 'pmcp.onHere' : 'pmcp.offHere');
+      nodes.push(
+        row(
+          { name: s.name, spec: s.spec, on: s.on && !s.replaced, note, fixed: !listing.project || s.replaced },
+          (on) => decide('global', s.name, on),
+        ),
+      );
     }
-    body.replaceChildren(...nodes);
+    return nodes;
+  }
+
+  function draw() {
+    const title = document.createElement('h3');
+    title.className = 'lv-pmcp-title';
+    title.textContent = t(listing.project ? 'pmcp.title' : 'pmcp.titleChat');
+    const list = el('lv-pmcp-list');
+    // A project on this machine may have a file of its own; any chat sees
+    // the global servers.
+    if (listing.local) list.append(...own());
+    if (listing.global.length) list.append(...everywhere());
+    else if (!listing.local) list.append(el('lv-pmcp-intro', t('pmcp.empty')));
+    // Redrawn after a switch: stay where the list was scrolled to.
+    const at = body.querySelector('.lv-pmcp-list')?.scrollTop ?? 0;
+    body.replaceChildren(title, list, el('lv-cfg-footnote', t('pmcp.applies')));
+    list.scrollTop = at;
   }
 
   draw();
+  const actions = el('lv-pmcp-actions');
+  const manage = document.createElement('button');
+  manage.type = 'button';
+  manage.className = 'lv-btn lv-btn-ghost';
+  manage.textContent = t('pmcp.manage');
   const close = document.createElement('button');
   close.type = 'button';
   close.className = 'lv-btn';
   close.textContent = t('pmcp.done');
-  const dialog = showDialog({ body, actions: close });
+  actions.append(manage, close);
+  const dialog = showDialog({ body, actions });
   dialog.classList.add('lv-dialog-wide');
   close.addEventListener('click', () => dialog.close());
+  manage.addEventListener('click', async () => {
+    const { openSettings } = await import('./settings.js');
+    openSettings('mcp'); // takes this dialog's place
+  });
 }
 
-/**
- * The servers of the project in `root`, decided or not: a sidebar folder's
- * way back to them.
- * @param {string} root
- */
-export async function openProjectMcp(root) {
-  try {
-    openDialog({ root }, await api.getProjectMcp({ root }));
-  } catch (err) {
-    toast(String(err.message || err), { type: 'error' });
-  }
-}
-
-/** The open chat's project's servers: `/mcp`. */
-export async function openChatMcp() {
-  const scope = chatScope();
+/** @param {Scope} scope */
+async function open(scope) {
   try {
     openDialog(scope, await api.getProjectMcp(scope));
   } catch (err) {
     toast(String(err.message || err), { type: 'error' });
   }
 }
+
+/** The servers of the project in `root`: a sidebar folder's ⋯ menu. @param {string} root */
+export const openProjectMcp = (root) => open({ root });
+
+/** The open chat's servers: `/mcp`. */
+export const openChatMcp = () => open(chatScope());
 
 export function initProjectMcp() {
   // The chat's directory changed, or a run that may have edited the file ended.

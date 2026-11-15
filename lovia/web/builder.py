@@ -510,12 +510,12 @@ def build_agent(
         if memory is None:
             memory = resolve_memory(True, deployment.home / "memory")
         plugins.append(cast(Memory, memory))
-    servers = [s for s in config.mcp if s.enabled]
-    # With ``project_mcp`` it is there even with no server configured: a
-    # chat's project may name its own.
-    if servers or project_mcp is not None:
+    # Every server, on or off: a run takes those that are on, and a chat's
+    # project may have one on for itself. With ``project_mcp`` the plugin
+    # is there even with none configured: a project may name its own.
+    if config.mcp or project_mcp is not None:
         book = mcp if mcp is not None else MCPBook()
-        plugins.append(SettingsMCP(servers, book, project=project_mcp))
+        plugins.append(SettingsMCP(config.mcp, book, project=project_mcp))
     workspace = resolve_workspace(deployment, spec)
     tools = resolve_tools(config.search, web_search=spec.search)
     vision_tool = resolve_vision_tool(provider, workspace, config.vision_profile())

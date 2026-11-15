@@ -21,7 +21,7 @@ from ..tracing import Tracer
 from ..workspace import WorkspaceMode
 from . import config as webconfig
 from .app import Lifespan, create_app
-from .builder import Deployment
+from .builder import Customize, Deployment
 from .run_deps import RunDepsFn
 from .store import ChatStore
 from .ui import ChatUI
@@ -32,8 +32,6 @@ from .workspaces import WorkspaceSwitch
 # holds a concurrency slot forever; in a chat someone is watching, ten idle
 # minutes means the answer is no.
 ANSWER_TIMEOUT = 600
-
-Customize = Callable[[Agent[Any]], Agent[Any]]
 
 
 def default_app(
@@ -83,9 +81,11 @@ def default_app(
     modes, models — comes from ``config.json``, edited in Settings. Until a
     model is configured the app serves the setup screen.
     """
-    # Absolute, so the history and memory name one place whatever the
-    # working directory becomes.
+    # Absolute, so both name one place whatever the working directory
+    # becomes: the agent is rebuilt from them on every save in Settings.
     home = Path(home).expanduser().absolute()
+    if workspace is not None:
+        workspace = Path(workspace).expanduser().absolute()
     webconfig.protect_home(home)
     loaded = webconfig.load_active(home)
     deployment = Deployment(

@@ -69,6 +69,8 @@ log = logging.getLogger("lovia.web.builder")
 WORKSPACE_MODES: tuple[str, ...] = get_args(WorkspaceMode)
 # The served agent's background child is ``lovia.sub``.
 SUBAGENT_SUFFIX = ".sub"
+# ``default_app(customize=)``: the built agent in, the one to serve out.
+Customize = Callable[[Agent[Any]], Agent[Any]]
 # The command bundles a ``coding`` workspace runs without asking, by name
 # (Settings → Assistant; ``assistant.auto_allow`` in config.json). Core opts
 # into none; `lovia web` is a coding agent the person running it launched, so
@@ -460,7 +462,7 @@ def build_agent(
     config: WebConfig | None = None,
     memory: Memory | None = None,
     mcp: MCPBook | None = None,
-    customize: Callable[[Agent[Any]], Agent[Any]] | None = None,
+    customize: Customize | None = None,
 ) -> Agent[Any]:
     """The agent ``lovia web`` serves, from ``config`` on ``provider``.
 
@@ -555,9 +557,7 @@ def build_agent(
     return _customized(agent, customize)
 
 
-def _customized(
-    agent: Agent[Any], customize: Callable[[Agent[Any]], Agent[Any]] | None
-) -> Agent[Any]:
+def _customized(agent: Agent[Any], customize: Customize | None) -> Agent[Any]:
     if customize is None:
         return agent
     out = customize(agent)

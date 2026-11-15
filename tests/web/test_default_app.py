@@ -73,6 +73,19 @@ def test_the_switches_are_the_command_lines(
     assert elsewhere.is_file()
 
 
+def test_relative_paths_are_settled_when_the_app_is_built(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "ws").mkdir()
+    monkeypatch.chdir(tmp_path)
+    app = default_app(home="home", workspace="ws")
+    deployment = app.state.deps.config_runtime.deployment
+    # The agent is rebuilt from these on every save: they must not follow
+    # the working directory around.
+    assert deployment.home == tmp_path / "home"
+    assert deployment.workspace == str(tmp_path / "ws")
+
+
 def test_customize_has_the_last_word_on_the_assistant_and_its_child(
     tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:

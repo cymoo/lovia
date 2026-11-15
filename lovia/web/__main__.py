@@ -559,24 +559,35 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 )
             _warn_ignored_agent_flags(args)
             loaded_target = load_app_target(app_target)
-            agent_or_agents: Agent[Any] | Mapping[str, Agent[Any]] | None = None
             if isinstance(loaded_target, FastAPI):
                 # Already an app: served as built, no create_app here.
                 _warn_ignored_app_flags(args)
-                deps = getattr(loaded_target.state, "deps", None)
+                built_app = loaded_target
+                deps = getattr(built_app.state, "deps", None)
                 custom_agents = (
                     list(deps.agents.values()) if isinstance(deps, RouterDeps) else []
                 )
                 db_desc = "(configured by the app)"
             else:
-                agent_or_agents = loaded_target
                 custom_agents = (
-                    list(agent_or_agents.values())
-                    if isinstance(agent_or_agents, Mapping)
-                    else [agent_or_agents]
+                    list(loaded_target.values())
+                    if isinstance(loaded_target, Mapping)
+                    else [loaded_target]
                 )
                 # Without --db, create_app derives the file from the agent name.
                 db_desc = db_path or "(./.lovia/<agent>.db, from the agent's name)"
+                # A custom agent served with the CLI's own posture; anything
+                # else is create_app()'s job in its own code.
+                built_app = create_app(
+                    loaded_target,
+                    title=title,
+                    db_path=db_path,
+                    max_turns=webconfig.DEFAULT_MAX_TURNS,
+                    token=token or _generated_token(host),
+                    followups=True,
+                    approval_timeout=ANSWER_TIMEOUT,
+                    question_timeout=ANSWER_TIMEOUT,
+                )
             for custom_agent in custom_agents:
                 _warn_if_exposed(host, custom_agent.workspace)
             # stdout, not the logger: the summary must be visible at every
@@ -587,21 +598,6 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 ),
                 flush=True,
             )
-            if agent_or_agents is None:
-                built_app = cast(FastAPI, loaded_target)
-            else:
-                # A custom agent served with the CLI's own posture; anything
-                # else is create_app()'s job in its own code.
-                built_app = create_app(
-                    agent_or_agents,
-                    title=title,
-                    db_path=db_path,
-                    max_turns=webconfig.DEFAULT_MAX_TURNS,
-                    token=token or _generated_token(host),
-                    followups=True,
-                    approval_timeout=ANSWER_TIMEOUT,
-                    question_timeout=ANSWER_TIMEOUT,
-                )
         else:
             home = _home(args)
             if args.check:

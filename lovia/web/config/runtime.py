@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -37,7 +37,7 @@ from .storage import LoadedConfig, config_writable, save_config
 
 if TYPE_CHECKING:
     from ..api.deps import RouterDeps
-    from ..builder import Deployment
+    from ..builder import Customize, Deployment
     from ..store import ChatStore
 
 log = logging.getLogger("lovia.web.config")
@@ -67,7 +67,7 @@ class ConfigRuntime:
         loaded: LoadedConfig,
         store: "ChatStore",
         question_channel: HumanChannel | None = None,
-        customize: Callable[[Agent[Any]], Agent[Any]] | None = None,
+        customize: "Customize | None" = None,
     ) -> None:
         from ..builder import Deployment
 

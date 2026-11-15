@@ -3343,19 +3343,41 @@ button.lv-question-option:hover {
   min-width: 0;
 }
 .lv-pmcp-title {
-  margin: 0 0 6px;
+  margin: 0 0 10px;
   font-size: 16px;
   font-weight: 620;
 }
+.lv-pmcp-list {
+  max-height: 56vh;
+  overflow-y: auto;
+}
+/* Its two groups: the project's own servers, then Settings'. */
+.lv-pmcp-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lv-muted);
+}
+.lv-pmcp-row + .lv-pmcp-heading,
+.lv-pmcp-error + .lv-pmcp-heading,
+.lv-pmcp-intro + .lv-pmcp-heading {
+  margin-top: 18px;
+}
 .lv-pmcp-intro {
+  margin: 4px 0 6px;
   font-size: 13px;
   color: var(--lv-muted);
   overflow-wrap: anywhere;
 }
-.lv-pmcp-list {
-  max-height: 52vh;
-  overflow-y: auto;
-  border-top: 1px solid var(--lv-border);
+.lv-pmcp-note {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--lv-muted);
+}
+/* Manage… at the start of the row, Done at its end. */
+.lv-pmcp-actions {
+  display: flex;
+  flex: 1;
+  justify-content: space-between;
 }
 .lv-pmcp-row {
   display: flex;

@@ -16,6 +16,10 @@ so nothing in it runs until the person at the browser turned that server on
 ``${VAR}`` and ``${VAR:-default}`` in an entry are filled from the server's
 environment when the run starts, so secrets stay out of the file. They are
 not part of the digest: the approval is for what is written.
+
+The same record holds where a project has a *global* server (Settings →
+MCP) on or off for itself — the way a server becomes one project's alone
+without going into its repository.
 """
 
 from __future__ import annotations
@@ -142,30 +146,49 @@ class ProjectMCP:
     """Which servers are on in which project: :data:`DECISIONS_FILE` in
     lovia's home.
 
-    ``{"projects": {<project key>: {<server name>: {"on": bool, "digest":
-    str}}}}``. A decision counts for the entry it was made on: another
-    digest is undecided.
+    Two sections, each by project key then server name:
+
+    * ``projects`` — the project's own servers (its ``.mcp.json``):
+      ``{"on": bool, "digest": str}``. A decision counts for the entry it
+      was made on: another digest is undecided.
+    * ``global`` — the servers of Settings → MCP, where a project differs
+      from their own switch: ``true`` or ``false``. They are the person's
+      own entries, so there is nothing to approve and no digest.
     """
 
     def __init__(self, home: Path) -> None:
         self.path = home / DECISIONS_FILE
 
-    def _load(self) -> dict[str, dict[str, dict[str, Any]]]:
+    def _load(self) -> dict[str, dict[str, Any]]:
+        """The record's two sections; empty ones for a missing or unreadable
+        file — which turns nothing on."""
+        doc: Any = None
         try:
             doc = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return {}
+            pass
         except (OSError, ValueError) as exc:
-            # Unreadable: every server is undecided again — never on.
             log.warning("%s can't be read (%s); ignoring it", self.path, exc)
-            return {}
-        projects = doc.get("projects") if isinstance(doc, dict) else None
-        return projects if isinstance(projects, dict) else {}
+        doc = doc if isinstance(doc, dict) else {}
+        return {
+            section: found if isinstance(found := doc.get(section), dict) else {}
+            for section in ("projects", "global")
+        }
+
+    def _save(self, record: dict[str, dict[str, Any]]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(json.dumps({"version": 1, **record}, indent=2), encoding="utf-8")
+        os.replace(tmp, self.path)
+
+    @staticmethod
+    def _of(section: dict[str, Any], project: str) -> dict[str, Any]:
+        found = section.get(project)
+        return found if isinstance(found, dict) else {}
 
     def states(self, project: str, servers: list[ProjectServer]) -> dict[str, State]:
         """Each of ``servers``' state in ``project``, by name."""
-        decided = self._load().get(project)
-        decided = decided if isinstance(decided, dict) else {}
+        decided = self._of(self._load()["projects"], project)
         out: dict[str, State] = {}
         for server in servers:
             entry = decided.get(server.name)
@@ -176,19 +199,32 @@ class ProjectMCP:
         return out
 
     def decide(self, project: str, server: ProjectServer, on: bool) -> None:
-        projects = self._load()
-        if not isinstance(projects.get(project), dict):
-            projects[project] = {}
-        projects[project][server.name] = {
-            "on": on,
-            "digest": server.digest,
-        }
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(
-            json.dumps({"version": 1, "projects": projects}, indent=2), encoding="utf-8"
-        )
-        os.replace(tmp, self.path)
+        """Turn one of the project's own servers on or off, as written now."""
+        record = self._load()
+        mine = {**self._of(record["projects"], project)}
+        mine[server.name] = {"on": on, "digest": server.digest}
+        record["projects"][project] = mine
+        self._save(record)
+
+    def overrides(self, project: str) -> dict[str, bool]:
+        """Where ``project`` differs from the global servers' own switches."""
+        found = self._of(self._load()["global"], project)
+        return {name: on for name, on in found.items() if isinstance(on, bool)}
+
+    def override(self, project: str, name: str, on: bool | None) -> None:
+        """Have the global server ``name`` on or off in ``project``
+        whatever its own switch says; ``None``: follow the switch again."""
+        record = self._load()
+        mine = {**self._of(record["global"], project)}
+        if on is None:
+            mine.pop(name, None)
+        else:
+            mine[name] = on
+        if mine:
+            record["global"][project] = mine
+        else:
+            record["global"].pop(project, None)
+        self._save(record)
 
     def approved(self, project: str) -> list[MCPServerConfig]:
         """The servers of ``project`` (a local directory) to start now:

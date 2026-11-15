@@ -63,9 +63,10 @@ function fakeElement(onRemove = () => {}) {
  * `init` function. `api` stubs the module's fetch: `fetches` collects the
  * pending calls (`{ where, resolve, reject }`), each settled by the test.
  */
-export function harness(spec, init, apiName, { store: storeExtra = {} } = {}) {
+export function harness(spec, init, apiName, { store: storeExtra = {}, commands = [] } = {}) {
   const open = new Set();
   const fetches = [];
+  const ran = []; // the slash commands a pick ran: [name, args]
   const handlers = {};
   const input = Object.assign(fakeElement(), {
     value: '',
@@ -103,6 +104,9 @@ export function harness(spec, init, apiName, { store: storeExtra = {} } = {}) {
     },
     store,
     t: (k, params) => (params ? `${k} ${JSON.stringify(params)}` : k),
+    // commands.js, for the `/` menu: what is on offer, and what a pick ran.
+    listCommands: () => commands,
+    runCommand: (name, args) => ran.push([name, args]),
     draftWorkspaceRoot: () => null,
     document: {
       createElement: () => fakeElement((m) => open.delete(m)),
@@ -131,7 +135,11 @@ export function harness(spec, init, apiName, { store: storeExtra = {} } = {}) {
   const note = () =>
     (menu()?.children ?? []).find((c) => c.className === 'lv-complete-menu-note')?.textContent ??
     null;
-  return { input, type, fetches, store, rows, note, isOpen: () => open.size > 0 };
+  const headings = () =>
+    (menu()?.children ?? [])
+      .filter((c) => c.className === 'lv-popup-menu-heading')
+      .map((c) => c.textContent);
+  return { input, type, fetches, store, rows, note, headings, ran, isOpen: () => open.size > 0 };
 }
 
 export const settle = () => new Promise((r) => setImmediate(r));

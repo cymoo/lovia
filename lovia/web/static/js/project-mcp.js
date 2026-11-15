@@ -149,7 +149,7 @@ function openDialog(scope, listing) {
       intro.className = 'lv-pmcp-intro';
       intro.textContent = listing.servers.length
         ? t('pmcp.intro', { file: `${listing.project}/.mcp.json` })
-        : t('pmcp.none');
+        : t(listing.project ? 'pmcp.none' : 'pmcp.noProject');
       nodes.push(intro);
     }
     const list = document.createElement('div');
@@ -189,6 +189,16 @@ function openDialog(scope, listing) {
 export async function openProjectMcp(root) {
   try {
     openDialog({ root }, await api.getProjectMcp({ root }));
+  } catch (err) {
+    toast(String(err.message || err), { type: 'error' });
+  }
+}
+
+/** The open chat's project's servers: `/mcp`. */
+export async function openChatMcp() {
+  const scope = chatScope();
+  try {
+    openDialog(scope, await api.getProjectMcp(scope));
   } catch (err) {
     toast(String(err.message || err), { type: 'error' });
   }

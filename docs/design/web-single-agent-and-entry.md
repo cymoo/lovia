@@ -237,20 +237,21 @@ MCP 规范不规定客户端的配置文件。事实上的写法是项目根的 
 ### 注册表
 
 ```js
-window.lovia.registerCommand({
-  name: 'mcp',
-  label: () => t('command.mcp'),
-  description: () => t('command.mcpDesc'),
-  when: () => store.canConfigure,          // 可选：不适用时不列出
-  run: ({ sessionId, send, insert }) => { … },
+window.lovia.registerCommand('ticket', {
+  description: '为这个对话创建工单',
+  argument: '主题',                          // 可选：名字后面要填的内容
+  when: () => lovia.state.sessionId !== null, // 可选：不适用时不列出
+  run: ({ args, sessionId }) => { … },
 });
 ```
 
+（这是实现后的形状；评审时写的是 `registerCommand({ name, label, … })` 和 `run({ send, insert })`，改动的理由见文末"实现时定下的接缝"。）
+
 - 和 `registerView`、`registerToolView`、`registerMessageAction` 是同一种扩展方式，嵌入方用它加自己的命令。
-- `run` 拿到的东西只有四样：当前对话的 id、`args`（命令名后面的文字）、`send(text)`（当作用户消息发出）、`insert(text)`（放进输入框）。打开面板用已有的 `openView`。
-- **带参数的命令**声明一个 `argument`（占位提示，如"新标题"）：选中后输入框里留下 `/rename `，回车时执行，后面的文字作为 `args`。不带参数的命令选中即执行。发送前的判断只有一条：以已注册的命令名开头的消息在本地执行，其余照常发给模型。
-- 菜单分两组：先命令，后技能（技能再分项目和全局）。输入时两组一起过滤。
-- 命令和技能重名时命令优先；注册时在控制台警告一次。
+- `run` 拿到的只有两样：`args`（命令名后面的文字）和当前对话的 id。要发消息用已有的 `lovia.send`，要填输入框用 `lovia.setDraft`，打开面板用 `openView`。
+- **带参数的命令**声明一个 `argument`（占位提示，如"新标题"）：选中后输入框里留下 `/rename `，回车时执行，后面的文字作为 `args`。不带参数的命令选中即执行；它的名字后面还有文字时，那是一条普通消息（"/model 不回答了，帮我看看日志"），照常发给模型。
+- 菜单分两组：先命令，后技能。输入时两组各自过滤。
+- 命令和技能重名时命令优先，菜单里不再列那个技能。
 - **两个入口的页面是同一个注册表**：`create_app` 的页面也有 `/` 命令，只是按 `when` 少列几项。嵌入方加命令的方式和加视图一样。
 
 ### 内置命令
@@ -264,10 +265,8 @@ window.lovia.registerCommand({
 | `/mcp` | 打开 MCP 面板：服务器、状态、待批准 | 有设置页时 |
 | `/init` | 发出一条内置提示词：通读项目，写出或更新 `AGENTS.md` | 有工作区时 |
 | `/memory` | 打开记忆 | 有记忆时 |
-| `/rename 新标题`、`/pin`、`/archive`、`/fork` | 对话菜单里已有的四项 | 始终 |
+| `/rename 新标题`、`/pin`、`/archive`、`/branch` | 对话菜单里已有的四项 | 打开了对话时 |
 | `/compact` | 手动压缩 | #427 做完后 |
-
-`/init` 另有一个入口：新对话所在的项目没有 `AGENTS.md` 时，空白页的起始建议里多一条"为这个项目生成 AGENTS.md"。指令既然靠 `AGENTS.md`，就不该只有知道 `/init` 的人才用得上。
 
 不收：用量和计费、反馈、加速、绘图、侧边聊天、目标。计划模式仍是 recipe（#173）。⌘K 命令面板此前已否决；内置命令保持在这张表的范围内，不让 `/` 菜单变成它。
 
@@ -342,6 +341,13 @@ window.lovia.registerCommand({
 | 3 | 接口路径 | `GET` / `PUT /api/config/project/mcp`（`/mcp/project` 会被已有的 `/mcp/{name}` 抢走） |
 | 3 | 批准记录谁能写 | Agent 的工具在任何模式下都不能读写 `<home>/mcp-projects.json`（和 `config.json` 同一条规则）：home 在工作区里时，Agent 否则可以自己写 `.mcp.json` 再自己批准 |
 | 3 | 决定之后怎么再改 | 侧栏目录的 ⋯ 菜单里有"项目的 MCP 服务器"，打开同一个对话框；composer 上方那一行只在有未决定的时出现 |
+| 4 | 注册的形状 | `registerCommand(name, command)`，和 `registerMessageAction(id, action)` 一样：名字是键，重复注册替换（内置的也能换），返回的函数恢复被替换的那个。`description` 是字符串，没有单独的 `label` |
+| 4 | `run` 拿到什么 | 只有 `{ args, sessionId }`。要发消息、填输入框，用已有的 `lovia.send` / `lovia.setDraft`，不再各给一份 |
+| 4 | 执行的时机 | 提交时判断：以已注册、此刻可用的命令名开头的消息在页面执行，运行中也立即执行，不进发送队列；其余原样发出。从菜单选中不带参数的命令等于提交 |
+| 4 | 重名 | 命令优先，菜单里不再列同名技能。注册时没法知道有哪些技能，所以不做控制台警告 |
+| 4 | `/fork` | 叫 `/branch`，和对话菜单里的"分支"一致 |
+| 4 | `/init` 在空白页的入口 | 没做：要知道项目里有没有 `AGENTS.md` 得加一个接口，而 `/` 菜单里已经列着 `/init` 和它的说明 |
+| 4 | 拆成两个 PR | 注册表和内置命令一个；"按项目开关全局 MCP 服务器"单独一个（`/mcp` 打开的是第 3 期的对话框，后一个 PR 在里面加全局服务器） |
 | 3 | `cwd`、`disabled` | 命令在项目目录启动，条目的相对 `cwd` 相对项目解析；文件里 `disabled` 的条目列出但不能打开。为此 core 的 `MCPServerStdio` 加了 `cwd` |
 
 ## 参考

@@ -369,6 +369,7 @@ internal.
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI components](#ui-components) |
 | `registerToolView(name, view)` | [Tool views](#tool-views) |
 | `registerMessageAction(id, action)` / `refreshMessageActions()` | [Message actions](#message-actions) |
+| `registerCommand(name, command)` | [Commands](#commands) |
 | `registerView(id, view)` / `openView(target)` / `closeView()` | [Views](#views) |
 | `provideContext(key, fn)` | Add `key` to the context runs start with, read from `fn()` at send time — see [Run deps](#run-deps) |
 
@@ -542,6 +543,48 @@ lovia.registerMessageAction('rate-up', {
 
 `examples/35_web_feedback.py` is a complete version: 👍 / 👎 on answers kept
 in SQLite by its own routes, a report page, and a Quote action.
+
+### Commands
+
+`registerCommand(name, command)` adds a slash command to the composer. A
+message that starts with `/name` runs it in the page and is not sent to the
+model; the `/` menu lists commands ahead of the chat's skills.
+
+```js
+lovia.registerCommand('ticket', {
+  description: 'Open a support ticket for this chat',
+  argument: 'Subject',
+  when: () => lovia.state.sessionId !== null,
+  async run({ args, sessionId }) {
+    const res = await lovia.fetch('/tickets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, subject: args }),
+    });
+    if (!res.ok) throw new Error('Could not open the ticket'); // shown as a toast
+    lovia.toast('Ticket opened');
+  },
+});
+```
+
+| `command` field | Description |
+| --- | --- |
+| `description` | One line, shown beside the name in the menu |
+| `argument` | What goes after the name — a placeholder such as `Subject`. With one, picking the command from the menu leaves `/name ` to finish and send; without, it runs on the pick — and a message with more after the name is sent as a message, not run |
+| `when()` | Whether the command is offered now; always when absent |
+| `run({ args, sessionId })` | `args` is the text after the name, trimmed; `sessionId` is `null` in a new chat. May be async; an error it throws shows as a toast |
+
+- `name` is lower-case letters, digits and `-`. Registering a name again
+  replaces the command — a built-in included (`/model`, `/mode`, `/mcp`,
+  `/init`, `/memory`, `/rename`, `/pin`, `/archive`, `/branch`; each shows
+  only where it applies) — and the function `registerCommand` returns brings
+  the earlier one back.
+- A command that should *say* something to the model calls `lovia.send(text)`
+  — that is all `/init` does, with a prompt of its own. One that should
+  prefill the composer calls `lovia.setDraft(text)`.
+- A command wins over a skill of the same name: the message never reaches
+  the model. A `/name` that is no command is sent as typed, where it may
+  [name a skill](skills.md#calling-a-skill-by-name).
 
 ### Views
 

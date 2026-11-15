@@ -19,7 +19,11 @@ import { store } from './store.js';
  *   and a line to show under it
  * @property {(items: T[], query: string) => T[]} match
  * @property {(item: T) => Node[]} row an option's contents
+ * @property {(item: T) => string} [group] the heading an option goes under,
+ *   for a list in sections (in place of the one `label` heading); options of
+ *   one group are next to each other
  * @property {(text: string, caret: number, item: T) => { text: string, caret: number }} insert
+ * @property {(item: T) => void} [picked] called once a pick is in the text
  */
 
 /**
@@ -111,10 +115,18 @@ export function initCompleter(input, spec) {
       input.setAttribute('aria-controls', menu.id);
       input.setAttribute('aria-expanded', 'true');
     }
-    const head = document.createElement('div');
-    head.className = 'lv-popup-menu-heading';
-    head.textContent = spec.label();
+    const heading = (/** @type {string} */ text) => {
+      const head = document.createElement('div');
+      head.className = 'lv-popup-menu-heading';
+      head.textContent = text;
+      return head;
+    };
+    /** @type {Node[]} */
+    const parts = spec.group ? [] : [heading(spec.label())];
+    let group = null;
     const rows = shown.map((item, i) => {
+      const of = spec.group?.(item);
+      if (of !== undefined && of !== group) parts.push(heading((group = of)));
       const b = document.createElement('button');
       b.type = 'button';
       b.tabIndex = -1;
@@ -124,9 +136,9 @@ export function initCompleter(input, spec) {
       b.setAttribute('aria-selected', String(i === active));
       b.append(...spec.row(item));
       b.addEventListener('click', () => pick(item));
+      parts.push(b);
       return b;
     });
-    const parts = [head, ...rows];
     if (list?.note) {
       const note = document.createElement('div');
       note.className = 'lv-complete-menu-note';
@@ -160,6 +172,7 @@ export function initCompleter(input, spec) {
     input.focus();
     // The composer's own listeners: autoresize, Send enabled, the saved draft.
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    spec.picked?.(item);
   }
 
   // Capturing, so it runs before the composer's Enter-to-send handler on

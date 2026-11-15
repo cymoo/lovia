@@ -533,6 +533,9 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 - **A project's own MCP servers** — a `.mcp.json` in the chat's folder, the
   file other clients read, names servers for that project; each stays off
   until you turn it on, and an edited entry asks again.
+- **Slash commands** — `/` in the composer lists commands ahead of skills:
+  `/model`, `/mode`, `/mcp`, `/init` (write the project's `AGENTS.md`),
+  `/rename`, …; your page adds its own with `lovia.registerCommand`.
 - **The same app from code** — `default_app()` builds what `lovia web`
   serves, and `customize=` adds your tools and plugins to it; `create_app()`
   serves an agent of your own as you built it.

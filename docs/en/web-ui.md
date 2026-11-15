@@ -168,6 +168,28 @@ the model loads the skill by the [`/name` rule](skills.md#calling-a-skill-by-nam
 A `/` later in the message or on a later line opens nothing, since the model
 only honours the one that starts it.
 
+### Slash commands
+
+The same menu lists **commands** ahead of the skills. A command is the
+page's to run — it is never sent to the model — and each is another way in
+to something the page already does:
+
+| Command | Does |
+| --- | --- |
+| `/model` | Opens the model menu |
+| `/mode` | Opens this chat's permission-mode menu |
+| `/mcp` | Shows the chat's project's [MCP servers](#a-projects-own-servers) and turns them on or off |
+| `/init` | Asks the assistant to read the project and write (or update) its `AGENTS.md` |
+| `/memory` | Opens [Memory](#the-assistant) |
+| `/rename New title` | Renames the chat; without a title it asks |
+| `/pin`, `/archive`, `/branch` | The chat menu's items |
+
+A command shows only where it applies (`/mode` where chats pick a mode,
+`/pin` in an open chat). Picking one runs it; one that takes text —
+`/rename` — leaves `/rename ` in the box to finish and send. A command wins
+over a skill of the same name. Your own page can
+[add commands](web-server.md#commands).
+
 ## The assistant
 
 `lovia web` serves one agent, `lovia`. **Settings → Assistant** says how it

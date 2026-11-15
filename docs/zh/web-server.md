@@ -334,6 +334,7 @@ ui = ChatUI(
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI 组件](#ui-组件) |
 | `registerToolView(name, view)` | [工具视图](#工具视图) |
 | `registerMessageAction(id, action)` / `refreshMessageActions()` | [消息操作](#消息操作) |
+| `registerCommand(name, command)` | [命令](#命令) |
 | `registerView(id, view)` / `openView(target)` / `closeView()` | [视图](#视图) |
 | `provideContext(key, fn)` | 把 `key` 加进运行开始时的上下文，发送时读取 `fn()` 的值，见[运行依赖](#运行依赖) |
 
@@ -484,6 +485,43 @@ lovia.registerMessageAction('rate-up', {
 
 完整示例见 `examples/35_web_feedback.py`：回答上的 👍 / 👎 由示例自己的路由存进 SQLite，另有报表
 页面和一个"引用"操作。
+
+### 命令
+
+`registerCommand(name, command)` 给输入框加一个斜杠命令。以 `/name` 开头的消息由页面执行，不会发给模型；
+`/` 菜单里命令排在技能前面。
+
+```js
+lovia.registerCommand('ticket', {
+  description: '为这个对话创建工单',
+  argument: '主题',
+  when: () => lovia.state.sessionId !== null,
+  async run({ args, sessionId }) {
+    const res = await lovia.fetch('/tickets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, subject: args }),
+    });
+    if (!res.ok) throw new Error('工单创建失败'); // 以 toast 显示
+    lovia.toast('工单已创建');
+  },
+});
+```
+
+| `command` 字段 | 说明 |
+| --- | --- |
+| `description` | 一行说明，在菜单里显示在名字旁边 |
+| `argument` | 名字后面要填的内容，是占位提示（如“主题”）。有它时，从菜单选中只会留下 `/name `，补完再发送；没有时，选中即执行，而名字后面还带着文字的消息不算命令，会照常发出 |
+| `when()` | 现在是否提供这个命令；不写则始终提供 |
+| `run({ args, sessionId })` | `args` 是名字后面的文字（已去掉首尾空白）；新对话里 `sessionId` 为 `null`。可以是 async；抛出的错误以 toast 显示 |
+
+- `name` 只能是小写字母、数字和 `-`。再次注册同名命令会替换原来的——内置命令也可以替换（`/model`、`/mode`、`/mcp`、
+  `/init`、`/memory`、`/rename`、`/pin`、`/archive`、`/branch`，各自只在适用时出现）——`registerCommand`
+  返回的函数会把之前的那个恢复回来。
+- 需要对模型*说*点什么的命令调用 `lovia.send(text)`——`/init` 就只做了这件事，发的是它自带的提示词。
+  需要预填输入框的命令调用 `lovia.setDraft(text)`。
+- 命令和技能重名时命令优先：消息不会到达模型。不是命令的 `/name` 会原样发出，模型可能把它当作
+  [技能名](skills.md#按名字调用-skill)。
 
 ### 视图
 

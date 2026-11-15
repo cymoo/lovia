@@ -27,6 +27,7 @@ test('the API surface is exactly the documented one', () => {
     'provideContext',
     'ready',
     'refreshMessageActions',
+    'registerCommand',
     'registerMessageAction',
     'registerRenderer',
     'registerToolView',

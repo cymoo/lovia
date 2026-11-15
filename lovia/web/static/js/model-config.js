@@ -34,7 +34,11 @@ export function cfg() {
 
 /** The new chat's pick. @type {string | null} */
 let _draftModel = null;
-/** The open chat's pick. @type {string | null} */
+/**
+ * The open chat's pick; undefined until its row or detail says (shown as
+ * the default meanwhile, but a pick then is always sent).
+ * @type {string | null | undefined}
+ */
 let _chatModel = null;
 /** The chat `_chatModel` is of; null: a new chat. @type {string | null} */
 let _modelOf = null;
@@ -77,13 +81,15 @@ export function chatModelInfo() {
 /** The open chat changed, or what is known of it did. */
 function syncChatModel(/** @type {string | null} */ id, /** @type {any} */ row) {
   const wasNew = _modelOf === null;
+  const before = pickedModel();
   _modelOf = id;
   if (!id) _draftModel = null;
   else if (row) _chatModel = row.model ?? null;
   // A new chat that just got its id was saved with the draft's pick.
   else if (wasNew && store.streaming) _chatModel = _draftModel;
-  else _chatModel = null;
+  else _chatModel = undefined;
   updateChip();
+  if (pickedModel() !== before) store.emit('chat-model-changed');
 }
 
 function profileName(p) {

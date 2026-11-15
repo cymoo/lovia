@@ -12,7 +12,7 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from lovia import Agent  # noqa: E402
+from lovia import Agent, ImagePart  # noqa: E402
 from lovia.testing import ScriptedProvider, text  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.builder import Deployment  # noqa: E402
@@ -30,13 +30,21 @@ from lovia.web.store import ChatStore  # noqa: E402
 class Model(ScriptedProvider):
     """A provider that counts the runs it served."""
 
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, *, vision: bool = False) -> None:
         super().__init__([text("ok") for _ in range(20)])
         self.model = model
+        self.supports_vision = vision
         self.runs = 0
+        self.images = 0  # image parts in the last prompt it was sent
 
     def stream(self, entries: Any, **kw: Any) -> Any:
         self.runs += 1
+        self.images = sum(
+            isinstance(part, ImagePart)
+            for entry in entries
+            if isinstance(getattr(entry, "content", None), list)
+            for part in entry.content
+        )
         return super().stream(entries, **kw)
 
 
@@ -49,8 +57,10 @@ def served(
     monkeypatch.chdir(tmp_path)
     built: dict[str, list[Model]] = {}
 
-    def make(model: str, **_kw: Any) -> Model:
-        provider = Model(model)
+    def make(model: str, **kw: Any) -> Model:
+        if model.startswith("bad"):
+            raise ValueError("no such vendor")
+        provider = Model(model, vision=bool(kw.get("supports_vision")))
         built.setdefault(model, []).append(provider)
         return provider
 
@@ -175,6 +185,84 @@ def test_a_pick_follows_the_models_settings_and_outlives_its_deletion(served) ->
     before = _runs(built)["main-model"]
     _send(client, session_id=sid)
     assert _runs(built)["main-model"] == before + 1
+
+
+def test_an_attached_image_goes_as_the_chats_model_can_take_it(
+    served, tmp_path: Path
+) -> None:
+    client, _runtime, built = served
+    res = client.post(
+        "/api/config/models",
+        json={
+            "name": "eyes",
+            "model": "eyes-model",
+            "base_url": "https://gw.example/v1",
+            "api_key": "k",
+            "vision": "on",
+        },
+    )
+    assert res.status_code == 201, res.text
+    (tmp_path / "uploads").mkdir()
+    (tmp_path / "uploads/cat.png").write_bytes(
+        bytes.fromhex("89504e470d0a1a0a") + b"\x00" * 32
+    )
+    image = {"path": "uploads/cat.png", "mime": "image/png", "kind": "image"}
+    # The default can't see: a path note. The chat's own model can: pixels.
+    _send(client, attachments=[image])
+    assert built["main-model"][-1].images == 0
+    _send(client, model="eyes", attachments=[image])
+    assert built["eyes-model"][-1].images == 1
+
+
+def test_a_pick_that_cannot_be_run_on_is_refused(served) -> None:
+    client, _runtime, _built = served
+    sid = _send(client, model="fast")
+    res = client.put(
+        "/api/config/models/fast",
+        json={"model": "bad-model", "base_url": "https://gw.example/v1"},
+    )
+    assert res.status_code == 200, res.text
+    res = client.post("/api/chat", json={"message": "hi", "session_id": sid})
+    assert res.status_code == 400
+    assert "no such vendor" in res.json()["detail"]["message"]
+
+
+def test_a_customized_context_policy_stays_on_another_model(served) -> None:
+    client, runtime, _built = served
+
+    class Policy:
+        name = "mine"
+
+    agent = client.app.state.deps.agents["lovia"].clone(context_policy=Policy())
+    assert isinstance(runtime.on_model(agent, "fast").context_policy, Policy)
+
+
+def test_the_vision_tool_follows_the_model() -> None:
+    from lovia import tool
+    from lovia.web.builder import on_model
+    from lovia.web.config import ModelProfile
+    from lovia.web.vision import DESCRIBE_IMAGE
+
+    @tool(name=DESCRIBE_IMAGE)
+    def old(path: str) -> str:
+        """Describe an image."""
+        return path
+
+    @tool(name=DESCRIBE_IMAGE)
+    def new(path: str) -> str:
+        """Describe an image."""
+        return path
+
+    @tool
+    def other() -> str:
+        """Something else."""
+        return ""
+
+    agent = Agent(name="bot", model=Model("a"), tools=[old, other])
+    profile = ModelProfile(id="b", model="b")
+    # A model that sees for itself drops the tool; one that can't gets its own.
+    assert on_model(agent, Model("b"), profile, None).tools == [other]
+    assert on_model(agent, Model("b"), profile, new).tools == [other, new]
 
 
 def test_settings_says_what_window_a_model_has(served) -> None:

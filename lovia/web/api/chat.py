@@ -123,6 +123,16 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         mode = req.workspace_mode or (switch.default_mode if switch else None)
         return deps.requested_binding(agent, mode, req.workspace)
 
+    def scope(
+        agent: Agent[Any], meta: ChatMeta | None, req: ChatRequest, binding: ChatBinding
+    ) -> Agent[Any]:
+        """``agent`` as the chat has it before a run binds the rest: in the
+        chat's directory and on the chat's model — which decides whether an
+        attached image is sent as pixels — and what a ``run_deps`` hook is
+        shown."""
+        model = meta.model if meta is not None else req.model
+        return deps.on_chat_model(deps.at_root(agent, binding), model)
+
     def resolve_agent(meta: ChatMeta | None, requested: str | None) -> Agent[Any]:
         """The agent that runs this turn, given the session's metadata (if any).
 
@@ -157,7 +167,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 "a run is active for this session",
                 hint="use /api/chat/stream to attach or inject",
             )
-        scoped = deps.at_root(agent, binding)
+        scoped = scope(agent, meta, req, binding)
         user_input = await build_user_input(req, scoped)
         if isinstance(user_input, str) and not user_input.strip():
             # Attachments were given but all invalid (missing / outside the
@@ -225,7 +235,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         agent = resolve_agent(meta, req.agent)
         is_new = meta is None
         binding = bind(agent, meta, req)
-        scoped = deps.at_root(agent, binding)
+        scoped = scope(agent, meta, req, binding)
         # Build the message once — this validates attachments (dropping any
         # that are missing or escape the chat's directory), so an
         # attachments-only request whose attachments are all invalid reads as

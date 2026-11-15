@@ -578,14 +578,22 @@ def on_model(
 ) -> Agent[Any]:
     """``agent`` run on another configured model — a chat's own pick: the
     model, and what :func:`build_agent` sizes to it (the output cap, the
-    compaction window, which vision tool it needs)."""
+    compaction window, which vision tool it needs). A context policy a
+    ``customize`` hook put in place stays, unless it is a ``Compaction``
+    sized to another window."""
     tools = [t for t in agent.tools if t.name != DESCRIBE_IMAGE]
     if vision_tool is not None:
         tools.append(vision_tool)
+    policy = agent.context_policy
+    if (
+        isinstance(policy, Compaction)
+        and policy.context_window != profile.context_window
+    ):
+        policy = Compaction(context_window=profile.context_window)
     return agent.clone(
         model=provider,
         settings=replace(agent.settings, max_tokens=profile.max_tokens),
-        context_policy=Compaction(context_window=profile.context_window),
+        context_policy=policy,
         tools=tools,
     )
 

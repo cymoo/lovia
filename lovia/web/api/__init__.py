@@ -109,7 +109,7 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
     if deps.config_runtime is not None:
         from .config import build_config_router
 
-        router.include_router(build_config_router(deps.config_runtime))
+        router.include_router(build_config_router(deps.config_runtime, deps))
     router.include_router(build_agents_router(deps))
     router.include_router(build_chat_router(deps))
     router.include_router(build_events_router(deps))

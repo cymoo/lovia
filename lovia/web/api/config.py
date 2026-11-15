@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ...exceptions import UserError
@@ -44,6 +45,9 @@ from ..config.schema import MCPServerConfig
 from ..config.skills import scan_skills_status
 from ..errors import WebError
 from ..mcp import CONNECT_TIMEOUT, MCPStatus, probe
+from ..project_mcp import read_project_servers
+from ..workspaces import WorkspaceRef
+from .deps import RouterDeps
 
 # Loopback names a same-machine browser legitimately uses. Anything else in
 # the Host header of an *unauthenticated* config write is a DNS-rebinding
@@ -155,6 +159,16 @@ class MCPEnabledIn(BaseModel):
     enabled: bool
 
 
+class ProjectMCPIn(BaseModel):
+    """Turn a server of a project's ``.mcp.json`` on or off: the project is
+    chat ``session``'s, or the directory ``root`` a draft is opening in."""
+
+    session: str | None = None
+    root: str | None = Field(default=None, max_length=4096)
+    name: str
+    on: bool
+
+
 class MCPTestIn(BaseModel):
     """What to test: a saved server by ``name``, or the servers of a
     ``document`` not saved yet — whose masked values are the saved values of
@@ -232,7 +246,7 @@ def _with_secrets(
         raise WebError(400, "invalid_request", str(exc)) from exc
 
 
-def build_config_router(runtime: ConfigRuntime) -> APIRouter:
+def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
     router = APIRouter(prefix="/api/config")
 
     def _guard_host(request: Request) -> None:
@@ -638,6 +652,76 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             statuses = await asyncio.gather(*(probe(s) for s in servers))
             results = list(zip((s.name for s in servers), statuses))
         return {"results": [{"name": n, **(_status_out(s) or {})} for n, s in results]}
+
+    # ---- a project's own servers (.mcp.json) ------------------------------
+
+    async def _project(session: str | None, root: str | None) -> str | None:
+        """The local project of chat ``session`` — or of a draft opening in
+        ``root`` — whose ``.mcp.json`` its runs read; ``None``: it has none
+        (no workspace, "No project", or a project on another machine)."""
+        if session is not None:
+            meta = await deps.store.get(session)
+            if meta is None:
+                raise WebError(404, "session_not_found", "session not found")
+            binding = deps.chat_binding(deps.pick(deps.agent_of(meta)), meta)
+        else:
+            binding = deps.new_chat_binding(deps.pick(None), None, root)
+        key = deps.project_of(binding)
+        if key is None or WorkspaceRef.parse(key).remote:
+            return None
+        return key
+
+    def _project_out(key: str | None) -> dict[str, object]:
+        if key is None:
+            return {"project": None, "error": None, "servers": []}
+        servers, error = read_project_servers(Path(key))
+        states = runtime.project_mcp.states(key, servers)
+        return {
+            "project": key,
+            "error": error,
+            "servers": [
+                {
+                    "name": s.name,
+                    # As written — what turning it on approves.
+                    "spec": s.spec,
+                    "state": states[s.name],
+                    "error": s.error,
+                    "status": _status_out(runtime.mcp.get(s.config))
+                    if s.config is not None
+                    else None,
+                }
+                for s in servers
+            ],
+        }
+
+    @router.get("/project/mcp")
+    async def get_project_mcp(
+        response: Response,
+        session: str | None = Query(None),
+        root: str | None = Query(None, max_length=4096),
+    ) -> dict[str, object]:
+        """The servers the chat's project names in its ``.mcp.json``, and
+        whether each is on here. Read from disk every time."""
+        response.headers["Cache-Control"] = "no-store"
+        return _project_out(await _project(session, root))
+
+    @router.put("/project/mcp")
+    async def decide_project_mcp(
+        body: ProjectMCPIn, request: Request
+    ) -> dict[str, object]:
+        """Turn one of the project's servers on or off, as it is written
+        now. On is what lets a repository's command run: guarded like a
+        config write. It applies from the chat's next run."""
+        _guard_host(request)
+        key = await _project(body.session, body.root)
+        servers = read_project_servers(Path(key))[0] if key is not None else []
+        server = next((s for s in servers if s.name == body.name), None)
+        if key is None or server is None:
+            raise WebError(
+                404, "mcp_server_not_found", f"unknown MCP server {body.name!r}"
+            )
+        runtime.project_mcp.decide(key, server, body.on)
+        return _project_out(key)
 
     @router.post("/test")
     async def test_connection(body: TestIn, request: Request) -> TestOut:

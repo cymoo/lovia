@@ -91,8 +91,11 @@ class ConfigRuntime:
         # Each MCP server's last connection (Settings shows it), and where a
         # run reports one it started without: kept across ``apply`` too.
         from ..mcp import MCPBook
+        from ..project_mcp import ProjectMCP
 
         self.mcp = MCPBook(unavailable=self._mcp_unavailable)
+        # Which of a project's own servers (its ``.mcp.json``) are on.
+        self.project_mcp = ProjectMCP(self.deployment.home)
 
     # ------------------------------------------------------------- state -
 
@@ -183,6 +186,7 @@ class ConfigRuntime:
             config=config,
             memory=memory,
             mcp=self.mcp,
+            project_mcp=self.project_mcp,
             customize=self.customize,
         )
         return {agent.name: agent}, resolve_aux_model(config.aux_profile())

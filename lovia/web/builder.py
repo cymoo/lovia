@@ -57,6 +57,7 @@ from .config import (
 )
 from .html import show_html
 from .mcp import MCPBook, SettingsMCP
+from .project_mcp import ProjectMCP
 from .run_deps import chat_project
 from .scheduling import Scheduling
 from .store import ChatStore
@@ -462,6 +463,7 @@ def build_agent(
     config: WebConfig | None = None,
     memory: Memory | None = None,
     mcp: MCPBook | None = None,
+    project_mcp: ProjectMCP | None = None,
     customize: Customize | None = None,
 ) -> Agent[Any]:
     """The agent ``lovia web`` serves, from ``config`` on ``provider``.
@@ -470,7 +472,8 @@ def build_agent(
     in. ``memory`` is the plugin to use when the assistant keeps memory —
     one per server, it owns the notes file's lock — and ``None`` builds
     one. ``mcp`` records how each MCP server's connections go and where a
-    run reports one it started without (``ConfigRuntime`` passes its own).
+    run reports one it started without (``ConfigRuntime`` passes its own);
+    ``project_mcp`` is which of a project's own servers are turned on.
     ``customize`` (``default_app``'s) has the last word on the agent and on
     its background child, each under the name it was built with.
     The core ``Agent.name`` is :data:`DEFAULT_AGENT_ID`: what chats store.
@@ -501,8 +504,11 @@ def build_agent(
             memory = resolve_memory(True, deployment.home / "memory")
         plugins.append(cast(Memory, memory))
     servers = [s for s in config.mcp if s.enabled]
-    if servers:
-        plugins.append(SettingsMCP(servers, mcp if mcp is not None else MCPBook()))
+    # With ``project_mcp`` it is there even with no server configured: a
+    # chat's project may name its own.
+    if servers or project_mcp is not None:
+        book = mcp if mcp is not None else MCPBook()
+        plugins.append(SettingsMCP(servers, book, project=project_mcp))
     workspace = resolve_workspace(deployment, spec)
     tools = resolve_tools(config.search, web_search=spec.search)
     vision_tool = resolve_vision_tool(provider, workspace, config.vision_profile())

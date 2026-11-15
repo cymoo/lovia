@@ -1,5 +1,5 @@
-// mcp-config.js — Settings → MCP: the servers every agent whose MCP switch is
-// on connects to, once per message. A list (each server's last connection,
+// mcp-config.js — Settings → MCP: the servers every chat connects to, once
+// per message. A list (each server's last connection,
 // an on/off switch, test, edit, delete) ⇄ a JSON editor that takes the
 // mcpServers document other MCP clients use. Secrets never reach the page:
 // env and header values arrive masked, and a mask sent back unchanged keeps

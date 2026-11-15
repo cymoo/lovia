@@ -1,4 +1,4 @@
-"""The MCP servers of Settings → MCP, mounted on every agent whose switch is on.
+"""The MCP servers a chat can use: those of Settings → MCP, and its project's.
 
 Each server is opened the same way (docs/design/coding-features.md §6):
 
@@ -44,6 +44,9 @@ from ..plugins.mcp import (
 from ..run_context import RunContext
 from ..tools import Tool
 from .config.schema import MCPServerConfig
+from .project_mcp import ProjectMCP
+from .run_deps import chat_project
+from .workspaces import WorkspaceRef
 
 __all__ = ["CONNECT_TIMEOUT", "MCPBook", "MCPStatus", "SettingsMCP", "probe"]
 
@@ -102,6 +105,7 @@ def server_for(cfg: MCPServerConfig) -> MCPServer:
             command=cfg.command,
             args=list(cfg.args),
             env=dict(cfg.env) or None,
+            cwd=cfg.cwd,
             auto_reconnect=False,
             retries=0,
             permission="ask",
@@ -227,7 +231,9 @@ async def probe(cfg: MCPServerConfig, timeout: float = CONNECT_TIMEOUT) -> MCPSt
 
 
 class SettingsMCP:
-    """The plugin: every enabled server of Settings → MCP, for one agent."""
+    """The plugin: every enabled server of Settings → MCP, and — with
+    ``project`` — the servers the chat's project names in its ``.mcp.json``
+    that were turned on there (:mod:`lovia.web.project_mcp`)."""
 
     name = "mcp"
 
@@ -236,11 +242,27 @@ class SettingsMCP:
         servers: Sequence[MCPServerConfig],
         book: MCPBook,
         *,
+        project: ProjectMCP | None = None,
         timeout: float = CONNECT_TIMEOUT,
     ) -> None:
         self.servers = tuple(servers)
         self.book = book
+        self.project = project
         self.timeout = timeout
+
+    def _for_run(self, ctx: RunContext[Any]) -> Sequence[MCPServerConfig]:
+        """This run's servers: the project's own ahead of — and, by name,
+        instead of — the global ones. Read when the run starts, so a server
+        turned on a moment ago is there."""
+        key = chat_project(ctx) if self.project is not None else None
+        # A project on another machine: where its commands would run is
+        # undecided, so its file is not read.
+        if key is None or WorkspaceRef.parse(key).remote:
+            return self.servers
+        assert self.project is not None
+        mine = self.project.approved(key)
+        named = {s.name for s in mine}
+        return [*mine, *(s for s in self.servers if s.name not in named)]
 
     async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         tools: list[Tool] = []
@@ -257,7 +279,7 @@ class SettingsMCP:
                     )
 
         try:
-            for cfg in self.servers:
+            for cfg in self._for_run(ctx):
                 try:
                     conn = await connect(cfg, self.timeout)
                 except Exception as exc:  # noqa: BLE001 — skipped, and said so

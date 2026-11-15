@@ -46,10 +46,11 @@ def parse_servers(doc: Any) -> list[MCPServerConfig]:
     servers = doc.get("mcpServers", doc)
     if not isinstance(servers, dict) or not servers:
         raise ValueError("no servers in it")
-    return [_parse_one(str(name), spec) for name, spec in servers.items()]
+    return [parse_server(str(name), spec) for name, spec in servers.items()]
 
 
-def _parse_one(name: str, spec: Any) -> MCPServerConfig:
+def parse_server(name: str, spec: Any) -> MCPServerConfig:
+    """One entry of an ``mcpServers`` document, validated (``ValueError``)."""
     if not isinstance(spec, dict):
         raise ValueError(f"{name}: expected an object")
     kind = spec.get("type", spec.get("transport"))
@@ -70,6 +71,7 @@ def _parse_one(name: str, spec: Any) -> MCPServerConfig:
             command=_text(name, "command", spec.get("command")),
             args=_texts(name, "args", spec.get("args")),
             env=_mapping(name, "env", spec.get("env")),
+            cwd=_text(name, "cwd", spec.get("cwd")),
             url=_text(name, "url", url),
             headers=_mapping(name, "headers", spec.get("headers")),
         )
@@ -126,6 +128,8 @@ def spec_of(server: MCPServerConfig, *, masked: bool = True) -> dict[str, Any]:
             spec["args"] = list(server.args)
         if server.env:
             spec["env"] = {k: hide(v) for k, v in server.env.items()}
+        if server.cwd:
+            spec["cwd"] = server.cwd
     else:
         spec["type"] = "http"
         spec["url"] = server.url

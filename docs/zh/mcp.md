@@ -31,7 +31,7 @@ agent = Agent(
 两种传输，都是 frozen、keyword-only 配置：
 
 ```python
-MCPServerStdio(command="uvx", args=["mcp-server-fetch"], env=None, name="web")
+MCPServerStdio(command="uvx", args=["mcp-server-fetch"], env=None, cwd=None, name="web")
 MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="api")
 ```
 
@@ -142,8 +142,8 @@ plugins=[MCP(
   可以用 `include_tools` 拆成两个服务器条目，或用 `permission="ask"` 给危险工具加门禁。
 - **`permission` 是按服务器，不是按工具。** “读工具自由，写工具门禁”的惯用做法，是把同一
   服务器拆成两个 `MCPServer` 条目（同 command，不同 `include_tools`）。
-- **stdio 服务器默认继承你的进程环境**，除非传 `env=`；没有 `cwd` 选项。需要工作目录时，
-  用包装脚本启动。
+- **stdio 服务器默认继承你的进程环境**，除非传 `env=`；默认在当前目录启动，
+  除非传 `cwd=`。
 
 ## 延伸阅读
 

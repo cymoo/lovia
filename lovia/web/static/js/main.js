@@ -27,6 +27,7 @@ import { initModelConfig } from './model-config.js';
 import { initWorkspaceMode } from './workspace-mode.js';
 import { initWorkspaces } from './workspaces.js';
 import { initAgentChip } from './agent-chip.js';
+import { initProjectMcp } from './project-mcp.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 import { createBuildCheck } from './build-check.js';
@@ -333,6 +334,8 @@ window.lovia = lovia;
     // Directories: the composer's workspace chip and the sidebar's groups,
     // before the first session list so it draws grouped from the start.
     await initWorkspaces();
+    // After the directories: it asks about the one a draft opens in.
+    initProjectMcp();
     // The welcome view rendered before /api/info resolved; an unconfigured
     // server replaces it with the setup hero (no session exists yet).
     if (store.canConfigure && !store.configured) renderEmptyState();

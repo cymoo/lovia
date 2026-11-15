@@ -570,7 +570,7 @@ lovia.registerCommand('ticket', {
 | `command` field | Description |
 | --- | --- |
 | `description` | One line, shown beside the name in the menu |
-| `argument` | What goes after the name — a placeholder such as `Subject`. With one, picking the command from the menu leaves `/name ` to finish and send; without, it runs on the pick |
+| `argument` | What goes after the name — a placeholder such as `Subject`. With one, picking the command from the menu leaves `/name ` to finish and send; without, it runs on the pick — and a message with more after the name is sent as a message, not run |
 | `when()` | Whether the command is offered now; always when absent |
 | `run({ args, sessionId })` | `args` is the text after the name, trimmed; `sessionId` is `null` in a new chat. May be async; an error it throws shows as a toast |
 

@@ -149,7 +149,7 @@ function openDialog(scope, listing) {
       intro.className = 'lv-pmcp-intro';
       intro.textContent = listing.servers.length
         ? t('pmcp.intro', { file: `${listing.project}/.mcp.json` })
-        : t('pmcp.none');
+        : t(listing.project ? 'pmcp.none' : 'pmcp.noProject');
       nodes.push(intro);
     }
     const list = document.createElement('div');

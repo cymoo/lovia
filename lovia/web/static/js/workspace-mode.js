@@ -134,7 +134,7 @@ export function modeChoices() {
 export const modeLabel = label;
 export const modeGlyph = glyph;
 /** The composer's mode menu: the chip's, and `/mode`'s. */
-export const openModeMenu = () => openMenu();
+export const openModeMenu = openMenu;
 
 function render() {
   if (!_chip) return;

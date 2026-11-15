@@ -49,9 +49,13 @@ test('offered in registration order, unless `when` says no — or throws', () =>
 });
 
 test('a message names a command only as `/name` at its start', () => {
-  const undo = registerCommand('rename', { description: 'd', run() {} });
+  const undo = registerCommand('rename', { description: 'd', argument: 'Title', run() {} });
+  const bare = registerCommand('model', { description: 'd', run() {} });
   const off = registerCommand('hidden', { description: 'd', when: () => false, run() {} });
   try {
+    // Takes nothing: text after it makes this a message, not the command.
+    assert.deepEqual(findCommand('/model'), { name: 'model', args: '' });
+    assert.equal(findCommand('/model is not answering, check the logs'), null);
     assert.deepEqual(findCommand('/rename'), { name: 'rename', args: '' });
     assert.deepEqual(findCommand('/rename  New  title '), { name: 'rename', args: 'New  title' });
     assert.deepEqual(findCommand('/rename\nsecond line'), { name: 'rename', args: 'second line' });
@@ -63,6 +67,7 @@ test('a message names a command only as `/name` at its start', () => {
     assert.equal(findCommand('/hidden'), null); // not on offer now
   } finally {
     undo();
+    bare();
     off();
   }
 });
@@ -81,7 +86,7 @@ test('registering a name again replaces it until the newer one is undone', async
 
 test('run gets the argument text and the chat; a failure does not throw', async () => {
   let got = null;
-  const undo = registerCommand('note', { description: 'd', run: (ctx) => { got = ctx; } });
+  const undo = registerCommand('note', { description: 'd', argument: 'Text', run: (ctx) => { got = ctx; } });
   const bad = registerCommand('boom', { description: 'd', run: async () => { throw new Error('no'); } });
   const quiet = console.error;
   console.error = () => {};

@@ -100,7 +100,8 @@ interface SlashCommand {
   /**
    * What goes after the name — a placeholder such as "New title". With one,
    * picking the command from the menu leaves `/name ` to finish and send;
-   * without, it runs on the pick.
+   * without, it runs on the pick — and a message with more after the name
+   * is sent as a message, not run.
    */
   argument?: string;
   /** Whether the command is offered now (default: always). */

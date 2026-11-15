@@ -22,7 +22,8 @@ const TYPED = /^\/([a-z][a-z0-9-]*)(?:\s+([\s\S]*))?$/;
  * @property {string} description One line, shown beside the name in the menu.
  * @property {string} [argument] What goes after the name (a placeholder, as
  *   in "/rename New title"). With one, picking the command from the menu
- *   leaves `/name ` to finish and send; without, it runs at once.
+ *   leaves `/name ` to finish and send; without, it runs at once — and a
+ *   message with more after the name is not the command.
  * @property {() => boolean} [when] Whether it is offered now; always when absent.
  * @property {(ctx: { args: string, sessionId: string | null }) => void | Promise<void>} run
  *   `args` is the text after the name, trimmed. An error it throws shows as a toast.
@@ -93,7 +94,8 @@ export function listCommands() {
 
 /**
  * The command a message names and its argument text, or null: not a
- * `/name …`, no such command, or one that isn't offered now.
+ * `/name …`, no such command, one that isn't offered now — or text after
+ * a command that takes none ("/model is broken, look at…" is a message).
  * @param {string} text The whole message, trimmed.
  * @returns {{ name: string, args: string } | null}
  */
@@ -102,7 +104,9 @@ export function findCommand(text) {
   if (!typed) return null;
   const command = commands.get(typed[1]);
   if (!command || !offered(typed[1], command)) return null;
-  return { name: typed[1], args: (typed[2] ?? '').trim() };
+  const args = (typed[2] ?? '').trim();
+  if (args && command.argument === undefined) return null;
+  return { name: typed[1], args };
 }
 
 /**

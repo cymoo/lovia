@@ -72,7 +72,10 @@ export function initBuiltinCommands() {
   });
   registerCommand('archive', {
     description: t('command.archive'),
-    when: () => !!listedChat()?.id && !listedChat().archived,
+    when: () => {
+      const s = listedChat();
+      return !!s && !s.archived;
+    },
     run: () => toggleArchive(listedChat()),
   });
   registerCommand('branch', {

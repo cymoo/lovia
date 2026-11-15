@@ -20,7 +20,7 @@ directory the server was started in, which only decides where new chats work:
 
 | In the home | What |
 | --- | --- |
-| `config.json` | Models, web search, global skill directories, and the [agents](#agents) |
+| `config.json` | Models, web search, global skill directories, MCP servers, and the [assistant's settings](#the-assistant) |
 | `lovia.db` | Chat history (`--db FILE` puts it elsewhere) |
 | `memory/` | Long-term memory: notes about you, and per-project notes and history under `scopes/` |
 | `workspace/` | Where chats that belong to no project work |
@@ -53,7 +53,7 @@ optional DuckDuckGo backend.
 Default features can make model calls outside the main Run. Memory performs one
 digest after each completed Run and another call when a periodic dream is due;
 titles and follow-up suggestions also use separate calls. Turn memory or
-follow-ups off for an agent in **Settings → Agents**, or assign auxiliary work to a
+follow-ups off in **Settings → Assistant**, or assign auxiliary work to a
 cheaper model. See [Memory](memory.md#sharp-edges) for the full cost boundary.
 
 !!! danger "Local use by default"
@@ -99,10 +99,9 @@ a whole, written atomically, and applied without a restart.
 
 A model switch applies from the **next message**, including later messages in
 an existing chat, scheduled runs, and background subagents. An in-flight reply
-continues on its original model. The model chip in the composer sets the
-model of the chat's [agent](#agents), and that agent's alone — or puts it back
-on the default model. The default, which every agent without a model of its
-own follows, changes only in Settings → Models (**Make default**). Vision and auxiliary
+continues on its original model. The model chip in the composer and
+Settings → Models (**Make default**) change the same thing: the model every
+chat runs on. Vision and auxiliary
 work such as titles and follow-up suggestions can be assigned to separate
 profiles.
 
@@ -158,40 +157,31 @@ The pane lists only the global directories, with what each contributes —
 discovered skills, parse problems, shadowed duplicates — and a directory that
 does not exist is simply skipped, so a stale entry never prevents the server
 from starting. Changing the list applies immediately; adding a skill inside
-an already-listed directory needs no action at all. An agent may load its own
-list of directories instead (below); the project's own skills load either way.
+an already-listed directory needs no action at all.
 
 Type `/` at the very start of the composer and it lists the skills this chat
 can use, filtered as you type; ↑/↓ move, Enter or Tab inserts `/name `, Esc
-closes. The list is exactly what the chat's run loads — the project's skills,
-duplicate-name precedence and the agent's skill settings included; a remote
+closes. The list is exactly what the chat's run loads — the project's skills
+and duplicate-name precedence included; a remote
 chat lists only the global directories'. The message goes out as typed, and
 the model loads the skill by the [`/name` rule](skills.md#calling-a-skill-by-name).
 A `/` later in the message or on a later line opens nothing, since the model
 only honours the one that starts it.
 
-## Agents
+## The assistant
 
-`lovia web` serves one agent, `lovia`, until you add more in **Settings →
-Agents**. Each agent is a way of working: its own name, prompt, model,
-default permission mode and auto-allowed commands, switches (web search,
-[MCP tools](#mcp-servers), memory, background subagents, follow-ups) and, under Advanced, skill
-directories and run limits. Models, keys and the search service are configured
-once (Settings → Models, Settings → Web search) and shared; an agent refers to them.
-The agent menu shows each agent's model and permission mode under its name.
+`lovia web` serves one agent, `lovia`. **Settings → Assistant** says how it
+behaves in every chat: custom instructions, the permission mode a new chat
+starts in and the commands it runs without asking, and four switches (web
+search, memory, background subagents, follow-ups). What differs between
+projects comes from the project — its [`AGENTS.md`](#project-instructions)
+and `.agents/skills` — and what differs between chats is picked in the
+composer (the folder and the permission mode).
 
-- A new chat picks its agent on the chip beside the folder and mode chips,
-  shown when there is more than one. It starts with the agent the folder's
-  latest chat used, else the default — the first in the list (**Make
-  default** moves one there) — and in that agent's permission mode.
-- A chat keeps the agent it was created with; the chip only names it. A chat
-  whose agent is deleted carries on with the default agent, and the page
-  says so when it opens. A schedule whose agent is deleted fails, naming it,
-  until it is pointed at another.
-- An agent's `id` is what chats and schedules store. It is derived from the
-  name when the agent is created and never changes, so renaming keeps every
-  chat.
-- Memory is shared by every agent that keeps it, and split by project (see
+- The turn and retry limits are not in Settings: set `assistant.max_turns`
+  (150) and `assistant.max_retries` (5) in `config.json` and restart. The
+  Assistant page shows the current values and the file's path.
+- Memory is split by project (see
   [Memory scopes](memory.md#scopes)): notes about you are one list, carried
   into chats in every project; notes about a project, and recall over its
   past chats, are kept per chat directory. A chat in "No project" has only
@@ -208,28 +198,29 @@ In `config.json` a missing field takes its default ([below](#settings-that-apply
 
 ```json
 {
-  "version": 2,
-  "agents": [
-    {"id": "lovia"},
-    {"id": "review", "name": "Code review",
-     "instructions": "Review the change; don't edit files.",
-     "mode": "readonly", "model": "fast"}
-  ]
+  "version": 3,
+  "assistant": {
+    "instructions": "Lead with the answer.",
+    "mode": "coding",
+    "max_turns": 150
+  }
 }
 ```
 
-!!! note "Upgrading from 0.9.179 or earlier"
+!!! note "Upgrading from 0.9.207 or earlier"
 
-    `config.json` version 1 kept the one agent's settings in its `agent`,
-    `run` and `workspace` sections. Those are not converted: the default agent
-    starts from the defaults (its prompt, permission mode, auto-allowed
-    commands, switches and limits), and the next save writes version 2.
-    Models, roles, search and skills carry over.
+    Earlier versions kept these settings elsewhere: version 1 in `agent`,
+    `run` and `workspace` sections, version 2 in an `agents` list (several
+    agents, each with its own). Neither is converted: the assistant starts
+    from the defaults, and the next save writes version 3. Models, roles,
+    search, skills and MCP servers carry over. A chat stored under another
+    agent carries on with `lovia`; a schedule stored under another fails,
+    naming it, until it is recreated.
 
 ## MCP servers
 
-**Settings → MCP** lists the [MCP](mcp.md) servers whose tools the agents
-use — every agent with its **MCP tools** switch on (the default). Add servers
+**Settings → MCP** lists the [MCP](mcp.md) servers whose tools chats can
+use. Add servers
 by pasting the `mcpServers` JSON other clients use; several at once is fine:
 
 ```json
@@ -499,24 +490,21 @@ What the page can and can't do:
 
 ## Settings that apply without a restart
 
-Everything about the agents lives in `config.json` in the home and is
+The assistant's settings live in `config.json` in the home and are
 edited in Settings. A save applies from the next run; a reply already streaming
 finishes with what it started with.
 
 | Settings pane | `config.json` | Default |
 | --- | --- | --- |
 | **Models** → a model's advanced fields | `models[].max_tokens` | The provider's |
-| **Agents** → Model | `agents[].model` | `null`: the default chat model |
-| **Agents** → Custom instructions | `agents[].instructions` | Empty: the chat's [project instructions](#project-instructions), else a generic prompt; set, they are appended |
-| **Agents** → Default permission mode | `agents[].mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
-| **Agents** → Commands that run without asking (shown for Edit in workspace) | `agents[].auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
-| **Agents** → Advanced → Skills | `agents[].skills` | `null`: the global directories; a list replaces them |
-| **Agents** → Web search | `agents[].search` | On; off leaves out `web_search` (`web_fetch` stays) |
-| **Agents** → MCP tools | `agents[].mcp` | On: the servers turned on in [Settings → MCP](#mcp-servers) (`mcp[]`) |
-| **Agents** → Long-term memory | `agents[].memory` | On, kept in `<home>/memory` |
-| **Agents** → Background tasks | `agents[].subagents` | On |
-| **Agents** → Suggest follow-up questions | `agents[].followups` | On |
-| **Agents** → Advanced → Max turns / Retries | `agents[].max_turns` / `agents[].max_retries` | `100` / the core default (`4`) |
+| **Assistant** → Custom instructions | `assistant.instructions` | Empty: the chat's [project instructions](#project-instructions), else a generic prompt; set, they are appended |
+| **Assistant** → Permission mode for new chats | `assistant.mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
+| **Assistant** → Commands that run without asking (shown for Edit in workspace) | `assistant.auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
+| **Assistant** → Web search | `assistant.search` | On; off leaves out `web_search` (`web_fetch` stays) |
+| **Assistant** → Long-term memory | `assistant.memory` | On, kept in `<home>/memory` |
+| **Assistant** → Background tasks | `assistant.subagents` | On |
+| **Assistant** → Suggest follow-up questions | `assistant.followups` | On |
+| — (the file only; restart to apply) | `assistant.max_turns` / `assistant.max_retries` | `150` / `5` |
 
 When `config.json` isn't writable (a read-only mount, say), the server still
 starts and Settings shows these as view-only.
@@ -579,7 +567,7 @@ Each chat has its own permission mode — **View only**, **Edit in
 workspace** or **Full access** (`readonly`, `coding` and `trusted` in
 `config.json` and the API; see [modes](workspace.md#modes)) — on the chip
 beside the folder
-chip in the composer. A new chat starts in its agent's mode; pick another
+chip in the composer. A new chat starts in the mode Settings → Assistant names; pick another
 before sending to start it there. Switching a chat applies from its next run:
 a reply already streaming finishes in the mode it began, and the chat's
 background processes (a dev server, say) keep running. The chats a run
@@ -690,7 +678,7 @@ serve(create_app(agent, question_channel=channel, question_timeout=600))
 ## Follow-up suggestions
 
 Follow-up suggestions use a separate model call and never enter the Transcript.
-Turn them off for an agent in **Settings → Agents** to avoid that extra call, or point them at a
+Turn them off in **Settings → Assistant** to avoid that extra call, or point them at a
 cheaper model by assigning it the aux role ([Models and
 switching](#models-and-switching)). They are opt-in for a custom Agent served
 through `create_app()`; see [Web server](web-server.md#follow-up-suggestions).
@@ -767,7 +755,7 @@ this conversation and links back to the chat that started it.
 ## Background subagents
 
 `lovia web` enables [background subagents](multi-agent.md#background-subagents)
-by default; turn them off for an agent in **Settings → Agents**. A default child keeps Skills,
+by default; turn them off in **Settings → Assistant**. A default child keeps Skills,
 Todo, Tools, and Workspace, but omits Scheduling, Memory, and Subagents, so it
 cannot spawn recursively.
 

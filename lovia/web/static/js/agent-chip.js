@@ -12,7 +12,7 @@ import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { scopeRoot } from './workspaces.js';
-import { modeLabel, modelName } from './agent-config.js';
+import { modeLabel } from './assistant-config.js';
 
 /** @type {HTMLButtonElement | null} */
 let _chip = null;
@@ -26,21 +26,9 @@ function info(name) {
   return store.agents.find((/** @type {any} */ a) => a.name === name) || null;
 }
 
-/** What the page calls an agent. @param {string | null | undefined} name */
-export function agentLabel(name) {
-  return info(name)?.label || name || '';
-}
-
-/**
- * The line under an agent in the menu: what it runs on, and how — the
- * settings' own model name where the page has them.
- * @param {any} a
- */
+/** The line under an agent in the menu: what it runs on, and how. @param {any} a */
 function facts(a) {
-  const c = store.modelConfig;
-  const spec = c?.agents?.find((/** @type {any} */ x) => x.id === a.name);
-  const model = spec ? modelName(c, spec) : a.model;
-  return [model, a.mode && modeLabel(a.mode)].filter(Boolean).join(' · ');
+  return [a.model, a.mode && modeLabel(a.mode)].filter(Boolean).join(' · ');
 }
 
 const defaultAgent = () => store.agents[0]?.name ?? null;
@@ -78,8 +66,9 @@ function render() {
   _chip.classList.toggle('lv-chip-fixed', fixed);
   _chip.setAttribute('aria-disabled', String(fixed));
   const text = _chip.querySelector('.lv-model-chip-label');
-  if (text) text.textContent = agentLabel(store.agent);
-  _chip.title = t(fixed ? 'agent.chipFixed' : 'agent.chipTitle', { name: agentLabel(store.agent) });
+  const name = store.agent ?? '';
+  if (text) text.textContent = name;
+  _chip.title = t(fixed ? 'agent.chipFixed' : 'agent.chipTitle', { name });
 }
 
 function closeMenu() {
@@ -112,7 +101,7 @@ function openMenu() {
     text.className = 'lv-mode-item-text';
     const name = document.createElement('span');
     name.className = 'lv-model-chip-item-name';
-    name.textContent = agentLabel(a.name);
+    name.textContent = a.name;
     text.appendChild(name);
     const line = facts(a);
     if (line) {
@@ -130,20 +119,6 @@ function openMenu() {
       document.getElementById('prompt')?.focus();
     });
     menu.appendChild(item);
-  }
-  if (store.canConfigureModels) {
-    const divider = document.createElement('div');
-    divider.className = 'lv-model-chip-menu-divider';
-    const manage = document.createElement('button');
-    manage.type = 'button';
-    manage.className = 'lv-model-chip-item lv-manage';
-    manage.textContent = t('agent.manage');
-    manage.addEventListener('click', async () => {
-      closeMenu();
-      const { openSettings } = await import('./settings.js');
-      openSettings('agents');
-    });
-    menu.append(divider, manage);
   }
   _chip.insertAdjacentElement('afterend', menu);
   // Over its chip, pulled back in where the bar is narrower (a phone).
@@ -163,7 +138,7 @@ function openMenu() {
 function onChatAgent(name) {
   if (info(name)) return setAgent(/** @type {string} */ (name));
   const fallback = defaultAgent();
-  if (name && fallback) toast(t('agent.gone', { name, fallback: agentLabel(fallback) }));
+  if (name && fallback) toast(t('agent.gone', { name, fallback }));
   setAgent(fallback);
 }
 

@@ -26,18 +26,11 @@ export function cfg() {
   return store.modelConfig;
 }
 
-/** The settings of the agent the composer is on (the default before any). */
-function activeAgent() {
-  const c = cfg();
-  return c?.agents?.find((a) => a.id === store.agent) || c?.agents?.[0] || null;
-}
-
-/** The model the composer's agent runs on: its own, else the default chat one. */
+/** The model chats run on: the default chat one. */
 function activeProfile() {
   const c = cfg();
   if (!c) return null;
-  const id = activeAgent()?.model || c.roles.chat;
-  return c.models.find((m) => m.id === id) || null;
+  return c.models.find((m) => m.id === c.roles.chat) || null;
 }
 
 function profileName(p) {
@@ -343,7 +336,7 @@ export function buildModelsPane() {
           ghostBtn(t('cfg.makeDefault'), async (e) => {
             e.stopPropagation();
             try {
-              await makeDefaultModel(p.id);
+              await switchModel(p.id, 'cfg.madeDefault');
             } catch (err) {
               toast(String(err.message || err), { type: 'error' });
             }
@@ -707,7 +700,7 @@ export function buildModelsPane() {
 
 // ---- Search pane ----------------------------------------------------------
 
-/** Settings → Web search: the backend agents with web search on use, and its key. */
+/** Settings → Web search: the backend web search uses, and its key. */
 export function buildSearchPane() {
   const pane = el('div', 'lv-cfg-pane');
 
@@ -1046,33 +1039,14 @@ function updateChip() {
 }
 
 /**
- * Switch the model the composer's agent runs on — that agent's alone; `null`
- * puts it back on the default chat model. The default itself changes only in
- * Settings → Models, so picking a model here never moves other agents.
- * @param {string | null} id
- */
-async function switchModel(id) {
-  const agent = activeAgent();
-  if (!agent || (agent.model ?? null) === id) return;
-  await api.updateAgent(agent.id, { model: id });
-  await afterModelChange(id ?? cfg().roles.chat, id ? 'cfg.switched' : 'cfg.followsDefault');
-}
-
-/**
- * Settings → Models' "Make default": the default chat model itself
- * (roles.chat), whichever agent the composer is on.
+ * Switch the model chats run on (roles.chat) — every chat's next message,
+ * from the composer's chip and Settings → Models' "Make default" alike.
  * @param {string} id
- */
-async function makeDefaultModel(id) {
-  await api.setRoles({ chat: id });
-  await afterModelChange(id, 'cfg.madeDefault');
-}
-
-/**
- * @param {string} id The model switched to.
  * @param {string} [message] What the toast says about it.
  */
-async function afterModelChange(id, message = 'cfg.switched') {
+async function switchModel(id, message = 'cfg.switched') {
+  if (cfg()?.roles.chat === id) return;
+  await api.setRoles({ chat: id });
   await loadConfig();
   toast(t(message, { name: profileName(cfg()?.models.find((m) => m.id === id)) }));
   updateChip();
@@ -1111,21 +1085,17 @@ async function openChipMenu() {
     }
   }
   const c = cfg();
-  const agent = activeAgent();
-  if (!agent) return;
   const menu = el('div', 'lv-model-chip-menu');
   menu.setAttribute('role', 'menu');
-  // Named for the agent: the pick is its setting, not this chat's.
-  menu.appendChild(
-    el('div', 'lv-model-chip-menu-title', t('cfg.switchTitle', { name: agent.display_name })),
-  );
+  // The pick is the server's default, not this chat's: say so.
+  menu.appendChild(el('div', 'lv-model-chip-menu-title', t('cfg.switchTitle')));
   /**
    * @param {string} label
-   * @param {string | null} id What switchModel gets.
+   * @param {string} id
    * @param {string} [sub]
    */
   const option = (label, id, sub) => {
-    const on = (agent.model ?? null) === id;
+    const on = c.roles.chat === id;
     const item = el('button', 'lv-model-chip-item');
     item.setAttribute('type', 'button');
     item.setAttribute('role', 'menuitemradio');
@@ -1143,11 +1113,6 @@ async function openChipMenu() {
     });
     menu.appendChild(item);
   };
-  const fallback = c.models.find((/** @type {any} */ m) => m.id === c.roles.chat);
-  option(
-    fallback ? t('agent.modelDefault', { name: profileName(fallback) }) : t('agent.modelNone'),
-    null,
-  );
   for (const p of c.models) {
     option(profileName(p), p.id, p.vision === 'on' ? t('cfg.visionBadge') : undefined);
   }
@@ -1231,8 +1196,6 @@ export function initModelConfig() {
   if (!store.canConfigureModels) return;
   initModelChip();
   store.on('config-changed', _onConfigChanged);
-  // Agents may run on different models: the chip names the composer's.
-  store.on('agent-changed', updateChip);
   store.on('open-model-settings', async () => {
     const { openSettings } = await import('./settings.js');
     openSettings('models');

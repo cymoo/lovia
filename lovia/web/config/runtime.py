@@ -31,7 +31,7 @@ from ...workspace import LocalWorkspace
 from ..followups import FollowupRequest, generate_followups
 from ..sse import ConfigChangedData
 from .check import mask_key
-from .schema import AgentConfig, Connection, WebConfig
+from .schema import DEFAULT_AGENT_ID, Connection, WebConfig
 from .storage import LoadedConfig, config_writable, save_config
 
 if TYPE_CHECKING:
@@ -55,9 +55,8 @@ class ConfigRuntime:
     to the app's ``RouterDeps`` by ``create_app``. ``apply()`` is the one
     write path: validate by building first, persist, then swap.
 
-    Each configured agent is served under its ``id``, which is also its core
-    ``Agent.name``; :meth:`agent_config` maps a served agent (or its
-    background child) back to the settings it runs on.
+    It serves one agent, named :data:`DEFAULT_AGENT_ID`, with the
+    ``assistant`` section's settings.
     """
 
     def __init__(
@@ -123,13 +122,6 @@ class ConfigRuntime:
     def configured(self) -> bool:
         return not self.serveable(self.config)
 
-    def agent_config(self, name: str) -> AgentConfig | None:
-        """The settings behind a served agent's ``Agent.name`` (or its
-        ``<id>.sub`` child), ``None`` when no configured agent has it."""
-        from ..builder import spec_id
-
-        return self.config.agent(spec_id(name))
-
     def _mcp_unavailable(
         self, ctx: RunContext[Any], failed: list[tuple[str, str]]
     ) -> None:
@@ -141,10 +133,6 @@ class ConfigRuntime:
         if ctrl is not None:
             ctrl.announce(MCPUnavailable(servers=failed))
 
-    def _spec(self, agent: Agent[Any]) -> AgentConfig:
-        # An agent deleted since the run began runs on as the default does.
-        return self.agent_config(agent.name) or self.config.default_agent
-
     # ---------------------------------------------------------- building -
 
     def build(
@@ -153,15 +141,13 @@ class ConfigRuntime:
         """Construct the served pieces for ``config`` (no side effects but
         the one Memory plugin, built on first need and reused by every build).
 
-        Returns ``(agents, aux_model)``: every configured agent by id, in
-        order (the first is the default), and the aux model that serves
-        titles and follow-ups, or ``None`` for "the agent's own". Agents on
-        one model share its provider; agents that keep memory share the
-        Memory plugin. The CLI boot and ``apply`` both build through here,
-        so a field can't reach one path and miss the other. Raises
-        :class:`UserError` when the configuration cannot serve (naming the
-        agent whose model is incomplete) and ``ValueError`` for an unknown
-        vendor prefix — callers turn both into their surface's error shape.
+        Returns ``(agents, aux_model)``: the one served agent by name, and
+        the aux model that serves titles and follow-ups, or ``None`` for
+        "the agent's own". The CLI boot and ``apply`` both build through
+        here, so a field can't reach one path and miss the other. Raises
+        :class:`UserError` when the configuration cannot serve and
+        ``ValueError`` for an unknown vendor prefix — callers turn both
+        into their surface's error shape.
         """
         from ..builder import build_agent, resolve_aux_model, resolve_memory
 
@@ -169,79 +155,61 @@ class ConfigRuntime:
         missing = self.serveable(config)
         if missing:
             raise UserError(f"no {' or '.join(missing)} configured")
-        providers: dict[str, Provider] = {}
+        profile = config.default_profile()
+        assert profile is not None  # serveable() checked it
+        conn = Connection.from_profile(profile)
+        assert conn.model is not None
+        provider = provider_from_string(
+            conn.model,
+            api_key=conn.api_key,
+            base_url=conn.base_url,
+            supports_vision=profile.vision_override(),
+            extra_body=profile.extra_body,
+        )
         memory = None
-        if any(spec.memory for spec in config.agents):
+        if config.assistant.memory:
             if self._memory is None:
                 self._memory = resolve_memory(True, self.deployment.home / "memory")
             memory = self._memory
-        agents: dict[str, Agent[Any]] = {}
-        for spec in config.agents:
-            profile = config.agent_profile(spec)
-            assert profile is not None  # references are validated
-            provider = providers.get(profile.id)
-            if provider is None:
-                conn = Connection.from_profile(profile)
-                gaps = conn.missing()
-                if gaps or conn.model is None:
-                    raise UserError(
-                        f"agent {spec.display_name!r}: no {' or '.join(gaps)} "
-                        f"configured for model {profile.display_name!r}"
-                    )
-                provider = provider_from_string(
-                    conn.model,
-                    api_key=conn.api_key,
-                    base_url=conn.base_url,
-                    supports_vision=profile.vision_override(),
-                    extra_body=profile.extra_body,
-                )
-                providers[profile.id] = provider
-            agents[spec.id] = build_agent(
-                self.deployment,
-                self.store,
-                provider,
-                question_channel=self.question_channel,
-                config=config,
-                spec=spec,
-                memory=memory,
-                mcp=self.mcp,
-            )
-        return agents, resolve_aux_model(config.aux_profile())
+        agent = build_agent(
+            self.deployment,
+            self.store,
+            provider,
+            question_channel=self.question_channel,
+            config=config,
+            memory=memory,
+            mcp=self.mcp,
+        )
+        return {agent.name: agent}, resolve_aux_model(config.aux_profile())
 
     def max_turns(self) -> dict[str, int]:
-        """Each served agent's turn limit — ``create_app(max_turns=)`` —
-        and its background child's, which runs under its own name."""
+        """The turn limit — ``create_app(max_turns=)`` — for the served
+        agent and its background child, which runs under its own name."""
         from ..builder import SUBAGENT_SUFFIX
 
-        limits: dict[str, int] = {}
-        for spec in self.config.agents:
-            limits[spec.id] = limits[f"{spec.id}{SUBAGENT_SUFFIX}"] = spec.max_turns
-        return limits
+        limit = self.config.assistant.max_turns
+        return {DEFAULT_AGENT_ID: limit, f"{DEFAULT_AGENT_ID}{SUBAGENT_SUFFIX}": limit}
 
     def workspace_for(self, agent: Agent[Any], root: Path, mode: str) -> LocalWorkspace:
         """A chat's workspace in ``mode`` — ``WorkspaceSwitch.build`` for the
-        CLI, with the auto-allowed commands of the agent the chat runs on.
-        Built from the current configuration each run, so a change to them
-        reaches every coding chat's next run."""
+        CLI, with the auto-allowed commands. Built from the current
+        configuration each run, so a change to them reaches every coding
+        chat's next run."""
         from ..builder import resolve_workspace
 
         workspace = resolve_workspace(
-            self.deployment, self._spec(agent), root=root, mode=mode
+            self.deployment, self.config.assistant, root=root, mode=mode
         )
         assert workspace is not None  # a switch exists only with a workspace
         return workspace
 
     def agent_for(self, agent: Agent[Any], root: Path) -> Agent[Any]:
         """``WorkspaceSwitch.agent_for`` for the CLI: the directory's
-        ``AGENTS.md`` and skills, by the agent's current settings."""
+        ``AGENTS.md`` and skills, by the current settings."""
         from ..builder import instructions_policy, project_agent
 
         return project_agent(
-            agent,
-            root,
-            self.config,
-            self._spec(agent),
-            instructions_policy(self.deployment),
+            agent, root, self.config, instructions_policy(self.deployment)
         )
 
     def agent_for_remote(self, agent: Agent[Any], ref: Any) -> Agent[Any]:
@@ -249,14 +217,14 @@ class ConfigRuntime:
         agent without the launch directory's ``AGENTS.md`` and skills."""
         from ..builder import remote_agent
 
-        return remote_agent(agent, self.config, self._spec(agent))
+        return remote_agent(agent, self.config)
 
     async def followups(self, request: FollowupRequest) -> Sequence[str]:
         """``create_app(followups=)`` for the CLI: the built-in suggester,
-        for the agents that keep suggestions on."""
-        spec = self.agent_config(request.agent)
+        while Settings keeps suggestions on."""
         deps = self._deps
-        if spec is None or not spec.followups or deps is None:
+        on = self.config.assistant.followups
+        if not on or deps is None or request.agent not in deps.agents:
             return []
         model = deps.followup_model or deps.agents[request.agent].model
         if model is None:  # pragma: no cover - a served agent has a model
@@ -276,9 +244,10 @@ class ConfigRuntime:
         provider is retired (closed) once no live run still holds it.
         Serialized — concurrent writes apply one at a time.
 
-        ``settings_only`` marks a write that touches no model (an agent's
-        settings): before a model is configured there is nothing to build
-        or serve, so it is saved for when one arrives instead of refused.
+        ``settings_only`` marks a write that touches no model (the
+        assistant's settings): before a model is configured there is nothing
+        to build or serve, so it is saved for when one arrives instead of
+        refused.
         """
         async with self._lock:
             if settings_only and self.serveable(config):
@@ -336,8 +305,7 @@ class ConfigRuntime:
                 ),
             )
             log.info(
-                "configuration applied: %d agent(s), default model %s (%s)",
-                len(agents),
+                "configuration applied: model %s (%s)",
                 profile.model,
                 mask_key(profile.api_key),
             )

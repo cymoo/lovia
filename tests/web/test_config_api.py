@@ -18,7 +18,7 @@ from lovia import Skills  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.builder import Deployment  # noqa: E402
 from lovia.web.config import (  # noqa: E402
-    AgentConfig,
+    AssistantConfig,
     ConfigRuntime,
     LoadedConfig,
     ValidationOutcome,
@@ -30,7 +30,7 @@ from lovia.web.store import ChatStore  # noqa: E402
 
 def _lean() -> WebConfig:
     """A fresh document with memory and subagents off (no disk, fewer parts)."""
-    return WebConfig(agents=[AgentConfig(id="lovia", memory=False, subagents=False)])
+    return WebConfig(assistant=AssistantConfig(memory=False, subagents=False))
 
 
 def _loaded(tmp_path: Path) -> LoadedConfig:
@@ -608,7 +608,9 @@ def test_token_auth_lifts_the_host_restriction(
         assert client.get("/api/config").status_code == 401
 
 
-# --------------------------------------------------------------- agents -
+# ------------------------------------------------------------ assistant -
+
+ASSISTANT = "/api/config/assistant"
 
 
 def _served_with(
@@ -623,41 +625,41 @@ def _served_with(
     return TestClient(app, base_url="http://localhost"), runtime
 
 
-def _add_agent(client: TestClient, **fields: object) -> str:
-    res = client.post("/api/config/agents", json=fields)
-    assert res.status_code == 201, res.text
-    return res.json()["id"]
-
-
 async def test_run_settings_apply_to_the_next_run(served) -> None:
     from lovia.web.followups import FollowupRequest
 
     client, runtime, app = served
     _add_model(client)
     deps = app.state.deps
-    res = client.put(
-        "/api/config/agents/lovia",
-        json={"max_turns": 7, "max_retries": 2, "followups": False},
-    )
+    # The web's own limits, where the file sets none.
+    assert deps.max_turns_for("lovia") == 150
+    assert deps.agents["lovia"].retry.max_attempts == 6
+    res = client.put(ASSISTANT, json={"followups": False})
     assert res.status_code == 200, res.text
-    (agent,) = res.json()["config"]["agents"]
-    assert (agent["max_turns"], agent["max_retries"], agent["followups"]) == (
-        7,
-        2,
-        False,
-    )
-    # Read by every run at its start: the next one gets these.
-    assert deps.max_turns_for("lovia") == 7
-    assert deps.agents["lovia"].retry.max_attempts == 3
+    assert res.json()["config"]["assistant"]["followups"] is False
     asked = FollowupRequest(session_id="s", agent="lovia")
     assert await runtime.followups(asked) == []
-    # An explicit null restores the core default retry posture.
-    client.put("/api/config/agents/lovia", json={"max_retries": None})
-    assert deps.agents["lovia"].retry.max_attempts == 5
+
+
+async def test_the_limits_are_the_files_to_set(served) -> None:
+    client, runtime, app = served
+    _add_model(client)
+    # Settings never writes them: naming one in a save is refused.
+    assert client.put(ASSISTANT, json={"max_turns": 5}).status_code == 422
+    assert runtime.config.assistant.max_turns == 150
+    assistant = runtime.config.assistant.model_copy(
+        update={"max_turns": 7, "max_retries": 2}
+    )
+    await runtime.apply(runtime.config.model_copy(update={"assistant": assistant}))
+    deps = app.state.deps
     assert deps.max_turns_for("lovia") == 7
+    assert deps.agents["lovia"].retry.max_attempts == 3
+    # ...and a later save from Settings keeps them.
+    client.put(ASSISTANT, json={"search": False})
+    assert json.loads(runtime.loaded.path.read_text())["assistant"]["max_turns"] == 7
 
 
-def test_the_page_learns_what_unset_values_mean(
+def test_the_page_learns_the_mode_an_unset_chat_runs_in(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from lovia.web import WorkspaceSwitch
@@ -665,23 +667,16 @@ def test_the_page_learns_what_unset_values_mean(
     client, runtime = _served_with(monkeypatch, tmp_path, Deployment(readonly=True))
     client.app.state.deps.workspace_switch = WorkspaceSwitch(modes=("readonly",))
     with client:
-        # Retries left empty: the core default, as a number to show.
-        assert client.get("/api/config").json()["defaults"]["max_retries"] == 4
         # A chat with no mode stored runs the CLI agent's own workspace —
         # built in the default mode as this server runs it: name it.
         modes = client.get("/api/info").json()["workspace_modes"]
         assert modes["own"] == modes["default"] == "readonly"
 
 
-def test_run_settings_reject_nulls_and_out_of_range(served) -> None:
+def test_settings_reject_nulls(served) -> None:
     client, *_ = served
-    url = "/api/config/agents/lovia"
-    assert client.put(url, json={"max_turns": None}).status_code == 400
-    assert client.put(url, json={"max_turns": 0}).status_code == 422
-    assert client.put(url, json={"memory": None}).status_code == 400
-    # Null where it means "inherit" is fine.
-    assert client.put(url, json={"model": None, "skills": None}).status_code == 200
-    assert client.put("/api/config/agents/nope", json={}).status_code == 404
+    assert client.put(ASSISTANT, json={"memory": None}).status_code == 400
+    assert client.put(ASSISTANT, json={"mode": "nope"}).status_code == 422
 
 
 def test_mode_change_rebuilds_the_agent_and_spares_a_held_copy(served) -> None:
@@ -690,15 +685,15 @@ def test_mode_change_rebuilds_the_agent_and_spares_a_held_copy(served) -> None:
     deps = app.state.deps
     held = deps.agents["lovia"]  # what an in-flight run would be holding
     assert held.workspace.policy.write == "allow"  # coding by default
-    res = client.put("/api/config/agents/lovia", json={"mode": "readonly"})
+    res = client.put(ASSISTANT, json={"mode": "readonly"})
     assert res.status_code == 200, res.text
-    (agent,) = res.json()["config"]["agents"]
-    assert agent["mode"] == agent["effective_mode"] == "readonly"
+    assistant = res.json()["config"]["assistant"]
+    assert assistant["mode"] == assistant["effective_mode"] == "readonly"
     assert deps.agents["lovia"].workspace.policy.write == "deny"
     assert held.workspace.policy.write == "allow"  # untouched
     saved = json.loads(runtime.loaded.path.read_text())
-    assert saved["agents"][0]["mode"] == "readonly"
-    # What a new chat with it starts in.
+    assert saved["assistant"]["mode"] == "readonly"
+    # What a new chat starts in.
     assert client.get("/api/agents/lovia").json()["mode"] == "readonly"
 
 
@@ -707,16 +702,16 @@ def test_auto_allow_change_reaches_the_command_policy(served) -> None:
     _add_model(client)
     deps = app.state.deps
     assert deps.agents["lovia"].workspace.policy.decide_command("ls").action == "allow"
-    res = client.put("/api/config/agents/lovia", json={"auto_allow": []})
+    res = client.put(ASSISTANT, json={"auto_allow": []})
     assert res.status_code == 200, res.text
     assert deps.agents["lovia"].workspace.policy.decide_command("ls").action == "ask"
 
 
-def test_agent_settings_apply(served, tmp_path: Path) -> None:
+def test_assistant_settings_apply(served, tmp_path: Path) -> None:
     client, _runtime, app = served
     _add_model(client)
     res = client.put(
-        "/api/config/agents/lovia",
+        ASSISTANT,
         json={"instructions": "Answer in haiku.", "subagents": True, "search": False},
     )
     assert res.status_code == 200, res.text
@@ -727,154 +722,62 @@ def test_agent_settings_apply(served, tmp_path: Path) -> None:
     assert "web_search" not in tools and "web_fetch" in tools
 
 
-def test_agents_are_served_side_by_side(
+def test_one_agent_is_served_and_keeps_one_memory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from lovia.plugins import Memory
+    from lovia.web.store import ChatMeta
 
     deployment = Deployment(workspace=str(tmp_path), home=tmp_path / "home")
     client, runtime = _served_with(monkeypatch, tmp_path, deployment)
     with client:
         _add_model(client)
-        client.put("/api/config/agents/lovia", json={"memory": True})
-        (first,) = [
-            p
-            for p in client.app.state.deps.agents["lovia"].plugins
-            if isinstance(p, Memory)
-        ]
-        new = _add_agent(
-            client,
-            name="Code Review",
-            mode="readonly",
-        )
-        assert new == "code-review"
+        client.put(ASSISTANT, json={"memory": True})
         deps = client.app.state.deps
-        assert list(deps.agents) == ["lovia", "code-review"]
-        lovia, review = deps.agents["lovia"], deps.agents["code-review"]
-        # The core name is the id; the label is the page's.
-        assert review.name == "code-review"
-        assert review.workspace.policy.write == "deny"
-        # One model, one provider; one memory, one plugin (it owns the lock).
-        assert lovia.model is review.model
-        mems = [p for a in (lovia, review) for p in a.plugins if isinstance(p, Memory)]
-        assert len(mems) == 2 and mems[0] is mems[1]
-        # ...and the same one across applies: a run still on the old agents
-        # and the editor on the new ones share its locks.
-        assert mems[0] is first
-        info = {a["name"]: a for a in client.get("/api/agents").json()}
-        assert info["lovia"]["memory_projects"] is True
-        assert info["code-review"]["label"] == "Code Review"
-        assert info["code-review"]["mode"] == "readonly"
-        assert info["lovia"]["mode"] == "coding"
-        # A name with nothing to slug gets a generic id, kept unique.
-        assert _add_agent(client, name="审阅") == "agent"
-        assert _add_agent(client, name="审阅") == "agent-2"
-        # Any name makes a valid id: no leading punctuation, room for the suffix.
-        assert _add_agent(client, name="_Review") == "review"
-        long = _add_agent(client, name="a" * 65)
-        assert len(long) <= 64
-        assert len(_add_agent(client, name="a" * 65)) <= 64
-        assert client.post(f"/api/config/agents/{long}/duplicate").status_code == 201
+        assert list(deps.agents) == ["lovia"]
+        (first,) = [p for p in deps.agents["lovia"].plugins if isinstance(p, Memory)]
+        # The same plugin across applies: a run still on the old agent and
+        # the editor on the new one share its locks.
+        client.put(ASSISTANT, json={"search": False})
+        (again,) = [p for p in deps.agents["lovia"].plugins if isinstance(p, Memory)]
+        assert again is first
+        (info,) = client.get("/api/agents").json()
+        assert info["memory_projects"] is True and info["mode"] == "coding"
+        # A chat stored under another agent (from when there were several)
+        # runs on this one.
+        orphan = ChatMeta(id="s", title=None, agent="old", created_at=0, updated_at=0)
+        assert deps.agent_of(orphan) == "lovia"
 
 
-def test_a_background_child_runs_on_its_agents_turn_limit(served) -> None:
+def test_a_background_child_runs_on_the_same_turn_limit(served) -> None:
     from lovia.plugins import Subagents
 
     client, _runtime, app = served
     _add_model(client)
-    res = client.put(
-        "/api/config/agents/lovia", json={"max_turns": 1, "subagents": True}
-    )
-    assert res.status_code == 200, res.text
+    assert client.put(ASSISTANT, json={"subagents": True}).status_code == 200
     deps = app.state.deps
     (plugin,) = [p for p in deps.agents["lovia"].plugins if isinstance(p, Subagents)]
     (child,) = plugin.agents
     # A child run goes by its own name (deps.name_of finds no registry key).
-    assert deps.name_of(child) == child.name != "lovia"
-    assert deps.max_turns_for(child.name) == 1
+    assert deps.name_of(child) == child.name == "lovia.sub"
+    assert deps.max_turns_for(child.name) == 150
 
 
-def test_the_build_hooks_use_each_agents_own_settings(
+def test_the_build_hooks_use_the_current_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     deployment = Deployment(workspace=str(tmp_path), home=tmp_path / "home")
     client, runtime = _served_with(monkeypatch, tmp_path, deployment)
     with client:
         _add_model(client)
-        _add_agent(client, name="strict", auto_allow=[], instructions="Be strict.")
-        deps = client.app.state.deps
-        strict, lovia = deps.agents["strict"], deps.agents["lovia"]
-        built = runtime.workspace_for(strict, tmp_path, "coding")
-        assert built.policy.decide_command("ls").action == "ask"
+        lovia = client.app.state.deps.agents["lovia"]
         built = runtime.workspace_for(lovia, tmp_path, "coding")
         assert built.policy.decide_command("ls").action == "allow"
-        # A background child runs on its agent's settings.
-        child = strict.clone(name="strict.sub")
-        assert runtime.agent_config(child.name).id == "strict"
-        assert runtime.agent_for(child, tmp_path).instructions.startswith("Be strict.")
-        # An agent deleted since its run began runs on as the default does.
-        client.delete("/api/config/agents/strict")
-        built = runtime.workspace_for(strict, tmp_path, "coding")
-        assert built.policy.decide_command("ls").action == "allow"
-
-
-def test_default_duplicate_and_delete(served) -> None:
-    from lovia.web.store import ChatMeta
-
-    client, runtime, app = served
-    _add_model(client)
-    _add_agent(client, name="writer", instructions="Write.")
-    deps = app.state.deps
-    res = client.post("/api/config/agents/writer/default")
-    assert res.status_code == 200, res.text
-    assert [a["id"] for a in res.json()["config"]["agents"]] == ["writer", "lovia"]
-    assert client.get("/api/info").json()["default_agent"] == "writer"
-    copy = client.post("/api/config/agents/writer/duplicate")
-    assert copy.status_code == 201, copy.text
-    assert copy.json()["id"] == "writer-copy"
-    assert runtime.config.agent("writer-copy").instructions == "Write."
-    # A chat whose agent was deleted runs on the default from then on.
-    assert client.delete("/api/config/agents/lovia").status_code == 200
-    orphan = ChatMeta(id="s", title=None, agent="lovia", created_at=0, updated_at=0)
-    assert deps.agent_of(orphan) == "writer"
-    client.delete("/api/config/agents/writer-copy")
-    res = client.delete("/api/config/agents/writer")
-    assert res.status_code == 409
-    assert res.json()["detail"]["code"] == "agent_in_use"
-
-
-def test_an_agent_names_a_configured_model(served) -> None:
-    client, runtime, app = served
-    _add_model(client, name="main")
-    # An official host with no key: fine to save, not to run an agent on.
-    _add_model(client, name="bare", model="gpt-x", base_url=None, api_key=None)
-    res = client.put("/api/config/agents/lovia", json={"model": "nope"})
-    assert res.status_code == 400
-    res = client.put("/api/config/agents/lovia", json={"model": "bare"})
-    assert res.status_code == 400
-    assert "lovia" in res.json()["detail"]["message"]
-    _add_model(client, name="other", model="other-model")
-    res = client.put("/api/config/agents/lovia", json={"model": "other"})
-    assert res.status_code == 200, res.text
-    assert app.state.deps.agents["lovia"].model.model == "other-model"
-    # Deleting the model it runs on: it follows the default chat model again.
-    assert client.delete("/api/config/models/other").status_code == 200
-    assert runtime.config.default_agent.model is None
-
-
-def test_agent_skills_replace_the_global_directories(served, tmp_path: Path) -> None:
-    client, runtime, app = served
-    _add_model(client)
-    own = tmp_path / "own-skills"
-    own.mkdir()
-    res = client.put("/api/config/agents/lovia", json={"skills": [str(own)]})
-    assert res.status_code == 200, res.text
-    (skills,) = [
-        p for p in app.state.deps.agents["lovia"].plugins if isinstance(p, Skills)
-    ]
-    assert skills is not None
-    res = client.put("/api/config/agents/lovia", json={"skills": [".agents/skills"]})
-    assert res.status_code == 400
+        client.put(ASSISTANT, json={"auto_allow": [], "instructions": "Be strict."})
+        # Read on every run: a copy from before the save gets them too.
+        built = runtime.workspace_for(lovia, tmp_path, "coding")
+        assert built.policy.decide_command("ls").action == "ask"
+        assert runtime.agent_for(lovia, tmp_path).instructions.startswith("Be strict.")
 
 
 def test_max_tokens_round_trips_through_a_profile(served) -> None:
@@ -896,19 +799,19 @@ def test_locked_workspace_settings_refuse_server_side(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, deployment: Deployment, lock: str
 ) -> None:
     client, runtime = _served_with(monkeypatch, tmp_path, deployment)
-    url = "/api/config/agents/lovia"
     with client:
         assert client.get("/api/config").json()["permissions"]["lock"] == lock
-        res = client.put(url, json={"mode": "readonly"})
+        res = client.put(ASSISTANT, json={"mode": "readonly"})
         assert res.status_code == 403
         assert res.json()["detail"]["code"] == "workspace_locked"
-        res = client.post("/api/config/agents", json={"auto_allow": []})
+        res = client.put(ASSISTANT, json={"auto_allow": []})
         assert res.status_code == 403
         # Other settings stay editable from the browser, the unchanged
         # permissions a whole-form save sends back included.
-        res = client.put(url, json={"max_turns": 9, "mode": "coding"})
+        res = client.put(ASSISTANT, json={"search": False, "mode": "coding"})
         assert res.status_code == 200, res.text
-    assert runtime.config.default_agent.mode == "coding"
+    assert runtime.config.assistant.mode == "coding"
+    assert runtime.config.assistant.search is False
 
 
 def test_readonly_flag_shows_the_effective_mode(
@@ -918,9 +821,9 @@ def test_readonly_flag_shows_the_effective_mode(
     with client:
         cfg = client.get("/api/config").json()
     # The file keeps the user's choice; runs get what the flag allows.
-    (agent,) = cfg["agents"]
-    assert agent["mode"] == "coding"
-    assert agent["effective_mode"] == "readonly"
+    assistant = cfg["assistant"]
+    assert assistant["mode"] == "coding"
+    assert assistant["effective_mode"] == "readonly"
     assert cfg["permissions"]["modes"] == ["readonly"]
 
 
@@ -932,7 +835,7 @@ def test_settings_offer_every_mode_without_a_flag(
         permissions = client.get("/api/config").json()["permissions"]
         assert permissions["modes"] == ["readonly", "coding", "trusted"]
         assert permissions["lock"] is None
-        res = client.put("/api/config/agents/lovia", json={"mode": "trusted"})
+        res = client.put(ASSISTANT, json={"mode": "trusted"})
         assert res.status_code == 200, res.text
 
 
@@ -947,9 +850,7 @@ def test_read_only_config_boots_and_refuses_every_write(
         assert cfg["writable"] is False
         for method, url, body in (
             ("post", "/api/config/models", {"model": "m"}),
-            ("post", "/api/config/agents", {"name": "x"}),
-            ("put", "/api/config/agents/lovia", {"memory": False}),
-            ("delete", "/api/config/agents/lovia", None),
+            ("put", ASSISTANT, {"memory": False}),
             ("put", "/api/config/search", {"backend": "off"}),
             ("put", "/api/config/skills", {"dirs": []}),
         ):
@@ -979,10 +880,10 @@ def test_config_writable_follows_file_and_directory(tmp_path: Path) -> None:
 
 def test_settings_save_before_any_model_and_apply_when_one_arrives(served) -> None:
     client, runtime, app = served
-    res = client.put("/api/config/agents/lovia", json={"max_turns": 5})
+    res = client.put(ASSISTANT, json={"mode": "readonly"})
     assert res.status_code == 200, res.text
     saved = json.loads(runtime.loaded.path.read_text())
-    assert saved["version"] == 2
-    assert saved["agents"][0]["max_turns"] == 5
+    assert saved["version"] == 3
+    assert saved["assistant"]["mode"] == "readonly"
     _add_model(client)
-    assert app.state.deps.max_turns_for("lovia") == 5
+    assert app.state.deps.agents["lovia"].workspace.policy.write == "deny"

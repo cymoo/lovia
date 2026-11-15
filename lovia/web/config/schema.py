@@ -76,14 +76,12 @@ _SLUG = re.compile(r"[^a-z0-9._-]+")
 _SLUG_BASE_MAX = 56
 
 
-def slugify(
-    text: str, taken: set[str] | None = None, *, fallback: str = "model"
-) -> str:
+def slugify(text: str, taken: set[str] | None = None) -> str:
     """An id from a display name or model spec, unique among ``taken``:
     starting with a letter or digit, at most 64 characters, whatever the
-    text (``fallback`` when nothing of it survives)."""
+    text (``model`` when nothing of it survives)."""
     base = _SLUG.sub("-", text.lower()).strip("-._")[:_SLUG_BASE_MAX].rstrip("-._")
-    base = base or fallback
+    base = base or "model"
     taken = taken or set()
     if base not in taken:
         return base
@@ -273,78 +271,55 @@ WorkspaceModeName = Literal["readonly", "coding", "trusted"]
 # behind each name live in :mod:`lovia.web.builder`.
 AutoAllowBundle = Literal["read-only", "dev-tools"]
 DEFAULT_AUTO_ALLOW: tuple[AutoAllowBundle, ...] = ("read-only", "dev-tools")
-# The web's own default, for an agent the person works with in a browser;
-# core's Runner keeps its library default.
-DEFAULT_MAX_TURNS = 100
-# The agent a config without any gets — and the one every chat from before
-# custom agents was stored under.
+# The web's own defaults, for an assistant the person works with in a
+# browser; core's Runner and RetryPolicy keep their library defaults.
+DEFAULT_MAX_TURNS = 150
+DEFAULT_MAX_RETRIES = 5
+# The served agent's name — what every chat stores as its agent.
 DEFAULT_AGENT_ID = "lovia"
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 
-class AgentConfig(BaseModel):
-    """One agent people pick for a chat: who does the work, and how.
+class AssistantConfig(BaseModel):
+    """How the assistant behaves, for every chat: the ``assistant`` section.
 
-    Connections (models, keys, the search backend) are global; an agent
-    refers to them and decides whether to use them. ``id`` is what chats
-    and schedules store, so it never changes; ``name`` is free to.
-    ``--readonly`` may narrow ``mode`` — see
+    These are where a new chat starts — a chat picks its own permission
+    mode in the composer. ``--readonly`` may narrow ``mode`` — see
     :class:`lovia.web.builder.Deployment`; the file keeps what was chosen.
     """
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
-    # No dots: it doubles as the core ``Agent.name``, which names tools.
-    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$", max_length=64)
-    name: str | None = None
     # Prepended to the chat's project's AGENTS.md; empty: AGENTS.md alone,
     # or a generic prompt when there is none.
     instructions: str = ""
-    # A model id; None: whichever ``roles.chat`` names.
-    model: str | None = None
     mode: WorkspaceModeName = "coding"
     auto_allow: list[AutoAllowBundle] = Field(
         default_factory=lambda: list(DEFAULT_AUTO_ALLOW)
     )
-    # Skill directories; None: the global ones. A project's own load anyway.
-    skills: list[str] | None = None
     search: bool = True
-    # The enabled servers of Settings → MCP; off: none of them.
-    mcp: bool = True
-    # Long-term memory, kept in <home>/memory and shared by every agent.
+    # Long-term memory, kept in <home>/memory.
     memory: bool = True
     subagents: bool = True
-    max_turns: int = Field(default=DEFAULT_MAX_TURNS, ge=1)
-    # Attempts after the first on transient provider errors; None keeps the
-    # core default posture.
-    max_retries: int | None = Field(default=None, ge=0)
     followups: bool = True
+    # File-only (Settings does not show them).
+    max_turns: int = Field(default=DEFAULT_MAX_TURNS, ge=1)
+    # Attempts after the first on transient provider errors.
+    max_retries: int = Field(default=DEFAULT_MAX_RETRIES, ge=0)
 
     @model_validator(mode="after")
-    def _normalise(self) -> "AgentConfig":
-        name = (self.name or "").strip()
-        self.__dict__["name"] = name or None
+    def _normalise(self) -> "AssistantConfig":
         self.__dict__["auto_allow"] = list(dict.fromkeys(self.auto_allow))
-        if self.skills is not None:
-            self.__dict__["skills"] = global_dirs(self.skills)
         return self
-
-    @property
-    def display_name(self) -> str:
-        return self.name or self.id
-
-
-def agent_slug(name: str, taken: set[str]) -> str:
-    """A new agent's id from its name (``agent`` when nothing survives)."""
-    return slugify(name.replace(".", "-"), taken, fallback="agent")
 
 
 class WebConfig(BaseModel):
     """The whole ``config.json`` document.
 
-    Version 1 kept one agent's settings in ``agent``, ``run`` and
-    ``workspace`` sections; those are ignored (not converted) and the file
-    is rewritten as version 2 on the next save.
+    Earlier versions kept these settings elsewhere (version 1 in ``agent``,
+    ``run`` and ``workspace`` sections, version 2 in an ``agents`` list);
+    those are ignored (not converted) and the file is rewritten as version
+    3 on the next save.
     """
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
@@ -354,13 +329,9 @@ class WebConfig(BaseModel):
     roles: Roles = Field(default_factory=Roles)
     search: SearchConfig = Field(default_factory=SearchConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
-    # For every agent whose ``mcp`` switch is on; order is display order.
+    # The enabled ones load in every chat; order is display order.
     mcp: list[MCPServerConfig] = Field(default_factory=list)
-    # The first is the default: what a new chat starts with, and what a chat
-    # whose agent was deleted runs on.
-    agents: list[AgentConfig] = Field(
-        default_factory=lambda: [AgentConfig(id=DEFAULT_AGENT_ID)]
-    )
+    assistant: AssistantConfig = Field(default_factory=AssistantConfig)
 
     @model_validator(mode="after")
     def _check_references(self) -> "WebConfig":
@@ -371,8 +342,7 @@ class WebConfig(BaseModel):
             raise ValueError(f"duplicate model ids: {', '.join(dupes)}")
         known = set(ids)
         # An absent chat role heals to the first profile; a *wrong* reference
-        # (in any role, or an agent's model) is a hand-edit typo and must be
-        # said out loud.
+        # is a hand-edit typo and must be said out loud.
         if self.roles.chat is None and ids:
             self.roles.__dict__["chat"] = ids[0]
         for role in ("chat", "vision", "aux"):
@@ -383,17 +353,6 @@ class WebConfig(BaseModel):
         dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:
             raise ValueError(f"duplicate MCP server names: {', '.join(dupes)}")
-        if not self.agents:
-            self.__dict__["agents"] = [AgentConfig(id=DEFAULT_AGENT_ID)]
-        agent_ids = [a.id for a in self.agents]
-        dupes = sorted({i for i in agent_ids if agent_ids.count(i) > 1})
-        if dupes:
-            raise ValueError(f"duplicate agent ids: {', '.join(dupes)}")
-        for agent in self.agents:
-            if agent.model is not None and agent.model not in known:
-                raise ValueError(
-                    f"agent {agent.id!r} references unknown model id {agent.model!r}"
-                )
         return self
 
     def profile(self, profile_id: str | None) -> ModelProfile | None:
@@ -409,23 +368,6 @@ class WebConfig(BaseModel):
 
     def aux_profile(self) -> ModelProfile | None:
         return self.profile(self.roles.aux)
-
-    @property
-    def default_agent(self) -> AgentConfig:
-        return self.agents[0]
-
-    def agent(self, agent_id: str) -> AgentConfig | None:
-        return next((a for a in self.agents if a.id == agent_id), None)
-
-    def agent_profile(self, agent: AgentConfig) -> ModelProfile | None:
-        """The model ``agent`` runs on: its own, else the default chat one."""
-        return self.profile(agent.model or self.roles.chat)
-
-    def agent_skills(self, agent: AgentConfig) -> SkillsConfig:
-        """The global skill directories ``agent`` loads."""
-        if agent.skills is None:
-            return self.skills
-        return SkillsConfig(dirs=agent.skills)
 
 
 @dataclass

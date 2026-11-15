@@ -18,10 +18,9 @@ from dataclasses import asdict
 from typing import Any, Literal
 
 from fastapi import APIRouter, Request, Response
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ...exceptions import UserError
-from ...reliability import RetryPolicy
 from ..config.probe import unlisted_model_note, validate_connection
 from ..config.runtime import ConfigRuntime
 from ..config.schema import (
@@ -29,7 +28,6 @@ from ..config.schema import (
     GLOBAL_SKILLS_HINT,
     OPENAI_FLAVOR,
     USER_SKILLS_DIR,
-    AgentConfig,
     AutoAllowBundle,
     Connection,
     FlavorName,
@@ -38,7 +36,6 @@ from ..config.schema import (
     VisionMode,
     WebConfig,
     WorkspaceModeName,
-    agent_slug,
     is_global_dir,
     slugify,
 )
@@ -127,31 +124,22 @@ class SkillsIn(BaseModel):
     dirs: list[str]
 
 
-class AgentIn(BaseModel):
-    """An agent's settings, as created or edited; only the fields present
-    change. ``null`` means "inherit" where a field has that meaning —
-    ``name`` (show the id), ``model`` (the default chat model), ``skills``
-    (the global directories), ``max_retries`` (the core default) — and is
-    refused elsewhere. The id is never written: it is derived from the
-    name on creation and fixed after."""
+class AssistantIn(BaseModel):
+    """The assistant's settings, as edited; only the fields present change.
+    The turn and retry limits are file-only, so naming one here is refused
+    rather than quietly dropped."""
 
-    name: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
     instructions: str | None = None
-    model: str | None = None
     mode: WorkspaceModeName | None = None
     auto_allow: list[AutoAllowBundle] | None = None
-    skills: list[str] | None = None
     search: bool | None = None
-    mcp: bool | None = None
     memory: bool | None = None
     subagents: bool | None = None
-    max_turns: int | None = Field(default=None, ge=1)
-    max_retries: int | None = Field(default=None, ge=0)
     followups: bool | None = None
 
 
-# What an explicit null means "inherit" for; anywhere else it is refused.
-_INHERITABLE = frozenset({"name", "model", "skills", "max_retries"})
 # Fixed by --readonly / --no-workspace: the browser can't change them then.
 _PERMISSION_FIELDS = frozenset({"mode", "auto_allow"})
 
@@ -289,16 +277,16 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         return {
             "modes": list(deployment.modes()),
             "bundles": list(AUTO_ALLOW_BUNDLES),
-            # None, or why the browser can't change an agent's permissions.
+            # None, or why the browser can't change the permissions.
             "lock": deployment.workspace_lock(),
         }
 
-    def _agent_out(agent: AgentConfig) -> dict[str, object]:
+    def _assistant_out() -> dict[str, object]:
+        spec = runtime.config.assistant
         return {
-            **agent.model_dump(),
-            "display_name": agent.display_name,
-            # What its runs actually get, once the deployment had its say.
-            "effective_mode": runtime.deployment.effective_mode(agent.mode),
+            **spec.model_dump(),
+            # What runs actually get, once the deployment had its say.
+            "effective_mode": runtime.deployment.effective_mode(spec.mode),
         }
 
     def _config_out() -> dict[str, object]:
@@ -314,9 +302,6 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             "defaults": {
                 "openai_base_url": OPENAI_FLAVOR.default_base_url,
                 "anthropic_base_url": ANTHROPIC_FLAVOR.default_base_url,
-                # Retries when an agent's max_retries is unset: the core
-                # RetryPolicy default.
-                "max_retries": RetryPolicy().max_attempts - 1,
             },
             "models": [
                 {
@@ -341,8 +326,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             },
             "skills": cfg.skills.model_dump(),
             "mcp": _mcp_out(),
-            # The first is the default agent.
-            "agents": [_agent_out(a) for a in cfg.agents],
+            "assistant": _assistant_out(),
             "permissions": _permissions_out(),
         }
 
@@ -468,12 +452,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             role: (None if ref == profile_id else ref)
             for role, ref in cfg.roles.model_dump().items()
         }
-        # An agent on it follows the default chat model from now on.
-        agents = [
-            {**a.model_dump(), "model": None if a.model == profile_id else a.model}
-            for a in cfg.agents
-        ]
-        await _apply(_copy(models=models, roles=roles, agents=agents))
+        await _apply(_copy(models=models, roles=roles))
         return {"config": _config_out()}
 
     @router.put("/roles")
@@ -507,25 +486,21 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         await _apply(_copy(skills={"dirs": body.dirs}))
         return {"config": _config_out()}
 
-    # ---- agents ----------------------------------------------------------
-    # Every agent write is ``settings_only``: an agent names no new model
-    # (only one already configured), so before any is, it is just saved.
-
-    def _stored_agent(agent_id: str) -> AgentConfig:
-        agent = runtime.config.agent(agent_id)
-        if agent is None:
-            raise WebError(404, "agent_not_found", f"unknown agent {agent_id!r}")
-        return agent
-
-    def _edited(stored: dict[str, Any], body: AgentIn) -> dict[str, Any]:
-        """``stored`` with ``body``'s fields applied, checked against what
-        this deployment lets the browser change."""
+    @router.put("/assistant")
+    async def update_assistant(
+        body: AssistantIn, request: Request
+    ) -> dict[str, object]:
+        """Apply the fields present, checked against what this deployment
+        lets the browser change. ``settings_only``: it names no model, so
+        before one is configured it is just saved."""
+        _guard_write(request)
         deployment = runtime.deployment
         lock = deployment.workspace_lock()
+        stored = runtime.config.assistant.model_dump()
         edited = dict(stored)
         for name in body.model_fields_set:
             value = getattr(body, name)
-            if value is None and name not in _INHERITABLE:
+            if value is None:
                 raise WebError(400, "invalid_request", f"{name} cannot be null")
             if value == stored.get(name):
                 continue  # a whole-form save sends back what it didn't touch
@@ -546,73 +521,8 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                     f"mode {value!r} is not available on this server",
                     hint=f"choose one of: {', '.join(deployment.modes())}",
                 )
-            if name == "skills" and value is not None:
-                _refuse_relative(value)
             edited[name] = value
-        return edited
-
-    async def _apply_agents(agents: list[dict[str, Any]]) -> None:
-        await _apply(_copy(agents=agents), settings_only=True)
-
-    @router.post("/agents", status_code=201)
-    async def create_agent(body: AgentIn, request: Request) -> dict[str, object]:
-        _guard_write(request)
-        cfg = runtime.config
-        new_id = agent_slug(body.name or "", {a.id for a in cfg.agents})
-        fields = _edited(AgentConfig(id=new_id).model_dump(), body)
-        await _apply_agents([a.model_dump() for a in cfg.agents] + [fields])
-        return {"id": new_id, "config": _config_out()}
-
-    @router.put("/agents/{agent_id}")
-    async def update_agent(
-        agent_id: str, body: AgentIn, request: Request
-    ) -> dict[str, object]:
-        _guard_write(request)
-        _stored_agent(agent_id)
-        agents = [
-            _edited(a.model_dump(), body) if a.id == agent_id else a.model_dump()
-            for a in runtime.config.agents
-        ]
-        await _apply_agents(agents)
-        return {"id": agent_id, "config": _config_out()}
-
-    @router.post("/agents/{agent_id}/duplicate", status_code=201)
-    async def duplicate_agent(agent_id: str, request: Request) -> dict[str, object]:
-        _guard_write(request)
-        cfg = runtime.config
-        stored = _stored_agent(agent_id)
-        copy = stored.model_copy(
-            update={
-                "id": agent_slug(f"{agent_id}-copy", {a.id for a in cfg.agents}),
-                "name": f"{stored.display_name} copy",
-            }
-        )
-        await _apply_agents([a.model_dump() for a in cfg.agents] + [copy.model_dump()])
-        return {"id": copy.id, "config": _config_out()}
-
-    @router.post("/agents/{agent_id}/default")
-    async def make_default_agent(agent_id: str, request: Request) -> dict[str, object]:
-        """Make it the default: the first in the list."""
-        _guard_write(request)
-        stored = _stored_agent(agent_id)
-        rest = [a.model_dump() for a in runtime.config.agents if a.id != agent_id]
-        await _apply_agents([stored.model_dump(), *rest])
-        return {"config": _config_out()}
-
-    @router.delete("/agents/{agent_id}")
-    async def delete_agent(agent_id: str, request: Request) -> dict[str, object]:
-        """Chats and schedules that ran on it run on the default from now on."""
-        _guard_write(request)
-        _stored_agent(agent_id)
-        rest = [a.model_dump() for a in runtime.config.agents if a.id != agent_id]
-        if not rest:
-            raise WebError(
-                409,
-                "agent_in_use",
-                "this is the only agent",
-                hint="add another agent first",
-            )
-        await _apply_agents(rest)
+        await _apply(_copy(assistant=edited), settings_only=True)
         return {"config": _config_out()}
 
     @router.get("/skills")

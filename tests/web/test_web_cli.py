@@ -19,7 +19,7 @@ from lovia.web import __main__ as cli  # noqa: E402
 from lovia.web import builder  # noqa: E402
 from lovia.workspace import Workspace  # noqa: E402
 from lovia.web.config import (  # noqa: E402
-    AgentConfig,
+    AssistantConfig,
     ModelProfile,
     SearchConfig,
     SkillsConfig,
@@ -278,8 +278,8 @@ def test_an_agents_md_linking_to_this_servers_config_is_not_loaded(
 # ------------------------------------------------------------- workspace -
 
 
-def _ws_config(**fields: object) -> AgentConfig:
-    return AgentConfig.model_validate({"id": "lovia", **fields})
+def _ws_config(**fields: object) -> AssistantConfig:
+    return AssistantConfig.model_validate(fields)
 
 
 def test_resolve_workspace_disabled() -> None:
@@ -491,13 +491,12 @@ def test_project_agent_reads_the_chat_directory(
     )
     assert "launch rules" in str(agent.instructions)
     assert not any(isinstance(p, Skills) for p in agent.plugins)
-    spec = config.default_agent
-    moved = builder.project_agent(agent, proj, config, spec)
+    moved = builder.project_agent(agent, proj, config)
     assert moved.instructions == "custom\n\nproj rules"
     (skills,) = [p for p in moved.plugins if isinstance(p, Skills)]
     assert moved.plugins[0] is skills
     # Back in a directory with no skills: none.
-    back = builder.project_agent(moved, launch, config, spec)
+    back = builder.project_agent(moved, launch, config)
     assert not any(isinstance(p, Skills) for p in back.plugins)
     assert back.instructions == "custom\n\nlaunch rules"
 
@@ -714,16 +713,16 @@ def test_help_defaults_render_from_core_constants() -> None:
 @pytest.mark.parametrize(
     ("argv", "where"),
     [
-        (["--max-turns", "20"], "agents[].max_turns"),
-        (["--max-retries=3"], "agents[].max_retries"),
-        (["--no-followups"], "agents[].followups"),
-        (["--trusted"], "agents[].mode"),
-        (["--auto-allow", "none"], "agents[].auto_allow"),
-        (["--no-memory"], "agents[].memory"),
+        (["--max-turns", "20"], "assistant.max_turns"),
+        (["--max-retries=3"], "assistant.max_retries"),
+        (["--no-followups"], "assistant.followups"),
+        (["--trusted"], "assistant.mode"),
+        (["--auto-allow", "none"], "assistant.auto_allow"),
+        (["--no-memory"], "assistant.memory"),
         (["--memory-dir", "m"], "--home DIR"),
-        (["--no-subagents"], "agents[].subagents"),
-        (["--instructions", "x"], "agents[].instructions"),
-        (["--instructions-file", "x"], "agents[].instructions"),
+        (["--no-subagents"], "assistant.subagents"),
+        (["--instructions", "x"], "assistant.instructions"),
+        (["--instructions-file", "x"], "assistant.instructions"),
         (["--max-tokens", "9"], "models[].max_tokens"),
     ],
 )
@@ -748,7 +747,7 @@ def test_main_points_removed_env_vars_at_settings(
     assert cli.main([]) == 2
     err = capsys.readouterr().err
     # Every hit at once, each with its new home.
-    assert "LOVIA_MAX_TURNS → Settings → Agents (config.json agents[].max_turns)" in err
+    assert "LOVIA_MAX_TURNS → config.json assistant.max_turns" in err
     assert "LOVIA_WORKSPACE_MODE → --readonly" in err
 
 
@@ -799,7 +798,7 @@ _DEPLOY = builder.Deployment()
 
 
 def _agent_config(**agent: object) -> WebConfig:
-    return WebConfig(agents=[AgentConfig.model_validate({"id": "lovia", **agent})])
+    return WebConfig(assistant=AssistantConfig.model_validate(agent))
 
 
 def test_build_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1135,26 +1134,25 @@ def test_no_warn_without_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_resolve_retry() -> None:
-    # None: the core default posture.
-    assert builder.resolve_retry(None).max_attempts == 5
+    assert builder.resolve_retry(5).max_attempts == 6
     assert builder.resolve_retry(0).max_attempts == 1  # 0 disables retries
 
 
 def test_run_settings_reject_out_of_range() -> None:
     with pytest.raises(ValueError):
-        AgentConfig(id="a", max_turns=0)
+        AssistantConfig(max_turns=0)
     with pytest.raises(ValueError):
-        AgentConfig(id="a", max_retries=-1)
+        AssistantConfig(max_retries=-1)
 
 
-def test_an_agent_carries_its_own_run_posture(
+def test_the_agent_carries_its_run_posture(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
     config = WebConfig.model_validate(
         {
             "models": [{"id": "m", "model": "test-model", "context_window": 12_345}],
-            "agents": [{"id": "lovia", "memory": False, "max_retries": 1}],
+            "assistant": {"memory": False, "max_retries": 1},
         }
     )
     agent = builder.build_agent(
@@ -1439,13 +1437,13 @@ def test_main_reports_unknown_vendor_at_startup(
     assert "Unknown model spec" in capsys.readouterr().err
 
 
-def test_main_gives_each_agent_its_retry_and_context_policy(
+def test_main_gives_the_agent_its_retry_and_context_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     monkeypatch.chdir(tmp_path)
     write_config(
         context_window=111_111,
-        agents=[{"id": "lovia", "max_retries": 1, "max_turns": 7}],
+        assistant={"max_retries": 1, "max_turns": 7},
     )
     captured = _capture_serving(monkeypatch)
     rc = cli.main([])
@@ -1718,21 +1716,16 @@ def test_main_passes_followups_to_serve(
     write_config()
     seen = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
-    # The runtime's suggester: each agent's own switch decides.
+    # The runtime's suggester: the Settings switch decides.
     assert seen["followups"] == seen["config_runtime"].followups  # type: ignore[union-attr]
     assert seen["followup_model"] is None
-    assert seen["max_turns"] == {"lovia": 100, "lovia.sub": 100}
+    assert seen["max_turns"] == {"lovia": 150, "lovia.sub": 150}
 
     seen.clear()
-    write_config(agents=[{"id": "lovia", "max_turns": 7}, {"id": "two"}])
+    write_config(assistant={"max_turns": 7})
     assert cli.main([]) == 0
-    assert seen["max_turns"] == {
-        "lovia": 7,
-        "lovia.sub": 7,
-        "two": 100,
-        "two.sub": 100,
-    }
-    assert list(seen["agent"]) == ["lovia", "two"]  # type: ignore[call-overload]
+    assert seen["max_turns"] == {"lovia": 7, "lovia.sub": 7}
+    assert list(seen["agent"]) == ["lovia"]  # type: ignore[call-overload]
 
 
 # ------------------------------------------------- per-chat modes (CLI) -
@@ -1742,7 +1735,7 @@ def test_main_lets_chats_pick_a_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    write_config(agents=[{"id": "lovia", "mode": "coding", "auto_allow": []}])
+    write_config(assistant={"mode": "coding", "auto_allow": []})
     captured = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
     switch = captured["workspaces"]

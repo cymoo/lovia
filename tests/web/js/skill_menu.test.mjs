@@ -123,3 +123,48 @@ test('Enter picks the highlighted skill and keeps the composer from sending', as
   assert.equal(input.value, '/init ');
   assert.ok(stopped && !isOpen());
 });
+
+// ---- commands in the same menu --------------------------------------------
+
+const COMMANDS = [
+  { name: 'mcp', description: 'servers' },
+  { name: 'rename', description: 'rename it', argument: 'New title' },
+];
+const withCommands = () =>
+  harness('skill-menu.js', 'initSkillMenu', 'listSkills', { commands: COMMANDS });
+
+test('commands come first, under their own heading, and hide a skill of their name', async () => {
+  const { type, fetches, rows, headings } = withCommands();
+  type('/');
+  fetches[0].resolve([...SKILLS, { name: 'mcp', description: 'a skill named like a command' }]);
+  await settle();
+  assert.deepEqual(rows(), ['/mcp', '/rename', '/review']);
+  assert.deepEqual(headings(), ['composer.commands', 'composer.skills']);
+  type('/re'); // each group filters on its own: the command still leads
+  assert.deepEqual(rows(), ['/rename', '/review']);
+});
+
+test('the commands are offered even when the skills cannot be listed', async () => {
+  const { type, fetches, rows } = withCommands();
+  type('/');
+  fetches[0].reject(new Error('offline'));
+  await settle();
+  assert.deepEqual(rows(), ['/mcp', '/rename']);
+});
+
+test('picking a command runs it and leaves nothing; one with an argument waits for it', async () => {
+  const { input, type, fetches, ran, isOpen } = withCommands();
+  type('/m');
+  fetches[0].resolve(SKILLS);
+  await settle();
+  input.fire('keydown', { key: 'Enter' });
+  assert.equal(input.value, '');
+  assert.deepEqual(ran, [['mcp', '']]);
+  assert.ok(!isOpen());
+  type('/ren');
+  fetches[1].resolve(SKILLS);
+  await settle();
+  input.fire('keydown', { key: 'Enter' });
+  assert.equal(input.value, '/rename '); // to finish and send
+  assert.equal(ran.length, 1);
+});

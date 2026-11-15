@@ -47,6 +47,7 @@ import {
 import { BlockStream } from './stream-blocks.js';
 import { createSendQueue } from './send-queue.js';
 import { initSkillMenu } from './skill-menu.js';
+import { findCommand, runCommand } from './commands.js';
 import { initFileMenu } from './file-menu.js';
 import { isStep, placeStep, removeStep, sealActivity } from './activity.js';
 import { collectContext } from './lovia.js';
@@ -4628,6 +4629,19 @@ export function initComposer() {
   composer?.addEventListener('submit', async (e) => {
     e.preventDefault();
     let message = promptEl.value.trim();
+
+    // A slash command is the page's to run, at once — mid-run too — and is
+    // never sent. Attachments in the tray stay for the next message.
+    const command = findCommand(message);
+    if (command) {
+      _steerOnce = false;
+      promptEl.value = '';
+      autoresize();
+      updateSendEnabled();
+      clearDraft();
+      void runCommand(command.name, command.args, store.sessionId);
+      return;
+    }
 
     // An upload in flight holds the send (Send is disabled), whichever key.
     if (uploading()) {

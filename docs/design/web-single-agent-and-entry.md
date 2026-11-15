@@ -342,6 +342,13 @@ window.lovia.registerCommand({
 | 3 | 接口路径 | `GET` / `PUT /api/config/project/mcp`（`/mcp/project` 会被已有的 `/mcp/{name}` 抢走） |
 | 3 | 批准记录谁能写 | Agent 的工具在任何模式下都不能读写 `<home>/mcp-projects.json`（和 `config.json` 同一条规则）：home 在工作区里时，Agent 否则可以自己写 `.mcp.json` 再自己批准 |
 | 3 | 决定之后怎么再改 | 侧栏目录的 ⋯ 菜单里有"项目的 MCP 服务器"，打开同一个对话框；composer 上方那一行只在有未决定的时出现 |
+| 4 | 注册的形状 | `registerCommand(name, command)`，和 `registerMessageAction(id, action)` 一样：名字是键，重复注册替换（内置的也能换），返回的函数恢复被替换的那个。`description` 是字符串，没有单独的 `label` |
+| 4 | `run` 拿到什么 | 只有 `{ args, sessionId }`。要发消息、填输入框，用已有的 `lovia.send` / `lovia.setDraft`，不再各给一份 |
+| 4 | 执行的时机 | 提交时判断：以已注册、此刻可用的命令名开头的消息在页面执行，运行中也立即执行，不进发送队列；其余原样发出。从菜单选中不带参数的命令等于提交 |
+| 4 | 重名 | 命令优先，菜单里不再列同名技能。注册时没法知道有哪些技能，所以不做控制台警告 |
+| 4 | `/fork` | 叫 `/branch`，和对话菜单里的"分支"一致 |
+| 4 | `/init` 在空白页的入口 | 没做：要知道项目里有没有 `AGENTS.md` 得加一个接口，而 `/` 菜单里已经列着 `/init` 和它的说明 |
+| 4 | 拆成两个 PR | 注册表和内置命令一个；"按项目开关全局 MCP 服务器"单独一个（`/mcp` 打开的是第 3 期的对话框，后一个 PR 在里面加全局服务器） |
 | 3 | `cwd`、`disabled` | 命令在项目目录启动，条目的相对 `cwd` 相对项目解析；文件里 `disabled` 的条目列出但不能打开。为此 core 的 `MCPServerStdio` 加了 `cwd` |
 
 ## 参考

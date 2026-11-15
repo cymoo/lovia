@@ -1072,7 +1072,9 @@ function closeChipMenu() {
   }
 }
 
-async function openChipMenu() {
+/** The composer's model menu: the chip's, and `/model`'s. */
+export async function openChipMenu() {
+  if (!_chip) return;
   if (_chipMenu) {
     closeChipMenu();
     return;

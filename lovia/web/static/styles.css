@@ -1296,6 +1296,11 @@ dialog.lv-custom-dialog:has(.lv-ws-dialog) {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+/* What a command takes, after its name: a placeholder, not the name. */
+.lv-complete-menu-arg {
+  color: var(--lv-muted);
+  font-weight: 400;
+}
 .lv-complete-menu-desc:empty {
   display: none;
 }

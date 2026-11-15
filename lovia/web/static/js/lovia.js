@@ -9,6 +9,7 @@ import { basePath, request } from './api.js';
 import { getRenderer, registerRenderer } from './components.js';
 import { t } from './i18n.js';
 import { refreshMessageActions, registerMessageAction } from './message-actions.js';
+import { registerCommand } from './commands.js';
 import { pageConfig } from './page-config.js';
 import { Registry } from './registry.js';
 import { registerToolView } from './tool-views.js';
@@ -128,6 +129,7 @@ export const lovia = Object.freeze({
   registerToolView,
   registerMessageAction,
   refreshMessageActions,
+  registerCommand,
   registerView,
   openView,
   closeView,

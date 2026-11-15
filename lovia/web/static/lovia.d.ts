@@ -93,6 +93,22 @@ interface MessageAction {
   run(msg: MessageRef): void | Promise<void>;
 }
 
+/** A slash command of the composer: `/name`, optionally with text after it. */
+interface SlashCommand {
+  /** One line, shown beside the name in the `/` menu. */
+  description: string;
+  /**
+   * What goes after the name — a placeholder such as "New title". With one,
+   * picking the command from the menu leaves `/name ` to finish and send;
+   * without, it runs on the pick.
+   */
+  argument?: string;
+  /** Whether the command is offered now (default: always). */
+  when?(): boolean;
+  /** `args` is the text after the name, trimmed. A thrown error is toasted. */
+  run(ctx: { readonly args: string; readonly sessionId: string | null }): void | Promise<void>;
+}
+
 interface LoviaApi {
   /** The lovia version serving the page, for feature checks. */
   readonly version: string;
@@ -123,6 +139,12 @@ interface LoviaApi {
   registerMessageAction(id: string, action: MessageAction): () => void;
   /** Draw every message's actions again, after the state their `when` or `pressed` read changed. */
   refreshMessageActions(): void;
+  /**
+   * Add the slash command `/name` (a-z, 0-9 and '-'), or replace the one
+   * under it — a built-in included. A message that starts with it runs the
+   * command in the page and is not sent.
+   */
+  registerCommand(name: string, command: SlashCommand): () => void;
   /**
    * Add view `id` (a-z, 0-9 and '-'), or replace the one under it. Plain
    * links open it: `<a href="?view=id">`. An open view whose id is left with

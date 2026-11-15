@@ -194,6 +194,16 @@ export async function openProjectMcp(root) {
   }
 }
 
+/** The open chat's project's servers: `/mcp`. */
+export async function openChatMcp() {
+  const scope = chatScope();
+  try {
+    openDialog(scope, await api.getProjectMcp(scope));
+  } catch (err) {
+    toast(String(err.message || err), { type: 'error' });
+  }
+}
+
 export function initProjectMcp() {
   // The chat's directory changed, or a run that may have edited the file ended.
   store.on('workspace-scope-changed', refresh);

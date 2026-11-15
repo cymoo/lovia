@@ -28,6 +28,7 @@ import { initWorkspaceMode } from './workspace-mode.js';
 import { initWorkspaces } from './workspaces.js';
 import { initAgentChip } from './agent-chip.js';
 import { initProjectMcp } from './project-mcp.js';
+import { initBuiltinCommands } from './builtin-commands.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 import { createBuildCheck } from './build-check.js';
@@ -277,6 +278,8 @@ configureLovia({
   openSession: (id) => switchSession(id),
   toast: (text, opts) => toast(text, opts),
 });
+// Before the extension scripts load: one may replace a built-in command.
+initBuiltinCommands();
 configureViews({
   changed: (view) => emitLovia('view', { view }),
   notify: (text) => toast(text),

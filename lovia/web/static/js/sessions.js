@@ -1009,7 +1009,7 @@ function chatActions(s) {
 let _openMeta = /** @type {any} */ (null);
 
 /** The open chat as the actions want it: its list row, else its detail. */
-function openChat() {
+export function openChat() {
   const id = store.sessionId;
   if (!id) return null;
   return (
@@ -1108,8 +1108,13 @@ export async function forkChat(id, ref = null) {
   return created.session_id;
 }
 
-async function renameSession(s) {
-  const title = await promptDialog(t('dialog.renameChat'), s.title || '');
+/**
+ * @param {any} s
+ * @param {string} [given] The new title, when the caller has it (`/rename
+ *   New title`): no dialog then.
+ */
+export async function renameSession(s, given) {
+  const title = given ?? (await promptDialog(t('dialog.renameChat'), s.title || ''));
   if (title === null) return; // cancelled — empty string means "clear the title"
   try {
     await api.renameSession(s.id, title);
@@ -1122,7 +1127,7 @@ async function renameSession(s) {
   updateSessionTitle(s.id, title);
 }
 
-async function togglePin(s) {
+export async function togglePin(s) {
   const next = !s.pinned;
   try {
     await api.setPinned(s.id, next);
@@ -1138,7 +1143,7 @@ async function togglePin(s) {
   await loadSessions();
 }
 
-async function toggleArchive(s) {
+export async function toggleArchive(s) {
   const next = !s.archived;
   try {
     await api.setArchived(s.id, next);

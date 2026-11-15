@@ -642,6 +642,38 @@ class RouterDeps:
             return meta.agent
         return self.default_agent
 
+    def check_chat_model(self, model: str) -> None:
+        """Refuse a model a chat asks for that this server can't put it on:
+        only ``default_app`` — which has models to pick from — lets a chat
+        pick one."""
+        runtime = self.config_runtime
+        if runtime is None:
+            raise WebError(
+                404,
+                "feature_unavailable",
+                "this server doesn't let chats pick a model",
+            )
+        if runtime.config.profile(model) is None:
+            known = ", ".join(p.id for p in runtime.config.models)
+            raise WebError(
+                400,
+                "invalid_request",
+                f"unknown model {model!r}",
+                hint=f"choose one of: {known}",
+            )
+
+    def on_chat_model(self, agent: Agent[Any], model: str | None) -> Agent[Any]:
+        """``agent`` on the model a chat picked; unchanged for a chat that
+        picked none, or whose pick is gone or is the default. A pick that
+        can't be run on (its key cleared since) is refused, saying why."""
+        runtime = self.config_runtime
+        if runtime is None or model is None:
+            return agent
+        try:
+            return runtime.on_model(agent, model)
+        except UserError as exc:
+            raise WebError.from_exc(400, "invalid_request", exc) from exc
+
     def max_turns_for(self, agent: str) -> int:
         """The turn limit for a run of the agent served as ``agent``."""
         limit = self.max_turns

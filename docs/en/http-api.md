@@ -222,6 +222,13 @@ bumps: of two reports of a chat's mode (a list, a detail, a `PATCH` answer,
 an event), the higher revision is the newer, in whatever order they arrive.
 A mode the server no longer offers runs as the widest offered one below it.
 
+On the CLI's server (`features.chat_model`), a new chat's request may carry
+`model` — the `id` of a configured model profile — and
+`PATCH /api/sessions/{id}` changes it from the chat's next run (`null`: follow
+the default again). An unknown id is refused (400 `invalid_request`). Sessions
+report `model`, `null` while the chat follows the default; a stored id whose
+profile was deleted runs on the default.
+
 `/api/chat/stream` also takes `busy`: what a message for a chat with a live
 run does. `"inject"` (the default) steers it into that run; `"reject"` answers
 409 `run_active` instead and never injects — for a message that must start a

@@ -339,6 +339,10 @@ class ChatRequest(BaseModel):
     # with create_app(workspaces=); None: the agent's own. Fixed for the
     # chat's life — an existing chat ignores it.
     workspace: str | None = Field(default=None, max_length=4096)
+    # A new chat's model, on a server whose chats pick one
+    # (``features.chat_model``); None: the server's default. An existing
+    # chat keeps its own (PATCH the session to change it).
+    model: str | None = Field(default=None, max_length=64)
 
     _bounded = field_validator("context")(lambda value: _bounded_context(value))
 
@@ -492,6 +496,9 @@ class SessionDetail(BaseModel):
     # The directory the chat works in (resolved, absolute); None: the agent
     # has no local workspace, or the chat predates directories (unassociated).
     workspace_root: str | None = None
+    # The model the chat picked, where the server lets chats pick one
+    # (``ServerInfo.features.chat_model``); None: the server's default.
+    model: str | None = None
     # False: the store has no such chat (an id from another database, or one
     # deleted) — the rest is a placeholder; a first message starts it anew.
     exists: bool = True
@@ -519,6 +526,8 @@ class ChatSessionInfo(BaseModel):
     workspace_mode: str | None = None
     workspace_mode_rev: int = 0
     workspace_root: str | None = None
+    # See SessionDetail.model.
+    model: str | None = None
 
 
 class RunInfo(BaseModel):
@@ -704,7 +713,9 @@ class RewindResponse(BaseModel):
 
 class SessionPatch(BaseModel):
     """Partial update for a session — rename, (un)pin, (un)archive, switch its
-    permission mode; applies whichever fields are set."""
+    permission mode or model; applies whichever fields are set. ``model``
+    alone tells an explicit ``null`` (back on the server's default) from a
+    field left out."""
 
     title: str | None = Field(default=None, min_length=1, max_length=120)
     pinned: bool | None = None
@@ -715,6 +726,8 @@ class SessionPatch(BaseModel):
     # Only for a chat with no directory yet (from before chats had one):
     # bind it, once — see POST /api/sessions/associate.
     workspace_root: str | None = Field(default=None, min_length=1, max_length=4096)
+    # Applies from the chat's next run; a live run keeps the model it began on.
+    model: str | None = Field(default=None, max_length=64)
 
 
 class TodoItemOut(BaseModel):

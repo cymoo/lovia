@@ -45,7 +45,7 @@ _T = TypeVar("_T")
 _META_COLS = (
     "id, title, agent, created_at, updated_at, pinned, parent_id, "
     "origin_kind, origin_session_id, origin_ref, workspace_root, workspace_mode, "
-    "workspace_mode_rev, archived"
+    "workspace_mode_rev, archived, model"
 )
 
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
@@ -315,6 +315,13 @@ def _schedule_name(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE chat_schedules ADD COLUMN name TEXT")
 
 
+def _chat_model(conn: sqlite3.Connection) -> None:
+    """A chat's own model (0.9.213); NULL follows the server's default."""
+    present = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
+    if "model" not in present:
+        conn.execute("ALTER TABLE chat_sessions ADD COLUMN model TEXT")
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     _reconcile_unversioned,
     _fork_origin,
@@ -325,6 +332,7 @@ _MIGRATIONS: tuple[Migration, ...] = (
     _workspace_list,
     _archived,
     _schedule_name,
+    _chat_model,
 )
 
 
@@ -362,6 +370,10 @@ class ChatMeta:
     archived: bool = False
     """Put away by the user: kept whole, but left out of :meth:`ChatStore.list`
     unless asked for. A search still finds it."""
+    model: str | None = None
+    """The model this chat picked — the serving layer's name for one (a
+    ``config.json`` model id under ``default_app``) — or None to run on the
+    server's default, whatever that is at the time."""
 
     @classmethod
     def from_row(cls, row: Any) -> "ChatMeta":
@@ -381,6 +393,7 @@ class ChatMeta:
             row[11],
             row[12] or 0,
             bool(row[13]),
+            row[14],
         )
 
     def to_dict(self) -> JsonObject:
@@ -399,6 +412,7 @@ class ChatMeta:
             "workspace_mode": self.workspace_mode,
             "workspace_mode_rev": self.workspace_mode_rev,
             "archived": self.archived,
+            "model": self.model,
         }
 
 
@@ -722,6 +736,7 @@ class ChatStore:
         scheduled_by: str | None = None,
         workspace_root: str | None = None,
         workspace_mode: str | None = None,
+        model: str | None = None,
         unarchive: bool = False,
     ) -> None:
         """Insert a row if missing, otherwise bump ``updated_at``.
@@ -737,7 +752,7 @@ class ChatStore:
         (``origin_kind = "spawn"``), and ``scheduled_by``, the schedule whose
         fire created it (``origin_kind = "schedule"``). The workspace binding
         too is set on insert only — :meth:`set_workspace_mode` is the one way
-        to change it.
+        to change it — and so is ``model`` (:meth:`set_model`).
         """
         now = time.time()
         kind = "spawn" if spawned_from else "schedule" if scheduled_by else None
@@ -745,8 +760,9 @@ class ChatStore:
             """
             INSERT INTO chat_sessions (id, title, agent, created_at, updated_at,
                                        parent_id, origin_kind, origin_session_id,
-                                       origin_ref, workspace_root, workspace_mode)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       origin_ref, workspace_root, workspace_mode,
+                                       model)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 updated_at = excluded.updated_at,
                 agent = COALESCE(chat_sessions.agent, excluded.agent),
@@ -764,6 +780,7 @@ class ChatStore:
                 scheduled_by,
                 workspace_root,
                 workspace_mode,
+                model,
                 unarchive,
             ),
         )
@@ -781,6 +798,13 @@ class ChatStore:
             "UPDATE chat_sessions SET workspace_mode = ?, "
             "workspace_mode_rev = workspace_mode_rev + 1 WHERE id = ?",
             (mode, session_id),
+        )
+
+    async def set_model(self, session_id: str, model: str | None) -> None:
+        """Change the model a chat runs on (None: the server's default); its
+        next run uses it."""
+        await self._write(
+            "UPDATE chat_sessions SET model = ? WHERE id = ?", (model, session_id)
         )
 
     async def associate(self, session_ids: Sequence[str], root: str) -> Sequence[str]:
@@ -949,7 +973,7 @@ class ChatStore:
         def _publish() -> bool:
             with self._meta._tx() as conn:
                 source = conn.execute(
-                    "SELECT title, agent, workspace_root, workspace_mode "
+                    "SELECT title, agent, workspace_root, workspace_mode, model "
                     "FROM chat_sessions WHERE id = ?",
                     (source_id,),
                 ).fetchone()
@@ -962,12 +986,13 @@ class ChatStore:
                     (fork_id, source_id),
                 )
                 # A fork keeps its source's workspace binding: its history
-                # refers to that directory, under those permissions.
+                # refers to that directory, under those permissions. And its
+                # model: it carries the conversation on.
                 conn.execute(
                     "INSERT INTO chat_sessions (id, title, agent, created_at, "
                     "updated_at, origin_kind, origin_session_id, origin_ref, "
-                    "workspace_root, workspace_mode) "
-                    "VALUES (?, ?, ?, ?, ?, 'fork', ?, ?, ?, ?)",
+                    "workspace_root, workspace_mode, model) "
+                    "VALUES (?, ?, ?, ?, ?, 'fork', ?, ?, ?, ?, ?)",
                     (
                         fork_id,
                         source[0],
@@ -978,6 +1003,7 @@ class ChatStore:
                         ref,
                         source[2],
                         source[3],
+                        source[4],
                     ),
                 )
                 return True

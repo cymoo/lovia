@@ -220,6 +220,15 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify({ workspace_mode }),
     }).then(_json),
+  // A chat's own model (a config model id), or null: back on the default.
+  // Applies from its next run.
+  /** @param {string} id @param {string | null} model */
+  setSessionModel: (id, model) =>
+    request(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ model }),
+    }).then(_json),
   // Bind a chat from before chats had a directory to one, for good.
   /** @param {string} id @param {string} workspace_root */
   setSessionRoot: (id, workspace_root) =>

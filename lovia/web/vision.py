@@ -42,6 +42,8 @@ from ..workspace.tools import (
 
 log = logging.getLogger(__name__)
 
+# The tool's name: stored in transcripts, and how a rebuilt agent finds it.
+DESCRIBE_IMAGE = "describe_image"
 DEFAULT_QUESTION = "Describe this image in detail, including any text it contains."
 
 VISION_INSTRUCTIONS = (
@@ -65,7 +67,7 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
     )
 
     @tool(
-        name="describe_image",
+        name=DESCRIBE_IMAGE,
         description=(
             "Have an image file described to you (you will get text, not the "
             "image). Images the user attaches land under 'uploads/'. Use this "

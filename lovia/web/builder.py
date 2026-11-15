@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
@@ -63,7 +63,7 @@ from .scheduling import Scheduling
 from .store import ChatStore
 from .tables import show_table
 from .ui import SURFACE_NOTE
-from .vision import make_describe_image_tool
+from .vision import DESCRIBE_IMAGE, make_describe_image_tool
 
 log = logging.getLogger("lovia.web.builder")
 
@@ -568,6 +568,34 @@ def build_agent(
     # within a prompt-cache window; precise time stays the `now` tool's job.
     agent.instruction(current_date())
     return _customized(agent, customize)
+
+
+def on_model(
+    agent: Agent[Any],
+    provider: Provider,
+    profile: ModelProfile,
+    vision_tool: Tool | None,
+) -> Agent[Any]:
+    """``agent`` run on another configured model — a chat's own pick: the
+    model, and what :func:`build_agent` sizes to it (the output cap, the
+    compaction window, which vision tool it needs). A context policy a
+    ``customize`` hook put in place stays, unless it is a ``Compaction``
+    sized to another window."""
+    tools = [t for t in agent.tools if t.name != DESCRIBE_IMAGE]
+    if vision_tool is not None:
+        tools.append(vision_tool)
+    policy = agent.context_policy
+    if (
+        isinstance(policy, Compaction)
+        and policy.context_window != profile.context_window
+    ):
+        policy = Compaction(context_window=profile.context_window)
+    return agent.clone(
+        model=provider,
+        settings=replace(agent.settings, max_tokens=profile.max_tokens),
+        context_policy=policy,
+        tools=tools,
+    )
 
 
 def _customized(agent: Agent[Any], customize: Customize | None) -> Agent[Any]:

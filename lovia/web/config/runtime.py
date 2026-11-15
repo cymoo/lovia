@@ -27,7 +27,7 @@ from ...plugins import Memory
 from ...providers import Provider, provider_from_string
 from ...providers._windows import clear_endpoint_cache
 from ...run_context import RunContext
-from ...tools import HumanChannel
+from ...tools import HumanChannel, Tool
 from ...workspace import LocalWorkspace
 from ..followups import FollowupRequest, generate_followups
 from ..sse import ConfigChangedData
@@ -96,6 +96,10 @@ class ConfigRuntime:
         self.mcp = MCPBook(unavailable=self._mcp_unavailable)
         # Which of a project's own servers (its ``.mcp.json``) are on.
         self.project_mcp = ProjectMCP(self.deployment.home)
+        # What a chat on a model other than the default runs on, by model
+        # id: its provider and vision tool, built on first use and kept
+        # until the configuration changes.
+        self._chat_models: dict[str, tuple[Provider, Tool | None]] = {}
 
     # ------------------------------------------------------------- state -
 
@@ -228,6 +232,43 @@ class ConfigRuntime:
 
         return remote_agent(agent, self.config)
 
+    def on_model(self, agent: Agent[Any], model_id: str) -> Agent[Any]:
+        """``agent`` on the configured model ``model_id`` — a chat's own
+        pick. A pick that is the default, or is gone, runs on the default:
+        the agent as it is. Raises :class:`UserError` for a model that can't
+        be run on (no API key, an unknown vendor prefix)."""
+        from ..builder import on_model, resolve_vision_tool, resolve_workspace
+
+        config = self.config
+        profile = config.profile(model_id)
+        if profile is None or profile.id == config.roles.chat:
+            return agent
+        built = self._chat_models.get(profile.id)
+        if built is None:
+            conn = Connection.from_profile(profile)
+            gaps = conn.missing()
+            if gaps or conn.model is None:
+                raise UserError(
+                    f"model {profile.display_name!r} has no {' or '.join(gaps)}",
+                    hint="complete it in Settings → Models, or pick another "
+                    "model for this chat",
+                )
+            try:
+                provider = provider_from_string(
+                    conn.model,
+                    api_key=conn.api_key,
+                    base_url=conn.base_url,
+                    supports_vision=profile.vision_override(),
+                    extra_body=profile.extra_body,
+                )
+            except ValueError as exc:
+                raise UserError(str(exc)) from exc
+            vision = resolve_vision_tool(
+                provider, resolve_workspace(self.deployment), config.vision_profile()
+            )
+            built = self._chat_models[profile.id] = (provider, vision)
+        return on_model(agent, built[0], profile, built[1])
+
     async def followups(self, request: FollowupRequest) -> Sequence[str]:
         """``create_app(followups=)`` for the CLI: the built-in suggester,
         while Settings keeps suggestions on."""
@@ -297,6 +338,11 @@ class ConfigRuntime:
                 if id(agent.model) not in served | retired:
                     retired.add(id(agent.model))
                     self._retire(agent.model)
+            # Chats on their own model: built for the configuration that
+            # was, so the next run builds anew.
+            for provider, _vision in self._chat_models.values():
+                self._retire(provider)
+            self._chat_models.clear()
             # The aux provider only ever serves transient title/follow-up
             # calls, which no supervisor entry holds — the retire grace
             # period is what covers one caught mid-swap.

@@ -115,9 +115,9 @@ class RouterDeps:
     # Per-chat permission modes (create_app(workspaces=)); None: every chat
     # runs on its agent's own workspace.
     workspace_switch: WorkspaceSwitch | None = None
-    # The CLI's runtime-reconfiguration surface, set by ``create_app`` when it
-    # received one. ``None`` — the embedder case — means no ``/api/config``
-    # routes and no ``model_config`` feature flag.
+    # ``default_app``'s runtime-reconfiguration surface, set by ``create_app``
+    # when it received one. ``None`` — an app from ``create_app`` alone —
+    # means no ``/api/config`` routes and no ``settings`` feature flag.
     config_runtime: "ConfigRuntime | None" = None
     # Builds each run's ``RunContext.deps`` from a RunTrigger (see
     # run_deps.py); ``None`` runs everything without deps, like core.

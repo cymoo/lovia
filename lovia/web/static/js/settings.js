@@ -2,7 +2,7 @@
 // tabs in three groups. Yours: General (this browser's preferences in
 // localStorage — language, theme, text size, Enter behavior, notifications,
 // sound) and Memory (memory.js; when an agent has it). The server's, shared
-// by everyone on it, shown only when it reports features.model_config:
+// by everyone on it, shown only when it reports features.settings:
 // Models, Assistant, Skills, MCP, Web search (config.json through
 // model-config.js, assistant-config.js, mcp-config.js). Then About.
 import { segmented, showDialog, setThemePref, themePref } from './ui.js';
@@ -293,7 +293,7 @@ export function openSettings(initialTab = 'general', opts = {}) {
     ],
     // The server's configuration: what the assistant runs on first (nothing
     // works without a model), then how it behaves and what it can use.
-    store.canConfigureModels
+    store.canConfigure
       ? [
           { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
           { id: 'assistant', label: t('settings.tabAssistant'), build: buildAssistantPane },

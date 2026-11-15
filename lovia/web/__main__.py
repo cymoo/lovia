@@ -1,10 +1,10 @@
 """``lovia web`` (or ``python -m lovia.web``) — launch the lovia chat UI.
 
-Builds a ready-made agent (model, skills, long-term memory, a todo checklist,
-current-date awareness, model-driven scheduled runs, built-in tools — time,
-HTTP fetch, web search — and a workspace) and serves it with the bundled web
-UI. ``--app module:attribute`` serves your own ``Agent`` — or a whole app
-from :func:`~lovia.web.create_app`, as built — instead.
+Serves :func:`~lovia.web.default_app` — a ready-made agent (model, skills,
+long-term memory, a todo checklist, scheduled runs, built-in tools and a
+workspace) with the bundled web UI: this module is its command line.
+``--app module:attribute`` serves your own ``Agent`` — or a whole app from
+:func:`~lovia.web.create_app`, as built — instead.
 
 The model connection is not a flag: it lives in ``config.json`` (see
 :mod:`lovia.web.config`) and is managed in one place — the web UI's
@@ -32,9 +32,6 @@ from ..agent import Agent
 from ..exceptions import UserError
 from ..http_config import DEFAULT_TIMEOUT
 from ..log_config import enable_logging
-from ..providers import Provider
-from ..tools import HumanChannel
-from ..workspace import WorkspaceMode
 from . import config as webconfig
 from .app import (
     _display_host,
@@ -47,9 +44,7 @@ from fastapi import FastAPI  # after .app: its import names a missing [web] extr
 from .api import RouterDeps
 from .auth import is_loopback
 from .builder import Deployment
-from .followups import FollowupFn
-from .store import ChatStore
-from .workspaces import WorkspaceSwitch
+from .default import ANSWER_TIMEOUT, default_app
 
 log = logging.getLogger("lovia.web.cli")
 
@@ -554,30 +549,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         if root_path:
             url += f" (proxied under {root_path})"
 
-        agent_or_agents: Agent[Any] | Mapping[str, Agent[Any]] = {}
-        # An --app that is already an app: served as built, no create_app here.
-        built_app: FastAPI | None = None
-        # For the default agent we build the store up front (rather than letting
-        # create_app build it) so the schedule_run tool can close over the same
-        # ChatStore the scheduler polls. Custom --app agents keep using db_path.
-        store: ChatStore | None = None
-        # ask_human bridge for the configured agents. A custom --app brings
-        # its own agents; wiring their channel is the library API's job
-        # (create_app's question_channel=), so it stays None here.
-        question_channel: HumanChannel | None = None
-        # The aux-role model (titles + follow-ups); None means the agent's own.
-        aux_model: Provider | None = None
-        # The runtime-reconfiguration surface behind /api/config — built for
-        # the configured agents only (a custom --app configures itself in code).
-        config_runtime: webconfig.ConfigRuntime | None = None
-        # Run limits: each configured agent's come from config.json (and
-        # follow Settings live); a custom --app agent gets the CLI defaults —
-        # anything else is create_app()'s job in its own code.
-        max_turns: int | Mapping[str, int] = webconfig.DEFAULT_MAX_TURNS
-        followups: bool | FollowupFn = True
-        # Per-chat permission modes, when the agents have a workspace; a
-        # custom --app opts in through create_app(workspaces=).
-        workspaces: WorkspaceSwitch | None = None
+        built_app: FastAPI
         app_target = _first(args.app, os.getenv("LOVIA_APP"))
         if app_target:
             if args.check:
@@ -587,10 +559,11 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 )
             _warn_ignored_agent_flags(args)
             loaded_target = load_app_target(app_target)
+            agent_or_agents: Agent[Any] | Mapping[str, Agent[Any]] | None = None
             if isinstance(loaded_target, FastAPI):
+                # Already an app: served as built, no create_app here.
                 _warn_ignored_app_flags(args)
-                built_app = loaded_target
-                deps = getattr(built_app.state, "deps", None)
+                deps = getattr(loaded_target.state, "deps", None)
                 custom_agents = (
                     list(deps.agents.values()) if isinstance(deps, RouterDeps) else []
                 )
@@ -606,117 +579,50 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 db_desc = db_path or "(./.lovia/<agent>.db, from the agent's name)"
             for custom_agent in custom_agents:
                 _warn_if_exposed(host, custom_agent.workspace)
-            summary = webconfig.format_app_summary(
-                version=__version__, app_target=app_target, db_desc=db_desc, url=url
+            # stdout, not the logger: the summary must be visible at every
+            # log level, while log lines keep flowing to stderr.
+            print(
+                webconfig.format_app_summary(
+                    version=__version__, app_target=app_target, db_desc=db_desc, url=url
+                ),
+                flush=True,
             )
+            if agent_or_agents is None:
+                built_app = cast(FastAPI, loaded_target)
+            else:
+                # A custom agent served with the CLI's own posture; anything
+                # else is create_app()'s job in its own code.
+                built_app = create_app(
+                    agent_or_agents,
+                    title=title,
+                    db_path=db_path,
+                    max_turns=webconfig.DEFAULT_MAX_TURNS,
+                    token=token or _generated_token(host),
+                    followups=True,
+                    approval_timeout=ANSWER_TIMEOUT,
+                    question_timeout=ANSWER_TIMEOUT,
+                )
         else:
             home = _home(args)
-            loaded = webconfig.load_active(home)
-            # The connection the default agent runs on — what --check probes
-            # and the summary shows.
-            profile = loaded.config.default_profile()
-            conn = (
-                webconfig.Connection.from_profile(profile)
-                if profile is not None
-                else webconfig.Connection()
-            )
             if args.check:
                 # Read-only diagnosis: report, probe, exit — never serves.
-                return webconfig.run_check(conn, version=__version__, path=loaded.path)
-            # It holds the chat history and memory beside the saved
-            # secrets: owner-only, never committed.
-            webconfig.protect_home(home)
-            db_desc = db_path or str(home / "lovia.db")
-            # Anything missing (no model, a keyless official host) means
-            # "serve the setup screen": the browser's Settings is the one
-            # write path, on a TTY exactly like everywhere else.
-            unconfigured = bool(webconfig.ConfigRuntime.serveable(loaded.config))
+                loaded = webconfig.load_active(home)
+                return webconfig.run_check(
+                    _connection(loaded.config), version=__version__, path=loaded.path
+                )
             general = Deployment(home=home).general_workspace()
-            deployment = Deployment(
+            built_app = default_app(
+                home=home,
                 workspace=None if args.no_workspace else _launch_dir(args, general),
                 readonly=args.readonly,
                 lock_workspace=args.lock_workspace,
-                home=home,
-            )
-            _warn_if_remote_capable(host, deployment)
-            store = ChatStore.sqlite(db_desc)
-            question_channel = HumanChannel()
-            config_runtime = webconfig.ConfigRuntime(
-                deployment=deployment,
-                loaded=loaded,
-                store=store,
-                question_channel=question_channel,
-            )
-            if deployment.workspace is not None:
-                roots = deployment.roots()
-                workspaces = WorkspaceSwitch(
-                    roots=roots,
-                    modes=cast("tuple[WorkspaceMode, ...]", deployment.modes()),
-                    build=config_runtime.workspace_for,
-                    agent_for=config_runtime.agent_for,
-                    general=general if roots == "any" else None,
-                    remotes=deployment.remotes(),
-                    agent_for_remote=config_runtime.agent_for_remote,
-                )
-            if unconfigured:
-                agent_or_agents = {}
-                summary = webconfig.format_unconfigured_summary(
-                    version=__version__, url=url, db_desc=db_desc, path=loaded.path
-                )
-            else:
-                # The same build hot-reload uses, so boot and Settings can't
-                # drift. Eager construction also surfaces vendor-prefix typos
-                # at startup instead of on the first chat message.
-                try:
-                    agent_or_agents, aux_model = config_runtime.build()
-                except (UserError, ValueError) as exc:
-                    raise CliError(str(exc)) from exc
-                summary = webconfig.format_summary(
-                    conn,
-                    version=__version__,
-                    url=url,
-                    config_desc=(
-                        loaded.label if loaded.exists else "(not saved — session only)"
-                    ),
-                    workspace_desc=_workspace_desc(deployment, loaded.config),
-                    db_desc=db_desc,
-                )
-            max_turns = config_runtime.max_turns()
-            followups = config_runtime.followups
-
-        # stdout, not the logger: the summary must be visible at every log
-        # level, while log lines keep flowing to stderr.
-        print(summary, flush=True)
-        if built_app is None:
-            built_app = create_app(
-                agent_or_agents,
-                title=title,
-                # `store` wins when set (default agent); otherwise create_app
-                # builds one from db_path (the custom --app path).
-                store=store,
                 db_path=db_path,
-                max_turns=max_turns,
+                title=title,
                 token=token or _generated_token(host),
-                # On, unlike create_app's default: the bundled CLI is a
-                # finished chat app where the chips are part of it (each
-                # configured agent may turn them off).
-                followups=followups,
-                title_model=aux_model,
-                followup_model=aux_model,
-                # Deny an unanswered tool approval after 10 minutes. Without it
-                # a clientless run (a scheduled fire, a subagent task) parked on
-                # an approval holds one of the concurrency slots forever; for a
-                # chat the user is watching, ten idle minutes means the answer
-                # is no.
-                approval_timeout=600,
-                # Same policy for the ask_human tool: an unanswered question is
-                # cancelled after 10 minutes (the model gets a tool error and
-                # continues), so a scheduled run that asks can never park.
-                question_channel=question_channel,
-                question_timeout=600,
-                config_runtime=config_runtime,
-                workspaces=workspaces,
             )
+            runtime = built_app.state.deps.config_runtime
+            _warn_if_remote_capable(host, runtime.deployment)
+            print(_summary(runtime, url=url, db_path=db_path), flush=True)
         serve(
             built_app,
             host=host,
@@ -730,6 +636,33 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
     except KeyboardInterrupt:  # pragma: no cover - interactive only
         return 130
     return 0
+
+
+def _connection(config: webconfig.WebConfig) -> webconfig.Connection:
+    """The connection chats run on — what ``--check`` probes and the summary
+    shows."""
+    profile = config.default_profile()
+    if profile is None:
+        return webconfig.Connection()
+    return webconfig.Connection.from_profile(profile)
+
+
+def _summary(runtime: webconfig.ConfigRuntime, *, url: str, db_path: str | None) -> str:
+    """The startup block for the default app."""
+    loaded, deployment = runtime.loaded, runtime.deployment
+    db_desc = db_path or str(deployment.home / "lovia.db")
+    if not runtime.configured:
+        return webconfig.format_unconfigured_summary(
+            version=__version__, url=url, db_desc=db_desc, path=loaded.path
+        )
+    return webconfig.format_summary(
+        _connection(loaded.config),
+        version=__version__,
+        url=url,
+        config_desc=loaded.label if loaded.exists else "(not saved — session only)",
+        workspace_desc=_workspace_desc(deployment, loaded.config),
+        db_desc=db_desc,
+    )
 
 
 if __name__ == "__main__":

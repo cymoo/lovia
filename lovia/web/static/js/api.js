@@ -439,7 +439,7 @@ export const api = {
   },
 
   // ---- configuration (Settings → Models/Web search/Skills/Agents; the CLI's) ----
-  // Only served when /api/info reports features.model_config. API keys never
+  // Only served when /api/info reports features.settings. API keys never
   // round-trip: reads carry { set, hint }; writes use null=keep, ''=clear.
   getConfig: () => request('/api/config').then(_json),
   /** @param {object} body Profile fields: { id?, name?, model, flavor?, base_url?, api_key?, context_window?, max_tokens?, vision?, extra_body? }. */

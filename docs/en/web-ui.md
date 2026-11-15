@@ -302,6 +302,10 @@ would otherwise pass to `create_app()` (`--token`, `--db`, `--title`, …) are
 ignored with a warning. For Python deployment and ASGI integration, see
 [Web server](web-server.md).
 
+To keep everything on this page and add to it — a tool, a plugin, your own
+auth — build the same app in code with
+[`default_app()`](web-server.md#two-ways-in) and serve that.
+
 The interface renders GitHub-flavored Markdown, highlighted code, Mermaid, and
 inline images. The default Agent is told about these capabilities; a custom
 Agent is not. Add `SURFACE_NOTE` when you want the model to use them deliberately:

@@ -1637,7 +1637,7 @@ function appendRetry() {
   const btn = node.querySelector('.lv-retry-btn');
   btn.textContent = t('chat.retry');
   btn.addEventListener('click', () => store.emit('retry'));
-  if (store.canConfigureModels && SETTINGS_FIXABLE.has(_lastErrorCode)) {
+  if (store.canConfigure && SETTINGS_FIXABLE.has(_lastErrorCode)) {
     const settings = document.createElement('button');
     settings.type = 'button';
     settings.className = 'lv-btn lv-btn-ghost lv-btn-sm';
@@ -1646,7 +1646,7 @@ function appendRetry() {
     node.appendChild(settings);
   }
   // Out of turns: the limit is file-only, and that page says where.
-  if (store.canConfigureModels && _lastErrorCode === 'max_turns') {
+  if (store.canConfigure && _lastErrorCode === 'max_turns') {
     const limit = document.createElement('button');
     limit.type = 'button';
     limit.className = 'lv-btn lv-btn-ghost lv-btn-sm';
@@ -1779,7 +1779,7 @@ function appendMcpUnavailable(/** @type {{ servers: { name: string, error: strin
   why.textContent = servers.map((s) => `${s.name}: ${s.error}`).join('\n');
   detail.append(summary, why);
   main.append(head, detail);
-  if (store.canConfigureModels) {
+  if (store.canConfigure) {
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-mcp-notice-open';
@@ -2578,7 +2578,7 @@ function renderSetupHero(transcript) {
 export function renderEmptyState() {
   const transcript = document.getElementById('transcript');
   if (!transcript) return;
-  if (store.canConfigureModels && !store.configured) {
+  if (store.canConfigure && !store.configured) {
     renderSetupHero(transcript);
     return;
   }

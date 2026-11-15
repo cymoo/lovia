@@ -9,6 +9,7 @@ boot and runtime reconfiguration, so both build agents through one path.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
@@ -459,6 +460,7 @@ def build_agent(
     config: WebConfig | None = None,
     memory: Memory | None = None,
     mcp: MCPBook | None = None,
+    customize: Callable[[Agent[Any]], Agent[Any]] | None = None,
 ) -> Agent[Any]:
     """The agent ``lovia web`` serves, from ``config`` on ``provider``.
 
@@ -467,6 +469,8 @@ def build_agent(
     one per server, it owns the notes file's lock — and ``None`` builds
     one. ``mcp`` records how each MCP server's connections go and where a
     run reports one it started without (``ConfigRuntime`` passes its own).
+    ``customize`` (``default_app``'s) has the last word on the agent and on
+    its background child, each under the name it was built with.
     The core ``Agent.name`` is :data:`DEFAULT_AGENT_ID`: what chats store.
     """
     config = config or WebConfig()
@@ -524,7 +528,7 @@ def build_agent(
         child.instruction(current_date())
         # Cap below max_background_runs (8): parent + children + scheduler
         # fires must all fit without starving each other.
-        plugins.append(Subagents([child], max_concurrent=3))
+        plugins.append(Subagents([_customized(child, customize)], max_concurrent=3))
     if question_channel is not None:
         tools = [*tools, ask_human(question_channel)]
     # Parent-only too: a background child's transcript has no one watching.
@@ -548,4 +552,19 @@ def build_agent(
     # skips the now->web_search round-trip. Date only (server-local tz): stable
     # within a prompt-cache window; precise time stays the `now` tool's job.
     agent.instruction(current_date())
-    return agent
+    return _customized(agent, customize)
+
+
+def _customized(
+    agent: Agent[Any], customize: Callable[[Agent[Any]], Agent[Any]] | None
+) -> Agent[Any]:
+    if customize is None:
+        return agent
+    out = customize(agent)
+    # Chats, schedules and the turn limits all find the agent by this name.
+    if not isinstance(out, Agent) or out.name != agent.name:
+        raise UserError(
+            f"customize must return the agent it was given, as {agent.name!r}",
+            hint="return agent.clone(...) with the changes, keeping its name",
+        )
+    return out

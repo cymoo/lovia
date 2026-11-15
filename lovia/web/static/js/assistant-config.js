@@ -1,7 +1,7 @@
 // assistant-config.js — the Settings "Assistant" pane: how the assistant
 // behaves in every chat — its custom instructions, the permission mode a new
 // chat starts in, and its switches. Like the Models pane it edits the
-// server's config.json and exists only with features.model_config.
+// server's config.json and exists only with features.settings.
 //
 // These are where a new chat starts; a chat picks its own mode in the
 // composer. A save applies from the next run: a reply already streaming

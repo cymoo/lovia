@@ -95,9 +95,9 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 "rewind": hasattr(deps.session, "rewind"),
                 # The /api/events lifecycle stream (push instead of poll).
                 "events": True,
-                # /api/config exists: the model connection is editable from
-                # the UI (the CLI's default agent only — never embedders).
-                "model_config": deps.config_runtime is not None,
+                # /api/config exists: the server is configured from the UI
+                # (``default_app`` only — never an app from ``create_app``).
+                "settings": deps.config_runtime is not None,
                 # create_app(workspaces=): chats pick a mode, and a directory
                 # from GET /api/workspaces (whose can_add says if any beyond
                 # the agent's own may be added).

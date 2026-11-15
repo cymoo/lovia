@@ -237,7 +237,7 @@ class WorkspaceSwitch:
     """
 
     roots: Literal["any"] | Sequence[str | Path] | None = "any"
-    modes: Sequence[WorkspaceMode] = ("readonly", "coding")
+    modes: Sequence[WorkspaceMode] = ("readonly", "coding", "trusted")
     default_mode: WorkspaceMode | None = None
     build: Callable[[Agent[Any], Path, WorkspaceMode], LocalWorkspace] | None = None
     agent_for: Callable[[Agent[Any], Path], Agent[Any]] | None = None

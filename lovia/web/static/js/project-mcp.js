@@ -141,15 +141,21 @@ function openDialog(scope, listing) {
     const title = document.createElement('h3');
     title.className = 'lv-pmcp-title';
     title.textContent = t('pmcp.title');
-    const intro = document.createElement('p');
-    intro.className = 'lv-pmcp-intro';
-    intro.textContent = listing.servers.length
-      ? t('pmcp.intro', { file: `${listing.project}/.mcp.json` })
-      : t('pmcp.none');
+    const nodes = [title];
+    // Nothing listed: there is no file — unless the error below says it
+    // is there and unreadable.
+    if (listing.servers.length || !listing.error) {
+      const intro = document.createElement('p');
+      intro.className = 'lv-pmcp-intro';
+      intro.textContent = listing.servers.length
+        ? t('pmcp.intro', { file: `${listing.project}/.mcp.json` })
+        : t('pmcp.none');
+      nodes.push(intro);
+    }
     const list = document.createElement('div');
     list.className = 'lv-pmcp-list';
     for (const s of listing.servers) list.appendChild(row(s, (on) => decide(s.name, on)));
-    const nodes = [title, intro, list];
+    nodes.push(list);
     if (listing.error) {
       const problem = document.createElement('div');
       problem.className = 'lv-pmcp-error';

@@ -312,8 +312,11 @@ with the repository, so **a server in it stays off until you turn it on**:
   relative to it. A server with the same name as one in Settings is used
   instead of it. An entry with `"disabled": true` is listed but can't be
   turned on.
-- No agent tool can read or write `mcp-projects.json`, in any permission
-  mode: the decision is yours.
+- The decision is yours: the agent's file tools can't open
+  `mcp-projects.json`, and a shell command that names it is refused, in
+  every permission mode — the same guard as for `config.json`. (Full access
+  still runs any program unasked; that mode trusts the agent with the
+  machine.)
 - Scheduled runs use what is turned on, like any other run. A chat on
   another machine (a [remote workspace](#workspaces)) does not read the
   file.

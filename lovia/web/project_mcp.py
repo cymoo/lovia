@@ -33,11 +33,20 @@ from typing import Any, Literal
 from .config.mcp import parse_server
 from .config.schema import MCPServerConfig
 
-__all__ = ["PROJECT_MCP_FILE", "ProjectMCP", "ProjectServer", "read_project_servers"]
+__all__ = [
+    "DECISIONS_FILE",
+    "PROJECT_MCP_FILE",
+    "ProjectMCP",
+    "ProjectServer",
+    "read_project_servers",
+]
 
 log = logging.getLogger("lovia.web.mcp")
 
 PROJECT_MCP_FILE = ".mcp.json"
+# In lovia's home. No agent tool may touch it (builder._home_secrets): an
+# agent that could write it would turn its own server on.
+DECISIONS_FILE = "mcp-projects.json"
 # Far more than any real file; a guard against reading a mistake whole.
 _MAX_BYTES = 256 * 1024
 
@@ -91,9 +100,10 @@ def read_project_servers(
     """The servers ``root``'s ``.mcp.json`` names, and what is wrong with the
     file as a whole (``None``: nothing, or there is no file).
 
-    An entry that can't be used — a bad shape, an unset variable — comes
-    back with its ``error`` rather than failing the others. A stdio server
-    with no ``cwd`` of its own starts in ``root``.
+    An entry that can't be used — a bad shape, an unset variable, one the
+    file itself disables — comes back with its ``error`` rather than
+    failing the others. A stdio server starts in ``root``, or in its own
+    ``cwd`` taken relative to it.
     """
     env = os.environ if env is None else env
     path = root / PROJECT_MCP_FILE
@@ -115,8 +125,13 @@ def read_project_servers(
         config, error = None, None
         try:
             config = parse_server(name, _expand(spec, env))
-            if config.command is not None and config.cwd is None:
-                config = config.model_copy(update={"cwd": str(root)})
+            if not config.enabled:
+                config, error = None, "the file turns it off (disabled)"
+            elif config.command is not None:
+                # In the project, or where the entry says relative to it.
+                config = config.model_copy(
+                    update={"cwd": str(root / (config.cwd or ""))}
+                )
         except ValueError as exc:
             error = str(exc).removeprefix(f"{name}: ")
         servers.append(ProjectServer(name, spec, _digest(spec), config, error))
@@ -124,7 +139,8 @@ def read_project_servers(
 
 
 class ProjectMCP:
-    """Which servers are on in which project: ``<home>/mcp-projects.json``.
+    """Which servers are on in which project: :data:`DECISIONS_FILE` in
+    lovia's home.
 
     ``{"projects": {<project key>: {<server name>: {"on": bool, "digest":
     str}}}}``. A decision counts for the entry it was made on: another
@@ -132,7 +148,7 @@ class ProjectMCP:
     """
 
     def __init__(self, home: Path) -> None:
-        self.path = home / "mcp-projects.json"
+        self.path = home / DECISIONS_FILE
 
     def _load(self) -> dict[str, dict[str, dict[str, Any]]]:
         try:
@@ -182,7 +198,5 @@ class ProjectMCP:
             return []
         states = self.states(project, servers)
         return [
-            s.config
-            for s in servers
-            if s.config is not None and s.config.enabled and states[s.name] == "on"
+            s.config for s in servers if s.config is not None and states[s.name] == "on"
         ]

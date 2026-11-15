@@ -57,7 +57,7 @@ from .config import (
 )
 from .html import show_html
 from .mcp import MCPBook, SettingsMCP
-from .project_mcp import ProjectMCP
+from .project_mcp import DECISIONS_FILE, ProjectMCP
 from .run_deps import chat_project
 from .scheduling import Scheduling
 from .store import ChatStore
@@ -446,12 +446,19 @@ def resolve_workspace(
 
 
 def _home_secrets(deployment: Deployment) -> tuple[str, ...]:
-    """``config.json`` holds the model API keys, so no agent tool may open
-    it. The workspace baseline names it in the default home; a ``--home``
-    elsewhere — inside the workspace, even — is named here."""
-    if deployment.home.expanduser() == DEFAULT_HOME.expanduser():
-        return ()
-    return (config_path(deployment.home).resolve().with_suffix(".*").as_posix(),)
+    """What in lovia's home no agent tool may open, whatever the mode.
+
+    ``config.json`` holds the model API keys: the workspace baseline names
+    it in the default home, and a ``--home`` elsewhere — inside the
+    workspace, even — is named here. The record of which project MCP
+    servers are on is the person's decision to make: an agent that could
+    write it would turn its own server on.
+    """
+    home = deployment.home.expanduser()
+    decisions = ((home / DECISIONS_FILE).resolve().as_posix(),)
+    if home == DEFAULT_HOME.expanduser():
+        return decisions
+    return (config_path(home).resolve().with_suffix(".*").as_posix(), *decisions)
 
 
 def build_agent(

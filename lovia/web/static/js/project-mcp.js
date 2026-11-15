@@ -1,6 +1,7 @@
-// project-mcp.js — the MCP servers the chat's project names in its own
-// .mcp.json: a line over the composer while any is undecided, and the dialog
-// that turns each on or off for this project.
+// project-mcp.js — the MCP servers a project names in its own .mcp.json: a
+// line over the composer while the chat's project has any undecided, and
+// the dialog that turns each on or off for that project (also behind a
+// sidebar folder's ⋯ menu, to look again later).
 //
 // A server runs only once it was turned on here, for the entry as written:
 // the file arrives with the repository, and it names commands to run. An
@@ -18,13 +19,14 @@ import { switchControl } from './assistant-config.js';
 
 /** @typedef {{ name: string, spec: any, state: 'on' | 'off' | 'pending', error: string | null }} ProjectServer */
 /** @typedef {{ project: string | null, error: string | null, servers: ProjectServer[] }} Listing */
+/** Whose project: a chat's, or the directory a draft opens in. @typedef {{ session?: string, root?: string }} Scope */
 
-/** @type {Listing | null} */
+/** The open chat's project, for the composer line. @type {Listing | null} */
 let _listing = null;
 let _asked = 0; // bumped per request: a slower, older answer is dropped
 
-/** Which chat's project: the open chat, else where a draft will open. */
-function scope() {
+/** @returns {Scope} */
+function chatScope() {
   return store.sessionId ? { session: store.sessionId } : { root: draftWorkspaceRoot() };
 }
 
@@ -43,7 +45,7 @@ async function refresh() {
   const mine = ++_asked;
   let listing = null;
   try {
-    listing = await api.getProjectMcp(scope());
+    listing = await api.getProjectMcp(chatScope());
   } catch {
     /* no project to ask about (a refused directory, say): nothing to show */
   }
@@ -65,13 +67,16 @@ function renderNote() {
   open.type = 'button';
   open.className = 'lv-btn lv-btn-ghost lv-btn-sm';
   open.textContent = t('pmcp.review');
-  open.addEventListener('click', openDialog);
+  open.addEventListener('click', () => _listing && openDialog(chatScope(), _listing));
   note.replaceChildren(text, open);
   note.insertAdjacentHTML('afterbegin', icon('server', { size: 15 }));
 }
 
-/** @param {ProjectServer} s @param {() => void} redraw */
-function row(s, redraw) {
+/**
+ * @param {ProjectServer} s
+ * @param {(on: boolean) => void} decide
+ */
+function row(s, decide) {
   const item = document.createElement('div');
   item.className = 'lv-pmcp-row';
   const main = document.createElement('div');
@@ -108,47 +113,58 @@ function row(s, redraw) {
   const sw = switchControl(s.state === 'on');
   sw.node.setAttribute('aria-label', t('pmcp.switch', { name: s.name }));
   sw.node.toggleAttribute('disabled', !!s.error);
-  sw.node.addEventListener('change', async () => {
-    try {
-      _listing = await api.setProjectMcp({ ...scope(), name: s.name, on: sw.value() });
-    } catch (err) {
-      toast(String(err.message || err), { type: 'error' });
-      await refresh();
-    }
-    renderNote();
-    redraw();
-  });
+  sw.node.addEventListener('change', () => decide(sw.value()));
   item.append(main, sw.node);
   return item;
 }
 
-function openDialog() {
+/**
+ * @param {Scope} scope
+ * @param {Listing} listing
+ */
+function openDialog(scope, listing) {
   const body = document.createElement('div');
   body.className = 'lv-pmcp';
-  const draw = () => {
-    const listing = _listing;
+
+  /** @param {string} name @param {boolean} on */
+  async function decide(name, on) {
+    try {
+      listing = await api.setProjectMcp({ ...scope, name, on });
+    } catch (err) {
+      toast(String(err.message || err), { type: 'error' });
+    }
+    draw();
+    refresh(); // the composer line counts what is still undecided
+  }
+
+  function draw() {
     const title = document.createElement('h3');
     title.className = 'lv-pmcp-title';
     title.textContent = t('pmcp.title');
     const intro = document.createElement('p');
     intro.className = 'lv-pmcp-intro';
-    intro.textContent = t('pmcp.intro', { file: `${listing?.project ?? ''}/.mcp.json` });
+    intro.textContent = listing.servers.length
+      ? t('pmcp.intro', { file: `${listing.project}/.mcp.json` })
+      : t('pmcp.none');
     const list = document.createElement('div');
     list.className = 'lv-pmcp-list';
-    for (const s of listing?.servers ?? []) list.appendChild(row(s, draw));
+    for (const s of listing.servers) list.appendChild(row(s, (on) => decide(s.name, on)));
     const nodes = [title, intro, list];
-    if (listing?.error) {
+    if (listing.error) {
       const problem = document.createElement('div');
       problem.className = 'lv-pmcp-error';
       problem.textContent = listing.error;
       nodes.push(problem);
     }
-    const foot = document.createElement('div');
-    foot.className = 'lv-cfg-footnote';
-    foot.textContent = t('pmcp.applies');
-    nodes.push(foot);
+    if (listing.servers.length) {
+      const foot = document.createElement('div');
+      foot.className = 'lv-cfg-footnote';
+      foot.textContent = t('pmcp.applies');
+      nodes.push(foot);
+    }
     body.replaceChildren(...nodes);
-  };
+  }
+
   draw();
   const close = document.createElement('button');
   close.type = 'button';
@@ -159,10 +175,22 @@ function openDialog() {
   close.addEventListener('click', () => dialog.close());
 }
 
-export function initProjectMcp() {
-  // The chat or its directory changed; a run may have edited the file.
-  for (const event of ['workspace-scope-changed', 'session-switched', 'new-chat', 'run-end']) {
-    store.on(event, refresh);
+/**
+ * The servers of the project in `root`, decided or not: a sidebar folder's
+ * way back to them.
+ * @param {string} root
+ */
+export async function openProjectMcp(root) {
+  try {
+    openDialog({ root }, await api.getProjectMcp({ root }));
+  } catch (err) {
+    toast(String(err.message || err), { type: 'error' });
   }
+}
+
+export function initProjectMcp() {
+  // The chat's directory changed, or a run that may have edited the file ended.
+  store.on('workspace-scope-changed', refresh);
+  store.on('run-end', refresh);
   refresh();
 }

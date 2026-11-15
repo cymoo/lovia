@@ -98,6 +98,24 @@ def test_one_unusable_entry_does_not_take_the_others_down(tmp_path: Path) -> Non
     assert by_name["fine"].config is not None and by_name["fine"].error is None
 
 
+def test_a_commands_directory_is_the_projects_or_relative_to_it(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "here": {"command": "x"},
+            "sub": {"command": "x", "cwd": "tools"},
+            "abs": {"command": "x", "cwd": "/opt/mcp"},
+            "off": {"command": "x", "disabled": True},
+        },
+    )
+    by_name = {s.name: s for s in read_project_servers(tmp_path, {})[0]}
+    assert by_name["here"].config.cwd == str(tmp_path)
+    assert by_name["sub"].config.cwd == str(tmp_path / "tools")
+    assert by_name["abs"].config.cwd == "/opt/mcp"
+    # Turned off in the file: listed, with why it can't be turned on here.
+    assert by_name["off"].config is None and "disabled" in by_name["off"].error
+
+
 def test_a_file_that_is_not_the_projects_is_not_read(tmp_path: Path) -> None:
     (tmp_path / ".mcp.json").write_text("{not json", encoding="utf-8")
     servers, error = read_project_servers(tmp_path)
@@ -255,6 +273,17 @@ def test_a_projects_server_stands_in_for_a_global_one_of_its_name(served) -> Non
     tools = _chat(client, provider)
     # The project's "stub" answered; the global one of that name wasn't tried.
     assert {"stub__add", "other__add"} <= tools
+
+
+def test_a_read_only_home_refuses_the_decision(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _provider, project = served
+    _write(project, {"proj": _stub()})
+    monkeypatch.setattr(runtime_module, "config_writable", lambda path: False)
+    res = client.put(URL, json={"name": "proj", "on": True})
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "config_read_only"
 
 
 def test_turning_one_on_needs_a_local_origin(served) -> None:

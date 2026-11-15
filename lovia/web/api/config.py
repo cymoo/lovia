@@ -710,9 +710,10 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         body: ProjectMCPIn, request: Request
     ) -> dict[str, object]:
         """Turn one of the project's servers on or off, as it is written
-        now. On is what lets a repository's command run: guarded like a
-        config write. It applies from the chat's next run."""
-        _guard_host(request)
+        now. On is what lets a repository's command run, and the record
+        lives in the home beside ``config.json``: guarded like a config
+        write. It applies from the chat's next run."""
+        _guard_write(request)
         key = await _project(body.session, body.root)
         servers = read_project_servers(Path(key))[0] if key is not None else []
         server = next((s for s in servers if s.name == body.name), None)

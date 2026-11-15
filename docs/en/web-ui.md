@@ -243,7 +243,8 @@ by pasting the `mcpServers` JSON other clients use; several at once is fine:
 A server is a `command` run on the lovia web host (stdio) — for a remote
 chat too — or a `url` (streamable HTTP; SSE is not supported). Its name
 prefixes its tools (`docs__search`), so it is letters, digits, `-` and `_`.
-`"disabled": true` saves it switched off; other keys are ignored.
+A command may name the directory it starts in (`cwd`). `"disabled": true`
+saves it switched off; other keys are ignored.
 
 - **Connected per message.** Each run connects to the servers as it starts,
   one after another, and closes them when it ends — an `npx` server makes
@@ -297,7 +298,8 @@ with the repository, so **a server in it stays off until you turn it on**:
 
 - While any is undecided, a line over the composer says so; **Review** shows
   each entry as written with a switch. The chat runs meanwhile, without those
-  servers — nothing waits on the answer.
+  servers — nothing waits on the answer. To look again later, open the
+  folder's **⋯ → Project MCP servers** in the sidebar.
 - The decision is kept in lovia's home (`mcp-projects.json`), per project
   directory, never in the project: a repository can't approve itself.
 - It holds for the entry as it was written. An edited entry — after a pull,
@@ -306,8 +308,12 @@ with the repository, so **a server in it stays off until you turn it on**:
   `headers` are filled from the server's environment when a run starts, so
   secrets stay out of the file. An entry naming a variable that is not set
   (and has no default) is not started, and the dialog says which.
-- A command starts in the project directory unless the entry has a `cwd`.
-  A server with the same name as one in Settings is used instead of it.
+- A command starts in the project directory, or in the entry's `cwd` taken
+  relative to it. A server with the same name as one in Settings is used
+  instead of it. An entry with `"disabled": true` is listed but can't be
+  turned on.
+- No agent tool can read or write `mcp-projects.json`, in any permission
+  mode: the decision is yours.
 - Scheduled runs use what is turned on, like any other run. A chat on
   another machine (a [remote workspace](#workspaces)) does not read the
   file.

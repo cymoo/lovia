@@ -7,8 +7,9 @@ through ``RouterDeps.agents`` at message time, and in-flight runs hold
 configuration to every *next* message while running turns finish undisturbed
 on the old providers.
 
-Owned by the CLI (``lovia web``): embedders configure their agents in code
-and never see this class.
+Owned by :func:`~lovia.web.default_app` (what ``lovia web`` serves): an app
+from ``create_app`` alone configures its agents in code and never sees this
+class.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from .storage import LoadedConfig, config_writable, save_config
 
 if TYPE_CHECKING:
     from ..api.deps import RouterDeps
-    from ..builder import Deployment
+    from ..builder import Customize, Deployment
     from ..store import ChatStore
 
 log = logging.getLogger("lovia.web.config")
@@ -66,6 +67,7 @@ class ConfigRuntime:
         loaded: LoadedConfig,
         store: "ChatStore",
         question_channel: HumanChannel | None = None,
+        customize: "Customize | None" = None,
     ) -> None:
         from ..builder import Deployment
 
@@ -73,6 +75,8 @@ class ConfigRuntime:
         self.loaded = loaded
         self.store = store
         self.question_channel = question_channel
+        # ``default_app(customize=)``: applied to every agent a build makes.
+        self.customize = customize
         # Set by create_app when the app runs without its own auth guard —
         # the config write endpoints then insist on a loopback Host header
         # (the DNS-rebinding guard; see api/config.py).
@@ -179,6 +183,7 @@ class ConfigRuntime:
             config=config,
             memory=memory,
             mcp=self.mcp,
+            customize=self.customize,
         )
         return {agent.name: agent}, resolve_aux_model(config.aux_profile())
 

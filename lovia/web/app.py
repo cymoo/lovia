@@ -290,11 +290,13 @@ def create_app(
     tasks alike. ``None`` (default) runs without deps, like the core
     ``Runner``.
 
-    ``config_runtime`` is the CLI's runtime-reconfiguration surface (a
+    ``config_runtime`` is :func:`~lovia.web.default_app`'s
+    runtime-reconfiguration surface (a
     :class:`lovia.web.config.ConfigRuntime`); passing one mounts the
     ``/api/config`` routes and allows an *empty* agents mapping — the
     not-yet-configured state whose first ``/api/config`` write brings the
-    default agent up. Embedders leave it ``None``.
+    default agent up. Leave it ``None``: for the app Settings configures,
+    call ``default_app``.
 
     ``workspaces`` (a :class:`~lovia.web.WorkspaceSwitch`) lets each chat
     pick its own permission mode — the composer offers the switch's modes,

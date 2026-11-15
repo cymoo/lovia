@@ -385,7 +385,11 @@ def test_a_schedule_picks_its_directory_and_mode_like_a_new_chat(
     launch, other = dirs
     c = _client(
         _agent(launch, []),
-        WorkspaceSwitch(roots=[str(launch), str(other)], default_mode="coding"),
+        WorkspaceSwitch(
+            roots=[str(launch), str(other)],
+            modes=("readonly", "coding"),
+            default_mode="coding",
+        ),
     )
     base = {"input": "tick", "trigger_kind": "every", "trigger_expr": "3600"}
 

@@ -530,6 +530,9 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   (`create_app(workspaces=WorkspaceSwitch())` in your own app). The folder
   can be on an SSH host or in a running container: pick it in the add
   dialog, and the chat's tools run there.
+- **The same app from code** — `default_app()` builds what `lovia web`
+  serves, and `customize=` adds your tools and plugins to it; `create_app()`
+  serves an agent of your own as you built it.
 - **Rich tool results** — a tool returns `ui_result(kind, props)` to draw UI;
   tables, ECharts charts and sandboxed HTML pages come built in
   (`show_table`, `show_chart`, `show_html`).

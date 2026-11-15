@@ -15,6 +15,54 @@ agent = Agent(name="assistant", model="<model>")
 serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 ```
 
+## 两个入口
+
+构建应用的函数有两个，各管一件事：
+
+- **`create_app(agent)`：原样托管你写的 Agent。** 默认值跟随 core，不替你做决定；页面只显示这个 Agent 用得上的部分。
+  本页后面讲的都是它。
+- **`default_app(...)`：`lovia web` 启动的那个应用**——现成的助手，在浏览器里配置，保存在 home 目录里。
+  命令行只是它的一层包装，所以 `lovia web` 能做的它都能做；命令行参数表达不了的，用 `customize`。
+
+```python
+from lovia import tool
+from lovia.web import default_app, serve
+
+
+@tool
+def order_status(order_id: str) -> str:
+    """查询订单。"""
+    return "shipped"
+
+
+def customize(agent):
+    return agent.clone(tools=[*agent.tools, order_status])
+
+
+serve(default_app(workspace=".", customize=customize))
+```
+
+| | `default_app()` / `lovia web` | `create_app(agent)` |
+| --- | --- | --- |
+| Agent | 按 `config.json` 构建：技能、记忆、待办、网页搜索、定时任务、后台子 Agent、工作区 | 你自己的 |
+| 设置页（模型、助手、技能、MCP、联网搜索）、模型按钮、首次配置引导 | 有 | 没有，在代码里配置 |
+| 项目的 `AGENTS.md` 和 `.agents/skills`，按对话加载 | 有 | 用 `WorkspaceSwitch(agent_for=)` |
+| 权限模式按钮 | 启动参数允许的每一种 | 传 `workspaces=WorkspaceSwitch()` |
+| 最大轮数 / 追问建议 / 审批超时 | `150` / 开 / 600 秒 | `50` / 关 / 不超时 |
+| 聊天记录 | `<home>/lovia.db` | `./.lovia/<agent>.db` |
+
+`default_app(*, home="~/.lovia", workspace=".", readonly=False, lock_workspace=False, db_path=None,
+customize=None, ...)`：前五个就是命令行的开关（`--home`、`DIR`（`None` 即 `--no-workspace`）、`--readonly`、
+`--lock-workspace`、`--db`）。其余的——`title`、`token`、`auth`、`ui`、`cors_origins`、`lifespan`、`run_deps`、
+`tracer`——就是 `create_app` 的同名选项。
+
+`customize(agent)` 会拿到配置构建出的每个 Agent——助手 `lovia` 和它的后台子 Agent `lovia.sub`——并返回要托管的那个，
+名字不能变。启动时调用一次，之后每次在设置页保存都会再调用。用它加工具、插件、hook 或指令片段；基础的 `instructions`
+每个对话都会按设置页和项目的 `AGENTS.md` 重新生成，所以替换那段文字不会保留。只想给其中一个加东西，就按 `agent.name` 判断。
+
+`lovia web --app mymodule:app` 可以托管任一种方式构建的应用，所以定制过的 `default_app` 仍然能用命令行的
+`--host`、`--port` 和日志参数。
+
 ## `create_app()` 与 `serve()`
 
 `serve(target, *, host="127.0.0.1", port=8000, **uvicorn_kwargs)` 运行由 `create_app()`
@@ -681,18 +729,18 @@ window.lovia.registerRenderer('trend', {
 ```python
 from lovia.web import WorkspaceSwitch, create_app
 
-app = create_app(agent, workspaces=WorkspaceSwitch())  # 任意目录；readonly / coding
+app = create_app(agent, workspaces=WorkspaceSwitch())  # 任意目录，三种模式都可选
 app = create_app(agent, workspaces=WorkspaceSwitch(roots=["/srv/repos"]))  # 只能是这些目录之下
 app = create_app(agent, workspaces=WorkspaceSwitch(roots=None))  # 只用 Agent 自己的目录，只切模式
 app = create_app(
     agent,
-    workspaces=WorkspaceSwitch(modes=("readonly", "coding", "trusted"), default_mode="coding"),
-)
+    workspaces=WorkspaceSwitch(modes=("readonly", "coding"), default_mode="coding"),
+)  # 不提供“完全权限”
 ```
 
 - `roots` 是对话可以工作的目录：`"any"`（默认）、一个列表（这些目录及其子目录），或 `None`（只有 Agent 自己的目录）。
   Agent 自己的目录始终允许。
-- `modes` 是对话可选的模式，必须包含 `"readonly"`。对话保存的模式不在其中时，按它下方最宽的可用模式运行——
+- `modes` 是对话可选的模式，默认三种都有，必须包含 `"readonly"`。不希望使用者自己关掉审批时，去掉 `"trusted"`。对话保存的模式不在其中时，按它下方最宽的可用模式运行——
   只收紧，不放宽。
 - `default_mode` 是页面给新对话预选的模式。从未选过模式的对话沿用 Agent 自带的 policy（自定义规则原样保留），只是换到对话的目录。
 - `build(agent, root, mode)` 返回某个 Agent 的对话在某个目录和模式下的 `LocalWorkspace`。默认用 `Workspace.local` 的预设，沿用 Agent 工作区的

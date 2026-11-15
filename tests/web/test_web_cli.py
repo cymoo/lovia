@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 
 import pytest
@@ -16,7 +17,7 @@ from lovia.context import Compaction  # noqa: E402
 from lovia.exceptions import UserError  # noqa: E402
 from lovia.web import ChatStore  # noqa: E402
 from lovia.web import __main__ as cli  # noqa: E402
-from lovia.web import builder  # noqa: E402
+from lovia.web import builder, default  # noqa: E402
 from lovia.workspace import Workspace  # noqa: E402
 from lovia.web.config import (  # noqa: E402
     AssistantConfig,
@@ -516,9 +517,12 @@ def _capture_serving(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     def fake_create_app(agent_or_agents: object, **kwargs: object) -> object:
         captured["agent"] = agent_or_agents
         captured.update(kwargs)
-        return object()
+        # What main() reads back off a built app: its runtime, for the summary.
+        deps = SimpleNamespace(config_runtime=kwargs.get("config_runtime"))
+        return SimpleNamespace(state=SimpleNamespace(deps=deps))
 
-    monkeypatch.setattr(cli, "create_app", fake_create_app)
+    monkeypatch.setattr(cli, "create_app", fake_create_app)  # --app
+    monkeypatch.setattr(default, "create_app", fake_create_app)  # default_app
     monkeypatch.setattr(cli, "serve", lambda app, **kwargs: captured.update(kwargs))
     return captured
 

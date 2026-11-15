@@ -323,7 +323,7 @@ window.lovia = lovia;
   if (info) store.canSuggest = !!info.features?.followups;
   if (info) {
     store.serverInfo = info;
-    store.canConfigureModels = !!info.features?.model_config;
+    store.canConfigure = !!info.features?.settings;
     store.configured = info.configured !== false;
     // The model chip + first-run setup; a no-op on embedder servers.
     initModelConfig();
@@ -335,7 +335,7 @@ window.lovia = lovia;
     await initWorkspaces();
     // The welcome view rendered before /api/info resolved; an unconfigured
     // server replaces it with the setup hero (no session exists yet).
-    if (store.canConfigureModels && !store.configured) renderEmptyState();
+    if (store.canConfigure && !store.configured) renderEmptyState();
   } else {
     initAgentChip(); // an opened chat still syncs to its own agent
   }

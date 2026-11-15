@@ -28,9 +28,10 @@ export const store = {
   // produce them — the opposite default to canRewind, since asking a server
   // that has the feature disabled burns a request per run for nothing.
   canSuggest: false,
-  // The model connection is editable in Settings (features.model_config).
-  // Off by default: embedder apps configure their agents in code.
-  canConfigureModels: false,
+  // The server is configured in Settings (features.settings): its models,
+  // assistant, skills, MCP servers and web search. Off by default: an app
+  // from create_app configures its agents in code.
+  canConfigure: false,
   // False only in the CLI's not-yet-configured state — the chat is replaced
   // by the first-run setup until /api/config receives a model.
   configured: true,

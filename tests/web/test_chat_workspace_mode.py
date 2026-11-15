@@ -54,7 +54,9 @@ def test_switch_orders_modes_and_requires_the_readonly_floor() -> None:
     with pytest.raises(UserError, match="unknown"):
         WorkspaceSwitch(modes=("readonly", "root"))  # type: ignore[arg-type]
     with pytest.raises(UserError, match="default_mode"):
-        WorkspaceSwitch(default_mode="trusted")
+        WorkspaceSwitch(modes=("readonly", "coding"), default_mode="trusted")
+    # Every mode is on offer unless the embedder narrows them.
+    assert WorkspaceSwitch().modes == ("readonly", "coding", "trusted")
 
 
 @pytest.mark.parametrize(
@@ -105,7 +107,7 @@ def test_info_reports_the_offered_modes(tmp_path: Path) -> None:
     switch = WorkspaceSwitch(default_mode="coding")
     with _client(_agent(tmp_path, []), switch) as c:
         assert c.get("/api/info").json()["workspace_modes"] == {
-            "modes": ["readonly", "coding"],
+            "modes": ["readonly", "coding", "trusted"],
             "default": "coding",
             # An embedder's own workspace may be a custom policy: unnamed.
             "own": None,
@@ -150,7 +152,8 @@ def test_switching_a_chat_applies_from_its_next_run(tmp_path: Path) -> None:
 
 
 def test_a_mode_outside_the_offer_is_refused(tmp_path: Path) -> None:
-    with _client(_agent(tmp_path, [text("x")]), WorkspaceSwitch()) as c:
+    narrowed = WorkspaceSwitch(modes=("readonly", "coding"))
+    with _client(_agent(tmp_path, [text("x")]), narrowed) as c:
         res = c.post("/api/chat", json={"message": "a", "workspace_mode": "trusted"})
         assert res.status_code == 400
         sid = c.post("/api/chat", json={"message": "a"}).json()["session_id"]

@@ -130,7 +130,7 @@
 - **`create_app(agent)`：原样托管你的 Agent。** 默认值对齐 core，不替嵌入方做决定。页面只显示这个 Agent 用得上的部分。它的默认值一个都不改。
 - **`default_app(...)`：`lovia web` 这个成品。** CLI 能做的它都能做，并留一个定制口。
 
-```py
+```python
 from lovia.web import default_app, serve
 
 def customize(agent):
@@ -327,6 +327,17 @@ window.lovia.registerCommand({
 | 按项目开关 MCP 服务器 | 做：记录格式在第 3 期定，开关在第 4 期的 `/mcp` 面板里 | 只做批准：想私用的人得把服务器写进仓库 |
 
 没有未决问题。
+
+## 实现时定下的接缝
+
+| 期 | 问题 | 定论 |
+| --- | --- | --- |
+| 1 | 四个开关放哪 | 都留在"助手"页：记忆页只在有记忆时才出现，把开关挪过去，关掉后就没有地方再打开 |
+| 1 | 保存时带上只在文件里的字段 | `PUT /api/config/assistant` 拒绝未知字段（422），不悄悄丢掉 |
+| 2 | `default_app` 放哪 | `lovia/web/default.py`；CLI 从构建好的应用上取回 `ConfigRuntime` 来打印启动摘要 |
+| 2 | `customize` 和指令 | 每个对话的基础 `instructions` 都按设置页和 `AGENTS.md` 重新生成，所以 `customize` 里替换它不会保留；指令片段（`agent.instruction(...)`）会保留 |
+| 2 | `--app` 托管自定义 Agent 时的默认值 | 仍用 CLI 的姿态（150 轮、追问建议开、600 秒超时），和原来一样 |
+| 2 | 相对路径的 `home` | 构建时转成绝对路径，之后不随工作目录变 |
 
 ## 参考
 

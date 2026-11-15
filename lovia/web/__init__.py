@@ -16,6 +16,8 @@ Public surface::
     app = create_app(agents, ui=False) # JSON + SSE only — bring your own UI
     app = create_app(agent, ui=ChatUI(empty_title="Ask me"))  # customize it
 
+    app = default_app(workspace=".")   # what ``lovia web`` serves, as an app
+
 Bring your own UI: mount the UI-free API router into your own FastAPI app::
 
     from fastapi import FastAPI
@@ -34,6 +36,7 @@ try:
     from .auth import generate_token, is_loopback, token_dependency
     from .charts import show_chart, validate_chart_option
     from .components import put_ui_data, ui_result
+    from .default import default_app
     from .followups import FollowupFn, FollowupRequest, generate_followups
     from .html import show_html
     from .questions import QuestionRegistry
@@ -65,6 +68,7 @@ __all__ = [
     "build_api_router",
     "chat_project",
     "create_app",
+    "default_app",
     "generate_followups",
     "generate_token",
     "is_loopback",

@@ -75,7 +75,7 @@ def test_unconfigured_boot_reports_and_blocks_chat(served) -> None:
     info = client.get("/api/info").json()
     assert info["configured"] is False
     assert info["agents"] == []
-    assert info["features"]["model_config"] is True
+    assert info["features"]["settings"] is True
     cfg = client.get("/api/config").json()
     assert cfg["configured"] is False
     assert cfg["missing"] == ["model"]
@@ -128,7 +128,7 @@ def test_embedder_apps_have_no_config_api() -> None:
     with TestClient(app) as client:
         info = client.get("/api/info").json()
         assert info["configured"] is True
-        assert info["features"]["model_config"] is False
+        assert info["features"]["settings"] is False
         assert client.get("/api/config").status_code == 404
 
 

@@ -221,6 +221,9 @@ lovia web --app app:assistant
 （`--token`、`--db`、`--title` 等）会被忽略并给出警告。Python 部署和 ASGI 集成详见
 [Web 服务端](web-server.md)。
 
+想保留本页的全部功能，再加点自己的东西——一个工具、一个插件、自己的鉴权——就在代码里用
+[`default_app()`](web-server.md#两个入口) 构建同一个应用，再托管它。
+
 界面支持 GitHub 风格 Markdown、代码高亮、Mermaid 和内嵌图片。默认 Agent 已知道这些能力；
 自定义 Agent 不会自动获得相关提示。如果希望模型主动使用这些格式，可以加入 `SURFACE_NOTE`：
 

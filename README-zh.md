@@ -481,6 +481,8 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   改动从下次运行起生效。设置、聊天记录和记忆都在一个 home 里（`~/.lovia`，或 `--home DIR`），不放在启动目录；
   项目自己的 `AGENTS.md` 和 `.agents/skills` 会在该项目的每个对话里加载（在 Git 仓库里，从仓库根到对话目录沿途的 `AGENTS.md` 都会加载）。每个对话在自己的目录里工作——侧栏按目录分组，权限模式也可以单独选择（自己的应用里用 `create_app(workspaces=WorkspaceSwitch())`）。
   目录也可以在 SSH 主机上或运行中的容器里：在添加对话框里选好位置，对话的工具就在那边执行。
+- **同一个应用，也能从代码里构建** —— `default_app()` 构建的就是 `lovia web` 启动的那个应用，`customize=` 给它加上你的工具和插件；
+  `create_app()` 则原样托管你自己写的 Agent。
 - **富工具结果** —— 工具返回 `ui_result(kind, props)` 即可渲染 UI；内置表格、ECharts 图表
   和沙箱 HTML 页面（`show_table`、`show_chart`、`show_html`）。
 - **页面可定制** —— `ChatUI(...)` 与 `assets=` 修改文案、logo、样式和脚本；脚本通过

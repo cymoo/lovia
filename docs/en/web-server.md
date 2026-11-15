@@ -15,6 +15,63 @@ agent = Agent(name="assistant", model="<model>")
 serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 ```
 
+## Two ways in
+
+There are two functions that build an app, and they answer different needs:
+
+- **`create_app(agent)` serves the agent you built, as you built it.** Its
+  defaults follow the core library and decide nothing for you; the page shows
+  what your agent can use. Everything on this page below is about it.
+- **`default_app(...)` is the app `lovia web` serves** — the ready-made
+  assistant, configured in the browser and saved in a home directory. The
+  command line is a thin wrapper over it, so anything `lovia web` does, this
+  does; `customize` adds what a flag can't.
+
+```python
+from lovia import tool
+from lovia.web import default_app, serve
+
+
+@tool
+def order_status(order_id: str) -> str:
+    """Look up an order."""
+    return "shipped"
+
+
+def customize(agent):
+    return agent.clone(tools=[*agent.tools, order_status])
+
+
+serve(default_app(workspace=".", customize=customize))
+```
+
+| | `default_app()` / `lovia web` | `create_app(agent)` |
+| --- | --- | --- |
+| The agent | Built from `config.json`: skills, memory, todos, web search, scheduled runs, background subagents, a workspace | Yours |
+| Settings (models, assistant, skills, MCP, web search), the model chip, first-run setup | Yes | No — you configure in code |
+| The project's `AGENTS.md` and `.agents/skills`, per chat | Yes | With `WorkspaceSwitch(agent_for=)` |
+| Permission-mode chip | Every mode the launch allows | With `workspaces=WorkspaceSwitch()` |
+| Max turns / follow-ups / approval timeout | `150` / on / 600 s | `50` / off / none |
+| Chat history | `<home>/lovia.db` | `./.lovia/<agent>.db` |
+
+`default_app(*, home="~/.lovia", workspace=".", readonly=False,
+lock_workspace=False, db_path=None, customize=None, ...)`: the first five are
+the command line's own switches (`--home`, `DIR` or `--no-workspace` for
+`None`, `--readonly`, `--lock-workspace`, `--db`). The rest — `title`,
+`token`, `auth`, `ui`, `cors_origins`, `lifespan`, `run_deps`, `tracer` — are
+`create_app`'s, with the same meaning.
+
+`customize(agent)` is handed each agent the configuration builds — the
+assistant, `lovia`, and its background child, `lovia.sub` — and returns the
+one to serve, under the same name. It runs at start and again after every save
+in Settings. Add tools, plugins, hooks or instruction fragments; the base
+`instructions` are rebuilt for each chat from Settings and the project's
+`AGENTS.md`, so replacing that text doesn't stick. To give only one of the two
+something, branch on `agent.name`.
+
+`lovia web --app mymodule:app` serves an app built either way, so a customized
+`default_app` keeps the command line's `--host`, `--port` and logging flags.
+
 ## `create_app()` and `serve()`
 
 `serve(target, *, host="127.0.0.1", port=8000, **uvicorn_kwargs)` runs an app
@@ -768,19 +825,21 @@ chat:
 ```python
 from lovia.web import WorkspaceSwitch, create_app
 
-app = create_app(agent, workspaces=WorkspaceSwitch())  # any directory; readonly / coding
+app = create_app(agent, workspaces=WorkspaceSwitch())  # any directory, every mode
 app = create_app(agent, workspaces=WorkspaceSwitch(roots=["/srv/repos"]))  # only under these
 app = create_app(agent, workspaces=WorkspaceSwitch(roots=None))  # the agent's own; modes only
 app = create_app(
     agent,
-    workspaces=WorkspaceSwitch(modes=("readonly", "coding", "trusted"), default_mode="coding"),
-)
+    workspaces=WorkspaceSwitch(modes=("readonly", "coding"), default_mode="coding"),
+)  # no Full access
 ```
 
 - `roots` is where a chat may work: `"any"` (the default), a list — those
   directories and everything under them — or `None`, the agent's own
   directory only. The agent's own directory is always allowed.
-- `modes` is what a chat may pick, and must include `"readonly"`. A chat
+- `modes` is what a chat may pick — all three by default — and must include
+  `"readonly"`. Leave `"trusted"` out where the people chatting should not be
+  able to drop the approval prompts. A chat
   stored with a mode the switch doesn't offer runs in the widest offered mode
   below it — narrowed, never widened.
 - `default_mode` is what the page preselects for a new chat. A chat that

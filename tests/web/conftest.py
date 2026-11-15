@@ -81,12 +81,12 @@ def write_config(fake_home: Path):
             if context_window:
                 profile["context_window"] = context_window
             models = [profile]
-        doc: dict = {"version": 1, "models": models}
+        doc: dict = {"version": 3, "models": models}
         if roles is not None:
             doc["roles"] = roles
         if search is not None:
             doc["search"] = search
-        doc.update(sections)  # workspace= / run= / agent=
+        doc.update(sections)  # assistant= / skills= / mcp=
         target = (home or fake_home / ".lovia") / "config.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(doc), encoding="utf-8")

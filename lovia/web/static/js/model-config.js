@@ -1,6 +1,6 @@
 // model-config.js — the Settings "Models"/"Search"/"About" panes, the composer
 // model chip, and the first-run setup hero. All of it exists only when
-// /api/info reports features.model_config (the CLI's default agent); embedder
+// /api/info reports features.settings (the CLI's default agent); embedder
 // servers render none of this.
 //
 // Data flow: GET /api/config is cached on store.modelConfig (keys arrive
@@ -998,7 +998,7 @@ export function buildAboutPane() {
     return r;
   };
   rows.appendChild(row(t('cfg.aboutVersion'), store.serverInfo?.version || '—'));
-  if (store.canConfigureModels) {
+  if (store.canConfigure) {
     const scope = cfg()?.scope;
     rows.appendChild(
       row(
@@ -1013,7 +1013,7 @@ export function buildAboutPane() {
   link.rel = 'noreferrer';
   rows.appendChild(row(t('cfg.aboutDocs'), link));
   pane.appendChild(rows);
-  if (store.canConfigureModels) {
+  if (store.canConfigure) {
     pane.appendChild(el('div', 'lv-cfg-footnote', t('cfg.aboutConfigNote')));
   }
   return pane;
@@ -1190,10 +1190,10 @@ function _onConfigChanged(data) {
 /**
  * Boot the model-config surfaces (chip, hero hook, change events). Called
  * from main.js once /api/info resolved; a no-op unless the server reports
- * features.model_config.
+ * features.settings.
  */
 export function initModelConfig() {
-  if (!store.canConfigureModels) return;
+  if (!store.canConfigure) return;
   initModelChip();
   store.on('config-changed', _onConfigChanged);
   store.on('open-model-settings', async () => {

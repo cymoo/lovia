@@ -545,6 +545,8 @@ class MCPServerStdio(MCPServer):
     command: str
     args: list[str] | None = None
     env: dict[str, str] | None = None
+    # The directory the server starts in; None: the current one.
+    cwd: str | None = None
 
     def _make_transport(self) -> Callable[[], Any]:
         try:
@@ -556,7 +558,10 @@ class MCPServerStdio(MCPServer):
                 hint=_MCP_INSTALL_HINT,
             ) from exc
         params = StdioServerParameters(
-            command=self.command, args=list(self.args or []), env=self.env
+            command=self.command,
+            args=list(self.args or []),
+            env=self.env,
+            cwd=self.cwd,
         )
         return lambda: stdio_client(params)
 

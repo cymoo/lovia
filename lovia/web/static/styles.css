@@ -3311,6 +3311,100 @@ button.lv-question-option:hover {
 }
 /* Messages queued until the run completes, one line each, above the input;
    each can be steered into the live run, edited, or withdrawn. */
+/* A line over the composer about the chat's project (its MCP servers). */
+.lv-composer-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: var(--lv-content-w);
+  margin: 0 auto 8px;
+  padding: 0 6px;
+  font-size: 13px;
+  color: var(--lv-ink-2);
+}
+.lv-composer-note[hidden] {
+  display: none;
+}
+.lv-composer-note svg {
+  flex-shrink: 0;
+  color: var(--lv-muted);
+}
+.lv-composer-note-text {
+  min-width: 0;
+  flex: 1;
+}
+/* The dialog behind it: each server, what it runs, a switch. */
+.lv-pmcp {
+  min-width: 0;
+}
+.lv-pmcp-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 620;
+}
+.lv-pmcp-intro {
+  font-size: 13px;
+  color: var(--lv-muted);
+  overflow-wrap: anywhere;
+}
+.lv-pmcp-list {
+  max-height: 52vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--lv-border);
+}
+.lv-pmcp-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--lv-border);
+}
+.lv-pmcp-main {
+  min-width: 0;
+  flex: 1;
+}
+.lv-pmcp-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-family: var(--lv-mono);
+}
+.lv-pmcp-name .lv-badge {
+  font-family: var(--lv-sans);
+  background: var(--lv-warn-soft);
+  color: var(--lv-warn);
+}
+.lv-pmcp-target {
+  margin-top: 2px;
+  font-family: var(--lv-mono);
+  font-size: 12.5px;
+  color: var(--lv-ink-2);
+  overflow-wrap: anywhere;
+}
+.lv-pmcp-error {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--lv-danger);
+}
+.lv-pmcp-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--lv-muted);
+}
+.lv-pmcp-detail summary {
+  cursor: pointer;
+}
+.lv-pmcp-detail pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+  border-radius: var(--lv-radius-sm);
+  background: var(--lv-surface-2);
+}
 .lv-send-queue {
   display: flex;
   flex-direction: column;

@@ -278,17 +278,19 @@ def test_a_run_goes_on_without_a_server_it_cannot_reach(served) -> None:
     assert servers["stub"]["status"]["ok"] and servers["nope"]["status"]["ok"] is False
 
 
-def test_no_server_on_means_no_plugin(served) -> None:
+def test_a_server_turned_off_is_not_among_the_plugins(served) -> None:
     client, runtime, _ = served
     client.post("/api/config/mcp", json={"document": {"stub": _stub()}})
 
-    def mounted() -> bool:
+    def mounted() -> list[str]:
         agents, _ = runtime.build()
-        return any(isinstance(p, SettingsMCP) for p in agents["lovia"].plugins)
+        # Always there: a chat's project may name servers of its own.
+        (plugin,) = [p for p in agents["lovia"].plugins if isinstance(p, SettingsMCP)]
+        return [s.name for s in plugin.servers]
 
-    assert mounted()
+    assert mounted() == ["stub"]
     client.put("/api/config/mcp/stub/enabled", json={"enabled": False})
-    assert not mounted()
+    assert mounted() == []
 
 
 def test_a_status_counts_for_the_server_as_it_was_tested(served) -> None:

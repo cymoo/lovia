@@ -227,7 +227,7 @@ MCP 规范不规定客户端的配置文件。事实上的写法是项目根的 
 
 - 设置页的 MCP 页仍只有全局服务器（设置页是全局的）。
 - 项目的服务器在 `/mcp` 命令打开的面板里（第 4 期），按"项目 / 全局"分组，显示状态和批准情况。第 3 期先只做上面那行提示和批准对话框。
-- 接口挂在 `/api/config/mcp/project` 下（`/api/config/*` 不在稳定性约定里）：`GET ?session=|root=` 列出项目的服务器、状态和批准情况；`POST` 记一次批准或拒绝。
+- 接口挂在 `/api/config/project/mcp` 下（`/api/config/*` 不在稳定性约定里）：`GET ?session=|root=` 列出项目的服务器、状态和批准情况；`POST` 记一次批准或拒绝。
 - `lovia` 本期不写 `.mcp.json`：用户或 Agent 编辑文件。
 
 ## 第 4 期：slash 命令
@@ -337,7 +337,12 @@ window.lovia.registerCommand({
 | 2 | `default_app` 放哪 | `lovia/web/default.py`；CLI 从构建好的应用上取回 `ConfigRuntime` 来打印启动摘要 |
 | 2 | `customize` 和指令 | 每个对话的基础 `instructions` 都按设置页和 `AGENTS.md` 重新生成，所以 `customize` 里替换它不会保留；指令片段（`agent.instruction(...)`）会保留 |
 | 2 | `--app` 托管自定义 Agent 时的默认值 | 仍用 CLI 的姿态（150 轮、追问建议开、600 秒超时），和原来一样 |
-| 2 | 相对路径的 `home` | 构建时转成绝对路径，之后不随工作目录变 |
+| 2 | 相对路径的 `home` 和 `workspace` | 构建时转成绝对路径，之后不随工作目录变 |
+| 3 | 在哪一步读 `.mcp.json` | MCP 插件在运行开始时读（`SettingsMCP._for_run`），不是在构建 Agent 时：批准后的下一次运行就生效，不用重建 Agent |
+| 3 | 接口路径 | `GET` / `PUT /api/config/project/mcp`（`/mcp/project` 会被已有的 `/mcp/{name}` 抢走） |
+| 3 | 批准记录谁能写 | Agent 的工具在任何模式下都不能读写 `<home>/mcp-projects.json`（和 `config.json` 同一条规则）：home 在工作区里时，Agent 否则可以自己写 `.mcp.json` 再自己批准 |
+| 3 | 决定之后怎么再改 | 侧栏目录的 ⋯ 菜单里有"项目的 MCP 服务器"，打开同一个对话框；composer 上方那一行只在有未决定的时出现 |
+| 3 | `cwd`、`disabled` | 命令在项目目录启动，条目的相对 `cwd` 相对项目解析；文件里 `disabled` 的条目列出但不能打开。为此 core 的 `MCPServerStdio` 加了 `cwd` |
 
 ## 参考
 

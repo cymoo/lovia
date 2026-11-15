@@ -33,7 +33,7 @@ so `lovia.plugins.mcp` is always safe to import; a missing package raises
 Two transports, both frozen keyword-only configs:
 
 ```python
-MCPServerStdio(command="uvx", args=["mcp-server-fetch"], env=None, name="web")
+MCPServerStdio(command="uvx", args=["mcp-server-fetch"], env=None, cwd=None, name="web")
 MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="api")
 ```
 
@@ -169,8 +169,7 @@ plugin raises `UserError` at setup (give servers a `name=` prefix).
   into two `MCPServer` entries (same command, different
   `include_tools`) is the idiom for "read tools free, write tools gated".
 - **stdio servers inherit your process environment** unless you pass
-  `env=`; there is no `cwd` option — launch via a wrapper script when a
-  server needs a working directory.
+  `env=`, and start in the current directory unless you pass `cwd=`.
 
 ## See also
 

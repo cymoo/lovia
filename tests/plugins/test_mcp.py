@@ -708,3 +708,13 @@ async def test_stdio_round_trip_through_the_installed_sdk() -> None:
         assert await call("stub__add", {"a": 2, "b": 3}) == "5"
         assert await call("stub__fail", {}) == "[tool error] boom"
         assert await call("stub__pic", {}) == "[image: image/png, 3 B]"
+
+
+async def test_a_stdio_server_starts_in_its_cwd() -> None:
+    script = Path(__file__).with_name("mcp_stub_server.py")
+    # Named relative to the directory it is told to start in.
+    server = MCPServerStdio(
+        command=sys.executable, args=[script.name], cwd=str(script.parent), name="stub"
+    )
+    async with server.session() as conn:
+        assert [t.name for t in conn.tools()][0] == "stub__add"

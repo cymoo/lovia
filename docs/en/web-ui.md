@@ -243,7 +243,8 @@ by pasting the `mcpServers` JSON other clients use; several at once is fine:
 A server is a `command` run on the lovia web host (stdio) — for a remote
 chat too — or a `url` (streamable HTTP; SSE is not supported). Its name
 prefixes its tools (`docs__search`), so it is letters, digits, `-` and `_`.
-`"disabled": true` saves it switched off; other keys are ignored.
+A command may name the directory it starts in (`cwd`). `"disabled": true`
+saves it switched off; other keys are ignored.
 
 - **Connected per message.** Each run connects to the servers as it starts,
   one after another, and closes them when it ends — an `npx` server makes
@@ -273,6 +274,55 @@ prefixes its tools (`docs__search`), so it is letters, digits, `-` and `_`.
 MCP support comes with the `web` extra. Servers are saved in `config.json` as `mcp`.
 Background subagent tasks don't get MCP tools: no one is there to approve
 their calls.
+
+### A project's own servers
+
+A chat also reads `.mcp.json` in the root of the directory it works in — the
+file other clients read, checked in with the project:
+
+```json
+{
+  "mcpServers": {
+    "db": {
+      "command": "npx",
+      "args": ["-y", "@example/db-mcp"],
+      "env": { "DSN": "${APP_DSN}" }
+    }
+  }
+}
+```
+
+It is a convention, like `AGENTS.md` and `.agents/skills`, not a setting, and
+Settings → MCP does not list it. But it names commands to run and it arrives
+with the repository, so **a server in it stays off until you turn it on**:
+
+- While any is undecided, a line over the composer says so; **Review** shows
+  each entry as written with a switch. The chat runs meanwhile, without those
+  servers — nothing waits on the answer. To look again later, open the
+  folder's **⋯ → Project MCP servers** in the sidebar.
+- The decision is kept in lovia's home (`mcp-projects.json`), per project
+  directory, never in the project: a repository can't approve itself.
+- It holds for the entry as it was written. An edited entry — after a pull,
+  or because the agent changed the file — is undecided again.
+- `${VAR}` and `${VAR:-default}` in `command`, `args`, `env`, `url` and
+  `headers` are filled from the server's environment when a run starts, so
+  secrets stay out of the file. An entry naming a variable that is not set
+  (and has no default) is not started, and the dialog says which.
+- A command starts in the project directory, or in the entry's `cwd` taken
+  relative to it. A server with the same name as one in Settings is used
+  instead of it. An entry with `"disabled": true` is listed but can't be
+  turned on.
+- The decision is yours: the agent's file tools can't open
+  `mcp-projects.json`, and a shell command that names it is refused, in
+  every permission mode — the same guard as for `config.json`. (Full access
+  still runs any program unasked; that mode trusts the agent with the
+  machine.)
+- Scheduled runs use what is turned on, like any other run. A chat on
+  another machine (a [remote workspace](#workspaces)) does not read the
+  file.
+
+Once on, its tools behave like any MCP tool's: they ask before each call
+except in Full access.
 
 ## Serve your own Agent
 

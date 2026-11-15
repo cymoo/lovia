@@ -237,6 +237,9 @@ class MCPServerConfig(BaseModel):
     command: str | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    # Where the command starts; None: the server's own directory — or, for
+    # a project's server, the project.
+    cwd: str | None = None
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
 
@@ -251,9 +254,9 @@ class MCPServerConfig(BaseModel):
         if command is not None and self.headers:
             raise ValueError(f"MCP server {self.name!r}: headers go with a url")
         if url is not None:
-            if self.args or self.env:
+            if self.args or self.env or self.cwd:
                 raise ValueError(
-                    f"MCP server {self.name!r}: args and env go with a command"
+                    f"MCP server {self.name!r}: args, env and cwd go with a command"
                 )
             if urlparse(url).scheme not in ("http", "https"):
                 raise ValueError(f"MCP server {self.name!r}: url must be http(s)")

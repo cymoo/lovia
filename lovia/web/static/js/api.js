@@ -524,6 +524,23 @@ export const api = {
   /** @param {string} name */
   deleteMcpServer: (name) =>
     request(`/api/config/mcp/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(_json),
+  // The servers a chat's project names in its .mcp.json, and whether each
+  // is on there: { project, error, servers: [{ name, spec, state, error }] }.
+  // The project is chat `session`'s, or the directory `root` a draft opens in.
+  /** @param {{ session?: string | null, root?: string }} scope */
+  getProjectMcp: (scope) => {
+    const p = new URLSearchParams();
+    if (scope.session) p.set('session', scope.session);
+    else if (scope.root) p.set('root', scope.root);
+    return request(`/api/config/project/mcp?${p}`).then(_json);
+  },
+  /** @param {{ session?: string | null, root?: string, name: string, on: boolean }} body */
+  setProjectMcp: (body) =>
+    request('/api/config/project/mcp', {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
   // Connect, list tools, close: { name } for a saved server (its outcome is
   // remembered), or { document, original } for an edit not saved yet.
   // Resolves to { results: [{ name, ok, at, tools, error }] }.

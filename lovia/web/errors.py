@@ -72,7 +72,6 @@ ErrorCode = Literal[
     "model_exists",
     "mcp_server_exists",
     "model_in_use",
-    "agent_in_use",
     "config_read_only",
     "workspace_locked",
     "workspace_not_allowed",

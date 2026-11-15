@@ -309,10 +309,15 @@ async def test_no_mode_reads_the_api_keys_of_a_home_inside_the_workspace(
         assert ws is not None
         session = await ws.open()
         assert session.decide_path(".lovia/config.json").action == "deny", mode
+        # Which project MCP servers are on is the person's to decide: an
+        # agent that could write the record would turn its own server on.
+        assert session.decide_path(".lovia/mcp-projects.json").action == "deny", mode
         assert session.decide_path(".lovia/workspace/a.md").action == "allow", mode
         await session.close()
-    # The default home is the workspace baseline's to name.
-    assert builder._home_secrets(builder.Deployment()) == ()
+    # In the default home config.json is the workspace baseline's to name;
+    # the record is named here either way.
+    (denied,) = builder._home_secrets(builder.Deployment())
+    assert denied.endswith("/.lovia/mcp-projects.json")
 
 
 def test_resolve_workspace_mode_from_config(tmp_path: Path) -> None:

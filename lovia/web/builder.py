@@ -47,7 +47,7 @@ from ..context import Compaction
 from .config import (
     DEFAULT_AGENT_ID,
     DEFAULT_HOME,
-    AgentConfig,
+    AssistantConfig,
     ModelProfile,
     SearchConfig,
     WebConfig,
@@ -66,11 +66,10 @@ from .vision import make_describe_image_tool
 log = logging.getLogger("lovia.web.builder")
 
 WORKSPACE_MODES: tuple[str, ...] = get_args(WorkspaceMode)
-# A configured agent's background child is ``<id>.sub``: ids have no dots,
-# so the part before one always names the agent whose settings apply.
+# The served agent's background child is ``lovia.sub``.
 SUBAGENT_SUFFIX = ".sub"
 # The command bundles a ``coding`` workspace runs without asking, by name
-# (Settings → Agents; ``agents[].auto_allow`` in config.json). Core opts
+# (Settings → Assistant; ``assistant.auto_allow`` in config.json). Core opts
 # into none; `lovia web` is a coding agent the person running it launched, so
 # inspection that prints no file contents and the project's own
 # test/lint/build tools need no card — a prompt for `ls` or `pytest` is noise
@@ -291,11 +290,8 @@ def resolve_aux_model(profile: ModelProfile | None) -> Provider | None:
         return None
 
 
-def resolve_retry(max_retries: int | None) -> RetryPolicy:
-    """An agent's retry policy: ``max_retries`` attempts after the first,
-    or the core default for ``None``."""
-    if max_retries is None:
-        return RetryPolicy()
+def resolve_retry(max_retries: int) -> RetryPolicy:
+    """The retry policy: ``max_retries`` attempts after the first."""
     return RetryPolicy(max_attempts=max_retries + 1)
 
 
@@ -306,7 +302,7 @@ def resolve_instructions(
 ) -> str:
     """An agent's system prompt for a chat working in ``root``.
 
-    ``custom`` (the agent's own, from Settings → Agents) comes first; the
+    ``custom`` (from Settings → Assistant) comes first; the
     project's ``AGENTS.md`` files (the cross-agent convention) follow it,
     from the Git root down to ``root`` (:func:`instruction_files`, whose
     explicit rules come from ``policy``; default: the baseline). Without
@@ -378,63 +374,56 @@ async def _remote_project_text(session: WorkspaceSession | None) -> str:
     return _project_text(files)
 
 
-def spec_id(name: str) -> str:
-    """The id of the configured agent whose settings the agent named
-    ``name`` runs on — its own, or the one a ``<id>.sub`` child belongs to."""
-    return name.partition(".")[0]
-
-
 def project_agent(
     agent: Agent[Any],
     root: Path,
     config: WebConfig,
-    spec: AgentConfig,
     policy: WorkspacePolicy | None = None,
 ) -> Agent[Any]:
     """``agent`` for a chat working in ``root`` — ``WorkspaceSwitch.agent_for``
     for the CLI: that project's ``AGENTS.md`` files (read under ``policy``'s
     rules, :func:`resolve_instructions`) and the directory's ``.agents/skills``
-    (ahead of ``spec``'s skill directories) in place of the launch
+    (ahead of the global skill directories) in place of the launch
     directory's. Read on every run; nothing is cached."""
     plugins: list[Plugin] = [p for p in agent.plugins if not isinstance(p, Skills)]
-    dirs = resolve_skills_dirs(config.agent_skills(spec), root, quiet=True)
+    dirs = resolve_skills_dirs(config.skills, root, quiet=True)
     if dirs:
         plugins.insert(0, Skills(*dirs))
     return agent.clone(
-        instructions=resolve_instructions(spec.instructions, root, policy),
+        instructions=resolve_instructions(config.assistant.instructions, root, policy),
         plugins=plugins,
     )
 
 
-def remote_agent(agent: Agent[Any], config: WebConfig, spec: AgentConfig) -> Agent[Any]:
+def remote_agent(agent: Agent[Any], config: WebConfig) -> Agent[Any]:
     """``agent`` for a chat on a remote host — ``WorkspaceSwitch.agent_for_remote``
     for the CLI. The served agent was built for the launch directory; a
     project on another machine gets neither that directory's ``AGENTS.md``
-    nor its skills. It gets ``spec``'s prompt with its own ``AGENTS.md`` files
-    (:func:`remote_instructions`), and ``spec``'s global skill directories —
+    nor its skills. It gets the configured prompt with its own ``AGENTS.md``
+    files (:func:`remote_instructions`), and the global skill directories —
     the skills plugin reads this machine's disk, so the project's own stay
     unloaded (#405)."""
     plugins: list[Plugin] = [p for p in agent.plugins if not isinstance(p, Skills)]
-    dirs = resolve_skills_dirs(config.agent_skills(spec), quiet=True)
+    dirs = resolve_skills_dirs(config.skills, quiet=True)
     if dirs:
         plugins.insert(0, Skills(*dirs))
     return agent.clone(
-        instructions=remote_instructions(spec.instructions),
+        instructions=remote_instructions(config.assistant.instructions),
         plugins=plugins,
     )
 
 
 def resolve_workspace(
     deployment: Deployment,
-    spec: AgentConfig | None = None,
+    spec: AssistantConfig | None = None,
     *,
     root: str | Path | None = None,
     mode: str | None = None,
 ) -> LocalWorkspace | None:
-    """``spec``'s workspace: in ``root`` (default: the deployment's) and
-    ``mode`` (default: ``spec``'s), as the deployment allows it, with
+    """The assistant's workspace: in ``root`` (default: the deployment's)
+    and ``mode`` (default: ``spec``'s), as the deployment allows it, with
     ``spec``'s auto-allowed commands when that mode is ``coding``."""
-    spec = spec or AgentConfig(id=DEFAULT_AGENT_ID)
+    spec = spec or AssistantConfig()
     mode = deployment.effective_mode(mode or spec.mode)
     if mode is None or deployment.workspace is None:
         return None
@@ -468,36 +457,31 @@ def build_agent(
     question_channel: HumanChannel | None = None,
     *,
     config: WebConfig | None = None,
-    spec: AgentConfig | None = None,
     memory: Memory | None = None,
     mcp: MCPBook | None = None,
 ) -> Agent[Any]:
-    """One agent ``lovia web`` serves, from ``spec`` (default: the
-    configuration's default agent) on ``provider``.
+    """The agent ``lovia web`` serves, from ``config`` on ``provider``.
 
-    ``config`` supplies what is global (search backend, vision role, the
-    skill directories ``spec`` inherits); ``deployment`` bounds the
-    workspace and names the home memory lives in. ``memory`` is the plugin
-    to share when ``spec`` keeps memory — every agent of one configuration
-    must share one, it owns the notes file's lock — and ``None`` builds one.
-    ``mcp`` records how each MCP server's connections go and where a run
-    reports one it started without (``ConfigRuntime`` passes its own); the
-    enabled servers of ``config.mcp`` load when ``spec.mcp`` is on.
-    The core ``Agent.name`` is ``spec.id``: what chats store.
+    ``deployment`` bounds the workspace and names the home memory lives
+    in. ``memory`` is the plugin to use when the assistant keeps memory —
+    one per server, it owns the notes file's lock — and ``None`` builds
+    one. ``mcp`` records how each MCP server's connections go and where a
+    run reports one it started without (``ConfigRuntime`` passes its own).
+    The core ``Agent.name`` is :data:`DEFAULT_AGENT_ID`: what chats store.
     """
     config = config or WebConfig()
-    spec = spec or config.default_agent
-    profile = config.agent_profile(spec)
+    spec = config.assistant
+    profile = config.default_profile()
     settings = ModelSettings(max_tokens=profile.max_tokens if profile else None)
     # Compaction sizes itself to the window the profile states, else the
-    # provider's advertised one; per agent, since each may run another model.
+    # provider's advertised one.
     policy = Compaction(context_window=profile.context_window if profile else None)
     retry = resolve_retry(spec.max_retries)
     root = Path(deployment.workspace or ".")
     instructions = resolve_instructions(
         spec.instructions, root, instructions_policy(deployment)
     )
-    skills_dirs = resolve_skills_dirs(config.agent_skills(spec), root)
+    skills_dirs = resolve_skills_dirs(config.skills, root)
     plugins: list[Plugin] = []
     if skills_dirs:
         plugins.append(Skills(*skills_dirs))
@@ -511,7 +495,7 @@ def build_agent(
             memory = resolve_memory(True, deployment.home / "memory")
         plugins.append(cast(Memory, memory))
     servers = [s for s in config.mcp if s.enabled]
-    if spec.mcp and servers:
+    if servers:
         plugins.append(SettingsMCP(servers, mcp if mcp is not None else MCPBook()))
     workspace = resolve_workspace(deployment, spec)
     tools = resolve_tools(config.search, web_search=spec.search)
@@ -527,7 +511,7 @@ def build_agent(
         # ask_human is likewise parent-only (added below): a delegated
         # background task has no operator watching to answer it.
         child: Agent[Any] = Agent(
-            name=f"{spec.id}{SUBAGENT_SUFFIX}",
+            name=f"{DEFAULT_AGENT_ID}{SUBAGENT_SUFFIX}",
             instructions=instructions,
             model=provider,
             settings=settings,
@@ -546,7 +530,7 @@ def build_agent(
     # Parent-only too: a background child's transcript has no one watching.
     tools = [*tools, show_chart, show_table, show_html]
     agent: Agent[Any] = Agent(
-        name=spec.id,
+        name=DEFAULT_AGENT_ID,
         instructions=instructions,
         model=provider,
         settings=settings,

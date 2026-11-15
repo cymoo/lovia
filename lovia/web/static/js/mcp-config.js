@@ -10,7 +10,7 @@ import { toast } from './toast.js';
 import { confirmDialog } from './ui.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
 import { backButton, cfg, el, field, ghostBtn, loadConfig, readOnlyNotice, scopeFootnote } from './model-config.js';
-import { switchControl } from './agent-config.js';
+import { switchControl } from './assistant-config.js';
 
 /** @typedef {{ ok: boolean, at: number, tools: string[], error: string | null }} McpStatus */
 /** @typedef {{ name: string, enabled: boolean, transport: 'stdio' | 'http', command: string | null, args: string[], url: string | null, spec: Record<string, unknown>, status: McpStatus | null }} McpServer */

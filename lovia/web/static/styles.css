@@ -7857,8 +7857,8 @@ body.lv-files-resizing {
   background: var(--lv-surface);
 }
 
-/* The agent form: the schedule form's layout — sections divided by a rule,
-   tabs over a card, switch lists on a card, a fold that says what it holds. */
+/* The assistant form: the schedule form's layout — sections divided by a
+   rule, tabs over a card, switch lists on a card. */
 .lv-agent-form,
 .lv-agent-form ~ .lv-cfg-form-actions {
   max-width: 560px;
@@ -7871,8 +7871,7 @@ body.lv-files-resizing {
   flex-direction: column;
   gap: 16px;
 }
-.lv-agent-section + .lv-agent-section,
-.lv-agent-section + .lv-agent-advanced {
+.lv-agent-section + .lv-agent-section {
   padding-top: 20px;
   border-top: 1px solid var(--lv-border);
 }
@@ -7919,59 +7918,6 @@ body.lv-files-resizing {
   margin-top: 2px;
   font-size: 12px;
   color: var(--lv-muted);
-}
-.lv-agent-advanced > summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-}
-.lv-agent-advanced > summary::-webkit-details-marker {
-  display: none;
-}
-.lv-agent-advanced > summary svg {
-  flex-shrink: 0;
-  color: var(--lv-muted);
-  transition: transform var(--lv-t-fast);
-}
-.lv-agent-advanced[open] > summary svg {
-  transform: rotate(90deg);
-}
-.lv-agent-advanced-title {
-  flex-shrink: 0;
-  font-size: 12.5px;
-  font-weight: 570;
-  color: var(--lv-ink-2);
-}
-.lv-agent-advanced-set {
-  margin-left: auto;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--lv-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.lv-agent-advanced[open] .lv-agent-advanced-set {
-  visibility: hidden; /* open, the fields say it */
-}
-.lv-agent-advanced-body {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding-top: 14px;
-}
-.lv-agent-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-@media (max-width: 640px) {
-  .lv-agent-pair {
-    grid-template-columns: 1fr;
-  }
 }
 /* Beside Save: when what it saves takes effect. */
 .lv-cfg-form-actions .lv-cfg-footnote {

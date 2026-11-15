@@ -1645,6 +1645,15 @@ function appendRetry() {
     settings.addEventListener('click', () => openSettings('models'));
     node.appendChild(settings);
   }
+  // Out of turns: the limit is file-only, and that page says where.
+  if (store.canConfigureModels && _lastErrorCode === 'max_turns') {
+    const limit = document.createElement('button');
+    limit.type = 'button';
+    limit.className = 'lv-btn lv-btn-ghost lv-btn-sm';
+    limit.textContent = t('chat.changeTurnLimit');
+    limit.addEventListener('click', () => openSettings('assistant'));
+    node.appendChild(limit);
+  }
   appendBubbleContent(store.bubble, node);
   announce(t('a11y.runFailed'), { assertive: true });
 }

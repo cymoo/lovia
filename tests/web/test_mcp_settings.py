@@ -19,7 +19,7 @@ from lovia.testing import ScriptedProvider, text  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.builder import Deployment  # noqa: E402
 from lovia.web.config import (
-    AgentConfig,
+    AssistantConfig,
     ConfigRuntime,
     LoadedConfig,
     WebConfig,
@@ -152,7 +152,7 @@ def served(
     )
     path = storage.config_path(tmp_path / "home")
     config = WebConfig(
-        agents=[AgentConfig(id="lovia", memory=False, subagents=False, followups=False)]
+        assistant=AssistantConfig(memory=False, subagents=False, followups=False)
     )
     loaded = LoadedConfig(config, path, storage.display_path(path), exists=False)
     runtime = ConfigRuntime(
@@ -278,7 +278,7 @@ def test_a_run_goes_on_without_a_server_it_cannot_reach(served) -> None:
     assert servers["stub"]["status"]["ok"] and servers["nope"]["status"]["ok"] is False
 
 
-def test_an_agent_with_mcp_off_or_no_server_on_gets_no_plugin(served) -> None:
+def test_no_server_on_means_no_plugin(served) -> None:
     client, runtime, _ = served
     client.post("/api/config/mcp", json={"document": {"stub": _stub()}})
 
@@ -287,9 +287,6 @@ def test_an_agent_with_mcp_off_or_no_server_on_gets_no_plugin(served) -> None:
         return any(isinstance(p, SettingsMCP) for p in agents["lovia"].plugins)
 
     assert mounted()
-    client.put("/api/config/agents/lovia", json={"mcp": False})
-    assert not mounted()
-    client.put("/api/config/agents/lovia", json={"mcp": True})
     client.put("/api/config/mcp/stub/enabled", json={"enabled": False})
     assert not mounted()
 

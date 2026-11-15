@@ -732,15 +732,14 @@ async def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
     )
     (launch / "AGENTS.md").write_text("LAUNCH DIRECTORY RULES", encoding="utf-8")
     config = WebConfig.model_validate({"skills": {"dirs": []}})
-    spec = config.default_agent
-    served = project_agent(Agent(name="bot", model=None), launch, config, spec)
+    served = project_agent(Agent(name="bot", model=None), launch, config)
     assert "LAUNCH DIRECTORY RULES" in served.instructions
     assert any(isinstance(p, Skills) for p in served.plugins)
 
     # No workspace to read a project file from: what is left is not the
     # launch directory's.
     nowhere = RunContext(deps=None, entries=[], agent=served)
-    remote = remote_agent(served, config, spec)
+    remote = remote_agent(served, config)
     assert await remote.render_system_prompt(nowhere) == GENERIC_INSTRUCTIONS
     assert not any(isinstance(p, Skills) for p in remote.plugins)
     # The global skill directories are this server's own: they still load.
@@ -748,15 +747,14 @@ async def test_lovia_web_keeps_this_machines_project_out_of_a_remote_chat(
     shared.mkdir()
     everywhere = WebConfig.model_validate({"skills": {"dirs": [str(shared)]}})
     (skills,) = [
-        p
-        for p in remote_agent(served, everywhere, spec).plugins
-        if isinstance(p, Skills)
+        p for p in remote_agent(served, everywhere).plugins if isinstance(p, Skills)
     ]
     assert skills is not None
-    # The agent's own prompt still applies everywhere.
-    terse = remote_agent(
-        served, config, spec.model_copy(update={"instructions": "be terse"})
+    # The custom instructions still apply everywhere.
+    custom = WebConfig.model_validate(
+        {"skills": {"dirs": []}, "assistant": {"instructions": "be terse"}}
     )
+    terse = remote_agent(served, custom)
     assert await terse.render_system_prompt(nowhere) == "be terse"
 
 
@@ -769,9 +767,7 @@ def test_a_remote_chat_reads_its_own_projects_instructions(places) -> None:
     here, there = places
     (here / "AGENTS.md").write_text("LOCAL PROJECT RULES", encoding="utf-8")
     (there / "AGENTS.md").write_text("REMOTE PROJECT RULES", encoding="utf-8")
-    config = WebConfig.model_validate(
-        {"agents": [{"id": "bot", "instructions": "be terse"}]}
-    )
+    config = WebConfig.model_validate({"assistant": {"instructions": "be terse"}})
     far = _far()
     provider = ScriptedProvider(
         [call("read_file", {"path": "AGENTS.md"}), text("x"), text("y")]
@@ -779,9 +775,7 @@ def test_a_remote_chat_reads_its_own_projects_instructions(places) -> None:
     agent = Agent(name="bot", model=provider, workspace=Workspace.local(str(here)))
     switch = WorkspaceSwitch(
         remotes={"far": far},
-        agent_for_remote=lambda agent, ref: remote_agent(
-            agent, config, config.default_agent
-        ),
+        agent_for_remote=lambda agent, ref: remote_agent(agent, config),
     )
     with _client(agent, switch) as c:
         try:

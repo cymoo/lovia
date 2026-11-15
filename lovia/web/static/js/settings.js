@@ -3,15 +3,15 @@
 // localStorage — language, theme, text size, Enter behavior, notifications,
 // sound) and Memory (memory.js; when an agent has it). The server's, shared
 // by everyone on it, shown only when it reports features.model_config:
-// Models, Agents, Skills, MCP, Web search (config.json through
-// model-config.js, agent-config.js, mcp-config.js). Then About.
+// Models, Assistant, Skills, MCP, Web search (config.json through
+// model-config.js, assistant-config.js, mcp-config.js). Then About.
 import { segmented, showDialog, setThemePref, themePref } from './ui.js';
 import { t, languages, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
 import { icon } from './icons.js';
 import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
-import { buildAgentsPane } from './agent-config.js';
+import { buildAssistantPane } from './assistant-config.js';
 import { buildMcpPane } from './mcp-config.js';
 import { hasMemory, memoryPane } from './memory.js';
 
@@ -278,7 +278,7 @@ function buildGeneralPane() {
 
 /**
  * Open the Settings dialog on a given tab.
- * @param {'general' | 'memory' | 'models' | 'agents' | 'skills' | 'mcp' | 'search' | 'about'} [initialTab]
+ * @param {'general' | 'memory' | 'models' | 'assistant' | 'skills' | 'mcp' | 'search' | 'about'} [initialTab]
  * @param {{ root?: string }} [opts] For Memory: open on this directory's project memory.
  */
 export function openSettings(initialTab = 'general', opts = {}) {
@@ -291,12 +291,12 @@ export function openSettings(initialTab = 'general', opts = {}) {
         ? [{ id: 'memory', label: t('settings.tabMemory'), build: memoryPane(opts) }]
         : []),
     ],
-    // The server's configuration: what the agents run on first (nothing
-    // works without a model), then who they are and what they can use.
+    // The server's configuration: what the assistant runs on first (nothing
+    // works without a model), then how it behaves and what it can use.
     store.canConfigureModels
       ? [
           { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
-          { id: 'agents', label: t('settings.tabAgents'), build: buildAgentsPane },
+          { id: 'assistant', label: t('settings.tabAssistant'), build: buildAssistantPane },
           { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
           { id: 'mcp', label: t('settings.tabMcp'), build: buildMcpPane },
           { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },

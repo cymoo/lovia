@@ -58,12 +58,11 @@ LOG_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 DESCRIPTION = """\
 Launch the lovia chat UI in your browser.
 
-Serves ready-made agents — skills, long-term memory, todos, web search,
+Serves a ready-made assistant — skills, long-term memory, todos, web search,
 scheduled runs, and a workspace rooted at DIR (default: the current
-directory). Everything about them — models, the agents themselves and each
-one's prompt, permissions and run limits — is set in the browser (Settings)
-and saved to config.json in lovia's home, applying from the next run
-without a restart.
+directory). Its models, custom instructions, permissions and switches are
+set in the browser (Settings) and saved to config.json in lovia's home,
+applying from the next run without a restart.
 """
 
 EPILOG = """\
@@ -77,13 +76,15 @@ examples:
   lovia web init-ui ui                     # scaffold a UI directory for ChatUI(assets=)
 
 configuration:
-  Models, web search, global skill directories and the agents (each with its
-  prompt, model, permission mode, auto-allowed commands, switches and run
-  limits) live in config.json in lovia's home (~/.lovia, or --home DIR), beside the
-  chat history and memory. Managed in the web UI's Settings; inspect with
-  --check. A project's own AGENTS.md and .agents/skills load in every chat
-  working there. The flags above are the server's own, plus the workspace
-  locks a deployment needs — the same on every --host.
+  Models, web search, global skill directories, MCP servers and the
+  assistant's settings (custom instructions, the permission mode a new chat
+  starts in, auto-allowed commands, switches) live in config.json in lovia's
+  home (~/.lovia, or --home DIR), beside the chat history and memory. Managed
+  in the web UI's Settings; inspect with --check. The turn and retry limits
+  are set in the file alone (assistant.max_turns, assistant.max_retries). A
+  project's own AGENTS.md and .agents/skills load in every chat working
+  there. The flags above are the server's own, plus the workspace locks a
+  deployment needs — the same on every --host.
 """
 
 # Options that moved into config.json (Settings) in 0.9.146. Each still
@@ -91,16 +92,18 @@ configuration:
 # arguments" — kept through the 0.9 series, dropped at 0.10.
 _SETTINGS = "Settings → {pane} (config.json {key})"
 REMOVED_OPTIONS: dict[str, str] = {
-    "--trusted": _SETTINGS.format(pane="Agents", key="agents[].mode"),
-    "--auto-allow": _SETTINGS.format(pane="Agents", key="agents[].auto_allow"),
-    "--max-turns": _SETTINGS.format(pane="Agents", key="agents[].max_turns"),
-    "--max-retries": _SETTINGS.format(pane="Agents", key="agents[].max_retries"),
-    "--no-followups": _SETTINGS.format(pane="Agents", key="agents[].followups"),
+    "--trusted": _SETTINGS.format(pane="Assistant", key="assistant.mode"),
+    "--auto-allow": _SETTINGS.format(pane="Assistant", key="assistant.auto_allow"),
+    "--max-turns": "config.json assistant.max_turns",
+    "--max-retries": "config.json assistant.max_retries",
+    "--no-followups": _SETTINGS.format(pane="Assistant", key="assistant.followups"),
     "--memory-dir": "--home DIR (memory lives in <home>/memory)",
-    "--no-memory": _SETTINGS.format(pane="Agents", key="agents[].memory"),
-    "--no-subagents": _SETTINGS.format(pane="Agents", key="agents[].subagents"),
-    "--instructions": _SETTINGS.format(pane="Agents", key="agents[].instructions"),
-    "--instructions-file": _SETTINGS.format(pane="Agents", key="agents[].instructions"),
+    "--no-memory": _SETTINGS.format(pane="Assistant", key="assistant.memory"),
+    "--no-subagents": _SETTINGS.format(pane="Assistant", key="assistant.subagents"),
+    "--instructions": _SETTINGS.format(pane="Assistant", key="assistant.instructions"),
+    "--instructions-file": _SETTINGS.format(
+        pane="Assistant", key="assistant.instructions"
+    ),
     "--max-tokens": _SETTINGS.format(pane="Models", key="models[].max_tokens"),
 }
 REMOVED_ENV: dict[str, str] = {
@@ -468,18 +471,12 @@ def _warn_if_remote_capable(host: str, deployment: Deployment) -> None:
     )
 
 
-def _agents_desc(config: webconfig.WebConfig) -> str:
-    """Human line for the startup summary: the default agent first."""
-    first, *rest = [a.display_name for a in config.agents]
-    return ", ".join([f"{first} (default)" if rest else first, *rest])
-
-
 def _workspace_desc(deployment: Deployment, config: webconfig.WebConfig) -> str:
     """Human line for the startup summary, e.g. ``/path/to/dir (coding)``:
-    how the default agent works there."""
+    how a new chat works there."""
     if deployment.workspace is None:
         return "(none)"
-    agent = config.default_agent
+    agent = config.assistant
     mode = deployment.effective_mode(agent.mode) or "none"
     desc = mode
     if mode == "coding":
@@ -617,7 +614,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             loaded = webconfig.load_active(home)
             # The connection the default agent runs on — what --check probes
             # and the summary shows.
-            profile = loaded.config.agent_profile(loaded.config.default_agent)
+            profile = loaded.config.default_profile()
             conn = (
                 webconfig.Connection.from_profile(profile)
                 if profile is not None
@@ -681,7 +678,6 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     config_desc=(
                         loaded.label if loaded.exists else "(not saved — session only)"
                     ),
-                    agents_desc=_agents_desc(loaded.config),
                     workspace_desc=_workspace_desc(deployment, loaded.config),
                     db_desc=db_desc,
                 )

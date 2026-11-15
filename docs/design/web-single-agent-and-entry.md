@@ -130,7 +130,7 @@
 - **`create_app(agent)`：原样托管你的 Agent。** 默认值对齐 core，不替嵌入方做决定。页面只显示这个 Agent 用得上的部分。它的默认值一个都不改。
 - **`default_app(...)`：`lovia web` 这个成品。** CLI 能做的它都能做，并留一个定制口。
 
-```python
+```py
 from lovia.web import default_app, serve
 
 def customize(agent):

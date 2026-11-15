@@ -81,7 +81,7 @@
 
 | 位置 | 现在 | 之后 |
 | --- | --- | --- |
-| `config/schema.py` | `AgentConfig`（带 id、name、model、skills、mcp）、`agents` 列表、`agent_slug`、`agent_profile`、`agent_skills`、重复 id 校验 | `AgentSettings` 一段；模型用 `default_profile()`，技能用 `skills` |
+| `config/schema.py` | `AgentConfig`（带 id、name、model、skills、mcp）、`agents` 列表、`agent_slug`、`agent_profile`、`agent_skills`、重复 id 校验 | `AssistantConfig` 一段；模型用 `default_profile()`，技能用 `skills` |
 | `config/runtime.py` | `build()` 循环建多个、按模型共享 provider、`agent_config(name)`、`_spec(agent)`、`max_turns()` 返回每个 Agent 一项 | 建一个；`max_turns()` 是它和它的子代理两项 |
 | `api/config.py` | `/agents` 的增、改、复制、设为默认、删除五个路由 | `PUT /api/config/assistant` 一个 |
 | `agent-config.js` | 列表加表单，465 行 | 一个表单 |

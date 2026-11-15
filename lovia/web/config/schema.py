@@ -76,14 +76,12 @@ _SLUG = re.compile(r"[^a-z0-9._-]+")
 _SLUG_BASE_MAX = 56
 
 
-def slugify(
-    text: str, taken: set[str] | None = None, *, fallback: str = "model"
-) -> str:
+def slugify(text: str, taken: set[str] | None = None) -> str:
     """An id from a display name or model spec, unique among ``taken``:
     starting with a letter or digit, at most 64 characters, whatever the
-    text (``fallback`` when nothing of it survives)."""
+    text (``model`` when nothing of it survives)."""
     base = _SLUG.sub("-", text.lower()).strip("-._")[:_SLUG_BASE_MAX].rstrip("-._")
-    base = base or fallback
+    base = base or "model"
     taken = taken or set()
     if base not in taken:
         return base

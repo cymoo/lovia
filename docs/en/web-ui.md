@@ -567,7 +567,7 @@ Each chat has its own permission mode — **View only**, **Edit in
 workspace** or **Full access** (`readonly`, `coding` and `trusted` in
 `config.json` and the API; see [modes](workspace.md#modes)) — on the chip
 beside the folder
-chip in the composer. A new chat starts in its agent's mode; pick another
+chip in the composer. A new chat starts in the mode Settings → Assistant names; pick another
 before sending to start it there. Switching a chat applies from its next run:
 a reply already streaming finishes in the mode it began, and the chat's
 background processes (a dev server, say) keep running. The chats a run

@@ -644,8 +644,8 @@ async def test_run_settings_apply_to_the_next_run(served) -> None:
 async def test_the_limits_are_the_files_to_set(served) -> None:
     client, runtime, app = served
     _add_model(client)
-    # Settings never writes them: a stray field in a save changes nothing.
-    assert client.put(ASSISTANT, json={"max_turns": 5}).status_code == 200
+    # Settings never writes them: naming one in a save is refused.
+    assert client.put(ASSISTANT, json={"max_turns": 5}).status_code == 422
     assert runtime.config.assistant.max_turns == 150
     assistant = runtime.config.assistant.model_copy(
         update={"max_turns": 7, "max_retries": 2}

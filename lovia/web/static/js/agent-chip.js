@@ -26,9 +26,6 @@ function info(name) {
   return store.agents.find((/** @type {any} */ a) => a.name === name) || null;
 }
 
-/** What the page calls an agent. @param {string | null | undefined} name */
-const agentLabel = (name) => name || '';
-
 /** The line under an agent in the menu: what it runs on, and how. @param {any} a */
 function facts(a) {
   return [a.model, a.mode && modeLabel(a.mode)].filter(Boolean).join(' · ');
@@ -69,8 +66,9 @@ function render() {
   _chip.classList.toggle('lv-chip-fixed', fixed);
   _chip.setAttribute('aria-disabled', String(fixed));
   const text = _chip.querySelector('.lv-model-chip-label');
-  if (text) text.textContent = agentLabel(store.agent);
-  _chip.title = t(fixed ? 'agent.chipFixed' : 'agent.chipTitle', { name: agentLabel(store.agent) });
+  const name = store.agent ?? '';
+  if (text) text.textContent = name;
+  _chip.title = t(fixed ? 'agent.chipFixed' : 'agent.chipTitle', { name });
 }
 
 function closeMenu() {
@@ -103,7 +101,7 @@ function openMenu() {
     text.className = 'lv-mode-item-text';
     const name = document.createElement('span');
     name.className = 'lv-model-chip-item-name';
-    name.textContent = agentLabel(a.name);
+    name.textContent = a.name;
     text.appendChild(name);
     const line = facts(a);
     if (line) {
@@ -140,7 +138,7 @@ function openMenu() {
 function onChatAgent(name) {
   if (info(name)) return setAgent(/** @type {string} */ (name));
   const fallback = defaultAgent();
-  if (name && fallback) toast(t('agent.gone', { name, fallback: agentLabel(fallback) }));
+  if (name && fallback) toast(t('agent.gone', { name, fallback }));
   setAgent(fallback);
 }
 

@@ -18,7 +18,7 @@ from dataclasses import asdict
 from typing import Any, Literal
 
 from fastapi import APIRouter, Request, Response
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ...exceptions import UserError
 from ..config.probe import unlisted_model_note, validate_connection
@@ -126,7 +126,10 @@ class SkillsIn(BaseModel):
 
 class AssistantIn(BaseModel):
     """The assistant's settings, as edited; only the fields present change.
-    The turn and retry limits are file-only: Settings never writes them."""
+    The turn and retry limits are file-only, so naming one here is refused
+    rather than quietly dropped."""
+
+    model_config = ConfigDict(extra="forbid")
 
     instructions: str | None = None
     mode: WorkspaceModeName | None = None

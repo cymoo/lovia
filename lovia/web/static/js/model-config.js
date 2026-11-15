@@ -700,7 +700,7 @@ export function buildModelsPane() {
 
 // ---- Search pane ----------------------------------------------------------
 
-/** Settings → Web search: the backend agents with web search on use, and its key. */
+/** Settings → Web search: the backend web search uses, and its key. */
 export function buildSearchPane() {
   const pane = el('div', 'lv-cfg-pane');
 
@@ -1196,8 +1196,6 @@ export function initModelConfig() {
   if (!store.canConfigureModels) return;
   initModelChip();
   store.on('config-changed', _onConfigChanged);
-  // Agents may run on different models: the chip names the composer's.
-  store.on('agent-changed', updateChip);
   store.on('open-model-settings', async () => {
     const { openSettings } = await import('./settings.js');
     openSettings('models');

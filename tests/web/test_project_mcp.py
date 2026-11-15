@@ -299,6 +299,50 @@ def test_a_project_has_global_servers_on_or_off_for_itself(served) -> None:
     assert res.status_code == 404
 
 
+def test_what_a_project_said_of_a_server_goes_with_the_server(served) -> None:
+    client, _provider, _project = served
+    doc = {"db": {**_stub(), "disabled": True}}
+    assert client.post("/api/config/mcp", json={"document": doc}).status_code == 201
+    client.put(URL, json={"name": "db", "on": True, "source": "global"})
+
+    def on_here() -> dict[str, bool]:
+        return {s["name"]: s["on"] for s in client.get(URL).json()["global"]}
+
+    # Renamed: it is the same server, on in this project as before.
+    renamed = {"store": {**_stub(), "disabled": True}}
+    res = client.put("/api/config/mcp/db", json={"document": renamed})
+    assert res.status_code == 200, res.text
+    assert on_here() == {"store": True}
+    # Deleted, and another server takes the name later: it starts as that
+    # server's own switch says, not as the old one was left here.
+    assert client.delete("/api/config/mcp/store").status_code == 200
+    again = {"store": {**_stub(), "disabled": True}}
+    assert client.post("/api/config/mcp", json={"document": again}).status_code == 201
+    assert on_here() == {"store": False}
+
+
+def test_a_global_server_is_replaced_only_by_one_a_run_starts(served) -> None:
+    client, _provider, project = served
+    assert (
+        client.post("/api/config/mcp", json={"document": {"db": _stub()}}).status_code
+        == 201
+    )
+
+    def replaced() -> bool:
+        (server,) = client.get(URL).json()["global"]
+        return server["replaced"]
+
+    _write(project, {"db": _stub()})
+    assert not replaced()  # undecided: the global one still runs
+    client.put(URL, json={"name": "db", "on": True})
+    assert replaced()
+    # Turned on, but no longer usable as written: runs skip it, and so the
+    # global one is what they start.
+    _write(project, {"db": {**_stub(), "env": {"K": "${NOT_SET_ANYWHERE_XYZ}"}}})
+    client.put(URL, json={"name": "db", "on": True})
+    assert not replaced()
+
+
 def test_the_record_keeps_both_kinds_of_decision_apart(tmp_path: Path) -> None:
     project, book = tmp_path / "p", ProjectMCP(tmp_path / "home")
     project.mkdir()

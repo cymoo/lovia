@@ -615,6 +615,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             await _apply_servers(
                 [server if s.name == name else s for s in runtime.config.mcp]
             )
+            if server.name != name:
+                runtime.project_mcp.renamed(name, server.name)
         return _config_out()
 
     @router.put("/mcp/{name}/enabled")
@@ -635,6 +637,7 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         async with mcp_lock:
             _stored_server(name)
             await _apply_servers([s for s in runtime.config.mcp if s.name != name])
+            runtime.project_mcp.renamed(name, None)
         return _config_out()
 
     @router.post("/mcp/test")
@@ -681,8 +684,9 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         book = runtime.project_mcp
         states = book.states(key, servers) if key is not None else {}
         here = book.overrides(key) if key is not None else {}
-        # A project's server that is on stands in for a global one of its name.
-        standing_in = {s.name for s in servers if states[s.name] == "on"}
+        # A project's server that a run starts stands in for a global one of
+        # its name: asked of the rule the run itself uses.
+        standing_in = {s.name for s in book.approved(key)} if servers and key else set()
         return {
             "project": key,
             # Whether the project could have a .mcp.json read here at all.

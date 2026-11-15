@@ -226,6 +226,28 @@ class ProjectMCP:
             record["global"].pop(project, None)
         self._save(record)
 
+    def renamed(self, name: str, to: str | None) -> None:
+        """The global server ``name`` is now called ``to`` — or, ``None``,
+        is gone: what projects said of it goes with it, never to another
+        server that later takes the name."""
+        record = self._load()
+        section = record["global"]
+        changed = False
+        for project in list(section):
+            mine = {**self._of(section, project)}
+            if name not in mine:
+                continue
+            on = mine.pop(name)
+            if to is not None:
+                mine[to] = on
+            if mine:
+                section[project] = mine
+            else:
+                del section[project]
+            changed = True
+        if changed:
+            self._save(record)
+
     def approved(self, project: str) -> list[MCPServerConfig]:
         """The servers of ``project`` (a local directory) to start now:
         turned on, as they are written today, and usable."""

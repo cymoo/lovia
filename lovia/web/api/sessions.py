@@ -261,6 +261,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             workspace_mode=meta.workspace_mode if meta else None,
             workspace_mode_rev=meta.workspace_mode_rev if meta else 0,
             workspace_root=meta.workspace_root if meta else None,
+            model=meta.model if meta else None,
             exists=meta is not None,
         )
 
@@ -347,8 +348,8 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
 
     @router.patch("/api/sessions/{session_id}", response_model=ChatSessionInfo)
     async def update_session(session_id: str, req: SessionPatch) -> ChatSessionInfo:
-        """Rename, (un)pin, and/or switch the permission mode of a session —
-        applies whichever fields are set."""
+        """Rename, (un)pin, and/or switch the permission mode or the model
+        of a session — applies whichever fields are set."""
         meta = await store.get(session_id)
         if meta is None:
             raise WebError(404, "session_not_found", "session not found")
@@ -368,6 +369,10 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                     f"mode {mode!r} is not available on this server",
                     hint=f"choose one of: {', '.join(switch.modes)}",
                 )
+        # An explicit null puts the chat back on the server's default.
+        pick_model = "model" in req.model_fields_set
+        if pick_model and req.model is not None:
+            deps.check_chat_model(req.model)
         root = req.workspace_root
         if root is not None:
             if deps.workspace_switch is None:
@@ -395,6 +400,8 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             await store.set_pinned(session_id, req.pinned)
         if mode is not None:
             await store.set_workspace_mode(session_id, mode)
+        if pick_model:
+            await store.set_model(session_id, req.model)
         meta = await store.get(session_id)
         if meta is None:  # deleted concurrently between the update and re-read
             raise WebError(404, "session_not_found", "session not found")

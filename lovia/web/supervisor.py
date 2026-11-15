@@ -1208,9 +1208,11 @@ class RunSupervisor:
             meta = await self.deps.store.get(session_id)
             agent_name = self.deps.name_of(agent)  # before binding copies the agent
             # The chat's directory, checked against the server's constraints,
-            # and its permission mode, read now: a switch lands on the next run.
+            # and its permission mode and model, read now: a switch lands on
+            # the next run.
             binding = self.deps.chat_binding(agent, meta)
             agent = self.deps.effective_agent(agent, binding)
+            agent = self.deps.on_chat_model(agent, meta)
             # Every run of one web session shares that session's workspace session
             # (lazily opened here), so background processes survive across runs —
             # they die with the *chat* (deletion/shutdown), not with the turn.
@@ -1291,9 +1293,10 @@ class RunSupervisor:
             self._check_slot(session_id, cap=False)
             meta = await self.deps.store.get(session_id)
             agent_name = self.deps.name_of(agent)  # before binding copies the agent
-            # The chat's binding as it is now, like a fresh run's.
+            # The chat's binding and model as they are now, like a fresh run's.
             binding = self.deps.chat_binding(agent, meta)
             agent = self.deps.effective_agent(agent, binding)
+            agent = self.deps.on_chat_model(agent, meta)
             # Same chat-scoped workspace binding as start(): the resumed leg's
             # background processes are gone (they never survive a restart), but
             # its shell/file tools must land on the chat's one live session.

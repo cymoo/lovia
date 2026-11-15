@@ -97,11 +97,14 @@ API keys are write-only: the server returns only whether a key is set and a
 masked hint, never the complete value. Configuration updates are validated as
 a whole, written atomically, and applied without a restart.
 
-A model switch applies from the **next message**, including later messages in
-an existing chat, scheduled runs, and background subagents. An in-flight reply
-continues on its original model. The model chip in the composer and
-Settings → Models (**Make default**) change the same thing: the model every
-chat runs on. Vision and auxiliary
+Each chat runs on its own model. The model chip in the composer picks it — for
+a new chat before the first message, for an open chat from its **next
+message**; a reply in progress finishes on the model it started with. Switching
+mid-chat is allowed because the transcript is provider-neutral, but the
+provider's prompt cache starts over. Settings → Models (**Make default**) sets
+the model a chat uses until it picks one: new chats, chats that never picked,
+and chats whose model has since been deleted. Background subagents and chats a
+schedule opens run on the default. Vision and auxiliary
 work such as titles and follow-up suggestions can be assigned to separate
 profiles.
 

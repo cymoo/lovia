@@ -26,11 +26,64 @@ export function cfg() {
   return store.modelConfig;
 }
 
-/** The model chats run on: the default chat one. */
+// ---- the chat's own model -------------------------------------------------
+// A chat may run on a model other than the default: picked on the chip for a
+// new chat (it goes out with the first message), switched there for an open
+// one (a PATCH; the next run is on it). null: the default, whatever it is
+// then — so a chat that never picked one follows a change of default.
+
+/** The new chat's pick. @type {string | null} */
+let _draftModel = null;
+/** The open chat's pick. @type {string | null} */
+let _chatModel = null;
+/** The chat `_chatModel` is of; null: a new chat. @type {string | null} */
+let _modelOf = null;
+
+/** The id the composer's chat picked, if it is still a configured model. */
+function pickedModel() {
+  const id = store.sessionId ? _chatModel : _draftModel;
+  return id && cfg()?.models.some((/** @type {any} */ m) => m.id === id) ? id : null;
+}
+
+/** The model the composer's chat runs on: its own pick, else the default. */
 function activeProfile() {
   const c = cfg();
   if (!c) return null;
-  return c.models.find((m) => m.id === c.roles.chat) || null;
+  const id = pickedModel() ?? c.roles.chat;
+  return c.models.find((/** @type {any} */ m) => m.id === id) || null;
+}
+
+/**
+ * The model a new chat's first message asks for; undefined for an open chat
+ * (its own applies) or the default. Read by the composer's send.
+ */
+export function draftChatModel() {
+  return store.sessionId ? undefined : pickedModel() ?? undefined;
+}
+
+/**
+ * The composer's chat's own model, when it picked one that isn't the
+ * default — its name and context window, for the context ring; else null
+ * (the agent's own apply).
+ * @returns {{ model: string, window: number | null } | null}
+ */
+export function chatModelInfo() {
+  const id = pickedModel();
+  if (!id || id === cfg()?.roles.chat) return null;
+  const p = activeProfile();
+  return p ? { model: p.model, window: p.window ?? null } : null;
+}
+
+/** The open chat changed, or what is known of it did. */
+function syncChatModel(/** @type {string | null} */ id, /** @type {any} */ row) {
+  const wasNew = _modelOf === null;
+  _modelOf = id;
+  if (!id) _draftModel = null;
+  else if (row) _chatModel = row.model ?? null;
+  // A new chat that just got its id was saved with the draft's pick.
+  else if (wasNew && store.streaming) _chatModel = _draftModel;
+  else _chatModel = null;
+  updateChip();
 }
 
 function profileName(p) {
@@ -336,7 +389,7 @@ export function buildModelsPane() {
           ghostBtn(t('cfg.makeDefault'), async (e) => {
             e.stopPropagation();
             try {
-              await switchModel(p.id, 'cfg.madeDefault');
+              await makeDefault(p.id);
             } catch (err) {
               toast(String(err.message || err), { type: 'error' });
             }
@@ -1039,18 +1092,38 @@ function updateChip() {
 }
 
 /**
- * Switch the model chats run on (roles.chat) — every chat's next message,
- * from the composer's chip and Settings → Models' "Make default" alike.
+ * Settings → Models' "Make default": the model a chat runs on unless it
+ * picked its own (roles.chat).
  * @param {string} id
- * @param {string} [message] What the toast says about it.
  */
-async function switchModel(id, message = 'cfg.switched') {
-  if (cfg()?.roles.chat === id) return;
+async function makeDefault(id) {
   await api.setRoles({ chat: id });
   await loadConfig();
-  toast(t(message, { name: profileName(cfg()?.models.find((m) => m.id === id)) }));
+  toast(t('cfg.madeDefault', { name: profileName(cfg()?.models.find((m) => m.id === id)) }));
   updateChip();
   await refreshAgents();
+}
+
+/**
+ * The chip's pick: this chat's model. The default's own entry means "follow
+ * the default" (stored as none), so the chat moves with it later.
+ * @param {string} id
+ */
+async function pickModel(id) {
+  const c = cfg();
+  const value = id === c.roles.chat ? null : id;
+  const name = profileName(c.models.find((/** @type {any} */ m) => m.id === id));
+  if (!store.sessionId) {
+    _draftModel = value;
+  } else {
+    if (value === _chatModel) return;
+    await api.setSessionModel(store.sessionId, value);
+    _chatModel = value;
+    // A reply in progress finishes on the model it began on.
+    toast(t(store.streaming ? 'cfg.modelNextRun' : 'cfg.switched', { name }));
+  }
+  updateChip();
+  store.emit('chat-model-changed');
 }
 
 // The agent list carries the model id + workspace/vision capabilities the
@@ -1086,18 +1159,27 @@ export async function openChipMenu() {
       return;
     }
   }
+  // A new chat's first message is out and its chat not created yet: it went
+  // with the draft's model, so a pick now would be silently lost.
+  if (!store.sessionId && store.streaming) return;
   const c = cfg();
   const menu = el('div', 'lv-model-chip-menu');
   menu.setAttribute('role', 'menu');
-  // The pick is the server's default, not this chat's: say so.
-  menu.appendChild(el('div', 'lv-model-chip-menu-title', t('cfg.switchTitle')));
+  menu.appendChild(
+    el(
+      'div',
+      'lv-model-chip-menu-title',
+      t(store.sessionId ? 'cfg.chatModelTitle' : 'cfg.newChatModelTitle'),
+    ),
+  );
+  const current = activeProfile()?.id;
   /**
    * @param {string} label
    * @param {string} id
    * @param {string} [sub]
    */
   const option = (label, id, sub) => {
-    const on = c.roles.chat === id;
+    const on = current === id;
     const item = el('button', 'lv-model-chip-item');
     item.setAttribute('type', 'button');
     item.setAttribute('role', 'menuitemradio');
@@ -1108,7 +1190,7 @@ export async function openChipMenu() {
     item.addEventListener('click', async () => {
       closeChipMenu();
       try {
-        await switchModel(id);
+        await pickModel(id);
       } catch (err) {
         toast(String(err.message || err), { type: 'error' });
       }
@@ -1116,7 +1198,12 @@ export async function openChipMenu() {
     menu.appendChild(item);
   };
   for (const p of c.models) {
-    option(profileName(p), p.id, p.vision === 'on' ? t('cfg.visionBadge') : undefined);
+    // The default says so: a chat on it moves when the default does.
+    const notes = [
+      p.id === c.roles.chat ? t('cfg.default') : null,
+      p.vision === 'on' ? t('cfg.visionBadge') : null,
+    ].filter(Boolean);
+    option(profileName(p), p.id, notes.join(' · ') || undefined);
   }
   menu.appendChild(el('div', 'lv-model-chip-menu-divider'));
   const manage = el('button', 'lv-model-chip-item lv-manage');
@@ -1198,6 +1285,14 @@ export function initModelConfig() {
   if (!store.canConfigure) return;
   initModelChip();
   store.on('config-changed', _onConfigChanged);
+  // The open chat's own model: from its list row, then from its detail
+  // (a task chat, or one the list doesn't carry).
+  store.on('session-id', (/** @type {string | null} */ id) =>
+    syncChatModel(id, id ? store.sessions.find((s) => s.id === id) : null),
+  );
+  store.on('session-meta', (/** @type {any} */ detail) => {
+    if (detail?.id === store.sessionId) syncChatModel(detail.id, detail);
+  });
   store.on('open-model-settings', async () => {
     const { openSettings } = await import('./settings.js');
     openSettings('models');

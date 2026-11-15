@@ -81,6 +81,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             title=title,
             workspace_root=binding.root if binding else None,
             workspace_mode=binding.mode if binding else None,
+            model=req.model if is_new else None,
             unarchive=True,  # the user is back in it
         )
         if binding is not None:
@@ -94,8 +95,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     def bind(agent: Agent[Any], meta: ChatMeta | None, req: ChatRequest) -> ChatBinding:
         """Where and how this turn's chat works — checked now, before the
         message is read (its attachments live in that directory) or anything
-        is written. A new chat takes the request's directory and mode, which
-        must be ones this server offers; an existing one its own."""
+        is written. A new chat takes the request's directory, mode and
+        model, which must be ones this server offers; an existing one its
+        own."""
         switch = deps.workspace_switch
         if meta is not None:
             if (
@@ -116,6 +118,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                     "or POST /api/sessions/associate",
                 )
             return deps.chat_binding(agent, meta)
+        if req.model is not None:
+            deps.check_chat_model(req.model)
         mode = req.workspace_mode or (switch.default_mode if switch else None)
         return deps.requested_binding(agent, mode, req.workspace)
 

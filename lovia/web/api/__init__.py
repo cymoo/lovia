@@ -98,6 +98,9 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 # /api/config exists: the server is configured from the UI
                 # (``default_app`` only — never an app from ``create_app``).
                 "settings": deps.config_runtime is not None,
+                # A chat may pick its own model (a request's ``model``, a
+                # session PATCH): where there are models to pick from.
+                "chat_model": deps.config_runtime is not None,
                 # create_app(workspaces=): chats pick a mode, and a directory
                 # from GET /api/workspaces (whose can_add says if any beyond
                 # the agent's own may be added).

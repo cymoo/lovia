@@ -22,7 +22,11 @@ from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ...exceptions import UserError
-from ..config.probe import unlisted_model_note, validate_connection
+from ..config.probe import (
+    known_context_window,
+    unlisted_model_note,
+    validate_connection,
+)
 from ..config.runtime import ConfigRuntime
 from ..config.schema import (
     ANTHROPIC_FLAVOR,
@@ -221,6 +225,13 @@ def _refuse_relative(dirs: list[str]) -> None:
         )
 
 
+def _known_window(profile: ModelProfile) -> int | None:
+    try:
+        return known_context_window(Connection.from_profile(profile))
+    except UserError:  # an incomplete profile: nothing to name
+        return None
+
+
 def _status_out(status: MCPStatus | None) -> dict[str, object] | None:
     if status is None:
         return None
@@ -329,6 +340,9 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                     "base_url": p.base_url,
                     "api_key": _mask(p.api_key),
                     "context_window": p.context_window,
+                    # The window a chat on it has: what is set, else what
+                    # the provider can name without asking the endpoint.
+                    "window": p.context_window or _known_window(p),
                     "max_tokens": p.max_tokens,
                     "vision": p.vision,
                     "extra_body": p.extra_body,

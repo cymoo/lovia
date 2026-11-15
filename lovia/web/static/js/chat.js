@@ -2,6 +2,7 @@
 import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { draftWorkspaceMode } from './workspace-mode.js';
+import { chatModelInfo, draftChatModel } from './model-config.js';
 import { draftWorkspaceRoot, ensureLinked, scopeRoot, workspaceName } from './workspaces.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
@@ -1419,10 +1420,21 @@ function contextFill(usage) {
   return usage?.last_input_tokens ?? usage?.input_tokens;
 }
 
+/**
+ * The model the chat's context is measured against, and its window: the
+ * chat's own pick where it has one, else the agent's.
+ */
+function contextModel() {
+  const own = chatModelInfo();
+  if (own) return own;
+  const agent = store.agents.find((a) => a.name === store.agent);
+  return { model: agent?.model, window: agent?.context_window };
+}
+
 function updateContextMeter(usage) {
   const el = document.getElementById('context-ring');
   if (!el) return;
-  const window_ = store.agents.find((a) => a.name === store.agent)?.context_window;
+  const window_ = contextModel().window;
   const fill = contextFill(usage);
   if (!fill) {
     // null, or 0 — no prompt is empty, so 0 is a provider that reports no usage
@@ -1459,8 +1471,7 @@ function hideContextMeter() {
 function fillContextPopover() {
   const rows = document.querySelector('#context-popover .lv-context-popover-rows');
   if (!rows) return;
-  const agent = store.agents.find((a) => a.name === store.agent);
-  const window_ = agent?.context_window;
+  const { model, window: window_ } = contextModel();
   const u = _lastUsage || {};
   const fill = contextFill(u);
   const pct = window_ && fill != null
@@ -1470,7 +1481,7 @@ function fillContextPopover() {
     [t('ctx.context'), pct != null
       ? `${formatTokens(fill)} / ${formatTokens(window_)} · ${pct}%`
       : formatTokens(fill), true],
-    [t('ctx.model'), agent?.model, false],
+    [t('ctx.model'), model, false],
     [t('ctx.input'), formatTokens(u.input_tokens), false],
     [t('ctx.output'), formatTokens(u.output_tokens), false],
     [t('ctx.cacheRead'), formatTokens(u.cache_read_tokens), false],
@@ -1552,6 +1563,8 @@ async function restoreContextMeter(sessionId) {
 
 store.on('session-switched', hideContextMeter);
 store.on('render-history', () => restoreContextMeter(store.sessionId));
+// Another model, another window: the same prompt fills it differently.
+store.on('chat-model-changed', () => _lastUsage && updateContextMeter(_lastUsage));
 
 // Surface why compaction fired and how much it saved. Policy-agnostic: the
 // numeric fields (tokens_before/after) ride at the top level and the policy
@@ -3397,6 +3410,7 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
         busy,
         workspace_mode: draftWorkspaceMode(),
         workspace: draftWorkspaceRoot(),
+        model: draftChatModel(),
       },
       { signal: _streamAbortController.signal }
     );

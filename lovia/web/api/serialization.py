@@ -47,6 +47,7 @@ def session_info(
         workspace_mode=meta.workspace_mode,
         workspace_mode_rev=meta.workspace_mode_rev,
         workspace_root=meta.workspace_root,
+        model=meta.model,
     )
 
 

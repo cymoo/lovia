@@ -89,11 +89,11 @@ export function buildAssistantPane() {
     box.append(head, el('div', 'lv-cfg-hint lv-skills-intro', t('assistant.intro')));
     // Sections divided by a rule, switch lists on a card: the schedule
     // form's layout.
-    const form = el('div', 'lv-cfg-form lv-agent-form');
-    const section = () => form.appendChild(el('section', 'lv-agent-section'));
+    const form = el('div', 'lv-cfg-form lv-assistant-form');
+    const section = () => form.appendChild(el('section', 'lv-assistant-section'));
     /** A grey card around a mode note or a list of switch rows. @param {HTMLElement[]} rows */
     const card = (...rows) => {
-      const c = el('div', 'lv-agent-card');
+      const c = el('div', 'lv-assistant-card');
       c.append(...rows);
       return c;
     };
@@ -113,7 +113,7 @@ export function buildAssistantPane() {
     if (perms.lock) {
       runs.appendChild(notice(t(`cfg.wsLock_${perms.lock}`)));
     } else {
-      const modeHint = el('div', 'lv-agent-card-note');
+      const modeHint = el('div', 'lv-assistant-card-note');
       const modeCtl = segmented(
         perms.modes.map((/** @type {string} */ m) => [m, modeLabel(m)]),
         mode,
@@ -122,10 +122,10 @@ export function buildAssistantPane() {
           sync();
         },
       );
-      const group = el('div', 'lv-agent-card-group');
+      const group = el('div', 'lv-assistant-card-group');
       group.setAttribute('role', 'group');
       group.setAttribute('aria-label', t('cfg.autoAllow'));
-      group.appendChild(el('div', 'lv-agent-card-head', t('cfg.autoAllow')));
+      group.appendChild(el('div', 'lv-assistant-card-head', t('cfg.autoAllow')));
       for (const name of perms.bundles) {
         const sw = switchControl(a.auto_allow.includes(name));
         bundles.set(name, sw.value);

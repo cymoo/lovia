@@ -223,9 +223,8 @@ class ConfigRuntime:
         """``create_app(followups=)`` for the CLI: the built-in suggester,
         while Settings keeps suggestions on."""
         deps = self._deps
-        if not self.config.assistant.followups or deps is None:
-            return []
-        if request.agent not in deps.agents:
+        on = self.config.assistant.followups
+        if not on or deps is None or request.agent not in deps.agents:
             return []
         model = deps.followup_model or deps.agents[request.agent].model
         if model is None:  # pragma: no cover - a served agent has a model
@@ -246,8 +245,9 @@ class ConfigRuntime:
         Serialized — concurrent writes apply one at a time.
 
         ``settings_only`` marks a write that touches no model (the
-        assistant's settings): before a model is configured there is nothing to build
-        or serve, so it is saved for when one arrives instead of refused.
+        assistant's settings): before a model is configured there is nothing
+        to build or serve, so it is saved for when one arrives instead of
+        refused.
         """
         async with self._lock:
             if settings_only and self.serveable(config):

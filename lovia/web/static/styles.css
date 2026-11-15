@@ -7859,62 +7859,62 @@ body.lv-files-resizing {
 
 /* The assistant form: the schedule form's layout — sections divided by a
    rule, tabs over a card, switch lists on a card. */
-.lv-agent-form,
-.lv-agent-form ~ .lv-cfg-form-actions {
+.lv-assistant-form,
+.lv-assistant-form ~ .lv-cfg-form-actions {
   max-width: 560px;
 }
-.lv-agent-form {
+.lv-assistant-form {
   gap: 20px;
 }
-.lv-agent-section {
+.lv-assistant-section {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
-.lv-agent-section + .lv-agent-section {
+.lv-assistant-section + .lv-assistant-section {
   padding-top: 20px;
   border-top: 1px solid var(--lv-border);
 }
-.lv-agent-form .lv-seg-control {
+.lv-assistant-form .lv-seg-control {
   display: flex;
 }
-.lv-agent-form .lv-seg-btn {
+.lv-assistant-form .lv-seg-btn {
   flex: 1;
   justify-content: center;
 }
-.lv-agent-card {
+.lv-assistant-card {
   margin-top: 8px;
   padding: 0 14px;
   border-radius: var(--lv-radius);
   background: var(--lv-surface-2);
 }
-.lv-agent-card-note {
+.lv-assistant-card-note {
   padding: 11px 0;
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--lv-muted);
 }
-.lv-agent-card-note + .lv-agent-card-group {
+.lv-assistant-card-note + .lv-assistant-card-group {
   border-top: 1px solid var(--lv-border);
 }
-.lv-agent-card-head {
+.lv-assistant-card-head {
   padding-top: 11px;
   font-size: 12px;
   font-weight: 600;
   color: var(--lv-muted);
 }
-.lv-agent-card .lv-cfg-switch-row {
+.lv-assistant-card .lv-cfg-switch-row {
   padding: 11px 0;
   cursor: pointer;
 }
-.lv-agent-card .lv-cfg-switch-row + .lv-cfg-switch-row {
+.lv-assistant-card .lv-cfg-switch-row + .lv-cfg-switch-row {
   border-top: 1px solid var(--lv-border);
 }
-.lv-agent-card .lv-cfg-switch-text .lv-cfg-label {
+.lv-assistant-card .lv-cfg-switch-text .lv-cfg-label {
   font-size: 13px;
   color: var(--lv-ink);
 }
-.lv-agent-card .lv-cfg-hint {
+.lv-assistant-card .lv-cfg-hint {
   margin-top: 2px;
   font-size: 12px;
   color: var(--lv-muted);

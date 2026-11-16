@@ -621,3 +621,87 @@ async def test_cancel_during_a_claimed_approval_keeps_the_grant(tmp_path: Path) 
     assert not any(
         "pushed" in str(d.get("result")) for d in _frames(lines, "tool_result")
     )
+
+
+# ------------------------------------------------------- subagent tasks ---
+
+
+@pytest.mark.asyncio
+async def test_grants_belong_to_the_top_of_the_task_tree(tmp_path: Path) -> None:
+    app = _app(_agent(tmp_path))
+    deps = app.state.deps
+    await deps.store.upsert("p", agent=None)  # from before chats stored one
+    await deps.store.upsert("t", agent="bot", parent_id="p")
+    await deps.store.upsert("g", agent="bot", parent_id="t")
+    # Any depth; a chat with no agent stored runs on the default one.
+    assert await deps.grant_owner("g") == ("p", "bot")
+    assert await deps.grant_owner("p") == ("p", "bot")
+    await deps.store.upsert("lone", agent="bot", parent_id="gone")
+    assert await deps.grant_owner("lone") == ("lone", "bot")
+
+
+async def _task_parked(app, agent: Agent) -> None:
+    """Task ``t`` of chat ``p`` (stored under ``p``'s agent key, as
+    ``run_child`` does) running ``agent`` — an unregistered clone, like a
+    spawned child — parked on its first approval, or done if none asks."""
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot")
+    await deps.store.upsert("t", agent="bot", parent_id="p")
+    await deps.supervisor.start(
+        session_id="t",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_task_uses_its_chats_remembered_approvals(tmp_path: Path) -> None:
+    store = ChatStore.in_memory()
+    served = _agent(tmp_path, call("push", {}, call_id="c1"), text("done"))
+    app = _app(served, store=store)
+    root = str(tmp_path.resolve())
+    await store.add_grants("p", ["shell:git push"], grant_context("bot", root))
+    async with _client(app) as ac:
+        await _task_parked(app, served.clone(name="digger"))
+        await _wait_run(ac, "t", gone=True)  # answered by p's grant: never parks
+        transcript = (await ac.get("/api/sessions/t")).json()
+        assert "pushed" in json.dumps(transcript)
+
+
+@pytest.mark.asyncio
+async def test_always_allow_in_a_task_is_remembered_for_its_chat(
+    tmp_path: Path,
+) -> None:
+    store = ChatStore.in_memory()
+    served = _agent(tmp_path, call("push", {}, call_id="c1"), text("done"))
+    app = _app(served, store=store)
+    async with _client(app) as ac:
+        await _task_parked(app, served.clone(name="digger"))
+        await _wait_run(ac, "t", status="blocked_on_approval")
+        r = await ac.post(
+            "/api/chat/approve",
+            json={
+                "session_id": "t",
+                "call_id": "c1",
+                "decision": "approve",
+                "remember": True,
+            },
+        )
+        assert r.json() == {"ok": True, "remembered": True}
+        await _wait_run(ac, "t", gone=True)
+        root = str(tmp_path.resolve())
+        assert await store.has_grants(
+            "p", ["shell:git push"], grant_context("bot", root)
+        )
+        # The task's grants are its chat's: listed there, and forgotten there.
+        (row,) = (await ac.get("/api/sessions/t/grants")).json()
+        assert (row["scope"], row["active"]) == ("shell:git push", True)
+        r = await ac.delete(
+            "/api/sessions/t/grants",
+            params={"scope": row["scope"], "context": row["context"]},
+        )
+        assert r.json() == {"removed": True}
+        assert (await ac.get("/api/sessions/p/grants")).json() == []

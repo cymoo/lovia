@@ -745,8 +745,10 @@ The
 grants are kept on the server, per chat, and tied to the agent and workspace
 root they were given under: a later call they fully cover is approved before
 anyone sees it, with no card; a chat rebound to another
-workspace does not reuse them. Grants never apply to a `deny`, and nothing is
-inherited by new chats or subagent tasks.
+workspace does not reuse them. Grants never apply to a `deny`, and new chats
+inherit none. A chat's subagent tasks share its grants: an "always allow"
+given in a task is remembered for the chat, and one given in the chat covers
+its tasks.
 
 The card is there only while the decision is open. Once decided — by you,
 another tab, the timeout or a stop — it goes, and the call's own tool row

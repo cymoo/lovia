@@ -171,7 +171,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/sessions/{id}/followups` | 生成追问建议，返回 `{followups: [...]}`；功能未启用或建议器未返回内容时为 `[]`。该操作可能消耗模型 token，因此使用 POST |
 | `POST /api/sessions/{id}/rewind` | 从某条用户消息起删除后续内容；用它的 `ref` 指定，或用 `user_turn`（它在用户消息中的索引，从 0 开始）；`ref` 已不在聊天中时返回 404，运行中返回 409，不支持 `rewind` 时返回 501 |
 | `POST /api/sessions/{id}/fork` | `{ref?}` → `{session_id}`：把聊天已完成的历史复制成一个新的独立聊天；给 `ref` 时只复制到该用户消息之前，不给则复制整个聊天。新聊天的详情带 `origin: {kind: "fork", session_id, ref, title, exists}`；删除任一聊天都不影响另一个。fork 复制的是对话，不是工作区：文件保持当前状态。有 Run 正在运行、正在收尾或可恢复时，复制整个聊天返回 409 |
-| `GET /api/sessions/{id}/grants` | 这个对话记住的授权：`[{scope, context, created_at, active}]`——在另一个 agent 或工作区根目录下给出的授权 `active` 为 false（列出但不生效） |
+| `GET /api/sessions/{id}/grants` | 这个对话记住的授权：`[{scope, context, created_at, active}]`——在另一个 agent 或工作区根目录下给出的授权 `active` 为 false（列出但不生效）。后台子任务与它所在任务树最上层的对话共用授权：在任一处点的“总是允许”都记在那个对话上，子任务列出（和撤销）的也是那个对话的 |
 | `DELETE /api/sessions/{id}/grants?scope=&context=` | 撤销一条授权 → `{removed}`；之后同范围的调用会再问，已经批准的调用不受影响 |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出聊天 |
 | `GET /api/sessions/{id}/ui-data/{ref}` | UI 组件的完整 props，由本聊天运行中的 `put_ui_data` 保存（[详情](web-server.md#大块数据)） |

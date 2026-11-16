@@ -467,6 +467,69 @@ def test_quoted_against_the_shell_a_word_is_literal() -> None:
         assert allowed.decide_command(cmd).action == "ask", cmd
 
 
+@pytest.mark.skipif(os.name == "nt", reason="cmd.exe quotes differently")
+def test_a_command_ends_where_the_shell_ends_it() -> None:
+    # A quoted or escaped separator is text: every grant on offer names a
+    # program at a real command's start, never a piece of an argument.
+    gray = WorkspacePolicy(shell_default="ask")
+    for cmd, scopes in (
+        ("jq '.[] | .name' a.json", ("shell:jq",)),
+        ("git commit -m 'fix: a | b'", ("shell:git",)),
+        ('git commit -m "x & y; z"', ("shell:git",)),
+        ("echo a\\;b", ("shell:echo",)),
+        ("rg 'a|b' src | head -5", ("shell:rg", "shell:head")),
+        ("awk '{print $2}' f | sort", ("shell:awk", "shell:sort")),
+        ("rg '#include' src", ("shell:rg",)),  # a quoted `#` is no comment
+        ("echo 'x<<y'", ("shell:echo",)),  # nor a quoted `<<` a here-document
+    ):
+        assert gray.decide_command(cmd) == Verdict("ask", "", scopes), cmd
+    # A line holding what gives its quotes another meaning is judged as
+    # spelled, but no piece of it is offered as a program to remember.
+    for cmd in (
+        "echo 'a;b;c' # note",
+        "cat > f.py <<'EOF'\nprint(1)\nEOF",
+        "make # it's done",
+    ):
+        verdict = gray.decide_command(cmd)
+        assert verdict.action == "ask" and verdict.scopes == (), cmd
+        assert "approve it once" in verdict.reason, cmd
+    # Text an allowed command prints is only text.
+    assert _opted_in().decide_command("echo 'a; rm x'").action == "allow"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="cmd.exe quotes differently")
+def test_what_the_lexical_cut_refused_stays_refused() -> None:
+    from lovia.workspace.policy import _segments
+
+    user = WorkspacePolicy(command_rules=(CommandRule("rm", "deny"),))
+    assert user.decide_command("bash -c 'echo ok; rm file; true'").action == "deny"
+    assert _opted_in().decide_command("bash -c 'x; rm -rf /; true'").action == "deny"
+    # Only refusals carry over: the pieces' asks and grants never show.
+    assert WorkspacePolicy(shell_default="ask").decide_command(
+        "bash -c 'a; b; c'"
+    ) == Verdict("ask", "", ("shell:bash",))
+    # The invariant, over a corpus: whatever the cut as spelled refuses, the
+    # command-aware reading refuses too.
+    corpus = (
+        "bash -c 'x; rm -rf /; true'",
+        'sh -c "cd /; rm -rf ~; true"',
+        "echo 'a; git push --force; b'",
+        "python -c 'import os; os.system(\"x\")' | rm -rf / ",
+        'echo "a | rm -rf ~ | b"',
+        "printf 'x & git push --force origin main & y'",
+    )
+    refused = 0
+    for policy in (user, _opted_in(), WorkspacePolicy(shell_default="ask")):
+        for cmd in corpus:
+            spelled = merge_verdicts(
+                *(policy._decide_segment(s, s) for s, _ in _segments(cmd))
+            )
+            if spelled.action == "deny":
+                refused += 1
+                assert policy.decide_command(cmd).action == "deny", cmd
+    assert refused >= 9  # the corpus does reach the refusals it guards
+
+
 def test_content_readers_are_gray_and_no_index_asks() -> None:
     # Every content reader has a way to reach a file it never names
     # (`sort --files0-from`, `git diff --no-index`, a glob), so none is

@@ -138,10 +138,14 @@ becomes). An allow becomes an ask, a deny still bites (`env git push
 --force`); the ask is not grantable. A word quoted against the shell
 (`find . -name '*.py'`, `awk '{print $2}'`) still keeps an allow rule out —
 a program may glob it itself — but a gray command asked about with one
-keeps its "always allow" grant: the shell expands nothing there. Only plain
-quoting is read that way: a command holding a here-document (`<<`), a
-comment (`#`) or a nested context (`$(`, a backtick, `${`) is judged as
-spelled, and a grant is withheld. The mode default `shell_default="allow"`
+keeps its "always allow" grant: the shell expands nothing there. The same
+reading decides where a command ends: a quoted or escaped `|`, `;` or `&` is
+text (`jq '.[] | .name'`, `git commit -m "a; b"`), so every grant on offer
+names a program at a real command's start. Only plain quoting is read that
+way: a command holding an unquoted here-document (`<<`), a comment (a `#`
+starting a word) or a nested context (`$(`, a backtick, `${`) is judged as
+spelled and can be approved once, with no grant on offer. Whatever the cut as
+spelled refuses — a deny rule, the baseline — stays refused either way. The mode default `shell_default="allow"`
 is not a rule vouching for anything, so `trusted` runs `cat *` unprompted —
 which is its point.
 

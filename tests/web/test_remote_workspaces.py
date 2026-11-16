@@ -954,3 +954,67 @@ def test_a_sandboxed_handoff_target_is_caught_at_the_door_too(places) -> None:
         assert res.status_code == 409, res.text
         assert "executor" in res.json()["detail"]["hint"]
         assert c.get("/api/sessions").json() == []
+
+
+async def test_a_switch_reaches_a_remote_chats_run_in_flight(places) -> None:
+    # The run's bound workspace is a remote session: the switch rebuilds from
+    # the agent as the run was handed it, and narrows the session on the host.
+    import asyncio
+
+    from lovia import Verdict, tool
+
+    @tool(permission=Verdict("ask", "Pauses."))
+    async def pause() -> str:
+        return "paused"
+
+    here, there = places
+    far = _far()
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider([call("pause", {}, call_id="c1"), _WRITE, text("done")]),
+        tools=[pause],
+        workspace=Workspace.local(str(here)),
+    )
+    app = create_app(
+        agent,
+        store=ChatStore.in_memory(),
+        titles=False,
+        workspaces=WorkspaceSwitch(remotes={"far": far}),
+    )
+    deps = app.state.deps
+
+    async def until(predicate) -> None:
+        async def loop() -> None:
+            while not predicate():
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(loop(), 10)
+
+    try:
+        key = f"remote://far{there}"
+        await deps.store.upsert(
+            "p", agent="bot", workspace_root=key, workspace_mode="trusted"
+        )
+        await deps.supervisor.start(
+            session_id="p",
+            agent=agent,
+            input="go",
+            is_new=False,
+            title_message=None,
+            autostart=True,
+        )
+
+        def parked() -> bool:
+            ctrl = deps.supervisor.get("p")
+            return ctrl is not None and ctrl.status == "blocked_on_approval"
+
+        await until(parked)
+        await deps.switch_mode("p", "readonly")
+        assert deps.supervisor.get("p").binding.mode == "readonly"
+        assert await deps.approvals.resolve("p", "c1", True)
+        await until(lambda: deps.supervisor.get("p") is None)
+        assert not (there / "out.txt").exists()  # refused on the host
+    finally:
+        await deps.supervisor.shutdown()
+        await deps.workspaces.aclose()
+        await far.aclose()

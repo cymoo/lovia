@@ -792,8 +792,9 @@ class ChatStore:
         )
 
     async def set_workspace_mode(self, session_id: str, mode: str | None) -> None:
-        """Change a chat's permission mode; its next run uses it. Each change
-        bumps ``workspace_mode_rev`` in the same statement."""
+        """Change a chat's permission mode (``RunSupervisor.retune`` brings a
+        live run onto it). Each change bumps ``workspace_mode_rev`` in the
+        same statement."""
         await self._write(
             "UPDATE chat_sessions SET workspace_mode = ?, "
             "workspace_mode_rev = workspace_mode_rev + 1 WHERE id = ?",

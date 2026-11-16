@@ -60,3 +60,47 @@ test('without a mode from the agent or the server (an embedder), it stays "Defau
   const c = load({ modes: ['readonly', 'coding'], default: 'coding', own: null }, [{ name: 'bot' }], 'bot');
   assert.equal(c.label(null), 'mode.default');
 });
+
+test('a switch says when it reaches the reply in flight', async () => {
+  let rev = 0;
+  const toasts = [];
+  const store = {
+    serverInfo: { workspace_modes: { modes, default: 'coding', own: null } },
+    sessionId: 's',
+    agents: [],
+    agent: null,
+    on: () => {},
+    activeRuns: new Set(),
+    runsBySession: new Map(),
+    streaming: false,
+  };
+  const context = {
+    store,
+    t: (key) => key,
+    icon: () => '',
+    toast: (text) => toasts.push(text),
+    api: {
+      setSessionMode: async (_id, mode) => ({ workspace_mode: mode, workspace_mode_rev: ++rev }),
+    },
+  };
+  runInNewContext(`${source}\nglobalThis.pick = pick;`, context);
+  const live = (run) => {
+    store.activeRuns = new Set(['s']);
+    store.runsBySession = run ? new Map([['s', { run_id: run }]]) : new Map();
+  };
+
+  await context.pick('readonly');
+  assert.equal(toasts.at(-1), 'mode.switched'); // nothing in flight
+  // A reply that began read-only has no tools that edit or run commands —
+  // through every switch it sees, its id arriving midway included.
+  live(undefined);
+  await context.pick('coding');
+  assert.equal(toasts.at(-1), 'mode.toolsNextRun');
+  live('r1');
+  await context.pick('trusted');
+  assert.equal(toasts.at(-1), 'mode.toolsNextRun');
+  // The next reply began in full access: a switch reaches it at once.
+  live('r2');
+  await context.pick('coding');
+  assert.equal(toasts.at(-1), 'mode.switchedLive');
+});

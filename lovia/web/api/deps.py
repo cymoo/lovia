@@ -138,6 +138,12 @@ class RouterDeps:
     )
     _deleting: Counter[str] = field(default_factory=Counter, init=False, repr=False)
     _deleting_all: int = field(default=0, init=False, repr=False)
+    # One mode cascade at a time (``switch_mode``, and a task's catch-up in
+    # ``run_child``): two interleaved ones could leave a task on the mode the
+    # chat was switched away from. Taken before a chat's start lock.
+    _mode_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
 
     @property
     def session(self) -> Session:
@@ -555,10 +561,11 @@ class RouterDeps:
 
     @staticmethod
     def inherited(snapshot: ChatBinding | None, meta: ChatMeta | None) -> ChatBinding:
-        """The binding a chat created from that run inherits: the run's own —
-        a ``None`` mode (the agent's own policy) included, never a mode the
-        chat was switched to since the run began — else the chat's stored
-        one (an empty binding without a chat: the agent's own)."""
+        """The binding a chat created from that run inherits: the one the run
+        works under now — a ``None`` mode (the agent's own policy) included,
+        and a switch it took mid-run, never one still waiting for the next
+        run — else the chat's stored one (an empty binding without a chat:
+        the agent's own)."""
         if snapshot is not None:
             return snapshot
         if meta is None:
@@ -607,6 +614,23 @@ class RouterDeps:
             if now is not None:
                 self.emit_workspace(now)
         return resolved, bound
+
+    async def switch_mode(self, session_id: str, mode: str | None) -> None:
+        """Store ``mode`` for the chat and every task under it, bringing each
+        live run onto it (:meth:`RunSupervisor.retune`): a task works for its
+        chat, under the chat's permissions. Each task is announced; the chat
+        itself is its caller's to announce. Switches run one at a time, so the
+        last one applies to the whole tree."""
+        async with self._mode_lock:
+            await self._switch_tree(session_id, mode)
+
+    async def _switch_tree(self, session_id: str, mode: str | None) -> None:
+        await self.store.set_workspace_mode(session_id, mode)
+        await self.supervisor.retune(session_id)
+        for task in await self.store.list_children(session_id):
+            await self._switch_tree(task.id, mode)
+            if (moved := await self.store.get(task.id)) is not None:
+                self.emit_workspace(moved)
 
     def emit_workspace(self, meta: ChatMeta) -> None:
         """Announce a chat's binding (``session_workspace_changed``)."""

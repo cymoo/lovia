@@ -4,10 +4,11 @@
 // create_app(workspaces=)).
 //
 // A new chat carries the picked mode in its first message (workspace_mode);
-// an existing chat keeps its own, switched with PATCH /api/sessions/{id} and
-// applied from its next run — a reply already streaming finishes as it
-// began. A stored mode the server no longer offers runs capped down; the chip
-// shows what runs get and says why.
+// an existing chat keeps its own, switched with PATCH /api/sessions/{id},
+// which applies at once — to a reply already streaming and to the chat's
+// tasks — except for the tools a reply began with (read-only has none that
+// write). A stored mode the server no longer offers runs capped down; the
+// chip shows what runs get and says why.
 //
 // The open chat's mode reaches the chip from several sources — a change
 // event, this page's own switch, the session list, the chat's detail — in no
@@ -34,6 +35,12 @@ let _current = /** @type {string | null | undefined} */ (undefined);
 let _rev = -1;
 /** The chat id the chip last showed (null: a new chat). */
 let _shownId = /** @type {string | null} */ (null);
+/**
+ * The reply in flight a switch was made during, and the mode it began in —
+ * its tools are that mode's, whatever it was switched to since.
+ * @type {{ id: string, run: string | undefined, mode: string | null } | null}
+ */
+let _reply = null;
 
 const ORDER = ['readonly', 'coding', 'trusted'];
 /** Each mode's glyph: view, edit, everything. */
@@ -168,6 +175,14 @@ async function pick(mode) {
   }
   // No "unchanged" shortcut: the shown mode may be stale (another tab), and
   // the server's answer is what counts.
+  const live = store.activeRuns.has(id) || store.streaming;
+  const run = store.runsBySession?.get(id)?.run_id;
+  if (!live) _reply = null;
+  else if (_reply?.id === id && (_reply.run === undefined || _reply.run === run)) {
+    _reply.run = run; // its id may only now have arrived
+  } else {
+    _reply = { id, run, mode: effective(_current) || own() };
+  }
   let answer;
   try {
     answer = await api.setSessionMode(id, mode);
@@ -177,8 +192,14 @@ async function pick(mode) {
   }
   if (store.sessionId !== id) return;
   apply(answer); // a later switch from another tab, if seen already, wins
-  const live = store.activeRuns.has(id) || store.streaming;
-  toast(t(live ? 'mode.nextRun' : 'mode.switched', { mode: label(mode) }));
+  // A switch lands on the reply in flight too, but its tools are the ones it
+  // began with: read-only gave it none that edit or run commands.
+  const key = !live
+    ? 'mode.switched'
+    : _reply?.mode === 'readonly' && mode !== 'readonly'
+      ? 'mode.toolsNextRun'
+      : 'mode.switchedLive';
+  toast(t(key, { mode: label(mode) }));
 }
 
 function openMenu() {

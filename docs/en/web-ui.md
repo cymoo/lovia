@@ -671,11 +671,14 @@ workspace** or **Full access** (`readonly`, `coding` and `trusted` in
 `config.json` and the API; see [modes](workspace.md#modes)) — on the chip
 beside the folder
 chip in the composer. A new chat starts in the mode Settings → Assistant names; pick another
-before sending to start it there. Switching a chat applies from its next run:
-a reply already streaming finishes in the mode it began, and the chat's
-background processes (a dev server, say) keep running. The chats a run
-creates — background subagent tasks, chats started with `start_session`,
-the fresh chats of a schedule set up from it — take the mode that run used.
+before sending to start it there. Switching a chat applies at once: a reply
+already streaming judges its next tool call by the new mode, the chat's
+background subagent tasks switch with it, and its background processes (a
+dev server, say) keep running. A reply that began in View only has no tools
+that edit files or run commands, so those start with the next reply. The
+chats a run creates — background subagent tasks, chats started with
+`start_session`, the fresh chats of a schedule set up from it — take the
+mode that run is in.
 
 The chip offers what the server allows (see the limits below). A chat set to
 a mode the server no longer offers — it was restarted with `--readonly`, say

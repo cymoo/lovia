@@ -531,6 +531,227 @@ async def test_a_start_that_loses_a_race_never_touches_the_winners_policy(
     assert session is not None and session.policy.write == "allow"
 
 
+# ------------------------------------------------ a switch mid-run -------
+
+
+def _pausing(root: Path, mode: str, *after: object) -> Agent:
+    """An agent whose first call (``c1``, a tool that always asks) parks the
+    run — the moment a test switches the mode — and then makes ``after``."""
+    from lovia import Verdict, tool
+
+    @tool(permission=Verdict("ask", "Pauses."))
+    async def pause() -> str:
+        return "paused"
+
+    return Agent(
+        name="bot",
+        model=ScriptedProvider([call("pause", {}, call_id="c1"), *after, text("done")]),
+        tools=[pause],
+        workspace=Workspace.local(str(root), mode=mode),  # type: ignore[arg-type]
+    )
+
+
+async def _parked(deps, sid: str, agent: Agent):
+    await deps.supervisor.start(
+        session_id=sid,
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+    )
+
+    async def blocked() -> bool:
+        ctrl = deps.supervisor.get(sid)
+        return ctrl is not None and ctrl.status == "blocked_on_approval"
+
+    await _until(blocked)
+
+
+async def _switch(app, sid: str, mode: str) -> None:
+    import httpx
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+        res = await ac.patch(f"/api/sessions/{sid}", json={"workspace_mode": mode})
+        assert res.status_code == 200, res.text
+
+
+async def _finish(deps, sid: str) -> None:
+    assert await deps.approvals.resolve(sid, "c1", True)
+
+    async def gone() -> bool:
+        return deps.supervisor.get(sid) is None
+
+    await _until(gone)
+
+
+async def test_a_switch_reaches_the_run_in_flight(tmp_path: Path) -> None:
+    touch = call("shell", {"command": "touch b.txt"}, call_id="c2")
+    agent = _pausing(tmp_path, "coding", touch)
+    app = create_app(
+        agent, store=ChatStore.in_memory(), titles=False, workspaces=WorkspaceSwitch()
+    )
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="coding")
+    await _parked(deps, "p", agent)
+    await _switch(app, "p", "trusted")
+    assert deps.supervisor.get("p").binding.mode == "trusted"
+    # The shell call after the switch runs unasked: under coding it would
+    # park on a second approval nobody gives, and the run never ends.
+    await _finish(deps, "p")
+    assert (tmp_path / "b.txt").exists()
+
+
+async def test_narrowing_reaches_the_run_in_flight(tmp_path: Path) -> None:
+    agent = _pausing(tmp_path, "trusted", _WRITE)
+    app = create_app(
+        agent, store=ChatStore.in_memory(), titles=False, workspaces=WorkspaceSwitch()
+    )
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="trusted")
+    await _parked(deps, "p", agent)
+    await _switch(app, "p", "readonly")
+    # The run still has its write tool; the session refuses the write.
+    await _finish(deps, "p")
+    assert not (tmp_path / "out.txt").exists()
+
+
+async def test_a_switch_carries_to_the_chats_live_task(tmp_path: Path) -> None:
+    touch = call("shell", {"command": "touch b.txt"}, call_id="c2")
+    agent = _pausing(tmp_path, "coding", touch)
+    app = create_app(
+        agent, store=ChatStore.in_memory(), titles=False, workspaces=WorkspaceSwitch()
+    )
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="coding")
+    await deps.store.upsert("t", agent="bot", parent_id="p", workspace_mode="coding")
+    await _parked(deps, "t", agent)  # the task's run; the parent is idle
+    await _switch(app, "p", "trusted")
+    task = await deps.store.get("t")
+    assert (task.workspace_mode, task.workspace_mode_rev) == ("trusted", 1)
+    await _finish(deps, "t")
+    assert (tmp_path / "b.txt").exists()
+
+
+async def test_a_switch_reaches_tasks_at_every_depth(tmp_path: Path) -> None:
+    app = create_app(
+        _agent(tmp_path, []),
+        store=ChatStore.in_memory(),
+        titles=False,
+        workspaces=WorkspaceSwitch(),
+    )
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="coding")
+    await deps.store.upsert("t", agent="bot", parent_id="p", workspace_mode="coding")
+    await deps.store.upsert("g", agent="bot", parent_id="t", workspace_mode="coding")
+    await _switch(app, "p", "trusted")
+    assert (await deps.store.get("g")).workspace_mode == "trusted"
+
+
+async def test_interleaved_switches_leave_the_whole_tree_on_the_last(
+    tmp_path: Path,
+) -> None:
+    import asyncio
+
+    app = create_app(
+        _agent(tmp_path, []),
+        store=ChatStore.in_memory(),
+        titles=False,
+        workspaces=WorkspaceSwitch(),
+    )
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="coding")
+    await deps.store.upsert("t", agent="bot", parent_id="p", workspace_mode="coding")
+    store_write = deps.store.set_workspace_mode
+
+    async def slow_widening(session_id: str, mode: str | None) -> None:
+        # The widening's write to the task lands after the narrowing began.
+        if session_id == "t" and mode == "trusted":
+            await asyncio.sleep(0.05)
+        await store_write(session_id, mode)
+
+    deps.store.set_workspace_mode = slow_widening
+    widen = asyncio.create_task(deps.switch_mode("p", "trusted"))
+    await asyncio.sleep(0.01)
+    await deps.switch_mode("p", "readonly")
+    await widen
+    modes = {s: (await deps.store.get(s)).workspace_mode for s in ("p", "t")}
+    assert modes == {"p": "readonly", "t": "readonly"}
+
+
+async def test_a_switch_during_a_tasks_setup_still_reaches_it(tmp_path: Path) -> None:
+    from lovia import Subagents
+
+    child = Agent(
+        name="digger",
+        model=ScriptedProvider(
+            [call("shell", {"command": "touch b.txt"}), text("dug")]
+        ),
+        workspace=Workspace.local(str(tmp_path)),
+    )
+    parent = Agent(
+        name="bot",
+        model=ScriptedProvider([call("spawn_subagent", {"prompt": "dig"}), text("ok")]),
+        plugins=[Subagents(child)],
+        workspace=Workspace.local(str(tmp_path)),
+    )
+    switched: list[str] = []
+
+    async def run_deps(trigger) -> None:
+        # Between the spawn and the task row: the switch's list of tasks
+        # can't have this one yet.
+        if trigger.source.startswith("subagent:") and not switched:
+            switched.append(trigger.session_id)
+            await app.state.deps.switch_mode("p", "trusted")
+
+    app = create_app(
+        parent,
+        store=ChatStore.in_memory(),
+        titles=False,
+        workspaces=WorkspaceSwitch(),
+        run_deps=run_deps,
+    )
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="coding")
+    await deps.supervisor.start(
+        session_id="p",
+        agent=parent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+    )
+
+    async def touched() -> bool:
+        return (tmp_path / "b.txt").exists()
+
+    # Under coding the task's shell call would park on an approval forever.
+    await _until(touched)
+    (task,) = await deps.store.list_children("p")
+    assert switched and task.workspace_mode == "trusted"
+
+
+async def test_retune_changes_only_a_policy_and_never_closes(tmp_path: Path) -> None:
+    from lovia.web.workspaces import WorkspaceSessions
+
+    sessions = WorkspaceSessions()
+    coding = Workspace.local(str(tmp_path), mode="coding")
+    assert sessions.retune("s", coding) is False  # nothing bound yet
+    await sessions.bind("s", Agent(name="a", workspace=coding))
+    held = sessions.get("s")
+    assert held is not None
+    assert sessions.retune("s", Workspace.local(str(tmp_path), mode="readonly"))
+    assert held.policy.write == "deny"
+    # Another root (or env, limits, ...) can't change in place: left alone.
+    other = tmp_path / "other"
+    other.mkdir()
+    assert sessions.retune("s", Workspace.local(str(other), mode="coding")) is False
+    assert sessions.get("s") is held and not getattr(held, "closed", False)
+    assert held.policy.write == "deny"
+    await sessions.aclose()
+
+
 def test_every_report_of_a_mode_carries_its_revision(tmp_path: Path) -> None:
     with _client(_agent(tmp_path, [text("x")]), WorkspaceSwitch()) as c:
         sid = c.post(

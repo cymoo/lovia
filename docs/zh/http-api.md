@@ -203,7 +203,7 @@ API 路由抛出的错误都使用同一种响应体：
 以及 `workspace_mode`（`"readonly"`、`"coding"` 或 `"trusted"`，须在 `/api/info` 的
 `workspace_modes.modes` 之中）。目录在对话的整个生命周期内不变，每次运行前都会重新校验：服务端不再允许的目录
 会被拒绝（409 `workspace_not_allowed`），不会被换掉。已有对话也保持自己的模式，
-用 `PATCH /api/sessions/{id}` 修改，从下次运行起生效。会话里还返回 `workspace_root`（`null` 表示对话早于目录绑定）。会话里返回的是保存的 `workspace_mode`，
+用 `PATCH /api/sessions/{id}` 修改，立即生效：进行中的运行和对话的子任务也随之切换。会话里还返回 `workspace_root`（`null` 表示对话早于目录绑定）。会话里返回的是保存的 `workspace_mode`，
 以及每次切换都会加 1 的 `workspace_mode_rev`：同一对话的模式有多份报告时（列表、详情、`PATCH` 的响应、事件），
 无论到达顺序如何，版本号更大的那份更新。服务端已不提供的模式，按它下方最宽的可用模式运行。
 

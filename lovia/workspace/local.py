@@ -547,8 +547,9 @@ class LocalWorkspaceSession:
 
         The session keeps its processes, locks and root: this is how a
         serving layer changes a conversation's permissions without killing
-        the dev server it started. Call it between runs — an operation
-        already past its gate is not re-judged.
+        the dev server it started. Safe mid-run: every later gate judges by
+        ``policy``, while an operation already past its gate is not
+        re-judged. The tools a run was given stay as they were.
         """
         self.policy = policy
 

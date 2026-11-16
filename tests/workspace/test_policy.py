@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -415,6 +416,55 @@ def test_globs_variables_and_substitutions_cap_allowed_commands_at_ask() -> None
         verdict = policy.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scopes == (), cmd
         assert "expanded by the shell" in verdict.reason, cmd
+
+
+@pytest.mark.skipif(os.name == "nt", reason="cmd.exe quotes differently")
+def test_quoted_against_the_shell_a_word_is_literal() -> None:
+    # The shell expands nothing in single quotes, no glob or brace in double
+    # quotes, and no escaped character: the program gets the word as written,
+    # so it is an argument like any other — a gray command keeps its grant.
+    gray = WorkspacePolicy(shell_default="ask")
+    for cmd, scopes in (
+        ("find . -name '*.py'", ("shell:find",)),
+        ("rg 'foo.*bar' src", ("shell:rg",)),
+        ("rg -g '*.ts' foo", ("shell:rg",)),
+        ("awk '{print $2}' a.txt", ("shell:awk",)),
+        ("python -c 'print(1*2)'", ("shell:python",)),
+        ('grep "a*b" x', ("shell:grep",)),
+        ("rg '#include' src", ("shell:rg",)),  # nothing to expand at all
+    ):
+        assert gray.decide_command(cmd) == Verdict("ask", "", scopes), cmd
+    # What the shell still expands withholds the grant: `$` and backticks in
+    # double quotes, an unquoted part of a word, `$'…'`.
+    # Judged with the quotes of the whole line: the split cuts inside them
+    # (`'a;b'`), and a piece read on its own would take the stray quote for an
+    # opening one and the `$(id)` after it for a literal.
+    for cmd in (
+        'awk "$P"',
+        'grep "$(id)" x',
+        'grep "`id`" x',
+        "rg '*'*",
+        "rg $'a'",
+        "rg 'a;b' $(id)",
+        "rg 'foo|bar' \"$HOME\"",
+        # What gives quotes another meaning turns the reading off for the
+        # whole line: a comment (a quote in it opens nothing), a
+        # here-document (quotes in its body quote nothing), a nested context.
+        'rg foo # \'\nrg "$HOME"',
+        "# don't\nrg $DIR",
+        "rg foo\\ #'\nbar' $HOME",
+        "cat <<EOF\n'`printf x`'\nEOF",
+        "find . -name '*.py' # all of them",
+        "rg 'a' \"${X:-'*'}\"",
+    ):
+        verdict = gray.decide_command(cmd)
+        assert verdict.action == "ask" and verdict.scopes == (), cmd
+        assert "expanded by the shell" in verdict.reason, cmd
+    # An allow rule still covers literal arguments only, quoted ones included
+    # (a program may glob '*' itself): those ask, as before.
+    allowed = _opted_in()
+    for cmd in ("echo '$HOME'", 'ls "*.py"', r"ls \*.py"):
+        assert allowed.decide_command(cmd).action == "ask", cmd
 
 
 def test_content_readers_are_gray_and_no_index_asks() -> None:

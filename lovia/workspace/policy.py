@@ -310,22 +310,76 @@ _NOT_A_PROGRAM = _THIN_WRAPPERS | {"timeout", "for", "case", "select"}
 # * a glob, variable or substitution — the shell turns it into paths the
 #   guard never sees (``cat *`` reads ``id_rsa``; ``cat $F``; ``$(…)``), or
 #   into a program it never sees (``$CMD``, ``./tool*``), which a grant for
-#   the word as spelled would then cover.
+#   the word as spelled would then cover. Quoted against the shell, the same
+#   characters are literal (``find . -name '*.py'``, ``awk '{print $2}'``):
+#   no allow rule covers them still (a program may glob them itself), but a
+#   gray command keeps the grant the person may give for it.
 _OUTPUT_LIKE = ("--out", "--log-file", "--junit")
 # cmd.exe expands `%VAR%` and strips the `^` escape (`type .e^nv` is `.env`).
 _EXPANSION_CHARS = frozenset("*?[{$`" + ("%^" if os.name == "nt" else ""))
 
 
-def _uncertain_word(segment: list[str], command: list[str]) -> str | None:
+def _mask_literal(command: str) -> str:
+    """``command`` with each expansion character the shell takes literally
+    turned into ``x``: everything inside single quotes, a glob or brace inside
+    double quotes (``$`` and backticks still expand there), and one escaped by
+    a backslash. Only expansion characters change — none is a quote, a blank
+    or shell punctuation — so the result splits into the same segments and
+    lexes into the same words, one for one. Given the whole command line:
+    quotes only mean something in their full context.
+
+    Only plain quoting is read. A line holding anything that gives quotes
+    another meaning — a here-document (``<<``), a comment (``#``), a nested
+    context (``$(``, a backtick, ``${``) — is returned as it is: every
+    expansion character in it counts, as it did before quotes were read, and
+    at worst a grant is withheld. Not on Windows either: cmd.exe has no
+    single quotes and expands ``%VAR%`` inside double ones."""
+    if os.name == "nt" or any(mark in command for mark in _QUOTING_CHANGES):
+        return command
+    out: list[str] = []
+    quote = ""
+    escaped = False
+    for c in command:
+        if escaped:
+            escaped = False
+            out.append("x" if c in _EXPANSION_CHARS else c)
+        elif quote == "'":
+            quote = "" if c == "'" else quote
+            out.append("x" if c in _EXPANSION_CHARS else c)
+        elif c == "\\":
+            escaped = True
+            out.append(c)
+        elif quote == '"':
+            quote = "" if c == '"' else quote
+            out.append("x" if c in "*?[{" else c)
+        else:
+            quote = c if c in "'\"" else ""
+            out.append(c)
+    return "".join(out)
+
+
+# What gives quotes a meaning plain reading gets wrong: a here-document's
+# body (quotes in it quote nothing), a comment (a quote in it opens nothing),
+# and contexts nested in double quotes, which start their own quoting. Present
+# anywhere, quoted or not, they turn the mask off — a closed list, by design:
+# guessing in their presence is what a grant must never rest on.
+_QUOTING_CHANGES = ("<<", "#", "$(", "`", "${")
+
+
+def _uncertain_word(
+    segment: list[str], command: list[str], masked: list[str] | None = None
+) -> str | None:
     """The first word an allow rule cannot vouch for, with why, or None.
 
     ``segment`` is every word as lexed — the shell expands everywhere, a
     redirect target included, so expansion is judged before any syntax is
-    dropped; ``command`` is what is left after that, whose arguments alone
-    can be options.
+    dropped; ``masked`` is the same words lexed from :func:`_mask_literal`'s
+    segment, so a quoted ``'*.py'`` is not taken for a glob. ``command`` is
+    what is left after the syntax, whose arguments alone can be options.
     """
-    for word in segment:
-        if any(c in word for c in _EXPANSION_CHARS):
+    seen = masked if masked is not None and len(masked) == len(segment) else segment
+    for word, judged in zip(segment, seen):
+        if any(c in judged for c in _EXPANSION_CHARS):
             return f"'{word}' is expanded by the shell"
     for word in command[1:]:
         if word == "--":
@@ -741,16 +795,33 @@ class WorkspacePolicy:
         """
         if not self.allow_shell:
             return Verdict("deny", "the shell is disabled for this workspace")
-        segments = [seg.strip() for seg in _COMMAND_SPLIT.split(command)]
-        segments = [seg for seg in segments if seg]
+        # Literals are masked over the whole command, where every quote has
+        # its real context: the split is lexical and cuts inside quotes too
+        # (`rg 'a|b' $(id)`), and a piece masked on its own would take the
+        # stray quote for an opening one — and mask the `$(id)` after it. The
+        # mask keeps every character's place and never touches what the split
+        # cuts on, so both strings split the same.
+        pieces = zip(
+            _COMMAND_SPLIT.split(command), _COMMAND_SPLIT.split(_mask_literal(command))
+        )
+        segments = [(seg.strip(), masked.strip()) for seg, masked in pieces]
+        segments = [(seg, masked) for seg, masked in segments if seg]
         if not segments:
             return self._default_command_verdict([])
-        return merge_verdicts(*(self._decide_segment(seg) for seg in segments))
+        return merge_verdicts(
+            *(self._decide_segment(seg, masked) for seg, masked in segments)
+        )
 
-    def _decide_segment(self, segment: str) -> Verdict:
+    def _decide_segment(self, segment: str, masked: str) -> Verdict:
         lexed = _words(segment)
         words, stripped = _strip_wrappers(lexed)
+        # Two readings of the words. As spelled, any expansion character caps
+        # an allow rule: a rule vouches in advance for literal arguments, and
+        # a program may glob a quoted '*' itself (git pathspecs). As the shell
+        # reads them, a quoted literal is an argument like any other, so a
+        # gray ask keeps the grant the person can choose to give.
         uncertain = _uncertain_word(lexed, words)
+        expands = _uncertain_word(lexed, words, _words(masked))
         if not words:
             # Syntax alone (`fi`, `done`, `}`) runs nothing — unless the
             # shell expands something in it.
@@ -759,7 +830,7 @@ class WorkspacePolicy:
         if stripped or uncertain:
             # The wrapper (or the word) is what neither an allow *rule*
             # nor a grant for the command can vouch for: a rule's allow is
-            # capped at ask, and any ask loses its scope. A default of allow
+            # capped at ask, and an ask loses its scope. A default of allow
             # (``trusted``) is not a rule vouching for anything — it is the
             # choice not to judge commands — and is left alone.
             why = f"'{' '.join(stripped)}' wraps the command" if stripped else uncertain
@@ -767,9 +838,12 @@ class WorkspacePolicy:
                 verdict = Verdict(
                     "ask", f"{why}; allow rules cover literal arguments only"
                 )
-            elif verdict.action == "ask":
+            elif verdict.action == "ask" and (stripped or expands):
                 # Without a reason of its own, the ask says why no "always
                 # allow" is on offer.
+                why = (
+                    f"'{' '.join(stripped)}' wraps the command" if stripped else expands
+                )
                 verdict = Verdict("ask", verdict.reason or str(why))
         base = self._command_rule_verdict(self._baseline_commands, words, every=True)
         return merge_verdicts(verdict, base) if base is not None else verdict

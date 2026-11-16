@@ -154,9 +154,12 @@ _PERMISSION_FIELDS = frozenset({"mode", "auto_allow"})
 
 class MCPDocumentIn(BaseModel):
     """Servers as pasted into Settings → MCP: an ``mcpServers`` document, or
-    the object inside it (:func:`lovia.web.config.mcp.parse_servers`)."""
+    the object inside it (:func:`lovia.web.config.mcp.parse_servers`).
+    With ``root`` (adding only), they are for that directory's project
+    alone: saved switched off, and turned on there."""
 
     document: Any
+    root: str | None = Field(default=None, max_length=4096)
 
 
 class MCPEnabledIn(BaseModel):
@@ -361,6 +364,7 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         }
 
     def _mcp_out() -> dict[str, object]:
+        used = runtime.project_mcp.turned_on()
         return {
             "timeout": CONNECT_TIMEOUT,
             "servers": [
@@ -374,6 +378,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                     # What the editor shows: env and header values masked.
                     "spec": spec_of(s),
                     "status": _status_out(runtime.mcp.get(s)),
+                    # The projects that have it on though it is off here.
+                    "projects": [] if s.enabled else used.get(s.name, []),
                 }
                 for s in runtime.config.mcp
             ],
@@ -595,6 +601,19 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
     ) -> dict[str, object]:
         _guard_write(request)
         added = [_with_secrets(s, None) for s in _parsed(body.document)]
+        project = None
+        if body.root is not None:
+            # For one project: off for every other, on there — the same
+            # record a switch in that project writes.
+            project = await _project(None, body.root)
+            if project is None:
+                raise WebError(
+                    400,
+                    "invalid_request",
+                    "that directory is no project",
+                    hint="add the server for every chat instead",
+                )
+            added = [s.model_copy(update={"enabled": False}) for s in added]
         async with mcp_lock:
             taken = {s.name for s in runtime.config.mcp}
             clash = next((s.name for s in added if s.name in taken), None)
@@ -606,6 +625,9 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                     hint="edit that one, or give this one another name",
                 )
             await _apply_servers([*runtime.config.mcp, *added])
+            if project is not None:
+                for server in added:
+                    runtime.project_mcp.override(project, server.name, True)
         return _config_out()
 
     @router.put("/mcp/{name}")

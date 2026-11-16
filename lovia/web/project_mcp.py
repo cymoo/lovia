@@ -226,6 +226,16 @@ class ProjectMCP:
             record["global"].pop(project, None)
         self._save(record)
 
+    def turned_on(self) -> dict[str, list[str]]:
+        """The projects that have a global server on whatever its own
+        switch says, by server name — who still uses one that is off."""
+        out: dict[str, list[str]] = {}
+        for project, mine in self._load()["global"].items():
+            for name, on in self._of({project: mine}, project).items():
+                if on is True:
+                    out.setdefault(name, []).append(project)
+        return out
+
     def renamed(self, name: str, to: str | None) -> None:
         """The global server ``name`` is now called ``to`` — or, ``None``,
         is gone: what projects said of it goes with it, never to another

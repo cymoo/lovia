@@ -180,7 +180,7 @@ permission mode) has no command.
 
 | Command | Does |
 | --- | --- |
-| `/mcp` | Shows the MCP servers this chat can use — [the project's own](#a-projects-own-servers) and [Settings'](#servers-for-one-project) — and turns each on or off for the project |
+| `/mcp` | Opens Settings → MCP on this chat's project: [the servers that came with it](#a-projects-own-servers) and [the ones you added](#servers-for-one-project), each with a switch for the project |
 | `/init` | Asks the assistant to read the project and write (or update) its `AGENTS.md` |
 | `/rename New title` | Renames the chat; without a title it asks |
 | `/branch` | Branches a new chat off this one |
@@ -315,14 +315,18 @@ file other clients read, checked in with the project:
 }
 ```
 
-It is a convention, like `AGENTS.md` and `.agents/skills`, not a setting, and
-Settings → MCP does not list it. But it names commands to run and it arrives
-with the repository, so **a server in it stays off until you turn it on**:
+It is a convention, like `AGENTS.md` and `.agents/skills`, not a setting:
+lovia reads the file and never writes it. But it names commands to run and
+it arrives with the repository, so **a server in it stays off until you turn
+it on**:
 
-- While any is undecided, a line over the composer says so; **Review** shows
-  each entry as written with a switch. The chat runs meanwhile, without those
-  servers — nothing waits on the answer. To look again later, open the
-  folder's **⋯ → Project MCP servers** in the sidebar.
+- Settings → MCP has two scopes. **One project** lists that project's
+  servers: the ones its `.mcp.json` names under **Came with the project**,
+  each as written with a switch, then the ones you added.
+- While any is undecided, a line over the composer says so, and **Review**
+  opens that page. The chat runs meanwhile, without those servers — nothing
+  waits on the answer. `/mcp` in a chat, or the folder's **⋯ → Project MCP
+  servers** in the sidebar, opens the same page.
 - The decision is kept in lovia's home (`mcp-projects.json`), per project
   directory, never in the project: a repository can't approve itself.
 - It holds for the entry as it was written. An edited entry — after a pull,
@@ -330,7 +334,7 @@ with the repository, so **a server in it stays off until you turn it on**:
 - `${VAR}` and `${VAR:-default}` in `command`, `args`, `env`, `url` and
   `headers` are filled from the server's environment when a run starts, so
   secrets stay out of the file. An entry naming a variable that is not set
-  (and has no default) is not started, and the dialog says which.
+  (and has no default) is not started, and the page says which.
 - A command starts in the project directory, or in the entry's `cwd` taken
   relative to it. A server with the same name as one in Settings is used
   instead of it. An entry with `"disabled": true` is listed but can't be
@@ -349,20 +353,22 @@ except in Full access.
 
 ### Servers for one project
 
-The same dialog — `/mcp` in a chat, or a sidebar folder's **⋯ → Project MCP
-servers** — lists the servers of Settings → MCP under **From Settings**, each
-with a switch for *this project*:
+In the **One project** scope the servers you added are listed too, each with
+a switch for *this project*:
 
-- A server that is off in Settings can be on here, and one that is on can be
-  off here. Other projects, and Settings itself, stay as they are. That is
-  how a server becomes this project's alone without going into the
-  repository: add it in Settings switched off, and turn it on here.
+- A server that is off for all projects can be on here, and one that is on
+  can be off here. Other projects, and the **All projects** scope, stay as
+  they are.
+- **Add to this project** adds a server for this project alone: saved with
+  the others in `config.json`, switched off, and turned on here — nothing
+  is written into the project. Under **All projects** it reads "In 1 project
+  only".
 - A project that says nothing follows the server's own switch, including
   later changes to it.
 - These are your own entries, so there is nothing to approve; the record is
   the same `mcp-projects.json`.
 - A chat on another machine has these switches too: the servers still run on
-  the lovia web host. A chat in "No project" follows Settings.
+  the lovia web host. A chat in "No project" follows **All projects**.
 - Fewer servers on means fewer tools in every request of the project's
   chats — each server's tools are sent to the model whether or not they are
   used.

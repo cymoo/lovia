@@ -3338,100 +3338,6 @@ button.lv-question-option:hover {
   min-width: 0;
   flex: 1;
 }
-/* The dialog behind it: each server, what it runs, a switch. */
-.lv-pmcp {
-  min-width: 0;
-}
-.lv-pmcp-title {
-  margin: 0 0 10px;
-  font-size: 16px;
-  font-weight: 620;
-}
-.lv-pmcp-list {
-  max-height: 56vh;
-  overflow-y: auto;
-}
-/* Its two groups: the project's own servers, then Settings'. */
-.lv-pmcp-heading {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--lv-muted);
-}
-.lv-pmcp-row + .lv-pmcp-heading,
-.lv-pmcp-error + .lv-pmcp-heading,
-.lv-pmcp-intro + .lv-pmcp-heading {
-  margin-top: 18px;
-}
-.lv-pmcp-intro {
-  margin: 4px 0 6px;
-  font-size: 13px;
-  color: var(--lv-muted);
-  overflow-wrap: anywhere;
-}
-.lv-pmcp-note {
-  margin-top: 4px;
-  font-size: 12.5px;
-  color: var(--lv-muted);
-}
-/* Manage… at the start of the row, Done at its end. */
-.lv-pmcp-actions {
-  display: flex;
-  flex: 1;
-  justify-content: space-between;
-}
-.lv-pmcp-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--lv-border);
-}
-.lv-pmcp-main {
-  min-width: 0;
-  flex: 1;
-}
-.lv-pmcp-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13.5px;
-  font-weight: 600;
-  font-family: var(--lv-mono);
-}
-.lv-pmcp-name .lv-badge {
-  font-family: var(--lv-sans);
-  background: var(--lv-warn-soft);
-  color: var(--lv-warn);
-}
-.lv-pmcp-target {
-  margin-top: 2px;
-  font-family: var(--lv-mono);
-  font-size: 12.5px;
-  color: var(--lv-ink-2);
-  overflow-wrap: anywhere;
-}
-.lv-pmcp-error {
-  margin-top: 4px;
-  font-size: 12.5px;
-  color: var(--lv-danger);
-}
-.lv-pmcp-detail {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--lv-muted);
-}
-.lv-pmcp-detail summary {
-  cursor: pointer;
-}
-.lv-pmcp-detail pre {
-  margin: 6px 0 0;
-  padding: 8px 10px;
-  max-height: 180px;
-  overflow: auto;
-  font-size: 12px;
-  border-radius: var(--lv-radius-sm);
-  background: var(--lv-surface-2);
-}
 .lv-send-queue {
   display: flex;
   flex-direction: column;
@@ -4830,17 +4736,22 @@ details[open] > summary.lv-sched-group-head svg {
   gap: 10px;
   height: 100%;
 }
-.lv-memory-scope {
+/* Which scope a settings page shows (Memory, MCP): tabs, then — for the
+   project scope — which project. */
+.lv-scope-row {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
-.lv-memory-scope[hidden] {
+.lv-scope-row[hidden] {
   display: none;
 }
-.lv-memory-scope .lv-settings-select {
+.lv-cfg-pane > div > .lv-scope-row {
+  margin-bottom: 16px;
+}
+.lv-scope-row .lv-settings-select {
   max-width: 220px;
   min-width: 0;
 }
@@ -7511,6 +7422,32 @@ body.lv-files-resizing {
 .lv-mcp-intro {
   margin-bottom: 14px;
   line-height: 1.55;
+}
+/* A project's scope has two groups: the servers that came with it, then
+   the added ones. */
+.lv-mcp-heading {
+  margin: 18px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lv-muted);
+}
+.lv-mcp-heading + .lv-mcp-intro {
+  margin-bottom: 10px;
+}
+/* A server waiting on a yes or no stands out from the plain badges. */
+.lv-mcp-row .lv-badge:not(.lv-badge-plain) {
+  background: var(--lv-warn-soft);
+  color: var(--lv-warn);
+}
+/* An entry of the project's .mcp.json, as written. */
+.lv-mcp-entry {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+  border-radius: var(--lv-radius-sm);
+  background: var(--lv-surface);
 }
 .lv-mcp-empty {
   display: flex;

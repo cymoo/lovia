@@ -106,7 +106,7 @@ function buildPane(agent, pick, layers, projects) {
   const panel = document.createElement('div');
   panel.className = 'lv-settings-panel lv-memory-pane';
   panel.innerHTML = `
-    <div class="lv-memory-scope"></div>
+    <div class="lv-scope-row"></div>
     <p class="lv-memory-hint"></p>
     <label class="lv-vh" for="memory-editor">${t('memory.editorLabel')}</label>
     <textarea id="memory-editor" class="lv-dialog-input lv-memory-editor" spellcheck="false" disabled></textarea>
@@ -119,7 +119,7 @@ function buildPane(agent, pick, layers, projects) {
       </div>
     </div>`;
   const $ = (/** @type {string} */ sel) => /** @type {HTMLElement} */ (panel.querySelector(sel));
-  const scopeRow = $('.lv-memory-scope');
+  const scopeRow = $('.lv-scope-row');
   const hint = $('.lv-memory-hint');
   const meter = $('.lv-memory-meter');
   const editor = /** @type {HTMLTextAreaElement} */ ($('.lv-memory-editor'));

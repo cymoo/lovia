@@ -509,12 +509,14 @@ export const api = {
   getSkills: () => request('/api/config/skills').then(_json),
   // Settings → MCP. `document` is the pasted mcpServers JSON (parsed); env
   // and header values come back masked, and a mask sent back unchanged keeps
-  // what is stored. Each write resolves to the whole (masked) config.
-  addMcpServers: (document) =>
+  // what is stored. Each write resolves to the whole (masked) config. With
+  // `root`, the added servers are for that directory's project alone.
+  /** @param {unknown} document @param {string} [root] */
+  addMcpServers: (document, root) =>
     request('/api/config/mcp', {
       method: 'POST',
       headers: JSON_HEADERS,
-      body: JSON.stringify({ document }),
+      body: JSON.stringify({ document, ...(root ? { root } : {}) }),
     }).then(_json),
   /** @param {string} name @param {unknown} document */
   updateMcpServer: (name, document) =>

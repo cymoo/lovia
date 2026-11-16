@@ -299,6 +299,31 @@ def test_a_project_has_global_servers_on_or_off_for_itself(served) -> None:
     assert res.status_code == 404
 
 
+def test_a_server_added_for_one_project_is_on_there_alone(served) -> None:
+    client, provider, project = served
+    res = client.post(
+        "/api/config/mcp", json={"document": {"mine": _stub()}, "root": str(project)}
+    )
+    assert res.status_code == 201, res.text
+    # Saved like any other — off for every chat, and says who still uses it.
+    (saved,) = res.json()["mcp"]["servers"]
+    assert saved["enabled"] is False
+    assert saved["projects"] == [str(project.resolve())]
+    # On in the project it was added to: its chats get the tools.
+    (here,) = client.get(URL).json()["global"]
+    assert (here["enabled"], here["on"]) == (False, True)
+    assert {t.split("__")[0] for t in _chat(client, provider)} == {"mine"}
+    # Turned on for everyone, it no longer belongs to some projects only.
+    client.put("/api/config/mcp/mine/enabled", json={"enabled": True})
+    (saved,) = client.get("/api/config").json()["mcp"]["servers"]
+    assert saved["projects"] == []
+    # Nothing is saved for a name that is taken.
+    res = client.post(
+        "/api/config/mcp", json={"document": {"mine": _stub()}, "root": str(project)}
+    )
+    assert res.status_code == 409
+
+
 def test_what_a_project_said_of_a_server_goes_with_the_server(served) -> None:
     client, _provider, _project = served
     doc = {"db": {**_stub(), "disabled": True}}

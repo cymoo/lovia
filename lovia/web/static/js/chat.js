@@ -854,12 +854,14 @@ function appendApproval(call) {
     remembered: (text) => noteRemembered(call.id, text),
     // The answer never reached the server, so the request still waits:
     // take back what the click showed and offer the card again. Not when
-    // the server says it no longer waits (answered elsewhere — its
-    // approval_resolved has the last word), nor once the chat or the
-    // request on screen is another.
+    // the server says it no longer waits — by its answer, or by an
+    // approval_resolved already in (a send whose response was lost after
+    // the server acted) — nor once the chat or the request on screen is
+    // another. A resolution arriving after this restore removes the card.
     failed: (err) => {
       if (err.code === 'approval_not_found') return;
-      if (store.sessionId !== sessionId || store.approvals.get(call.id)?.call !== call) return;
+      const entry = store.approvals.get(call.id);
+      if (store.sessionId !== sessionId || entry?.call !== call || entry.settled) return;
       findToolNode(call.id)?.querySelector('summary > .lv-tool-approval')?.remove();
       toast(t('approval.notSent'), { type: 'error' });
       appendApproval(call);
@@ -1237,6 +1239,10 @@ function setApprovalBadge(row, { outcome, title }) {
 
 /** @param {{ id: string, approved: boolean, cause: 'user' | 'timeout' | 'cancel' | 'policy' }} data */
 function resolveApproval(data) {
+  // The server's word: a click's failed send (its response lost after the
+  // server acted) must not offer this request again.
+  const entry = store.approvals.get(data.id);
+  if (entry) entry.settled = true;
   // A mode switch answered it: the badge says so, not "you".
   const byMode = data.cause === 'policy' ? t('approval.byMode') : undefined;
   decideApproval(data.id, approvalOutcome(data), byMode);

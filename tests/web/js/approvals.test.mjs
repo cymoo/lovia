@@ -91,6 +91,9 @@ test('a frame settles the request by who decided', () => {
   assert.equal(approvalOutcome({ approved: false, cause: 'user' }), 'deny');
   assert.equal(approvalOutcome({ approved: false, cause: 'timeout' }), 'timeout');
   assert.equal(approvalOutcome({ approved: false, cause: 'cancel' }), 'cancel');
+  // The chat's mode, switched while it waited, decides like a person.
+  assert.equal(approvalOutcome({ approved: true, cause: 'policy' }), 'approve');
+  assert.equal(approvalOutcome({ approved: false, cause: 'policy' }), 'deny');
   assert.match(outcomeText('timeout'), /denied automatically/);
 });
 

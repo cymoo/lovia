@@ -112,13 +112,14 @@ export function scopeList(scopes) {
  */
 
 /**
- * How an `approval_resolved` frame settles a request.
- * @param {{ approved: boolean, cause: 'user' | 'timeout' | 'cancel' }} data
+ * How an `approval_resolved` frame settles a request. The chat's permission
+ * mode (`policy`: switched while it waited) approves or denies like a person.
+ * @param {{ approved: boolean, cause: 'user' | 'timeout' | 'cancel' | 'policy' }} data
  * @returns {ApprovalOutcome}
  */
 export function approvalOutcome(data) {
   if (data.approved) return 'approve';
-  return data.cause === 'user' ? 'deny' : data.cause;
+  return data.cause === 'user' || data.cause === 'policy' ? 'deny' : data.cause;
 }
 
 /** @type {Record<ApprovalOutcome, [badge: string, sentence: string]>} */

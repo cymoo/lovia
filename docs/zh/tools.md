@@ -225,6 +225,10 @@ handle.approvals.release(decision=False)  # 拒绝所有仍在等待的调用
 内置服务端通过 SSE 和 `POST /api/chat/approve` 暴露同一流程。Workspace 的 `ask` 判定和
 配置了 `permission` 的 MCP Tool 也使用这个通道。
 
+消费者在请求等待期间改了权限（比如服务层切换了对话的模式）时，可以让它重新判定：`await request.recheck()`
+用调用的参数再跑一次工具自己的检查，返回新的 `Verdict`——`allow` 或 `deny` 可以用 `approve()` / `reject()`
+结算，`ask` 表示仍需人来决定。
+
 “记住批准”（“本对话中总是允许 `git push`”）是消费者的事，以 `request.scopes` 为键；
 程序化版本就是五行 `approval_handler`：
 

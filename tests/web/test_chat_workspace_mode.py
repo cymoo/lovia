@@ -732,6 +732,102 @@ async def test_a_switch_during_a_tasks_setup_still_reaches_it(tmp_path: Path) ->
     assert switched and task.workspace_mode == "trusted"
 
 
+def _asking(root: Path, mode: str, first: object) -> tuple[Agent, object, list]:
+    """An agent whose first call (``c1``) the ``mode`` asks about, its app,
+    and the approval frames its runs publish."""
+    from lovia.web.sse import ApprovalResolved
+    from lovia.web.supervisor import RunController
+
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider([first, text("done")]),
+        workspace=Workspace.local(str(root), mode=mode),  # type: ignore[arg-type]
+    )
+    app = create_app(
+        agent, store=ChatStore.in_memory(), titles=False, workspaces=WorkspaceSwitch()
+    )
+    resolved: list = []
+    publish = RunController._publish_frame
+
+    def record(self, frame) -> None:  # type: ignore[no-untyped-def]
+        if isinstance(frame, ApprovalResolved):
+            resolved.append(frame)
+        publish(self, frame)
+
+    RunController._publish_frame = record  # type: ignore[method-assign]
+    return agent, app, resolved
+
+
+@pytest.fixture
+def _restore_publish():
+    from lovia.web.supervisor import RunController
+
+    publish = RunController._publish_frame
+    yield
+    RunController._publish_frame = publish  # type: ignore[method-assign]
+
+
+async def _gone(deps, sid: str) -> None:
+    async def gone() -> bool:
+        return deps.supervisor.get(sid) is None
+
+    await _until(gone)
+
+
+@pytest.mark.usefixtures("_restore_publish")
+async def test_a_waiting_request_the_new_mode_allows_runs(tmp_path: Path) -> None:
+    touch = call("shell", {"command": "touch a.txt"}, call_id="c1")
+    agent, app, resolved = _asking(tmp_path, "coding", touch)
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="coding")
+    await _parked(deps, "p", agent)  # coding asks about `touch`
+    await _switch(app, "p", "trusted")
+    # No one answers: the switch settled it, and the card says so.
+    await _gone(deps, "p")
+    assert (tmp_path / "a.txt").exists()
+    assert [(f.call_id, f.approved, f.cause) for f in resolved] == [
+        ("c1", True, "policy")
+    ]
+
+
+@pytest.mark.usefixtures("_restore_publish")
+async def test_a_waiting_request_the_new_mode_denies_is_refused(
+    tmp_path: Path,
+) -> None:
+    hook = call("write_file", {"path": ".git/hooks/x", "content": "hi"}, call_id="c1")
+    agent, app, resolved = _asking(tmp_path, "trusted", hook)
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="trusted")
+    await _parked(deps, "p", agent)  # trusted asks about writes to .git
+    await _switch(app, "p", "readonly")
+    await _gone(deps, "p")
+    assert not (tmp_path / ".git" / "hooks" / "x").exists()
+    assert [(f.approved, f.cause) for f in resolved] == [(False, "policy")]
+    # The model is told why, in the call's result.
+    from lovia.transcript import ToolResultEntry
+
+    entries = await deps.store.session.load("p")
+    (result,) = [e for e in entries if isinstance(e, ToolResultEntry)]
+    assert (
+        result.output == "Tool write_file was not approved: the workspace is read-only"
+    )
+
+
+async def test_a_request_the_new_mode_still_asks_about_keeps_waiting(
+    tmp_path: Path,
+) -> None:
+    agent = _pausing(tmp_path, "coding")  # a tool that always asks
+    app = create_app(
+        agent, store=ChatStore.in_memory(), titles=False, workspaces=WorkspaceSwitch()
+    )
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="coding")
+    await _parked(deps, "p", agent)
+    await _switch(app, "p", "trusted")
+    assert deps.supervisor.get("p").status == "blocked_on_approval"
+    await _finish(deps, "p")
+
+
 async def test_retune_changes_only_a_policy_and_never_closes(tmp_path: Path) -> None:
     from lovia.web.workspaces import WorkspaceSessions
 

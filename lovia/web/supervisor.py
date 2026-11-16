@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .. import events
+from ..approvals import Approval
 from ..checkpointer import CheckpointOptions
 from ..log_config import CURRENT_AGENT
 from ..messages import Message, Usage
@@ -377,6 +378,9 @@ class RunController:
         self.current_turn_entries: list[TranscriptEntry] = []
         self.in_flight_buffer: list[events.Event | LegFrame] = []
         self.pending_approval: ApprovalAsked | None = None
+        # The call id a mode switch settled (recheck_pending): its card says
+        # the permission mode decided, not a person.
+        self._policy_settled: str | None = None
         # first-run spec
         self._first_input = first_input
         self._first_ckpt = first_checkpoint
@@ -474,6 +478,30 @@ class RunController:
         if self.deps.questions is not None:
             self.deps.questions.cancel_session(self.session_id)
 
+    async def recheck_pending(self) -> None:
+        """Judge the request the run waits on again, by the permissions as
+        they are now (a mode switch). One the new mode decides is settled
+        here — allowed, it runs; denied, the model is told why — the way a
+        person's answer is: claimed first, so a click on its card and this
+        never both decide. One the mode still asks about keeps its card."""
+        asked = self.pending_approval
+        if asked is None:
+            return
+        verdict = await asked.request.recheck()
+        call_id = asked.request.call.id
+        if (
+            verdict.action == "ask"
+            or self.pending_approval is not asked
+            or not self.deps.approvals.claim(self.session_id, call_id)
+        ):
+            return
+        allowed = verdict.action == "allow"
+        self._policy_settled = call_id
+        reason = "" if allowed else verdict.reason or "denied by the permission mode"
+        await self.deps.approvals.resolve(
+            self.session_id, call_id, Approval(allowed, reason)
+        )
+
     def _set_status(self, status: str) -> None:
         """Change the live status and say so on ``/api/events``: a chat's page
         shows its tasks' pending approvals (``RunInfo.pending_approval``) and
@@ -559,14 +587,19 @@ class RunController:
             if timer is not None:
                 timer.cancel()
         # A sweep that found the approval still unclaimed decided it: the
-        # timer, or a stop (deny_pending). Anything else was a tab's answer.
-        cause: Literal["user", "timeout", "cancel"] = (
+        # timer, or a stop (deny_pending); or a mode switch did
+        # (recheck_pending). Anything else was a tab's answer.
+        cause: Literal["user", "timeout", "cancel", "policy"] = (
             "timeout"
             if timed_out
             else "cancel"
             if self.cancel.is_cancelled and not approval.approved
+            else "policy"
+            if self._policy_settled == ev.call.id
             else "user"
         )
+        # Spent: a provider may reuse the call id for a later request.
+        self._policy_settled = None
         return ApprovalResolved(ev.call.id, approval.approved, cause)
 
     def _deny_timed_out(self, call_id: str) -> bool:
@@ -1413,6 +1446,8 @@ class RunSupervisor:
                 log.info("mode switch for %s waits for its next run", session_id)
                 return False
             ctrl.binding = binding
+            # The request it waits on was judged by the old mode.
+            await ctrl.recheck_pending()
             return True
 
     def _start_lock(self, session_id: str) -> asyncio.Lock:

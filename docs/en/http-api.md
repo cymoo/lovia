@@ -303,7 +303,7 @@ of `event:` / `data:` pairs: the Runner's
 | `tool_result` | `{id, name, result, is_error, images?}` — `images` lists `{index, mime_type}` stubs served by `GET /api/sessions/{id}/tool-images/{call_id}/{index}` |
 | `todo` | `{call_id, name, todos}` — a structured todo update, in place of that call's `tool_result` |
 | `approval_required` | `{id, name, arguments, reason, scopes, granted, expires_at}` → answer via `POST /api/chat/approve`. `reason` says why the call asks (empty when nothing stands out beyond "not pre-approved"); `scopes` is what "always allow" would cover — every entry, remembered together (`[]` = don't offer it); `granted` is true when remembered approvals already answered it — show a note, not a card; `expires_at` (epoch seconds, `null` = never) is when an unanswered request is denied |
-| `approval_resolved` | `{id, approved, cause}` — the request `id` was settled: `cause` is `user` (an answer from any tab), `timeout` (no answer by `expires_at`) or `cancel` (the run was stopped). Sent to every attached client and replayed with the turn, so a card never stays open once decided |
+| `approval_resolved` | `{id, approved, cause}` — the request `id` was settled: `cause` is `user` (an answer from any tab), `timeout` (no answer by `expires_at`), `cancel` (the run was stopped) or `policy` (the chat's permission mode was switched while it waited, and the new mode allows or refuses the call). Sent to every attached client and replayed with the turn, so a card never stays open once decided |
 | `handoff` | `{from, to}` |
 | `turn_started` | `{turn, agent}` |
 | `retrying` | `{attempt, max_attempts, delay, message}` — the model call failed transiently; attempt `attempt + 1` follows in `delay` seconds |

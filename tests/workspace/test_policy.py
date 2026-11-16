@@ -435,7 +435,18 @@ def test_quoted_against_the_shell_a_word_is_literal() -> None:
         assert gray.decide_command(cmd) == Verdict("ask", "", scopes), cmd
     # What the shell still expands withholds the grant: `$` and backticks in
     # double quotes, an unquoted part of a word, `$'…'`.
-    for cmd in ('awk "$P"', 'grep "$(id)" x', 'grep "`id`" x', "rg '*'*", "rg $'a'"):
+    # Judged with the quotes of the whole line: the split cuts inside them
+    # (`'a;b'`), and a piece read on its own would take the stray quote for an
+    # opening one and the `$(id)` after it for a literal.
+    for cmd in (
+        'awk "$P"',
+        'grep "$(id)" x',
+        'grep "`id`" x',
+        "rg '*'*",
+        "rg $'a'",
+        "rg 'a;b' $(id)",
+        "rg 'foo|bar' \"$HOME\"",
+    ):
         verdict = gray.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scopes == (), cmd
         assert "expanded by the shell" in verdict.reason, cmd

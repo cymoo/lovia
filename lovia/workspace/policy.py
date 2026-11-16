@@ -319,20 +319,21 @@ _OUTPUT_LIKE = ("--out", "--log-file", "--junit")
 _EXPANSION_CHARS = frozenset("*?[{$`" + ("%^" if os.name == "nt" else ""))
 
 
-def _mask_literal(segment: str) -> str:
-    """``segment`` with each expansion character the shell takes literally
+def _mask_literal(command: str) -> str:
+    """``command`` with each expansion character the shell takes literally
     turned into ``x``: everything inside single quotes, a glob or brace inside
     double quotes (``$`` and backticks still expand there), and one escaped by
     a backslash. Only expansion characters change — none is a quote, a blank
-    or shell punctuation — so the result lexes into the same words, one for
-    one. Not on Windows: cmd.exe has no single quotes and expands ``%VAR%``
-    inside double ones."""
+    or shell punctuation — so the result splits into the same segments and
+    lexes into the same words, one for one. Given the whole command line:
+    quotes only mean something in their full context. Not on Windows: cmd.exe
+    has no single quotes and expands ``%VAR%`` inside double ones."""
     if os.name == "nt":
-        return segment
+        return command
     out: list[str] = []
     quote = ""
     escaped = False
-    for c in segment:
+    for c in command:
         if escaped:
             escaped = False
             out.append("x" if c in _EXPANSION_CHARS else c)
@@ -780,13 +781,24 @@ class WorkspacePolicy:
         """
         if not self.allow_shell:
             return Verdict("deny", "the shell is disabled for this workspace")
-        segments = [seg.strip() for seg in _COMMAND_SPLIT.split(command)]
-        segments = [seg for seg in segments if seg]
+        # Literals are masked over the whole command, where every quote has
+        # its real context: the split is lexical and cuts inside quotes too
+        # (`rg 'a|b' $(id)`), and a piece masked on its own would take the
+        # stray quote for an opening one — and mask the `$(id)` after it. The
+        # mask keeps every character's place and never touches what the split
+        # cuts on, so both strings split the same.
+        pieces = zip(
+            _COMMAND_SPLIT.split(command), _COMMAND_SPLIT.split(_mask_literal(command))
+        )
+        segments = [(seg.strip(), masked.strip()) for seg, masked in pieces]
+        segments = [(seg, masked) for seg, masked in segments if seg]
         if not segments:
             return self._default_command_verdict([])
-        return merge_verdicts(*(self._decide_segment(seg) for seg in segments))
+        return merge_verdicts(
+            *(self._decide_segment(seg, masked) for seg, masked in segments)
+        )
 
-    def _decide_segment(self, segment: str) -> Verdict:
+    def _decide_segment(self, segment: str, masked: str) -> Verdict:
         lexed = _words(segment)
         words, stripped = _strip_wrappers(lexed)
         # Two readings of the words. As spelled, any expansion character caps
@@ -795,7 +807,7 @@ class WorkspacePolicy:
         # reads them, a quoted literal is an argument like any other, so a
         # gray ask keeps the grant the person can choose to give.
         uncertain = _uncertain_word(lexed, words)
-        expands = _uncertain_word(lexed, words, _words(_mask_literal(segment)))
+        expands = _uncertain_word(lexed, words, _words(masked))
         if not words:
             # Syntax alone (`fi`, `done`, `}`) runs nothing — unless the
             # shell expands something in it.

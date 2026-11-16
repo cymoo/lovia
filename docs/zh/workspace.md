@@ -95,7 +95,9 @@ ACL 有三个决策值，分别作用于两个执行环节：
 或薄包装（`command`、`exec`、`env`、`nice`、`nohup`、`time`、`timeout N`——`PATH=…` 会改变实际运行的程序）；看起来像输出
 选项的参数（`-o …`、`-oPATH`、`-ro`、`--output=…`、`--log-file`、`--junitxml`——命令可能写到它指向的
 任何地方）；以及会被 shell 展开的参数（`cat *`、`cat $F`、`$(…)`——守卫看不到它展开成的路径）。
-allow 降为 ask，deny 照样生效（`env git push --force`）；这种 ask 不可记忆。模式默认值
+allow 降为 ask，deny 照样生效（`env git push --force`）；这种 ask 不可记忆。用引号挡住 shell 的词
+（`find . -name '*.py'`、`awk '{print $2}'`）仍然不在 allow 规则覆盖之内——程序可能自己去匹配通配符——
+但灰名单命令带着它询问时，仍可选择“总是允许”：shell 在那里什么都不展开。模式默认值
 `shell_default="allow"` 不是规则、不为任何命令担保，所以 `trusted` 下 `cat *` 直接运行——这正是 trusted 的意思。
 
 **底线**（`WorkspacePolicy.baseline`）单独判定——命中的每条规则都算、最严者胜——再与上面所有规则取

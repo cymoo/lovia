@@ -135,7 +135,10 @@ option (`-o …`, `-oPATH`, `-ro`, `--output=…`, `--log-file`, `--junitxml` �
 the command may write wherever it points); and an argument the shell
 expands (`cat *`, `cat $F`, `$(…)` — the guard never sees the paths it
 becomes). An allow becomes an ask, a deny still bites (`env git push
---force`); the ask is not grantable. The mode default `shell_default="allow"`
+--force`); the ask is not grantable. A word quoted against the shell
+(`find . -name '*.py'`, `awk '{print $2}'`) still keeps an allow rule out —
+a program may glob it itself — but a gray command asked about with one
+keeps its "always allow" grant: the shell expands nothing there. The mode default `shell_default="allow"`
 is not a rule vouching for anything, so `trusted` runs `cat *` unprompted —
 which is its point.
 

@@ -326,15 +326,26 @@ def _mask_literal(command: str) -> str:
     a backslash. Only expansion characters change — none is a quote, a blank
     or shell punctuation — so the result splits into the same segments and
     lexes into the same words, one for one. Given the whole command line:
-    quotes only mean something in their full context. Not on Windows: cmd.exe
-    has no single quotes and expands ``%VAR%`` inside double ones."""
+    quotes only mean something in their full context — which includes
+    comments, where a quote opens nothing (``# don't`` before a line that
+    expands). Not on Windows: cmd.exe has no single quotes and expands
+    ``%VAR%`` inside double ones.
+
+    Reading too much as a comment is safe: its text stays unmasked, and the
+    next line starts unquoted, so at worst a literal there counts as an
+    expansion and a grant is withheld."""
     if os.name == "nt":
         return command
     out: list[str] = []
+    # "'" or '"': inside those quotes; "#": inside a comment, to the line's end.
     quote = ""
     escaped = False
+    prev = "\n"
     for c in command:
-        if escaped:
+        if quote == "#":
+            quote = "" if c == "\n" else quote
+            out.append(c)
+        elif escaped:
             escaped = False
             out.append("x" if c in _EXPANSION_CHARS else c)
         elif quote == "'":
@@ -346,10 +357,19 @@ def _mask_literal(command: str) -> str:
         elif quote == '"':
             quote = "" if c == '"' else quote
             out.append("x" if c in "*?[{" else c)
+        elif c == "#" and prev in _WORD_BREAKS:
+            quote = "#"  # a comment starts only where a word would
+            out.append(c)
         else:
             quote = c if c in "'\"" else ""
             out.append(c)
+        prev = c
     return "".join(out)
+
+
+# What ends a word for the shell — so a ``#`` after one starts a comment. A
+# backtick too: it starts a command of its own.
+_WORD_BREAKS = frozenset(" \t\r\n;&|()<>`")
 
 
 def _uncertain_word(

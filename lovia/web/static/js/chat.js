@@ -1008,7 +1008,10 @@ function renderTaskApprovals() {
     _trayDecided,
   );
   for (const [key, item] of _trayItems) {
-    if (want.has(key)) continue;
+    // A provider may reuse a call id: a card shown for an older request
+    // under it is replaced, or Approve would answer one it doesn't show.
+    const wanted = want.get(key);
+    if (wanted && item.dataset.request === JSON.stringify(wanted.call)) continue;
     item.remove();
     _trayItems.delete(key);
   }
@@ -1016,6 +1019,7 @@ function renderTaskApprovals() {
     if (_trayItems.has(key)) continue;
     const item = document.createElement('div');
     item.className = 'lv-task-approval';
+    item.dataset.request = JSON.stringify(call);
     const card = buildApprovalCard(call, task.id, {
       decided: () => {
         _trayDecided.add(key);
@@ -1074,6 +1078,10 @@ function taskApprovalHead(task) {
 }
 
 store.on('tasks-changed', renderTaskApprovals);
+// Another chat (or a new one) is on screen: the cards of the last one's tasks
+// go now, not when its task list is next fetched.
+store.on('session-switched', renderTaskApprovals);
+store.on('reset-chat-view', renderTaskApprovals);
 store.on('run-status', (/** @type {{ session_id: string, status: string }} */ d) => {
   if (d.status !== 'running') return;
   for (const key of _trayDecided) if (key.startsWith(`${d.session_id}:`)) _trayDecided.delete(key);

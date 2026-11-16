@@ -247,6 +247,7 @@ const MESSAGES = {
     'approval.denyReason': '拒绝原因（可选）',
     'approval.modelNote': '模型的说明，未经核实——以下面的命令为准',
     'approval.notRemembered': '已允许，但未能记住这个授权',
+    'approval.notSent': '决定未能送达，请再试一次',
     'grants.title': '已允许的规则',
     'grants.hint': '勾选“总是允许”记下的范围，只在这个对话里生效。撤销只影响之后的调用。',
     'grants.empty': '这个对话还没有记住任何授权。',
@@ -343,6 +344,8 @@ const MESSAGES = {
     'files.readerClose': '关闭',
     'toast.contentCopied': '已复制内容',
     'task.backToParent': '返回主对话',
+    'task.open': '打开任务',
+    'task.approvals': '后台任务的审批',
     'files.readFailed': '无法读取文件',
     'files.outsideWorkspace': '文件面板只显示工作区内的文件——该文件在工作区之外，或被工作区规则隐藏。',
     'files.loadFailed': '无法加载文件',
@@ -582,6 +585,7 @@ const MESSAGES = {
     'keys.help': '本帮助',
     // ---- screen-reader announcements
     'a11y.approvalNeeded': '等待审批：{name}',
+    'a11y.taskApprovalNeeded': '后台任务“{task}”等待审批：{name}',
     'a11y.replyDone': '回复已完成',
     'a11y.runFailed': '本次运行失败',
     // ---- settings
@@ -1093,6 +1097,7 @@ const EN = {
   'approval.denyReason': 'Reason for denying (optional)',
   'approval.modelNote': "The model's note, not checked — the command below is what runs",
   'approval.notRemembered': 'Approved, but the grant could not be saved',
+  'approval.notSent': 'The decision did not reach the server — try again',
   'grants.title': 'Allowed in this chat',
   'grants.hint':
     'Scopes you ticked "always allow" for. They apply to this chat only; revoking affects later calls.',
@@ -1186,6 +1191,8 @@ const EN = {
   'files.readerClose': 'Close',
   'toast.contentCopied': 'Content copied',
   'task.backToParent': 'Back to main chat',
+  'task.open': 'Open task',
+  'task.approvals': 'Approvals for background tasks',
   'files.readFailed': 'Couldn’t read file',
   'files.outsideWorkspace':
     'The Files panel only shows workspace files — this one is outside the workspace, or hidden by its rules.',
@@ -1422,6 +1429,7 @@ const EN = {
   'keys.help': 'This help',
   // ---- screen-reader announcements
   'a11y.approvalNeeded': 'Approval needed: {name}',
+  'a11y.taskApprovalNeeded': 'Background task “{task}” needs approval: {name}',
   'a11y.replyDone': 'Reply finished',
   'a11y.runFailed': 'The run failed',
   'settings.title': 'Settings',

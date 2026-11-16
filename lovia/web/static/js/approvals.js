@@ -138,3 +138,37 @@ export const outcomeText = (outcome) => t(OUTCOME_TEXT[outcome][1]);
 
 /** Whether the call ran (so its own tool row appears) or was refused. @param {ApprovalOutcome} outcome */
 export const ranAfter = (outcome) => outcome === 'approve' || outcome === 'auto';
+
+/**
+ * The approvals the chat `chatId` should offer for its tasks, by
+ * `${task}:${call}`: each of its tasks whose live run waits on one (the runs
+ * snapshot's `pending_approval`), less one already answered here. A task
+ * list still left from the chat before is ignored.
+ *
+ * `decided` holds, by task, the request answered here, whole: a snapshot
+ * taken before the answer still shows it and must not bring it back, but a
+ * new request — a reused call id included — is another one. An answer is
+ * forgotten once the snapshot no longer shows that request, so nothing
+ * depends on seeing an event in between.
+ * @param {Array<{ id: string, parent_id?: string | null, title?: string | null }>} tasks
+ * @param {Map<string, { pending_approval?: any }> | undefined} runs
+ * @param {string | null} chatId
+ * @param {Map<string, string>} decided task id → the answered request, as JSON
+ * @returns {Map<string, { task: any, call: any }>}
+ */
+export function pendingTaskApprovals(tasks, runs, chatId, decided) {
+  if (runs) {
+    for (const [taskId, request] of decided) {
+      const call = runs.get(taskId)?.pending_approval;
+      if (!call || JSON.stringify(call) !== request) decided.delete(taskId);
+    }
+  }
+  const want = new Map();
+  for (const task of tasks) {
+    if (!chatId || task.parent_id !== chatId) continue;
+    const call = runs?.get(task.id)?.pending_approval;
+    if (!call || decided.get(task.id) === JSON.stringify(call)) continue;
+    want.set(`${task.id}:${call.id}`, { task, call });
+  }
+  return want;
+}

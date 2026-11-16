@@ -272,6 +272,14 @@ class RunFinishedData(TypedDict):
     source: str
 
 
+class RunStatusData(TypedDict):
+    # A live run started or stopped waiting on an approval: ``GET /api/runs``
+    # says which (its ``pending_approval``).
+    session_id: str
+    run_id: str
+    status: str
+
+
 class SessionCreatedData(TypedDict):
     session_id: str
     agent: str | None
@@ -300,6 +308,7 @@ class ConfigChangedData(TypedDict):
 LIFECYCLE_EVENTS: dict[str, type] = {
     "run_started": RunStartedData,
     "run_finished": RunFinishedData,
+    "run_status": RunStatusData,
     "session_created": SessionCreatedData,
     "session_retitled": SessionRetitledData,
     "session_workspace_changed": SessionWorkspaceChangedData,
@@ -307,7 +316,8 @@ LIFECYCLE_EVENTS: dict[str, type] = {
 }
 
 
-def _approval_data(ev: ApprovalAsked) -> ApprovalRequiredData:
+def approval_data(ev: ApprovalAsked) -> ApprovalRequiredData:
+    """``ev`` as the ``approval_required`` frame (and ``RunInfo``) carry it."""
     req = ev.request
     return ApprovalRequiredData(
         id=req.call.id,
@@ -424,7 +434,7 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
     if isinstance(ev, UserTurnRefs):
         return frame("refs", RefsData(refs=ev.refs))
     if isinstance(ev, ApprovalAsked):
-        return frame("approval_required", _approval_data(ev))
+        return frame("approval_required", approval_data(ev))
     if isinstance(ev, ApprovalResolved):
         return frame(
             "approval_resolved",

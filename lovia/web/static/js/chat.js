@@ -7,7 +7,7 @@ import { draftWorkspaceRoot, ensureLinked, scopeRoot, workspaceName } from './wo
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
 import { addCodeBlockControls, copyToClipboard, openImageLightbox, showDialog } from './ui.js';
-import { forkChat, loadSessions, updateSessionTitle } from './sessions.js';
+import { forkChat, loadSessions, switchSession, updateSessionTitle } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
 import { enterToSend, followupsEnabled, openSettings } from './settings.js';
@@ -39,6 +39,7 @@ import {
   approvalOutcome,
   badgeText,
   outcomeText,
+  pendingTaskApprovals,
   ranAfter,
   scopeLabel,
   scopeList,
@@ -842,9 +843,41 @@ function appendApproval(call) {
   }
   setToolStatus(findToolNode(call.id), 'awaiting');
   store.emit('tool-awaiting');
+  const node = buildApprovalCard(call, /** @type {string} */ (store.sessionId), {
+    decided: (decision, reason) =>
+      decideApproval(
+        call.id,
+        decision,
+        reason ? t('approval.deniedWhy', { reason }) : undefined,
+      ),
+    remembered: (text) => noteRemembered(call.id, text),
+  });
+  store.approvals.get(call.id).card = node;
+  appendBubbleContent(store.bubble, node);
+  store.body = null;
+  store.rawText = '';
+  scrollDown();
+  // The run is now blocked on the user — say so past the aria-busy transcript,
+  // and put the keyboard on the decision unless it's busy typing elsewhere.
+  announce(t('a11y.approvalNeeded', { name: call.name }), { assertive: true });
+  focusApprovalCard(node);
+}
+
+/**
+ * An approval card for `call`, decided for the run of `sessionId` that asked
+ * it — this chat's, or one of its tasks' (the task tray). `decided` runs at
+ * the click, before the server confirms; `remembered` once the server has
+ * saved what "always allow" picked; `failed`, when given, if the decision
+ * never reached the server.
+ * @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], expires_at?: number | null }} call
+ * @param {string} sessionId
+ * @param {{ decided: (decision: 'approve' | 'deny', reason: string) => void, remembered: (text: string) => void, failed?: (err: Error & { code?: string }) => void }} hooks
+ * @returns {HTMLElement}
+ */
+function buildApprovalCard(call, sessionId, { decided, remembered, failed }) {
+  const scopes = call.scopes ?? [];
   const node = /** @type {HTMLElement} */ (cloneTemplate('tmpl-approval'));
   node.dataset.callId = call.id;
-  store.approvals.get(call.id).card = node;
   // The question leads, in the UI's words; the server's reason (only when
   // something stands out) goes under it; the call itself stays visible below,
   // because a summary can be wrong and the arguments cannot.
@@ -923,14 +956,10 @@ function appendApproval(call) {
     // a click that lost the race to the timeout). What was remembered is said
     // only once the server has saved it — a failed save, or another tab that
     // answered first, must not leave a "remembered" behind.
-    decideApproval(
-      call.id,
-      decision,
-      reason ? t('approval.deniedWhy', { reason }) : undefined,
-    );
+    decided(decision, reason);
     try {
       const res = await api.approve({
-        session_id: store.sessionId,
+        session_id: sessionId,
         call_id: call.id,
         decision,
         remember: kept.length > 0,
@@ -939,23 +968,120 @@ function appendApproval(call) {
       });
       if (!kept.length) return;
       if (res.remembered) {
-        noteRemembered(call.id, t('approval.remembered', { scopes: scopeList(kept) }));
+        remembered(t('approval.remembered', { scopes: scopeList(kept) }));
       } else {
         toast(t('approval.notRemembered'), { type: 'error' });
       }
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      console.error(err);
+      failed?.(/** @type {Error & { code?: string }} */ (err));
+    }
   };
   node.querySelector('.lv-approve').addEventListener('click', () => resolve('approve'));
   node.querySelector('.lv-decline').addEventListener('click', () => resolve('deny'));
-  appendBubbleContent(store.bubble, node);
-  store.body = null;
-  store.rawText = '';
-  scrollDown();
-  // The run is now blocked on the user — say so past the aria-busy transcript,
-  // and put the keyboard on the decision unless it's busy typing elsewhere.
-  announce(t('a11y.approvalNeeded', { name: call.name }), { assertive: true });
-  focusApprovalCard(node);
+  return node;
 }
+
+// ---- A task's approvals, in the chat that spawned it -----------------------
+// A subagent task runs in a chat of its own that nobody is looking at, so its
+// pending approval is offered here as well, above the composer: the open
+// chat's tasks (store.currentTasks) whose live run waits on one
+// (GET /api/runs' pending_approval, kept current by /api/events' run_status).
+// The task's own chat still shows its card; the first answer settles both.
+
+const taskTray = document.getElementById('task-approvals');
+/** The tray's items, by `${task}:${call}`. */
+const _trayItems = new Map();
+/**
+ * The request answered here, by task, as JSON: kept out while the runs
+ * snapshot still shows that very request (see pendingTaskApprovals).
+ * @type {Map<string, string>}
+ */
+const _trayDecided = new Map();
+
+function renderTaskApprovals() {
+  if (!taskTray) return;
+  const want = pendingTaskApprovals(
+    store.currentTasks || [],
+    store.runsBySession,
+    store.sessionId,
+    _trayDecided,
+  );
+  for (const [key, item] of _trayItems) {
+    // A provider may reuse a call id: a card shown for an older request
+    // under it is replaced, or Approve would answer one it doesn't show.
+    const wanted = want.get(key);
+    if (wanted && item.dataset.request === JSON.stringify(wanted.call)) continue;
+    item.remove();
+    _trayItems.delete(key);
+  }
+  for (const [key, { task, call }] of want) {
+    if (_trayItems.has(key)) continue;
+    const item = document.createElement('div');
+    item.className = 'lv-task-approval';
+    item.dataset.request = JSON.stringify(call);
+    const card = buildApprovalCard(call, task.id, {
+      decided: () => {
+        _trayDecided.set(task.id, JSON.stringify(call));
+        _trayItems.delete(key);
+        const hadFocus = item.contains(document.activeElement);
+        item.remove();
+        taskTray.hidden = _trayItems.size === 0;
+        if (hadFocus) promptEl?.focus({ preventScroll: true });
+      },
+      remembered: (text) => toast(text),
+      // Still waiting, as far as anyone knows: offer it again — unless the
+      // server says it is no longer pending (answered elsewhere, timed out).
+      failed: (err) => {
+        if (err.code === 'approval_not_found') return;
+        _trayDecided.delete(task.id);
+        toast(t('approval.notSent'), { type: 'error' });
+        renderTaskApprovals();
+      },
+    });
+    item.append(taskApprovalHead(task), card);
+    _trayItems.set(key, item);
+    taskTray.append(item);
+    // Said, not focused: whoever is typing in the composer keeps the keyboard.
+    announce(t('a11y.taskApprovalNeeded', { task: taskName(task), name: call.name }));
+  }
+  taskTray.hidden = _trayItems.size === 0;
+}
+
+/** A task's name as its chat title gives it: "[t1] dig into …" → "dig into …". */
+function taskName(task) {
+  const m = /^\[([^\]]{1,8})\]\s*(.*)$/.exec(task.title || '');
+  return (m ? m[2] : task.title) || task.id;
+}
+
+/** "t1 · dig into … · Open task" over a task's card. */
+function taskApprovalHead(task) {
+  const head = document.createElement('div');
+  head.className = 'lv-task-approval-head';
+  const tag = /^\[([^\]]{1,8})\]/.exec(task.title || '')?.[1];
+  if (tag) {
+    const chip = document.createElement('span');
+    chip.className = 'lv-task-tag';
+    chip.textContent = tag;
+    head.append(chip);
+  }
+  const title = document.createElement('span');
+  title.className = 'lv-task-approval-title';
+  title.textContent = taskName(task);
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'lv-task-approval-open';
+  open.textContent = t('task.open');
+  open.addEventListener('click', () => void switchSession(task.id));
+  head.append(title, open);
+  return head;
+}
+
+store.on('tasks-changed', renderTaskApprovals);
+// Another chat (or a new one) is on screen: the cards of the last one's tasks
+// go now, not when its task list is next fetched.
+store.on('session-switched', renderTaskApprovals);
+store.on('reset-chat-view', renderTaskApprovals);
 
 /**
  * "Always allow in this chat", picked per scope: the checkbox takes them all

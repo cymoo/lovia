@@ -3350,6 +3350,52 @@ button.lv-question-option:hover {
 .lv-send-queue[hidden] {
   display: none;
 }
+/* The approvals this chat's tasks wait on, above the composer. Capped so a
+   long command can't push the composer off screen; it scrolls instead. */
+.lv-task-approvals {
+  max-width: var(--lv-content-w);
+  max-height: 45vh;
+  margin: 0 auto 8px;
+  overflow-y: auto;
+}
+.lv-task-approvals[hidden] {
+  display: none;
+}
+.lv-task-approval + .lv-task-approval {
+  margin-top: 8px;
+}
+.lv-task-approval > .lv-approval {
+  margin: 0;
+}
+.lv-task-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  margin: 0 4px 4px;
+  font-size: 12px;
+  color: var(--lv-muted);
+}
+.lv-task-approval-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lv-task-approval-open {
+  flex-shrink: 0;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--lv-ink-2);
+  cursor: pointer;
+}
+.lv-task-approval-open:hover {
+  color: var(--lv-ink);
+  text-decoration: underline;
+}
 .lv-send-queue-item,
 .lv-send-queue-note {
   display: flex;

@@ -705,3 +705,39 @@ async def test_always_allow_in_a_task_is_remembered_for_its_chat(
         )
         assert r.json() == {"removed": True}
         assert (await ac.get("/api/sessions/p/grants")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_a_tasks_pending_approval_is_announced_and_listed(
+    tmp_path: Path,
+) -> None:
+    served = _agent(tmp_path, call("push", {}, call_id="c1"), text("done"))
+    app = _app(served)
+    deps = app.state.deps
+    emitted: list[tuple[str, dict]] = []
+    emit = deps.emit
+    deps.emit = lambda event, data: (
+        emitted.append((event, dict(data))),
+        emit(event, data),
+    )
+    async with _client(app) as ac:
+        await _task_parked(app, served.clone(name="digger"))
+        run = await _wait_run(ac, "t", status="blocked_on_approval")
+        # The request itself, as the task's own approval_required frame
+        # carries it: enough for the chat that spawned the task to offer it.
+        pending = run["pending_approval"]
+        assert (pending["id"], pending["name"], pending["scopes"]) == (
+            "c1",
+            "push",
+            ["shell:git push"],
+        )
+        assert pending["reason"] == "Pushes to a remote."
+        r = await ac.post(
+            "/api/chat/approve",
+            json={"session_id": "t", "call_id": "c1", "decision": "approve"},
+        )
+        assert r.json()["ok"] is True
+        await _wait_run(ac, "t", gone=True)
+    statuses = [d["status"] for e, d in emitted if e == "run_status"]
+    assert statuses == ["blocked_on_approval", "running"]
+    assert all(d["session_id"] == "t" for e, d in emitted if e == "run_status")

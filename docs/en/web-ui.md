@@ -880,6 +880,11 @@ A task is not owned by the parent Run, so stopping the parent does not stop the
 task; deleting the parent chat stops its tasks and deletes them with it. Approvals auto-deny after `approval_timeout`; unfinished tasks are not
 resumed after a server restart.
 
+A task's approval card shows in the chat that spawned it too, above the
+composer, under the task's name with a link to open it; answering either copy
+settles both. Tasks run in the chat's permission mode and share its "always
+allow" grants.
+
 ## See also
 
 - [Web server](web-server.md) — Python API, lifecycle, and scheduling

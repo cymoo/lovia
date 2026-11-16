@@ -254,6 +254,9 @@ export function initEventStream() {
     store.emit('runs-changed');
     refresh();
   });
+  // A live run started or stopped waiting on an approval: the tasks' badges
+  // and the task tray read it from the runs snapshot — only that changed.
+  es.addEventListener('run_status', () => void refreshRuns());
   es.addEventListener('session_created', refresh);
   es.addEventListener('session_retitled', (e) => {
     try {
@@ -274,6 +277,43 @@ export function initEventStream() {
       store.emit('config-changed', JSON.parse(e.data));
     } catch { /* malformed payload — the next explicit load resyncs */ }
   });
+}
+
+// Fetches of the live runs, numbered as sent, and the newest one shown.
+let _runsSent = 0;
+let _runsShown = 0;
+/**
+ * Re-fetch just the live runs (a status flip changes nothing else) and redraw
+ * what reads them: the sidebar's dots, the tasks button, the task tray.
+ */
+async function refreshRuns() {
+  const stamp = ++_runsSent;
+  let runs;
+  try {
+    runs = await api.listRuns();
+  } catch {
+    return; // transient — the next event or snapshot repaints
+  }
+  if (!takeRuns(stamp, runs)) return; // a newer fetch's answer is shown
+  renderSessions();
+  renderTasksButton();
+}
+
+/**
+ * Show the live runs fetched at `stamp`, unless a fetch sent later already
+ * answered: loadSessions (with the list) and refreshRuns (a status flip) both
+ * fetch them, and whichever answers last must not undo the newer one — a
+ * task's approval card would vanish until the next event.
+ * @param {number} stamp
+ * @param {any[]} runs
+ * @returns {boolean} whether they were taken
+ */
+function takeRuns(stamp, runs) {
+  if (stamp < _runsShown) return false;
+  _runsShown = stamp;
+  store.activeRuns = new Set(runs.map((r) => r.session_id));
+  store.runsBySession = new Map(runs.map((r) => [r.session_id, r]));
+  return true;
 }
 
 /**
@@ -327,6 +367,7 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
   // (and every pinned chat): one busy folder must not crowd the others out.
   const archived = _showArchived && !query; // a search covers both
   const grouped = !query && !archived && canAddWorkspace() && sidebarView() === 'groups';
+  const runsStamp = ++_runsSent;
   try {
     const [sessions, runs] = await Promise.all([
       // Fetch one row past the page: its presence answers "is there more?"
@@ -336,19 +377,20 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
           ? { per_workspace: Math.max(GROUP_PAGE, ..._groupShown.values()) + 1, limit: 1000 }
           : { q: query, limit: _flatLimit + 1, archived },
       ),
-      api.listRuns().catch(() => []),
+      api.listRuns().catch(() => null),
     ]);
     if (seq !== _loadSeq) return;
     _hasMore = !grouped && sessions.length > _flatLimit;
     store.sessions = grouped ? sessions : sessions.slice(0, _flatLimit);
     const prevRuns = store.activeRuns || new Set();
-    store.activeRuns = new Set(runs.map((r) => r.session_id));
     // Full live-run rows (status, started_at) — the task rows' badge data.
     const prevRows = store.runsBySession;
-    store.runsBySession = new Map(runs.map((r) => [r.session_id, r]));
+    // Unless a later fetch of the runs (refreshRuns) already answered, or
+    // this one failed: the runs shown stay.
+    const took = runs !== null && takeRuns(runsStamp, runs);
     // Diff-based completion detection belongs to the polling fallback; with
     // the event stream live, run_finished notifies directly (no double toast).
-    if (_runsPrimed && !_eventsLive) {
+    if (took && _runsPrimed && !_eventsLive) {
       for (const sid of prevRuns) {
         if (!store.activeRuns.has(sid)) {
           // Absence from the active list does not tell success from failure.
@@ -480,6 +522,9 @@ export async function loadCurrentTasks() {
 }
 
 function renderTasksButton() {
+  // The open chat's tasks or their live runs moved: the task tray (chat.js)
+  // redraws from the same state.
+  store.emit('tasks-changed');
   if (!tasksWrap || !tasksBtn || !tasksPopover) return;
   const tasks = store.currentTasks || [];
   const parentId = store.currentParentId;

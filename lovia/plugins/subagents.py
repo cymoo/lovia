@@ -29,7 +29,8 @@ Two lifecycle modes, keyed on :attr:`Subagents.deliver`:
 
 Children run headless: an approval request nobody resolves is denied by the
 runner's default, so the run cannot hang — give children approval-free
-toolsets for unattended work. Child spans join the parent's trace and child
+toolsets for unattended work. (A ``run_child`` may put the request before a
+person instead: the web app shows a task's in the chat that spawned it.) Child spans join the parent's trace and child
 token usage folds into the parent's :class:`~lovia.messages.Usage`, exactly
 like ``agent_as_tool`` sub-runs.
 """
@@ -240,7 +241,7 @@ _INSTRUCTIONS_COMMON = (
     "when you need pending results before continuing, "
     "`send_to_subagent(id, message)` to steer a running one (a forgotten "
     "constraint, a scope change), and `cancel_subagent(id)` to stop one. "
-    "Tools that need approval are auto-denied inside a subagent, so delegate "
+    "A subagent may not get approval for tools that need it, so delegate "
     "only work its tools can do unattended."
 )
 

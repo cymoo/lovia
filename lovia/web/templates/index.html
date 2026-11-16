@@ -173,6 +173,8 @@
   </div>
 
   <form id="composer" class="lv-composer" autocomplete="off" data-part="composer">
+    <!-- The approvals this chat's subagent tasks wait on, answered here. -->
+    <div id="task-approvals" class="lv-task-approvals" aria-label="Task approvals" data-i18n-aria="task.approvals" data-part="task-approvals" hidden></div>
     <!-- Messages queued to send once the running run completes. -->
     <div id="send-queue" class="lv-send-queue" aria-label="Queued messages" data-i18n-aria="queue.label" hidden></div>
     <!-- Pending uploads for the next send (thumbnails / file chips). -->

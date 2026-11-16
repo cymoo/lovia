@@ -1,19 +1,33 @@
-// mcp-config.js — Settings → MCP: the servers every chat connects to, once
-// per message. A list (each server's last connection,
-// an on/off switch, test, edit, delete) ⇄ a JSON editor that takes the
-// mcpServers document other MCP clients use. Secrets never reach the page:
-// env and header values arrive masked, and a mask sent back unchanged keeps
-// what the server stored (lovia/web/config/mcp.py).
+// mcp-config.js — Settings → MCP: the servers chats connect to, once per
+// message. A list (each server's last connection, an on/off switch, test,
+// edit, delete) ⇄ a JSON editor that takes the mcpServers document other
+// MCP clients use. Secrets never reach the page: env and header values
+// arrive masked, and a mask sent back unchanged keeps what the server
+// stored (lovia/web/config/mcp.py).
+//
+// Two scopes, one list: "All projects" switches a server for every chat;
+// "One project" shows the same servers as that project has them — a switch
+// there is the project's alone — above the ones the project's own
+// .mcp.json names. Those run only once turned on here, for the entry as
+// written: the file arrives with the repository and names commands to run
+// (lovia/web/project_mcp.py). A server added in a project's scope is saved
+// like any other, off everywhere but there.
 import { api } from './api.js';
+import { store } from './store.js';
 import { t } from './i18n.js';
 import { toast } from './toast.js';
-import { confirmDialog } from './ui.js';
+import { confirmDialog, segmented } from './ui.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
 import { backButton, cfg, el, field, ghostBtn, loadConfig, readOnlyNotice, scopeFootnote } from './model-config.js';
 import { switchControl } from './assistant-config.js';
+import { scopeRoot, workspaceChoices, workspaceName, workspacesOn } from './workspaces.js';
 
 /** @typedef {{ ok: boolean, at: number, tools: string[], error: string | null }} McpStatus */
-/** @typedef {{ name: string, enabled: boolean, transport: 'stdio' | 'http', command: string | null, args: string[], url: string | null, spec: Record<string, unknown>, status: McpStatus | null }} McpServer */
+/** @typedef {{ name: string, enabled: boolean, transport: 'stdio' | 'http', command: string | null, args: string[], url: string | null, spec: Record<string, unknown>, status: McpStatus | null, projects: string[] }} McpServer */
+/** One the project's .mcp.json names. @typedef {{ name: string, spec: any, state: 'on' | 'off' | 'pending', error: string | null, status: McpStatus | null }} OwnServer */
+/** A global server as the project has it. @typedef {{ name: string, on: boolean, enabled: boolean, replaced: boolean }} Here */
+/** @typedef {{ project: string | null, local: boolean, error: string | null, servers: OwnServer[], global: Here[] }} Listing */
+/** The scope on screen; `root` undefined: the server's one directory. @typedef {{ layer: 'global' | 'project', root: string | undefined }} Pick */
 
 const EXAMPLE = `{
   "mcpServers": {
@@ -35,6 +49,15 @@ const EXAMPLE = `{
  */
 function target(s) {
   return s.transport === 'stdio' ? [s.command, ...s.args].join(' ') : s.url || '';
+}
+
+/** The same of an entry as a .mcp.json writes it. @param {any} spec */
+function specTarget(spec) {
+  if (!spec || typeof spec !== 'object') return '';
+  if (typeof spec.command === 'string') {
+    return [spec.command, ...(Array.isArray(spec.args) ? spec.args : [])].join(' ');
+  }
+  return String(spec.url ?? spec.httpUrl ?? spec.serverUrl ?? '');
 }
 
 /**
@@ -66,14 +89,88 @@ function testingLine() {
   return line;
 }
 
-/** The Settings → MCP pane. Owns its rerenders; safe to rebuild on tab switches. */
-export function buildMcpPane() {
+/**
+ * The MCP page of one Settings dialog. Its scope lives here, so it
+ * survives a visit to another tab.
+ * @param {{ root?: string }} [start] Open on this directory's project.
+ * @returns {() => HTMLElement} Builds the page.
+ */
+export function mcpPane(start = {}) {
+  // Without directories the server has the one its agent works in: no root
+  // to send, and the listing names it.
+  const projects = workspacesOn()
+    ? workspaceChoices()
+        .filter((w) => w.kind !== 'general')
+        .map((w) => ({ root: /** @type {string | undefined} */ (w.root) }))
+    : [{ root: undefined }];
+  // A directory that isn't listed (a chat's, opened from it) is still one.
+  if (start.root && workspacesOn() && !projects.some((p) => p.root === start.root)) {
+    projects.push({ root: start.root });
+  }
+  const here = start.root ?? scopeRoot();
+  /** @type {Pick} */
+  const pick = {
+    layer: start.root && projects.length ? 'project' : 'global',
+    root: (projects.find((p) => p.root === here) ?? projects[0])?.root,
+  };
+  return () => buildPane(pick, projects);
+}
+
+/**
+ * Owns its rerenders; safe to rebuild on tab switches.
+ * @param {Pick} pick
+ * @param {{ root: string | undefined }[]} projects Empty: no project scope.
+ */
+function buildPane(pick, projects) {
   const pane = el('div', 'lv-cfg-pane');
   /** @type {{ name: 'list' } | { name: 'form', server: string | null }} */
   let view = { name: 'list' };
   let busy = false; // one write at a time: each one rebuilds the agents
   /** Servers being tested now: their rows say so until the answer is in. */
   const testing = new Set();
+  /** The picked project's servers; null in the global scope, or until read. */
+  let listing = /** @type {Listing | null} */ (null);
+  let asked = 0; // bumped per read: a slower, older answer is dropped
+
+  const inProject = () => pick.layer === 'project';
+  const projectName = () => workspaceName(listing?.project ?? pick.root);
+
+  /** Read the picked project's servers; nothing to read in the global scope. */
+  async function loadListing() {
+    const mine = ++asked;
+    if (!inProject()) {
+      listing = null;
+      return;
+    }
+    const read = await api.getProjectMcp(pick.root ? { root: pick.root } : {});
+    if (mine === asked) listing = read;
+  }
+
+  /** Another scope: its servers, then the list. */
+  async function rescope() {
+    listing = null;
+    view = { name: 'list' };
+    await rerenderScoped();
+    try {
+      await loadListing();
+    } catch (err) {
+      toast(String(err.message || err), { type: 'error' });
+    }
+    await rerenderScoped();
+  }
+
+  /** Render, keeping the keyboard in the scope row it was working: the
+   *  row is rebuilt with the list. */
+  async function rerenderScoped() {
+    const scope = pane.querySelector('.lv-scope-row');
+    const at = scope?.contains(document.activeElement) ? document.activeElement?.tagName : null;
+    await render();
+    if (!at) return;
+    const again = pane.querySelector(
+      at === 'SELECT' ? '.lv-scope-row select' : '.lv-scope-row input:checked',
+    );
+    /** @type {HTMLElement | null} */ (again)?.focus();
+  }
 
   /**
    * Test saved servers — each on its own, at once — and show each outcome as
@@ -126,13 +223,62 @@ export function buildMcpPane() {
     busy = true;
     try {
       await write();
-      await loadConfig();
+      await Promise.all([loadConfig(), loadListing()]);
     } catch (err) {
       toast(String(err.message || err), { type: 'error' });
     } finally {
       busy = false;
     }
     render();
+    // The line over the composer counts what a project still has to confirm.
+    store.emit('project-mcp-changed');
+  }
+
+  /** "All projects" ⇄ "One project", and which. */
+  function scopeRow() {
+    const node = el('div', 'lv-scope-row');
+    const seg = segmented(
+      [
+        ['global', t('pmcp.all')],
+        ['project', t('pmcp.one')],
+      ],
+      pick.layer,
+      (v) => {
+        pick.layer = /** @type {Pick['layer']} */ (v);
+        void rescope();
+      },
+    );
+    seg.setAttribute('aria-label', t('pmcp.scope'));
+    node.appendChild(seg);
+    // One project: its name is in the intro, a select would offer no choice.
+    if (inProject() && projects.length > 1) {
+      const select = /** @type {HTMLSelectElement} */ (el('select', 'lv-dialog-input lv-settings-select'));
+      select.setAttribute('aria-label', t('pmcp.project'));
+      for (const p of projects) select.add(new Option(workspaceName(p.root), p.root ?? ''));
+      select.value = pick.root ?? '';
+      select.addEventListener('change', () => {
+        pick.root = select.value || undefined;
+        void rescope();
+      });
+      node.appendChild(select);
+    }
+    return node;
+  }
+
+  /** The list's head: the page's title, and a button to add a server. */
+  function listHead(/** @type {boolean} */ withAdd) {
+    const head = el('div', 'lv-cfg-pane-head');
+    head.appendChild(el('span', 'lv-cfg-pane-title', t('mcp.title')));
+    if (withAdd) head.appendChild(addButton('lv-btn lv-btn-sm'));
+    return head;
+  }
+
+  function addButton(/** @type {string} */ className) {
+    const add = el('button', className, `＋ ${t(inProject() ? 'pmcp.add' : 'mcp.add')}`);
+    add.setAttribute('type', 'button');
+    add.toggleAttribute('disabled', !cfg().writable);
+    add.addEventListener('click', () => openForm(null));
+    return add;
   }
 
   function openForm(/** @type {string | null} */ server) {
@@ -142,31 +288,21 @@ export function buildMcpPane() {
 
   function renderList() {
     const c = cfg();
-    const mcp = c.mcp;
     /** @type {McpServer[]} */
-    const servers = mcp.servers;
+    const servers = c.mcp.servers;
     const box = el('div');
-
-    const head = el('div', 'lv-cfg-pane-head');
-    head.appendChild(el('span', 'lv-cfg-pane-title', t('mcp.title')));
-    if (servers.length) {
-      const add = el('button', 'lv-btn lv-btn-sm', `＋ ${t('mcp.add')}`);
-      add.setAttribute('type', 'button');
-      add.toggleAttribute('disabled', !c.writable);
-      add.addEventListener('click', () => openForm(null));
-      head.appendChild(add);
+    if (projects.length) box.appendChild(scopeRow());
+    if (inProject()) {
+      box.append(...renderProject(servers));
+      return box;
     }
-    box.appendChild(head);
+
+    box.appendChild(listHead(servers.length > 0));
     box.appendChild(el('div', 'lv-cfg-hint lv-mcp-intro', t('mcp.intro')));
 
     if (!servers.length) {
       const empty = el('div', 'lv-mcp-empty');
-      empty.appendChild(el('div', 'lv-cfg-hint', t('mcp.empty')));
-      const add = el('button', 'lv-btn lv-btn-primary lv-btn-sm', `＋ ${t('mcp.add')}`);
-      add.setAttribute('type', 'button');
-      add.toggleAttribute('disabled', !c.writable);
-      add.addEventListener('click', () => openForm(null));
-      empty.appendChild(add);
+      empty.append(el('div', 'lv-cfg-hint', t('mcp.empty')), addButton('lv-btn lv-btn-primary lv-btn-sm'));
       box.append(empty, scopeFootnote());
       return box;
     }
@@ -178,19 +314,108 @@ export function buildMcpPane() {
   }
 
   /**
+   * One project's scope: the servers its own .mcp.json names, each to
+   * confirm, then the added ones as the project has them.
+   * @param {McpServer[]} servers
+   */
+  function renderProject(servers) {
+    if (!listing) return [listHead(false), el('div', 'lv-cfg-hint', '…')];
+    if (!listing.project) {
+      return [listHead(false), el('div', 'lv-cfg-hint lv-mcp-intro', t('pmcp.noProject'))];
+    }
+    const nodes = [
+      listHead(true),
+      el('div', 'lv-cfg-hint lv-mcp-intro', t('pmcp.intro', { name: projectName() })),
+    ];
+    const own = listing.servers.length > 0 || !!listing.error;
+    if (own) {
+      nodes.push(
+        el('div', 'lv-mcp-heading', t('pmcp.own')),
+        el('div', 'lv-cfg-hint lv-mcp-intro', t('pmcp.ownIntro')),
+      );
+      if (listing.servers.length) {
+        const list = el('div', 'lv-model-list');
+        for (const s of listing.servers) list.appendChild(ownRow(s));
+        nodes.push(list);
+      }
+      if (listing.error) nodes.push(el('div', 'lv-mcp-error', listing.error));
+      nodes.push(el('div', 'lv-mcp-heading', t('pmcp.global')));
+    }
+    if (servers.length) {
+      const here = new Map(listing.global.map((g) => [g.name, g]));
+      const list = el('div', 'lv-model-list');
+      for (const s of servers) {
+        // One the listing hasn't caught up with follows its own switch, as
+        // the project then has it — still a row of this scope.
+        const mine = here.get(s.name) ?? { name: s.name, on: s.enabled, enabled: s.enabled, replaced: false };
+        list.appendChild(row(s, cfg().writable, mine));
+      }
+      nodes.push(list);
+    } else {
+      nodes.push(el('div', 'lv-cfg-hint', t('pmcp.empty')));
+    }
+    // Where else a server can come from, for a project that has no file yet.
+    if (listing.local && !own) nodes.push(el('div', 'lv-cfg-footnote', t('pmcp.fileHint')));
+    return nodes;
+  }
+
+  /**
+   * A server the project's .mcp.json names: what it runs, the entry as
+   * written — what turning it on agrees to — and its switch.
+   * @param {OwnServer} s
+   */
+  function ownRow(s) {
+    const node = el('div', 'lv-model-row lv-mcp-row');
+    if (s.state !== 'on') node.classList.add('lv-off');
+    const info = el('div', 'lv-model-row-info');
+    const name = el('div', 'lv-model-row-name', s.name);
+    if (s.state === 'pending' && !s.error) name.appendChild(el('span', 'lv-badge', t('pmcp.undecided')));
+    const where = el('div', 'lv-model-row-meta lv-mono lv-mcp-target', specTarget(s.spec));
+    where.title = specTarget(s.spec);
+    info.append(name, where);
+    if (s.error) info.appendChild(el('div', 'lv-mcp-error', s.error));
+    else if (s.state === 'on') info.appendChild(statusLine(s.status));
+    const details = /** @type {HTMLDetailsElement} */ (el('details', 'lv-mcp-tools'));
+    details.append(
+      el('summary', '', t('pmcp.entry')),
+      el('pre', 'lv-mcp-entry', JSON.stringify(s.spec, null, 2)),
+    );
+    info.appendChild(details);
+    const sw = switchControl(s.state === 'on');
+    sw.node.setAttribute('aria-label', t('pmcp.switch', { name: s.name }));
+    sw.node.toggleAttribute('disabled', !!s.error);
+    sw.node.addEventListener('change', () => act(() => setHere('project', s.name, sw.value())));
+    node.append(info, sw.node);
+    return node;
+  }
+
+  /** Turn a server on or off for the picked project. */
+  function setHere(/** @type {'project' | 'global'} */ source, /** @type {string} */ name, /** @type {boolean} */ on) {
+    return api.setProjectMcp({ ...(pick.root ? { root: pick.root } : {}), source, name, on });
+  }
+
+  /**
    * One server's row: name and how it connects, its last connection (and
    * the tools it had), then its controls.
    * @param {McpServer} s
    * @param {boolean} writable
+   * @param {Here} [here] In a project's scope: the server as that project
+   *   has it, which is what the switch then says and changes.
    */
-  function row(s, writable) {
+  function row(s, writable, here) {
     const node = el('div', 'lv-model-row lv-mcp-row');
-    if (!s.enabled) node.classList.add('lv-off');
+    const on = here ? here.on && !here.replaced : s.enabled;
+    if (!on) node.classList.add('lv-off');
     const info = el('div', 'lv-model-row-info');
 
     const name = el('div', 'lv-model-row-name', s.name);
     name.appendChild(el('span', 'lv-badge lv-badge-plain', s.transport === 'stdio' ? 'stdio' : 'HTTP'));
-    if (!s.enabled) name.appendChild(el('span', 'lv-badge lv-badge-plain', t('mcp.off')));
+    // How this scope differs from the other, where it does.
+    let note;
+    if (here?.replaced) note = t('pmcp.replaced');
+    else if (here) note = here.on === here.enabled ? undefined : t(here.on ? 'pmcp.onHere' : 'pmcp.offHere');
+    else if (!s.enabled) note = s.projects.length ? t('mcp.onlyIn', { n: s.projects.length }) : t('mcp.off');
+    if (note) name.appendChild(el('span', 'lv-badge lv-badge-plain', note));
     const where = el('div', 'lv-model-row-meta lv-mono lv-mcp-target', target(s));
     where.title = target(s);
     const busyNow = testing.has(s.name);
@@ -219,14 +444,18 @@ export function buildMcpPane() {
     });
     del.classList.add('lv-danger');
     del.toggleAttribute('disabled', !writable);
-    const sw = switchControl(s.enabled);
-    sw.node.setAttribute('aria-label', t('mcp.enabled', { name: s.name }));
-    sw.node.title = t(s.enabled ? 'mcp.turnOff' : 'mcp.turnOn');
-    sw.node.toggleAttribute('disabled', !writable);
+    const sw = switchControl(on);
+    sw.node.setAttribute('aria-label', t(here ? 'pmcp.switch' : 'mcp.enabled', { name: s.name }));
+    sw.node.title = t(on ? 'mcp.turnOff' : 'mcp.turnOn');
+    // A project's switch is kept beside config.json, not in it.
+    sw.node.toggleAttribute('disabled', here ? here.replaced : !writable);
     sw.node.addEventListener('change', () =>
-      act(() => api.setMcpServerEnabled(s.name, sw.value())),
+      act(() => (here ? setHere('global', s.name, sw.value()) : api.setMcpServerEnabled(s.name, sw.value()))),
     );
-    actions.append(test, edit, del);
+    // Deleting is for every project: from a project's scope, only a server
+    // that isn't on for all of them — the others are switched off here.
+    if (here?.enabled) actions.append(test, edit);
+    else actions.append(test, edit, del);
     // The switch is state, not an action: always in view, unlike the rest.
     node.append(actions, sw.node);
     return node;
@@ -250,8 +479,10 @@ export function buildMcpPane() {
     };
     back.addEventListener('click', leave);
     const title = el('span', 'lv-cfg-pane-title');
+    // A new server in a project's scope is for that project alone.
+    const forProject = !stored && inProject() ? listing?.project : null;
     if (stored) title.append(`${t('mcp.edit')} `, el('span', 'lv-mcp-title-name', stored.name));
-    else title.textContent = t('mcp.newTitle');
+    else title.textContent = t(forProject ? 'pmcp.add' : 'mcp.newTitle');
     head.append(back, title);
     box.appendChild(head);
 
@@ -273,9 +504,10 @@ export function buildMcpPane() {
       const v = stored.spec[k];
       return v && typeof v === 'object' && Object.keys(v).length > 0;
     });
-    form.appendChild(
-      field(t('mcp.json'), area, hasSecrets ? `${t('mcp.jsonHint')} ${t('mcp.maskHint')}` : t('mcp.jsonHint')),
-    );
+    const hints = [t('mcp.jsonHint')];
+    if (hasSecrets) hints.push(t('mcp.maskHint'));
+    if (forProject) hints.push(t('pmcp.addHint', { name: projectName() }));
+    form.appendChild(field(t('mcp.json'), area, hints.join(' ')));
     const syntax = el('div', 'lv-cfg-error lv-mcp-syntax');
     syntax.hidden = true;
     const results = el('div', 'lv-mcp-results');
@@ -359,8 +591,8 @@ export function buildMcpPane() {
       save.toggleAttribute('disabled', true);
       try {
         if (stored) await api.updateMcpServer(stored.name, document);
-        else await api.addMcpServers(document);
-        await loadConfig();
+        else await api.addMcpServers(document, forProject ?? undefined);
+        await Promise.all([loadConfig(), loadListing()]);
         toast(t('cfg.saved'));
         view = { name: 'list' };
         // The server read the names the way the document gives them.
@@ -389,14 +621,13 @@ export function buildMcpPane() {
 
   render();
   // Runs record each server's connection as they start, so what this page
-  // cached may be behind: show it now, then what the server says.
-  if (cfg()) {
-    loadConfig().then(
-      () => {
-        if (view.name === 'list') render();
-      },
-      () => {},
-    );
-  }
+  // cached may be behind: show it now, then what the server says — with
+  // the picked project's servers, which are read every time.
+  Promise.all([cfg() ? loadConfig() : null, loadListing()]).then(
+    () => {
+      if (view.name === 'list') render();
+    },
+    () => {},
+  );
   return pane;
 }

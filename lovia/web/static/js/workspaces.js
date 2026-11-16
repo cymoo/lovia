@@ -19,7 +19,6 @@ import { icon } from './icons.js';
 import { confirmDialog, copyToClipboard, openMenu, promptDialog, showDialog } from './ui.js';
 import { hasProjectMemory } from './memory.js';
 import { openSettings } from './settings.js';
-import { openProjectMcp } from './project-mcp.js';
 
 const PICK_KEY = 'lovia-workspace'; // sessionStorage: this tab's pick
 const COLLAPSED_KEY = 'lovia-workspace-collapsed'; // localStorage: folded groups
@@ -351,7 +350,7 @@ export function groupHeader(group, rerender) {
         : []),
       // Its MCP servers: what its .mcp.json names, and Settings' as it has them.
       ...(group.kind !== 'general' && store.canConfigure
-        ? [{ label: t('ws.mcp'), icon: icon('server', { size: 15 }), onSelect: () => void openProjectMcp(root) }]
+        ? [{ label: t('ws.mcp'), icon: icon('server', { size: 15 }), onSelect: () => void openSettings('mcp', { root }) }]
         : []),
       // The folders always listed can't be removed (they have no entry id).
       ...(group.workspace?.id

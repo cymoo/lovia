@@ -12,7 +12,7 @@ import { store } from './store.js';
 import { icon } from './icons.js';
 import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
 import { buildAssistantPane } from './assistant-config.js';
-import { buildMcpPane } from './mcp-config.js';
+import { mcpPane } from './mcp-config.js';
 import { hasMemory, memoryPane } from './memory.js';
 
 const NOTIF_KEY = 'lovia-notify';
@@ -279,7 +279,7 @@ function buildGeneralPane() {
 /**
  * Open the Settings dialog on a given tab.
  * @param {'general' | 'memory' | 'models' | 'assistant' | 'skills' | 'mcp' | 'search' | 'about'} [initialTab]
- * @param {{ root?: string }} [opts] For Memory: open on this directory's project memory.
+ * @param {{ root?: string }} [opts] Open Memory and MCP on this directory's project.
  */
 export function openSettings(initialTab = 'general', opts = {}) {
   /** @typedef {{ id: string, label: string, build: () => HTMLElement }} Tab */
@@ -298,7 +298,7 @@ export function openSettings(initialTab = 'general', opts = {}) {
           { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
           { id: 'assistant', label: t('settings.tabAssistant'), build: buildAssistantPane },
           { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
-          { id: 'mcp', label: t('settings.tabMcp'), build: buildMcpPane },
+          { id: 'mcp', label: t('settings.tabMcp'), build: mcpPane(opts) },
           { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
         ]
       : [],

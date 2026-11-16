@@ -649,6 +649,37 @@ async def test_a_switch_reaches_tasks_at_every_depth(tmp_path: Path) -> None:
     assert (await deps.store.get("g")).workspace_mode == "trusted"
 
 
+async def test_interleaved_switches_leave_the_whole_tree_on_the_last(
+    tmp_path: Path,
+) -> None:
+    import asyncio
+
+    app = create_app(
+        _agent(tmp_path, []),
+        store=ChatStore.in_memory(),
+        titles=False,
+        workspaces=WorkspaceSwitch(),
+    )
+    deps = app.state.deps
+    await deps.store.upsert("p", agent="bot", workspace_mode="coding")
+    await deps.store.upsert("t", agent="bot", parent_id="p", workspace_mode="coding")
+    store_write = deps.store.set_workspace_mode
+
+    async def slow_widening(session_id: str, mode: str | None) -> None:
+        # The widening's write to the task lands after the narrowing began.
+        if session_id == "t" and mode == "trusted":
+            await asyncio.sleep(0.05)
+        await store_write(session_id, mode)
+
+    deps.store.set_workspace_mode = slow_widening
+    widen = asyncio.create_task(deps.switch_mode("p", "trusted"))
+    await asyncio.sleep(0.01)
+    await deps.switch_mode("p", "readonly")
+    await widen
+    modes = {s: (await deps.store.get(s)).workspace_mode for s in ("p", "t")}
+    assert modes == {"p": "readonly", "t": "readonly"}
+
+
 async def test_a_switch_during_a_tasks_setup_still_reaches_it(tmp_path: Path) -> None:
     from lovia import Subagents
 

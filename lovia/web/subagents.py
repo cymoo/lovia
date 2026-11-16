@@ -278,11 +278,15 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 # one made while this task was being set up missed it. Read
                 # by the same rule again now the row exists — a later switch
                 # lists the task — and before the task runs: a call it has
-                # already parked for approval would not be judged again.
-                snapshot = deps.run_snapshot(parent)
-                mode = deps.inherited(snapshot, await deps.store.get(parent)).mode
-                if mode != binding.mode:
-                    await deps.store.set_workspace_mode(child_sid, mode)
+                # already parked for approval would not be judged again. Under
+                # the cascade's lock, so a switch can't land between the read
+                # and the write.
+                async with deps._mode_lock:
+                    snapshot = deps.run_snapshot(parent)
+                    meta = await deps.store.get(parent)
+                    mode = deps.inherited(snapshot, meta).mode
+                    if mode != binding.mode:
+                        await deps.store.set_workspace_mode(child_sid, mode)
             try:
                 ctrl = await deps.supervisor.start(
                     session_id=child_sid,

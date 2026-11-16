@@ -305,6 +305,9 @@ class RunController:
         self.supervisor = supervisor
         self.session_id = session_id
         self.agent = agent
+        # The agent as the run was handed it, before the chat's workspace was
+        # bound in: what ``RunSupervisor.retune`` rebuilds for another mode.
+        self.source_agent = agent
         # The registry key the agent is served under, resolved by the caller
         # *before* the workspace binding copied the agent (``name_of`` looks
         # up by identity, and a copy would fall back to ``agent.name``).
@@ -1211,6 +1214,7 @@ class RunSupervisor:
             # and its permission mode and model, read now: a switch lands on
             # the next run.
             binding = self.deps.chat_binding(agent, meta)
+            handed = agent
             agent = self.deps.effective_agent(agent, binding)
             agent = self.deps.on_chat_model(agent, meta.model if meta else None)
             # Every run of one web session shares that session's workspace session
@@ -1249,7 +1253,7 @@ class RunSupervisor:
                 await_approvals=await_approvals,
                 chat_created_at=meta.created_at if meta else None,
             )
-            ctrl.binding = binding
+            ctrl.binding, ctrl.source_agent = binding, handed
             # Reserve the session slot BEFORE the checkpoint await: two concurrent
             # starts (e.g. two tabs submitting at once) would otherwise both pass the
             # caller's live-check and the second would silently orphan the first's
@@ -1295,6 +1299,7 @@ class RunSupervisor:
             agent_name = self.deps.name_of(agent)  # before binding copies the agent
             # The chat's binding and model as they are now, like a fresh run's.
             binding = self.deps.chat_binding(agent, meta)
+            handed = agent
             agent = self.deps.effective_agent(agent, binding)
             agent = self.deps.on_chat_model(agent, meta.model if meta else None)
             # Same chat-scoped workspace binding as start(): the resumed leg's
@@ -1334,7 +1339,7 @@ class RunSupervisor:
                 run_deps=run_deps,
                 chat_created_at=meta.created_at if meta else None,
             )
-            ctrl.binding = binding
+            ctrl.binding, ctrl.source_agent = binding, handed
             ctrl.record_id = record_id
             ctrl.usage = _spent_before(
                 records[0].usage if records else None, snapshot.usage
@@ -1367,8 +1372,11 @@ class RunSupervisor:
             if binding == ctrl.binding:
                 return True
             try:
+                # From the agent as the run was handed it, not the bound one:
+                # a remote chat's bound workspace is no local config to
+                # rebuild, and the same build gives the session's own type.
                 workspace = self.deps.effective_agent(
-                    ctrl.agent, binding, hooks=False
+                    ctrl.source_agent, binding, hooks=False
                 ).workspace
             except Exception as exc:  # noqa: BLE001 — the switch is stored; it lands next run
                 log.warning(

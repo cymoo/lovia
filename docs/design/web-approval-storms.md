@@ -1,6 +1,6 @@
 # 审批风暴：模式即时生效、子任务审批、引号里的字面量
 
-> 状态：设计 · 2026-11-16 · 范围：`lovia/web`、`lovia/workspace`（session engine）、`lovia/plugins/subagents.py`。
+> 状态：已实现（#457–#460） · 2026-11-16 · 范围：`lovia/web`、`lovia/workspace`（session engine）、`lovia/plugins/subagents.py`。
 >
 > 行号指向 `main`（`aab66300`，v0.9.215）。
 
@@ -68,8 +68,8 @@
    - 如果有正在进行的 run：按新的 binding 重建工作区配置（`effective_agent(ctrl.agent, binding, hooks=False)`），交给 `retune`；成功后把 `ctrl.binding` 换成新的 binding，之后派生的子任务就继承新模式。
    
    拿锁是为了不和正在开始的 run 交错：开始前读到旧模式、开始后才被改的情况不会出现。
-3. 级联：父对话切换时，对它的每个子任务（`store.list_children`）做同样的事：写库、发 `session_workspace_changed`，有活的 run 就 `retune`。
-4. 前端提示改为"已切换为 X，立即生效"。只有从"只读"放宽、并且有回复正在进行时，才提示"文件编辑和命令从下一条回复起可用"（见下面边界的第一条）。
+3. 级联：`RouterDeps.switch_mode` 写库后，对任务树下的每一层子任务做同样的事：写库、发 `session_workspace_changed`，有活的 run 就 `retune`。`run_child` 在任务行写入之后、任务开始之前按同一规则（`deps.inherited`）再读一次父对话的模式，免得任务建立期间发生的切换漏掉它。必须在开始之前读：开始之后，已经在等审批的那次调用不会再判定。
+4. 前端提示：有回复正在进行时改为"已切换为 X，正在进行的回复立即生效"。只有这次回复是从"只读"开始（按 run id 记下开始时的模式）时，才提示"文件编辑和命令从下一条回复起可用"（见下面边界的第一条）。
 
 **边界。**
 
@@ -88,7 +88,7 @@
 
 **改法。** 只有子任务有 `parent_id`（`subagents.py:272`），以它为准：
 
-- `RouterDeps.grant_owner(meta) -> tuple[str, str | None]`：子任务返回 `(meta.parent_id, meta.agent)`，`meta.agent` 是父对话的 agent 注册名，`run_child` 存的就是它；其他对话返回 `(meta.id, None)`。
+- `RouterDeps.grant_owner(session_id) -> tuple[str, str | None]`：沿 `parent_id` 走到任务树最上层的对话，返回它和它的 run 所用的 agent 注册名（`agent_of`；没存 agent 的旧对话对应默认 agent）。
 - `RunController` 开始时记下 owner。`_granted` 和批准时写授权（`chat.py:395`）都用 owner 的 session id；`grant_context()` 对入口 agent 用 owner 的 agent 名，handoff 目标仍用它自己的名字。
 - `GET/DELETE /api/sessions/{id}/grants` 对子任务作用于父对话的授权。任务对话的授权面板列出的就是父对话的。
 - 卡片文案"在此对话中始终允许"不变：子任务属于这个对话。
@@ -107,7 +107,7 @@
 
 1. **生命周期事件 `run_status`** `{session_id, run_id, status}`：supervisor 在 `status` 变化时发出（`supervisor.py:932` 和 `:936` 两处）。
 2. **`RunInfo.pending_approval`**：正在等待的审批，与 `approval_required` 帧同样的结构（`_approval_data`）；没有就是 null。断线重连时客户端照常取 `/api/runs` 快照，事件流不需要回放。
-3. **客户端**：收到 `run_status` 就刷新 `runsBySession`，任务的"需审批"点也随之及时更新。
+3. **客户端**：收到 `run_status` 只重取 `/api/runs`，刷新 `runsBySession`，任务的"需审批"点也随之及时更新。
 4. **父对话的审批托盘**：打开的对话有子任务处于 `blocked_on_approval` 时，在输入框上方为每个子任务显示一张审批卡。
    - 卡头写"任务 t1 · <标题>"，带"打开任务"链接。
    - 卡片主体与对话里的审批卡相同。把 `appendApproval`（`chat.js:832`）里构建卡片的部分抽成 `buildApprovalCard(call, sessionId, onDecided)`，对话和托盘共用。
@@ -117,7 +117,9 @@
 
 **为什么不在父对话里订阅每个子任务的 SSE。** 那样要为每个活的子任务各维持一条连接，还要处理它们各自的回放。一个全局事件加一个快照字段，复用已有的"快照 + 事件"模型（`events.py:13`）。
 
-**测试。** 后端：状态变化时发出 `run_status`；`/api/runs` 带出 `pending_approval`；用子任务的 session id 批准，它会继续运行。前端：`node --test` 覆盖托盘的增删；用 verify skill 的 stub 模型手动走一遍：父对话派生子任务，子任务请求审批，在父对话里批准。
+**测试。** 后端：状态变化时发出 `run_status`；`/api/runs` 带出 `pending_approval`；用子任务的 session id 批准，它会继续运行。前端：哪些请求该显示由纯函数 `pendingTaskApprovals`（`approvals.js`）决定，用 `node --test` 覆盖；用 verify skill 的 stub 模型手动走一遍：父对话派生子任务，子任务请求审批，在父对话里批准。
+
+**未覆盖。** 子任务再派生的子任务（只有自定义 agent 会这样）不会出现在顶层对话的托盘里。
 
 ## 4. shell 检查不把引号里的字面量当作展开
 
@@ -130,13 +132,22 @@ ps aux | awk '{print $2}'    jq '.[] | .name' a.json  python -c 'print(1*2)'
 
 模型最常写的命令里很多都是这种形式，这是 coding 模式下审批成串出现的主要来源。
 
-**改法。** POSIX shell 不展开单引号里的任何字符，双引号里只展开 `$` 和反引号，反斜杠转义的字符也不展开。新增 `_mask_literal(segment)`：把这些位置上的展开字符替换为 `x`，其余字符原样保留。被替换的字符都不是空白、引号或 shlex 的标点，所以对替换后的串分词，得到的词与原串一一对应。`_uncertain_word` 对替换后的词判断是否展开，报告原词。
+**改法。** POSIX shell 不展开单引号里的任何字符，双引号里只展开 `$` 和反引号，反斜杠转义的字符也不展开。新增 `_mask_literal(segment)`：把这些位置上的展开字符替换为 `x`，其余字符原样保留。被替换的字符都不是空白、引号或 shlex 的标点，所以对替换后的串分词，得到的词与原串一一对应。
+
+`_decide_segment` 对词作两种读法：
+
+- **按字面拼写**（不变）：任何展开字符仍让 allow 规则降为 ask。规则是事先为字面参数担保的，而程序可能自己去匹配引号里的 `'*'`（git 的 pathspec）。`test_no_allowed_command_reads_through_an_expansion['*']` 这条既有的不变量照旧成立。
+- **按 shell 的读法**（新）：灰名单命令的 ask 保留 `shell:<命令>` 授权，除非某个词确实会被展开。
+
+其余说明：
 
 - Windows（`cmd.exe`）保持现状：单引号不是引号，`%VAR%` 在双引号里也会展开。
 - `$'…'`、`"$(…)"`、`"${HOME}"` 仍算展开：`$` 在单引号外或在双引号里。
-- 原则不变：allow 规则只为字面参数担保，被展开的词仍然降级。程序自己怎么解释参数（`find -name` 的通配、`bash -c` 的脚本）本来就在规则之外（模块 docstring）。
+- 程序自己怎么解释参数（`find -name` 的通配、`bash -c` 的脚本）本来就在规则之外（模块 docstring）。
 
-**测试。** 上面六条命令在 coding 下带回 `shell:<命令>` 的 scope；规则允许的命令带上引号里的字面量（`echo '$HOME'`、`git log --grep='fix.*'`）直接放行；`"$HOME"`、`$(…)`、未加引号的 `*.py` 照旧降级。Windows 的用例由 CI 跑。
+**已知、未处理。** 分段不识别引号：`jq '.[] | .name'` 会在引号里的 `|` 处断开，卡片上多出一个无意义的 `.name'` 授权（无害，以前什么都不提供）。让分段识别引号是 guard 语法的改动，单独做。
+
+**测试。** 上面这些命令在 coding 下带回 `shell:<命令>` 的 scope；`"$HOME"`、`$(…)`、`` `…` ``、未加引号的部分、`$'…'` 照旧不提供授权；规则允许的命令带上引号里的字面量（`echo '$HOME'`）仍然询问。Windows 的用例由 CI 跑。
 
 ## 合并顺序
 

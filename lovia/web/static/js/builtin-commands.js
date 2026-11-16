@@ -1,17 +1,14 @@
-// builtin-commands.js — the slash commands the page comes with. Each is
-// another way in to something the page already does: a chip's menu, a
-// dialog, an item of the chat's ⋯ menu. `/init` alone sends a message — a
-// prompt of ours, to write the project's AGENTS.md.
+// builtin-commands.js — the slash commands the page comes with. A command
+// does something, or takes what is typed after it; what a control beside
+// the composer already does in one click (the model, the mode) gets none.
+// `/init` sends a message — a prompt of ours, to write the project's
+// AGENTS.md.
 import { store } from './store.js';
 import { t } from './i18n.js';
 import { registerCommand } from './commands.js';
 import { sendText } from './chat.js';
-import { openChipMenu } from './model-config.js';
-import { modeChoices, openModeMenu } from './workspace-mode.js';
 import { openChatMcp } from './project-mcp.js';
-import { hasMemory } from './memory.js';
-import { openSettings } from './settings.js';
-import { forkChat, openChat, renameSession, toggleArchive, togglePin } from './sessions.js';
+import { forkChat, openChat, renameSession } from './sessions.js';
 
 // For the model: plain instructions, English whatever the page's language
 // (the model answers in the user's).
@@ -26,23 +23,13 @@ function hasWorkspace() {
   return !!store.agents.find((a) => a.name === store.agent)?.workspace;
 }
 
-/** An open chat that is listed (a task chat has no pin, archive or branch). */
+/** An open chat that is listed (a task chat has no branch). */
 function listedChat() {
   const s = openChat();
   return s && !s.parent_id ? s : null;
 }
 
 export function initBuiltinCommands() {
-  registerCommand('model', {
-    description: t('command.model'),
-    when: () => store.canConfigure && store.configured,
-    run: () => openChipMenu(),
-  });
-  registerCommand('mode', {
-    description: t('command.mode'),
-    when: () => (modeChoices()?.modes.length ?? 0) > 1,
-    run: () => openModeMenu(),
-  });
   registerCommand('mcp', {
     description: t('command.mcp'),
     when: () => store.canConfigure && store.configured,
@@ -53,30 +40,12 @@ export function initBuiltinCommands() {
     when: hasWorkspace,
     run: () => sendText(INIT_PROMPT),
   });
-  registerCommand('memory', {
-    description: t('command.memory'),
-    when: hasMemory,
-    run: () => void openSettings('memory'),
-  });
   registerCommand('rename', {
     description: t('command.rename'),
     argument: t('command.renameArg'),
     when: () => !!openChat(),
     // No title typed: the dialog asks, as the menu's Rename does.
     run: ({ args }) => renameSession(openChat(), args || undefined),
-  });
-  registerCommand('pin', {
-    description: t('command.pin'),
-    when: () => !!listedChat(),
-    run: () => togglePin(listedChat()),
-  });
-  registerCommand('archive', {
-    description: t('command.archive'),
-    when: () => {
-      const s = listedChat();
-      return !!s && !s.archived;
-    },
-    run: () => toggleArchive(listedChat()),
   });
   registerCommand('branch', {
     description: t('command.branch'),

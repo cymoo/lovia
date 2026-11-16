@@ -261,6 +261,12 @@ The bundled server exposes the same flow over SSE and
 `POST /api/chat/approve`. Workspace `ask` verdicts and MCP tools configured
 with `permission` also use this one channel.
 
+A consumer that changes the permissions while a request waits (a serving
+layer switching a conversation's mode) can ask for it to be judged again:
+`await request.recheck()` runs the tool's own check with the call's
+arguments and returns a fresh `Verdict` — `allow` or `deny` to settle with
+`approve()` / `reject()`, `ask` if a person still has to decide.
+
 Remembering approvals ("always allow `git push` in this chat") is the
 consumer's job, keyed by `request.scopes`; a programmatic version is a
 five-line `approval_handler`:

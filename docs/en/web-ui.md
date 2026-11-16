@@ -674,8 +674,11 @@ chip in the composer. A new chat starts in the mode Settings → Assistant names
 before sending to start it there. Switching a chat applies at once: a reply
 already streaming judges its next tool call by the new mode, the chat's
 background subagent tasks switch with it, and its background processes (a
-dev server, say) keep running. A reply that began in View only has no tools
-that edit files or run commands, so those start with the next reply. The
+dev server, say) keep running. An approval card already waiting is judged
+again: what the new mode allows runs, what it refuses is refused with its
+reason, and what it still asks about keeps its card. A reply that began in
+View only has no tools that edit files or run commands, so those start with
+the next reply. The
 chats a run creates — background subagent tasks, chats started with
 `start_session`, the fresh chats of a schedule set up from it — take the
 mode that run is in.

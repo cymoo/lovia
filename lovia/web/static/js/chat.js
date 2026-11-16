@@ -843,7 +843,8 @@ function appendApproval(call) {
   }
   setToolStatus(findToolNode(call.id), 'awaiting');
   store.emit('tool-awaiting');
-  const node = buildApprovalCard(call, /** @type {string} */ (store.sessionId), {
+  const sessionId = /** @type {string} */ (store.sessionId);
+  const node = buildApprovalCard(call, sessionId, {
     decided: (decision, reason) =>
       decideApproval(
         call.id,
@@ -851,6 +852,18 @@ function appendApproval(call) {
         reason ? t('approval.deniedWhy', { reason }) : undefined,
       ),
     remembered: (text) => noteRemembered(call.id, text),
+    // The answer never reached the server, so the request still waits:
+    // take back what the click showed and offer the card again. Not when
+    // the server says it no longer waits (answered elsewhere — its
+    // approval_resolved has the last word), nor once the chat or the
+    // request on screen is another.
+    failed: (err) => {
+      if (err.code === 'approval_not_found') return;
+      if (store.sessionId !== sessionId || store.approvals.get(call.id)?.call !== call) return;
+      findToolNode(call.id)?.querySelector('summary > .lv-tool-approval')?.remove();
+      toast(t('approval.notSent'), { type: 'error' });
+      appendApproval(call);
+    },
   });
   store.approvals.get(call.id).card = node;
   appendBubbleContent(store.bubble, node);
@@ -1222,9 +1235,11 @@ function setApprovalBadge(row, { outcome, title }) {
   else summary.append(badge);
 }
 
-/** @param {{ id: string, approved: boolean, cause: 'user' | 'timeout' | 'cancel' }} data */
+/** @param {{ id: string, approved: boolean, cause: 'user' | 'timeout' | 'cancel' | 'policy' }} data */
 function resolveApproval(data) {
-  decideApproval(data.id, approvalOutcome(data));
+  // A mode switch answered it: the badge says so, not "you".
+  const byMode = data.cause === 'policy' ? t('approval.byMode') : undefined;
+  decideApproval(data.id, approvalOutcome(data), byMode);
   // Approved elsewhere (another tab): the call runs now.
   if (data.approved) setToolStatus(findToolNode(data.id), 'running');
   else drawRefused(data.id);

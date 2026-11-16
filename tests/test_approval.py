@@ -328,3 +328,54 @@ async def test_approval_channel_supports_scopes_and_reasons() -> None:
 
     channel.release(scope="b", reason="the run ended")
     assert fut_b.result() == Approval(False, "the run ended")
+
+
+# ---------- Judging a waiting request again ----------
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_request_can_be_judged_again() -> None:
+    # The permission it was asked under can change while it waits (a serving
+    # layer switching the conversation's mode): recheck runs the tool's own
+    # check again, with the call's arguments and the run's context.
+    mood = {"verdict": Verdict("ask", "Not yet.")}
+    seen: list[dict] = []
+
+    @tool(permission=lambda args, ctx: (seen.append(args), mood["verdict"])[1])
+    async def gated(path: str) -> str:
+        return f"wrote {path}"
+
+    provider = ScriptedProvider(
+        [call("gated", {"path": "x"}, call_id="c1"), text("ok")]
+    )
+    handle = Runner.stream(Agent(name="t", model=provider, tools=[gated]), "go")
+    rechecked: list[Verdict] = []
+    async for ev in handle:
+        if isinstance(ev, events.ApprovalRequired):
+            rechecked.append(await ev.recheck())
+            mood["verdict"] = Verdict("allow")
+            rechecked.append(await ev.recheck())
+            ev.approve()
+    await handle.result()
+    assert [v.action for v in rechecked] == ["ask", "allow"]
+    assert seen[-1] == {"path": "x"}
+
+
+@pytest.mark.asyncio
+async def test_a_request_with_nothing_to_rejudge_still_asks() -> None:
+    from lovia.messages import ToolCall
+
+    req = events.ApprovalRequired(
+        call=ToolCall(id="c", name="t", arguments="{}"),
+        reason="Why.",
+        scopes=("shell:x",),
+    )
+    # Built outside the runner: nothing to judge by.
+    assert await req.recheck() == Verdict("ask", "Why.", ("shell:x",))
+
+    def broken() -> Verdict:
+        raise RuntimeError("policy gone")
+
+    req._judge = broken
+    # A check that fails settles nothing.
+    assert (await req.recheck()).action == "ask"

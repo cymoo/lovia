@@ -264,6 +264,9 @@ class ToolCallProcessor:
                 reason=verdict.reason,
                 scopes=verdict.scopes,
                 _channel=self.approvals,
+                # The same check, for a consumer that changes the permissions
+                # while the request waits (ApprovalRequired.recheck).
+                _judge=lambda: tool.decide(args, state.run_ctx),
             )
             yield request
             handler = state.agent.approval_handler

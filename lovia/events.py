@@ -8,6 +8,7 @@ data — control plumbing (approvals, cancellation) lives elsewhere. See
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -15,8 +16,10 @@ from .transcript import TranscriptEntry
 from .messages import ToolCall
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from .agent import Agent
-    from .approvals import ApprovalChannel
+    from .approvals import ApprovalChannel, Verdict
     from .parts import ContentPart
     from .runtime.result import RunResult
 
@@ -223,6 +226,31 @@ class ApprovalRequired(ToolEvent):
     # callers should prefer ``approve()`` / ``reject()`` on the event or
     # the channel API on ``RunHandle.approvals``.
     _channel: "ApprovalChannel | None" = field(default=None, repr=False)
+    # The tool's permission check for this call, bound by the runner.
+    _judge: "Callable[[], Verdict | Awaitable[Verdict]] | None" = field(
+        default=None, repr=False
+    )
+
+    async def recheck(self) -> "Verdict":
+        """Judge the call again by its tool's permission, as things stand
+        now — for a consumer that changed the permissions while the request
+        waits (a serving layer switching the conversation's mode). The
+        verdict is the consumer's to act on: ``allow`` or ``deny`` it may
+        settle with :meth:`approve` / :meth:`reject`; ``ask`` still needs a
+        person. A request built outside the runner, or a check that fails,
+        comes back as ``ask``: nothing is settled on a guess."""
+        from .approvals import Verdict, as_verdict
+
+        still_asks = Verdict("ask", self.reason, self.scopes)
+        if self._judge is None:
+            return still_asks
+        try:
+            verdict = self._judge()
+            if inspect.isawaitable(verdict):
+                verdict = await verdict
+            return as_verdict(verdict)
+        except Exception:  # noqa: BLE001 — fail closed: a person decides
+            return still_asks
 
     def approve(self) -> None:
         """Allow the tool call to proceed."""

@@ -89,8 +89,9 @@ class ApprovalRequiredData(TypedDict):
 class ApprovalResolvedData(TypedDict):
     id: str
     approved: bool
-    # Who decided: the user (from any tab), the approval timeout, or a stop.
-    cause: Literal["user", "timeout", "cancel"]
+    # Who decided: the user (from any tab), the approval timeout, a stop, or
+    # the chat's permission mode, switched while the request waited.
+    cause: Literal["user", "timeout", "cancel", "policy"]
 
 
 class _ToolResultRequired(TypedDict):
@@ -205,7 +206,7 @@ class ApprovalResolved:
 
     call_id: str
     approved: bool
-    cause: Literal["user", "timeout", "cancel"]
+    cause: Literal["user", "timeout", "cancel", "policy"]
 
 
 class UnavailableServer(TypedDict):

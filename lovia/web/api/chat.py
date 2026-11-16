@@ -403,7 +403,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         if not scopes:
             return False
         try:
-            await deps.store.add_grants(sid, scopes, ctrl.grant_context())
+            # On the chat whose approvals the run shares (a task's: its chat's).
+            await deps.store.add_grants(
+                ctrl.grant_owner[0], scopes, ctrl.grant_context()
+            )
         except Exception as exc:  # noqa: BLE001 — the approval itself still stands
             log.warning("could not remember approval %s for %s: %s", cid, sid, exc)
             return False

@@ -615,6 +615,22 @@ class RouterDeps:
                 self.emit_workspace(now)
         return resolved, bound
 
+    async def grant_owner(self, session_id: str) -> tuple[str, str | None]:
+        """Whose remembered approvals a chat's runs use — the chat at the top
+        of its task tree — and the agent key that chat's runs are served
+        under (:meth:`agent_of`). A task works for the chat that spawned it,
+        in its directory, so an "always allow" given in either holds for
+        both, and for siblings."""
+        meta = await self.store.get(session_id)
+        owner, seen = session_id, {session_id}
+        while meta is not None and meta.parent_id and meta.parent_id not in seen:
+            parent = await self.store.get(meta.parent_id)
+            if parent is None:  # being deleted, with its tasks
+                break
+            owner, meta = parent.id, parent
+            seen.add(owner)
+        return owner, self.agent_of(meta)
+
     async def switch_mode(self, session_id: str, mode: str | None) -> None:
         """Store ``mode`` for the chat and every task under it, bringing each
         live run onto it (:meth:`RunSupervisor.retune`): a task works for its

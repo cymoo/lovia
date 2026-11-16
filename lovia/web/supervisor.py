@@ -352,11 +352,14 @@ class RunController:
         self.started_at = time.time()
         # Where a snapshot's untimed (pre-timing) history starts from.
         self.chat_created_at = chat_created_at or self.started_at
-        # The directory and permission mode this run's workspace was built
-        # for (a None mode: the agent's own policy). The chats it creates — a
-        # subagent task, a spawned chat — work the same way, whatever the
-        # chat is switched to meanwhile.
+        # The directory and permission mode this run works under (a None
+        # mode: the agent's own policy) — moved by a switch it can take
+        # (``RunSupervisor.retune``). The chats it creates — a subagent task,
+        # a spawned chat — work the same way.
         self.binding = ChatBinding(None, None)
+        # Whose remembered approvals answer this run's, and under which agent
+        # key (``RouterDeps.grant_owner``): a task's are its chat's.
+        self.grant_owner: tuple[str, str | None] = (session_id, None)
         # Cumulative usage across auto-chained legs, for the durable run record.
         self.usage = Usage()
         # Final model call's prompt size (context fill), from the last leg that
@@ -473,12 +476,16 @@ class RunController:
     def grant_context(self) -> str:
         """Where this run's approvals are given: the *active* agent (a handoff
         target after a handoff) and its workspace root. The entry agent is
-        named by its registry key; a handoff target by its own name, so a
-        grant given to it applies only while it is the one acting."""
+        named by its registry key — a task's by its chat's, whose approvals
+        it shares; a handoff target by its own name, so a grant given to it
+        applies only while it is the one acting."""
         active = self.active_agent
-        if active is self.agent:
-            return agent_grant_context(self.agent_name, active)
-        return agent_grant_context(self.deps.name_of(active), active)
+        if active is not self.agent:
+            return agent_grant_context(self.deps.name_of(active), active)
+        owner, owner_agent = self.grant_owner
+        if owner == self.session_id or owner_agent is None:
+            owner_agent = self.agent_name  # its own approvals
+        return agent_grant_context(owner_agent, active)
 
     async def _granted(self, ev: events.ApprovalRequired) -> bool:
         """Whether remembered approvals cover every one of ``ev.scopes``."""
@@ -486,7 +493,7 @@ class RunController:
             return False
         try:
             return await self.deps.store.has_grants(
-                self.session_id, ev.scopes, self.grant_context()
+                self.grant_owner[0], ev.scopes, self.grant_context()
             )
         except Exception as exc:  # noqa: BLE001 — a lookup failure asks, never allows
             log.warning("grant lookup failed for %s: %s", self.session_id, exc)
@@ -1210,9 +1217,10 @@ class RunSupervisor:
             self._check_slot(session_id)
             meta = await self.deps.store.get(session_id)
             agent_name = self.deps.name_of(agent)  # before binding copies the agent
+            grants = await self.deps.grant_owner(session_id)
             # The chat's directory, checked against the server's constraints,
-            # and its permission mode and model, read now: a switch lands on
-            # the next run.
+            # and its permission mode and model, read now: a later mode switch
+            # reaches the run through ``retune``, a model switch the next run.
             binding = self.deps.chat_binding(agent, meta)
             handed = agent
             agent = self.deps.effective_agent(agent, binding)
@@ -1254,6 +1262,7 @@ class RunSupervisor:
                 chat_created_at=meta.created_at if meta else None,
             )
             ctrl.binding, ctrl.source_agent = binding, handed
+            ctrl.grant_owner = grants
             # Reserve the session slot BEFORE the checkpoint await: two concurrent
             # starts (e.g. two tabs submitting at once) would otherwise both pass the
             # caller's live-check and the second would silently orphan the first's
@@ -1297,6 +1306,7 @@ class RunSupervisor:
             self._check_slot(session_id, cap=False)
             meta = await self.deps.store.get(session_id)
             agent_name = self.deps.name_of(agent)  # before binding copies the agent
+            grants = await self.deps.grant_owner(session_id)
             # The chat's binding and model as they are now, like a fresh run's.
             binding = self.deps.chat_binding(agent, meta)
             handed = agent
@@ -1340,6 +1350,7 @@ class RunSupervisor:
                 chat_created_at=meta.created_at if meta else None,
             )
             ctrl.binding, ctrl.source_agent = binding, handed
+            ctrl.grant_owner = grants
             ctrl.record_id = record_id
             ctrl.usage = _spent_before(
                 records[0].usage if records else None, snapshot.usage

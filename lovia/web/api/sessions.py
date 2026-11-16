@@ -419,11 +419,15 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
     @router.get("/api/sessions/{session_id}/grants", response_model=list[GrantInfo])
     async def list_grants(session_id: str) -> list[GrantInfo]:
         """The chat's remembered approvals, flagged ``active`` when they apply
-        to the chat as served now (same agent and workspace root)."""
-        rows = await store.list_grants(session_id)
+        to the chat as served now (same agent and workspace root). A task
+        lists its chat's: those are the ones its runs use."""
+        owner, owner_agent = await deps.grant_owner(session_id)
+        rows = await store.list_grants(owner)
         if not rows:
             return []
-        current = await _current_grant_context(session_id)
+        current = await _current_grant_context(
+            session_id, owner_agent if owner != session_id else None
+        )
         return [
             GrantInfo(
                 scope=r.scope,
@@ -439,21 +443,26 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         session_id: str, scope: str = Query(...), context: str = Query(...)
     ) -> dict[str, bool]:
         """Forget one remembered approval. Later calls in that scope ask
-        again; a call it already approved is not affected."""
-        removed = await store.delete_grant(session_id, scope, context)
+        again; a call it already approved is not affected. A task's are its
+        chat's, so this forgets it there."""
+        owner, _ = await deps.grant_owner(session_id)
+        removed = await store.delete_grant(owner, scope, context)
         return {"removed": removed}
 
-    async def _current_grant_context(session_id: str) -> str | None:
+    async def _current_grant_context(
+        session_id: str, owner_agent: str | None
+    ) -> str | None:
         ctrl = deps.supervisor.get(session_id)
         if ctrl is not None:
             return ctrl.grant_context()
         meta = await store.get(session_id)
-        agent = deps.agents.get(meta.agent) if meta and meta.agent else None
-        if meta is None or meta.agent is None or agent is None:
+        name = owner_agent or (meta.agent if meta else None)
+        agent = deps.agents.get(name) if name else None
+        if meta is None or name is None or agent is None:
             return None
         # In the chat's own directory (none stored: the agent's own).
         where = ChatBinding(meta.workspace_root, None)
-        return agent_grant_context(meta.agent, deps.at_root(agent, where))
+        return agent_grant_context(name, deps.at_root(agent, where))
 
     @router.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, bool]:

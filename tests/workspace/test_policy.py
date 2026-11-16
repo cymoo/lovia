@@ -431,9 +431,7 @@ def test_quoted_against_the_shell_a_word_is_literal() -> None:
         ("awk '{print $2}' a.txt", ("shell:awk",)),
         ("python -c 'print(1*2)'", ("shell:python",)),
         ('grep "a*b" x', ("shell:grep",)),
-        # A comment changes nothing about the quotes around it.
-        ("find . -name '*.py' # it's all", ("shell:find",)),
-        ("rg '#x' '*.py'", ("shell:rg",)),
+        ("rg '#include' src", ("shell:rg",)),  # nothing to expand at all
     ):
         assert gray.decide_command(cmd) == Verdict("ask", "", scopes), cmd
     # What the shell still expands withholds the grant: `$` and backticks in
@@ -449,9 +447,15 @@ def test_quoted_against_the_shell_a_word_is_literal() -> None:
         "rg $'a'",
         "rg 'a;b' $(id)",
         "rg 'foo|bar' \"$HOME\"",
-        # A quote in a comment opens nothing: the next line still expands.
+        # What gives quotes another meaning turns the reading off for the
+        # whole line: a comment (a quote in it opens nothing), a
+        # here-document (quotes in its body quote nothing), a nested context.
         'rg foo # \'\nrg "$HOME"',
         "# don't\nrg $DIR",
+        "rg foo\\ #'\nbar' $HOME",
+        "cat <<EOF\n'`printf x`'\nEOF",
+        "find . -name '*.py' # all of them",
+        "rg 'a' \"${X:-'*'}\"",
     ):
         verdict = gray.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scopes == (), cmd

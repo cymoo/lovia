@@ -247,6 +247,7 @@ const MESSAGES = {
     'approval.denyReason': '拒绝原因（可选）',
     'approval.modelNote': '模型的说明，未经核实——以下面的命令为准',
     'approval.notRemembered': '已允许，但未能记住这个授权',
+    'approval.notSent': '决定未能送达，请再试一次',
     'grants.title': '已允许的规则',
     'grants.hint': '勾选“总是允许”记下的范围，只在这个对话里生效。撤销只影响之后的调用。',
     'grants.empty': '这个对话还没有记住任何授权。',
@@ -1096,6 +1097,7 @@ const EN = {
   'approval.denyReason': 'Reason for denying (optional)',
   'approval.modelNote': "The model's note, not checked — the command below is what runs",
   'approval.notRemembered': 'Approved, but the grant could not be saved',
+  'approval.notSent': 'The decision did not reach the server — try again',
   'grants.title': 'Allowed in this chat',
   'grants.hint':
     'Scopes you ticked "always allow" for. They apply to this chat only; revoking affects later calls.',

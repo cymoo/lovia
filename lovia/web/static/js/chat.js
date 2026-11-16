@@ -867,13 +867,14 @@ function appendApproval(call) {
  * An approval card for `call`, decided for the run of `sessionId` that asked
  * it — this chat's, or one of its tasks' (the task tray). `decided` runs at
  * the click, before the server confirms; `remembered` once the server has
- * saved what "always allow" picked.
+ * saved what "always allow" picked; `failed`, when given, if the decision
+ * never reached the server.
  * @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], expires_at?: number | null }} call
  * @param {string} sessionId
- * @param {{ decided: (decision: 'approve' | 'deny', reason: string) => void, remembered: (text: string) => void }} hooks
+ * @param {{ decided: (decision: 'approve' | 'deny', reason: string) => void, remembered: (text: string) => void, failed?: (err: Error & { code?: string }) => void }} hooks
  * @returns {HTMLElement}
  */
-function buildApprovalCard(call, sessionId, { decided, remembered }) {
+function buildApprovalCard(call, sessionId, { decided, remembered, failed }) {
   const scopes = call.scopes ?? [];
   const node = /** @type {HTMLElement} */ (cloneTemplate('tmpl-approval'));
   node.dataset.callId = call.id;
@@ -971,7 +972,10 @@ function buildApprovalCard(call, sessionId, { decided, remembered }) {
       } else {
         toast(t('approval.notRemembered'), { type: 'error' });
       }
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      console.error(err);
+      failed?.(/** @type {Error & { code?: string }} */ (err));
+    }
   };
   node.querySelector('.lv-approve').addEventListener('click', () => resolve('approve'));
   node.querySelector('.lv-decline').addEventListener('click', () => resolve('deny'));
@@ -1022,6 +1026,14 @@ function renderTaskApprovals() {
         if (hadFocus) promptEl?.focus({ preventScroll: true });
       },
       remembered: (text) => toast(text),
+      // Still waiting, as far as anyone knows: offer it again — unless the
+      // server says it is no longer pending (answered elsewhere, timed out).
+      failed: (err) => {
+        if (err.code === 'approval_not_found') return;
+        _trayDecided.delete(key);
+        toast(t('approval.notSent'), { type: 'error' });
+        renderTaskApprovals();
+      },
     });
     item.append(taskApprovalHead(task), card);
     _trayItems.set(key, item);

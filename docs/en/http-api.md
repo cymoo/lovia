@@ -171,7 +171,7 @@ normalizes all three.
 | `POST /api/chat/cancel?session_id=` | stop the live run (completed turns are kept) |
 | `POST /api/chat/inject` / `uninject` | queue / withdraw a [steering message](cancellation.md#steering-a-live-run) for the live run |
 | `GET /api/sessions?q=&limit=&offset=&per_workspace=&archived=` | list / search chats (pinned first, paged). `per_workspace=N` pages by directory instead: every pinned chat, plus the `N` most recent of each directory, so a busy one can't crowd the others out (chats with no directory all come). Archived chats are left out; `archived=true` lists those instead, and a search (`q`) covers both — each row says which with `archived`. `DELETE` clears all |
-| `GET /api/runs` | live supervised runs. A run's `run_id` is the one its lifecycle events and history record carry, kept across auto-chained legs and a resume |
+| `GET /api/runs` | live supervised runs. A run's `run_id` is the one its lifecycle events and history record carry, kept across auto-chained legs and a resume. `pending_approval` is the request a `blocked_on_approval` run waits on, shaped like its `approval_required` frame (`null` otherwise) — so a page can offer it outside that run's chat, as the web UI does for a chat's subagent tasks; answer it with `POST /api/chat/approve` and the run's `session_id` |
 | `GET /api/runs/history?session_id=&source=&since=&run_id=&limit=&offset=` | persisted run records (outcome, error, duration, token usage); `since` filters to runs finished after that timestamp, `run_id` picks one run |
 | `GET /api/events` | **SSE**: subscribe to process-wide lifecycle events (no history replay) |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin/archive/switch `workspace_mode` · delete (with its subagent tasks and the schedules bound to it). `{"archived": true}` puts a chat away without deleting anything (and unpins it); pinning it, or a message from the user, brings it back. Each user message carries a `ref` — `"<run_id>:<n>"`, stable across reloads and rewinds; `null` until its run has finished. The answer that ends a run carries its `duration` in seconds, and timestamps are real where the run recorded its timing. A chat that came from another carries `origin` — `kind` is `"fork"` (a branch) or `"spawn"` (started by that chat's agent with `start_session`), or `"schedule"` for a chat a schedule's fire created (`schedule_id` instead of `session_id`; `title` is the schedule's name) — and the list's `origin_kind` says the same. An id the store doesn't have (from another database, or deleted) still answers, with an empty placeholder and `exists: false`; a first message with it starts a new chat |
@@ -245,6 +245,7 @@ that starts meanwhile is still refused, with no injection and no new run.
 | --- | --- |
 | `run_started` | `{session_id, run_id, agent, source}` |
 | `run_finished` | `{session_id, run_id, status, error, source}` |
+| `run_status` | `{session_id, run_id, status}` — a live run started (`blocked_on_approval`) or stopped (`running`) waiting on an approval; `GET /api/runs` carries the request |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
 | `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev, workspace_root}` |

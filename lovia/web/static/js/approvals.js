@@ -138,3 +138,25 @@ export const outcomeText = (outcome) => t(OUTCOME_TEXT[outcome][1]);
 
 /** Whether the call ran (so its own tool row appears) or was refused. @param {ApprovalOutcome} outcome */
 export const ranAfter = (outcome) => outcome === 'approve' || outcome === 'auto';
+
+/**
+ * The approvals the chat `chatId` should offer for its tasks, by
+ * `${task}:${call}`: each of its tasks whose live run waits on one (the runs
+ * snapshot's `pending_approval`), less those already answered here
+ * (`decided`). A task list still left from the chat before is ignored.
+ * @param {Array<{ id: string, parent_id?: string | null, title?: string | null }>} tasks
+ * @param {Map<string, { pending_approval?: any }> | undefined} runs
+ * @param {string | null} chatId
+ * @param {Set<string>} decided
+ * @returns {Map<string, { task: any, call: any }>}
+ */
+export function pendingTaskApprovals(tasks, runs, chatId, decided) {
+  const want = new Map();
+  for (const task of tasks) {
+    if (!chatId || task.parent_id !== chatId) continue;
+    const call = runs?.get(task.id)?.pending_approval;
+    const key = call && `${task.id}:${call.id}`;
+    if (key && !decided.has(key)) want.set(key, { task, call });
+  }
+  return want;
+}

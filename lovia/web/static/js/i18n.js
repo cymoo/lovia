@@ -343,6 +343,8 @@ const MESSAGES = {
     'files.readerClose': '关闭',
     'toast.contentCopied': '已复制内容',
     'task.backToParent': '返回主对话',
+    'task.open': '打开任务',
+    'task.approvals': '后台任务的审批',
     'files.readFailed': '无法读取文件',
     'files.outsideWorkspace': '文件面板只显示工作区内的文件——该文件在工作区之外，或被工作区规则隐藏。',
     'files.loadFailed': '无法加载文件',
@@ -582,6 +584,7 @@ const MESSAGES = {
     'keys.help': '本帮助',
     // ---- screen-reader announcements
     'a11y.approvalNeeded': '等待审批：{name}',
+    'a11y.taskApprovalNeeded': '后台任务“{task}”等待审批：{name}',
     'a11y.replyDone': '回复已完成',
     'a11y.runFailed': '本次运行失败',
     // ---- settings
@@ -1186,6 +1189,8 @@ const EN = {
   'files.readerClose': 'Close',
   'toast.contentCopied': 'Content copied',
   'task.backToParent': 'Back to main chat',
+  'task.open': 'Open task',
+  'task.approvals': 'Approvals for background tasks',
   'files.readFailed': 'Couldn’t read file',
   'files.outsideWorkspace':
     'The Files panel only shows workspace files — this one is outside the workspace, or hidden by its rules.',
@@ -1422,6 +1427,7 @@ const EN = {
   'keys.help': 'This help',
   // ---- screen-reader announcements
   'a11y.approvalNeeded': 'Approval needed: {name}',
+  'a11y.taskApprovalNeeded': 'Background task “{task}” needs approval: {name}',
   'a11y.replyDone': 'Reply finished',
   'a11y.runFailed': 'The run failed',
   'settings.title': 'Settings',

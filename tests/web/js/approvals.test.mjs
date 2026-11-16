@@ -10,6 +10,7 @@ import {
   approvalOutcome,
   badgeText,
   outcomeText,
+  pendingTaskApprovals,
   ranAfter,
   scopeLabel,
   scopeList,
@@ -101,4 +102,26 @@ test('the badge names the outcome; only a call that ran gets its own row', () =>
     ['approve', 'auto', 'deny', 'timeout', 'cancel'].map(ranAfter),
     [true, true, false, false, false],
   );
+});
+
+test("a chat offers its own tasks' pending approvals, less those it answered", () => {
+  const call = { id: 'c1', name: 'shell' };
+  const tasks = [
+    { id: 't1', parent_id: 'p' },
+    { id: 't2', parent_id: 'p' }, // running, nothing pending
+    { id: 't3', parent_id: 'p' },
+  ];
+  const runs = new Map([
+    ['t1', { pending_approval: call }],
+    ['t2', { pending_approval: null }],
+    ['t3', { pending_approval: { id: 'c9', name: 'shell' } }],
+  ]);
+  const keys = (want) => [...want.keys()];
+  assert.deepEqual(keys(pendingTaskApprovals(tasks, runs, 'p', new Set())), ['t1:c1', 't3:c9']);
+  assert.equal(pendingTaskApprovals(tasks, runs, 'p', new Set()).get('t1:c1').call, call);
+  // Answered here: kept out while a snapshot from before the answer names it.
+  assert.deepEqual(keys(pendingTaskApprovals(tasks, runs, 'p', new Set(['t1:c1']))), ['t3:c9']);
+  // Another chat is open, its own task list not loaded yet: offer nothing.
+  assert.deepEqual(keys(pendingTaskApprovals(tasks, runs, 'q', new Set())), []);
+  assert.deepEqual(keys(pendingTaskApprovals(tasks, undefined, 'p', new Set())), []);
 });

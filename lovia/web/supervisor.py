@@ -62,6 +62,7 @@ from .sse import (
     ApprovalResolved,
     RunFinishedData,
     RunStartedData,
+    RunStatusData,
     SessionData,
     LegFrame,
     LegTiming,
@@ -472,6 +473,18 @@ class RunController:
         # Same for a run parked on an ask_human question (cancel).
         if self.deps.questions is not None:
             self.deps.questions.cancel_session(self.session_id)
+
+    def _set_status(self, status: str) -> None:
+        """Change the live status and say so on ``/api/events``: a chat's page
+        shows its tasks' pending approvals (``RunInfo.pending_approval``) and
+        must learn when one starts or stops waiting."""
+        self.status = status
+        self.deps.emit(
+            "run_status",
+            RunStatusData(
+                session_id=self.session_id, run_id=self.record_id, status=status
+            ),
+        )
 
     def grant_context(self) -> str:
         """Where this run's approvals are given: the *active* agent (a handoff
@@ -939,12 +952,12 @@ class RunController:
                         )
                         self._publish_frame(asked)
                         self.pending_approval = asked
-                        self.status = "blocked_on_approval"
+                        self._set_status("blocked_on_approval")
                         try:
                             resolved = await self._await_approval(ev)
                         finally:
                             self.pending_approval = None
-                            self.status = "running"
+                            self._set_status("running")
                         self._publish_frame(resolved)
                         continue
                     if isinstance(ev, events.RunFailed):

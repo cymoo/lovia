@@ -546,6 +546,10 @@ class RunInfo(BaseModel):
     source: str = "user"
     # Epoch seconds when the run began — the sidebar's elapsed ticker.
     started_at: float | None = None
+    # The approval it waits on (status "blocked_on_approval"), as the run's
+    # own approval_required frame carries it — so a page can offer the card
+    # outside that run's chat (a task's, in the chat that spawned it).
+    pending_approval: dict[str, Any] | None = None
 
 
 class RunRecordInfo(BaseModel):

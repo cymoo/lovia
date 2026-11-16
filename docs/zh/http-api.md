@@ -163,7 +163,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/chat/cancel?session_id=` | 取消正在执行的 Run（保留已完成的 Turn） |
 | `POST /api/chat/inject` / `uninject` | 为正在执行的 Run 排队或撤回[追加指令](cancellation.md#在运行中追加指令) |
 | `GET /api/sessions?q=&limit=&offset=&per_workspace=&archived=` | 列出或搜索对话（置顶优先，支持分页）。`per_workspace=N` 改为按目录分页：全部置顶对话，加上每个目录最近的 `N` 个，对话多的目录不会把别的目录挤出去（没有目录的对话全部返回）。默认不含已归档的对话；`archived=true` 改为只列已归档的，搜索（`q`）两者都包含，每行的 `archived` 标明是哪一种。`DELETE` 清空全部对话 |
-| `GET /api/runs` | 正在运行的服务端托管任务。`run_id` 与该 Run 的生命周期事件和运行记录一致，自动续跑和恢复后都不变 |
+| `GET /api/runs` | 正在运行的服务端托管任务。`run_id` 与该 Run 的生命周期事件和运行记录一致，自动续跑和恢复后都不变。`pending_approval` 是状态为 `blocked_on_approval` 的运行正在等待的请求，结构与它的 `approval_required` 帧相同（否则为 `null`）——页面可以在那个运行的对话之外提供审批，web UI 就这样在对话里显示子任务的审批；用该运行的 `session_id` 调 `POST /api/chat/approve` 回答 |
 | `GET /api/runs/history?session_id=&source=&since=&run_id=&limit=&offset=` | 查询持久化的运行记录，包括结果、错误、时长和 token 用量；`since` 按结束时间过滤，`run_id` 查询单个 Run |
 | `GET /api/events` | **SSE**：订阅进程级生命周期事件（不重放历史事件） |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名、置顶、归档或切换 `workspace_mode`；删除（连同其后台任务和绑定它的定时任务）。`{"archived": true}` 把对话收起来而不删除任何内容（同时取消置顶）；置顶它，或用户再发一条消息，就会恢复。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null`。每次 Run 的最后一条回答带 `duration`（秒）；记录了用时的 Run，其消息时间戳为真实时间。来自另一个对话的聊天带 `origin`：`kind` 为 `"fork"`（分支）或 `"spawn"`（由那个对话的 agent 用 `start_session` 启动）；定时任务触发时新建的对话为 `"schedule"`（带 `schedule_id` 而不是 `session_id`，`title` 是任务名称）；列表中的 `origin_kind` 与之一致。存储里没有的 id（来自另一个数据库，或已删除）也返回一份空占位，带 `exists: false`；用它发第一条消息就是新开一个对话 |
@@ -224,6 +224,7 @@ API 路由抛出的错误都使用同一种响应体：
 | --- | --- |
 | `run_started` | `{session_id, run_id, agent, source}` |
 | `run_finished` | `{session_id, run_id, status, error, source}` |
+| `run_status` | `{session_id, run_id, status}`：运行开始（`blocked_on_approval`）或结束（`running`）等待审批；请求本身见 `GET /api/runs` |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
 | `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev, workspace_root}` |

@@ -254,6 +254,14 @@ export function initEventStream() {
     store.emit('runs-changed');
     refresh();
   });
+  // A live run started or stopped waiting on an approval: the tasks' badges
+  // and the task tray read it from the runs snapshot — only that changed.
+  es.addEventListener('run_status', (e) => {
+    try {
+      store.emit('run-status', JSON.parse(e.data));
+    } catch { /* malformed payload — the refresh below still runs */ }
+    void refreshRuns();
+  });
   es.addEventListener('session_created', refresh);
   es.addEventListener('session_retitled', (e) => {
     try {
@@ -274,6 +282,26 @@ export function initEventStream() {
       store.emit('config-changed', JSON.parse(e.data));
     } catch { /* malformed payload — the next explicit load resyncs */ }
   });
+}
+
+let _runsSeq = 0;
+/**
+ * Re-fetch just the live runs (a status flip changes nothing else) and redraw
+ * what reads them: the sidebar's dots, the tasks button, the task tray.
+ */
+async function refreshRuns() {
+  const seq = ++_runsSeq;
+  let runs;
+  try {
+    runs = await api.listRuns();
+  } catch {
+    return; // transient — the next event or snapshot repaints
+  }
+  if (seq !== _runsSeq) return; // a newer flip's fetch wins
+  store.activeRuns = new Set(runs.map((r) => r.session_id));
+  store.runsBySession = new Map(runs.map((r) => [r.session_id, r]));
+  renderSessions();
+  renderTasksButton();
 }
 
 /**
@@ -480,6 +508,9 @@ export async function loadCurrentTasks() {
 }
 
 function renderTasksButton() {
+  // The open chat's tasks or their live runs moved: the task tray (chat.js)
+  // redraws from the same state.
+  store.emit('tasks-changed');
   if (!tasksWrap || !tasksBtn || !tasksPopover) return;
   const tasks = store.currentTasks || [];
   const parentId = store.currentParentId;

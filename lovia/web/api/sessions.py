@@ -26,6 +26,7 @@ from ..followups import FollowupRequest
 from ..sse import (
     SessionCreatedData,
     SessionRetitledData,
+    approval_data,
 )
 from ..schemas import (
     ChatSessionInfo,
@@ -172,6 +173,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 turns=c.turns,
                 source=c.source,
                 started_at=c.started_at,
+                pending_approval=dict(approval_data(c.pending_approval))
+                if c.pending_approval is not None
+                else None,
             )
             for sid, c in deps.supervisor
         ]

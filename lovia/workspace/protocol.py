@@ -43,8 +43,8 @@ class WorkspaceSession(Protocol):
 
         The session keeps its processes and root, so a serving layer can
         change a conversation's permissions without killing what it started.
-        Call it between runs: an operation already past its gate is not
-        re-judged.
+        Safe mid-run: every later gate judges by ``policy``; an operation
+        already past its gate is not re-judged.
         """
         ...
 

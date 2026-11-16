@@ -466,25 +466,37 @@ class WorkspaceSessions:
                 # dropped, taking its processes along. This run starts over.
                 await _close_quietly(session_id, held[1])
                 held = None
-            if held is not None and not (held[0] is cfg or held[0] == cfg):
-                set_policy = getattr(held[1], "set_policy", None)
-                if set_policy is not None and _only_policy_differs(held[0], cfg):
-                    # Only the permissions changed (the chat switched mode):
-                    # keep the session — and the dev server it runs — and
-                    # judge from now on by the new policy.
-                    set_policy(cast(Any, cfg).policy)
-                    held = (cfg, held[1])
-                    self._live[session_id] = held
-                else:
-                    # A different workspace (root, env, ...): the old session
-                    # must not keep serving — close it (killing its
-                    # background processes) and reopen.
-                    await _close_quietly(session_id, held[1])
-                    held = None
+            if held is not None and not self._retune(session_id, cfg):
+                # A different workspace (root, env, ...): the old session
+                # must not keep serving — close it (killing its background
+                # processes) and reopen.
+                await _close_quietly(session_id, held[1])
+                held = None
             if held is None:
                 held = (cfg, await cfg.open())
                 self._live[session_id] = held
         return replace(agent, workspace=WorkspaceSessionBinding(cfg, held[1]))
+
+    def retune(self, session_id: str, cfg: WorkspaceLike) -> bool:
+        """Judge the chat's live session by ``cfg``'s policy from now on —
+        a mode switch reaching the run in flight. True when the session now
+        holds ``cfg``; False (nothing changed) when there is no session or
+        ``cfg`` differs in more than its policy. Never closes the session:
+        a run is using it."""
+        return session_id in self._live and self._retune(session_id, cfg)
+
+    def _retune(self, session_id: str, cfg: WorkspaceLike) -> bool:
+        session_cfg, session = self._live[session_id]
+        if session_cfg is cfg or session_cfg == cfg:
+            return True
+        set_policy = getattr(session, "set_policy", None)
+        if set_policy is None or not _only_policy_differs(session_cfg, cfg):
+            return False
+        # Only the permissions changed: keep the session — and the dev
+        # server it runs — and judge from now on by the new policy.
+        set_policy(cast(Any, cfg).policy)
+        self._live[session_id] = (cfg, session)
+        return True
 
     def get(self, session_id: str) -> WorkspaceSession | None:
         """The chat's live session, or None (no run bound one yet)."""

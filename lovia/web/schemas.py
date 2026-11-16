@@ -721,7 +721,8 @@ class SessionPatch(BaseModel):
     pinned: bool | None = None
     # Archiving unpins; pinning (or a message from the user) brings back.
     archived: bool | None = None
-    # Applies from the chat's next run; a live run keeps the mode it began in.
+    # Applies at once, to the chat and its tasks: a live run's next tool call
+    # is judged by it (its tools stay those it began with).
     workspace_mode: Literal["readonly", "coding", "trusted"] | None = None
     # Only for a chat with no directory yet (from before chats had one):
     # bind it, once — see POST /api/sessions/associate.

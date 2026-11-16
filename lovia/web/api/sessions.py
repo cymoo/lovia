@@ -399,7 +399,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         if req.pinned is not None:
             await store.set_pinned(session_id, req.pinned)
         if mode is not None:
-            await store.set_workspace_mode(session_id, mode)
+            # Live: a reply in flight goes on in the new mode, and so do the
+            # chat's tasks.
+            await deps.switch_mode(session_id, mode)
         if pick_model:
             await store.set_model(session_id, req.model)
         meta = await store.get(session_id)

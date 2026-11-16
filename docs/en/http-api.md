@@ -215,7 +215,8 @@ and `workspace_mode` (`"readonly"`, `"coding"` or `"trusted"`, one of
 `/api/info`'s `workspace_modes.modes`). The directory is fixed for the chat's
 life and checked again on every run: one this server no longer allows is
 refused (409 `workspace_not_allowed`), never swapped. An existing chat keeps
-its mode too, which `PATCH /api/sessions/{id}` changes from its next run.
+its mode too, which `PATCH /api/sessions/{id}` changes at once — for a run in
+flight and for the chat's subagent tasks as well.
 Sessions report `workspace_root` (`null`: from before chats had one). Sessions report
 `workspace_mode` as stored, with `workspace_mode_rev`, which each switch
 bumps: of two reports of a chat's mode (a list, a detail, a `PATCH` answer,

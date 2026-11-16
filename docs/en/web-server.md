@@ -949,9 +949,14 @@ is refused (409 `workspace_not_allowed`), never moved. Attachments, the Files
 panel and uploads work in the chat's directory (a draft names its own with
 `?root=`). Every agent a run can reach — handoff targets too — works there.
 
-A chat's mode applies from its next run; a run in flight keeps the one it
-started with. The chats a run creates — subagent tasks, spawned chats,
-schedule fires — work in that run's directory and mode. Without
+A chat's mode applies at once: a run in flight judges its next tool call by
+the new mode, and the chat's subagent tasks switch with it. The tools a run
+was given stay as they were, so a run that began read-only gets file edits
+and the shell from its next run; handoff targets, which open workspaces of
+their own, keep the mode their run began with, as does a run whose `build`
+hook varies more than the policy per mode. The chats a run creates —
+subagent tasks, spawned chats, schedule fires — work in that run's directory
+and current mode. Without
 `workspaces=` (the default), every chat runs on its agent's own workspace;
 a chat stored in another directory (by a server that had a switch, or before
 the agent's root moved) is refused with `workspace_not_allowed`, not run here.

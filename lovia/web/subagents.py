@@ -210,8 +210,8 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         # served agent closest to it.
         agent_key: str | None = None
         # The task works in the directory and under the permissions of the
-        # run that spawned it — its snapshot, not the chat's mode now, which
-        # may have been switched since that run began.
+        # run that spawned it — its binding, not the chat's stored mode, which
+        # may hold a switch that run could not take.
         row = (
             await deps.store.get(spec.parent_session_id)
             if spec.parent_session_id is not None
@@ -273,6 +273,16 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 workspace_root=binding.root,
                 workspace_mode=binding.mode,
             )
+            if parent is not None:
+                # A switch of the parent's mode reaches the tasks it lists;
+                # one made while this task was being set up missed it. Read
+                # by the same rule again now the row exists — a later switch
+                # lists the task — and before the task runs: a call it has
+                # already parked for approval would not be judged again.
+                snapshot = deps.run_snapshot(parent)
+                mode = deps.inherited(snapshot, await deps.store.get(parent)).mode
+                if mode != binding.mode:
+                    await deps.store.set_workspace_mode(child_sid, mode)
             try:
                 ctrl = await deps.supervisor.start(
                     session_id=child_sid,

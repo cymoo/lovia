@@ -1343,6 +1343,46 @@ class RunSupervisor:
             self.last_client[session_id] = client
         return ctrl
 
+    async def retune(self, session_id: str) -> bool:
+        """Bring the chat's live run onto the permission mode stored for it
+        now. From the run's next tool call on, its workspace session judges
+        by that mode's policy (:meth:`WorkspaceSessions.retune`), and what
+        the run creates from here on — subagent tasks, spawned chats —
+        inherits the mode. The tools the run was given stay as they were.
+
+        False, with nothing changed, when no run is live or its workspace
+        can't change in place (a ``build`` hook that varies more than the
+        policy per mode): the mode then lands on the next run. Handoff
+        targets open sessions of their own and keep the run's first mode.
+        """
+        # Under the start lock: a run starting meanwhile has read the mode
+        # before this write, or reads it after — never binds half-way.
+        async with self._start_lock(session_id):
+            meta = await self.deps.store.get(session_id)
+            ctrl = self._controllers.get(session_id)
+            if ctrl is None or meta is None or ctrl.binding.root is None:
+                return False
+            mode = self.deps.effective_mode(meta.workspace_mode)
+            binding = ChatBinding(ctrl.binding.root, mode)
+            if binding == ctrl.binding:
+                return True
+            try:
+                workspace = self.deps.effective_agent(
+                    ctrl.agent, binding, hooks=False
+                ).workspace
+            except Exception as exc:  # noqa: BLE001 — the switch is stored; it lands next run
+                log.warning(
+                    "mode switch for %s waits for its next run: %s", session_id, exc
+                )
+                return False
+            if workspace is None or not self.deps.workspaces.retune(
+                session_id, workspace
+            ):
+                log.info("mode switch for %s waits for its next run", session_id)
+                return False
+            ctrl.binding = binding
+            return True
+
     def _start_lock(self, session_id: str) -> asyncio.Lock:
         lock = self._starting.get(session_id)
         if lock is None:

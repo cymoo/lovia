@@ -495,6 +495,11 @@ def test_a_command_ends_where_the_shell_ends_it() -> None:
         assert "approve it once" in verdict.reason, cmd
     # Text an allowed command prints is only text.
     assert _opted_in().decide_command("echo 'a; rm x'").action == "allow"
+    # A line continued with a backslash is one command, not one per line.
+    assert gray.decide_command("docker run \\\n  --rm \\\n  image") == Verdict(
+        "ask", "", ("shell:docker",)
+    )
+    assert _opted_in().decide_command("pytest \\\n  -q tests").action == "allow"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="cmd.exe quotes differently")

@@ -95,7 +95,7 @@ export function listCommands() {
 /**
  * The command a message names and its argument text, or null: not a
  * `/name …`, no such command, one that isn't offered now — or text after
- * a command that takes none ("/model is broken, look at…" is a message).
+ * a command that takes none ("/mcp is broken, look at…" is a message).
  * @param {string} text The whole message, trimmed.
  * @returns {{ name: string, args: string } | null}
  */

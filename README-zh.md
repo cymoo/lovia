@@ -483,7 +483,7 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   目录也可以在 SSH 主机上或运行中的容器里：在添加对话框里选好位置，对话的工具就在那边执行。
 - **项目自己的 MCP 服务器** —— 对话目录下的 `.mcp.json`（其他客户端读的也是它）可以给这个项目配服务器；每个服务器在你打开之前不会启动，
   条目被改过后会重新询问。
-- **斜杠命令** —— 输入框里打 `/`，命令排在技能前面：`/model`、`/mode`、`/mcp`、`/init`（生成项目的 `AGENTS.md`）、`/rename` 等；
+- **斜杠命令** —— 输入框里打 `/`，命令排在技能前面：`/init`（生成项目的 `AGENTS.md`）、`/mcp`、`/rename`、`/branch`；
   自己的页面用 `lovia.registerCommand` 添加。
 - **同一个应用，也能从代码里构建** —— `default_app()` 构建的就是 `lovia web` 启动的那个应用，`customize=` 给它加上你的工具和插件；
   `create_app()` 则原样托管你自己写的 Agent。

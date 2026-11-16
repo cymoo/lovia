@@ -515,8 +515,8 @@ lovia.registerCommand('ticket', {
 | `when()` | 现在是否提供这个命令；不写则始终提供 |
 | `run({ args, sessionId })` | `args` 是名字后面的文字（已去掉首尾空白）；新对话里 `sessionId` 为 `null`。可以是 async；抛出的错误以 toast 显示 |
 
-- `name` 只能是小写字母、数字和 `-`。再次注册同名命令会替换原来的——内置命令也可以替换（`/model`、`/mode`、`/mcp`、
-  `/init`、`/memory`、`/rename`、`/pin`、`/archive`、`/branch`，各自只在适用时出现）——`registerCommand`
+- `name` 只能是小写字母、数字和 `-`。再次注册同名命令会替换原来的——内置命令也可以替换（`/mcp`、`/init`、`/rename`、`/branch`，
+  各自只在适用时出现）——`registerCommand`
   返回的函数会把之前的那个恢复回来。
 - 需要对模型*说*点什么的命令调用 `lovia.send(text)`——`/init` 就只做了这件事，发的是它自带的提示词。
   需要预填输入框的命令调用 `lovia.setDraft(text)`。

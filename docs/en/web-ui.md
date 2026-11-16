@@ -174,21 +174,19 @@ only honours the one that starts it.
 ### Slash commands
 
 The same menu lists **commands** ahead of the skills. A command is the
-page's to run — it is never sent to the model — and each is another way in
-to something the page already does:
+page's to run — it is never sent to the model. The built-in ones are few:
+what a control beside the composer does in one click (the model, the
+permission mode) has no command.
 
 | Command | Does |
 | --- | --- |
-| `/model` | Opens the model menu |
-| `/mode` | Opens this chat's permission-mode menu |
 | `/mcp` | Shows the MCP servers this chat can use — [the project's own](#a-projects-own-servers) and [Settings'](#servers-for-one-project) — and turns each on or off for the project |
 | `/init` | Asks the assistant to read the project and write (or update) its `AGENTS.md` |
-| `/memory` | Opens [Memory](#the-assistant) |
 | `/rename New title` | Renames the chat; without a title it asks |
-| `/pin`, `/archive`, `/branch` | The chat menu's items |
+| `/branch` | Branches a new chat off this one |
 
-A command shows only where it applies (`/mode` where chats pick a mode,
-`/pin` in an open chat). Picking one runs it; one that takes text —
+A command shows only where it applies (`/init` where there is a workspace,
+`/branch` in an open chat). Picking one runs it; one that takes text —
 `/rename` — leaves `/rename ` in the box to finish and send. A command wins
 over a skill of the same name. Your own page can
 [add commands](web-server.md#commands).

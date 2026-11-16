@@ -1127,7 +1127,7 @@ export async function renameSession(s, given) {
   updateSessionTitle(s.id, title);
 }
 
-export async function togglePin(s) {
+async function togglePin(s) {
   const next = !s.pinned;
   try {
     await api.setPinned(s.id, next);
@@ -1143,7 +1143,7 @@ export async function togglePin(s) {
   await loadSessions();
 }
 
-export async function toggleArchive(s) {
+async function toggleArchive(s) {
   const next = !s.archived;
   try {
     await api.setArchived(s.id, next);

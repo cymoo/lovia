@@ -256,12 +256,7 @@ export function initEventStream() {
   });
   // A live run started or stopped waiting on an approval: the tasks' badges
   // and the task tray read it from the runs snapshot — only that changed.
-  es.addEventListener('run_status', (e) => {
-    try {
-      store.emit('run-status', JSON.parse(e.data));
-    } catch { /* malformed payload — the refresh below still runs */ }
-    void refreshRuns();
-  });
+  es.addEventListener('run_status', () => void refreshRuns());
   es.addEventListener('session_created', refresh);
   es.addEventListener('session_retitled', (e) => {
     try {

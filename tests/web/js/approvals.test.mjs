@@ -117,11 +117,29 @@ test("a chat offers its own tasks' pending approvals, less those it answered", (
     ['t3', { pending_approval: { id: 'c9', name: 'shell' } }],
   ]);
   const keys = (want) => [...want.keys()];
-  assert.deepEqual(keys(pendingTaskApprovals(tasks, runs, 'p', new Set())), ['t1:c1', 't3:c9']);
-  assert.equal(pendingTaskApprovals(tasks, runs, 'p', new Set()).get('t1:c1').call, call);
-  // Answered here: kept out while a snapshot from before the answer names it.
-  assert.deepEqual(keys(pendingTaskApprovals(tasks, runs, 'p', new Set(['t1:c1']))), ['t3:c9']);
+  assert.deepEqual(keys(pendingTaskApprovals(tasks, runs, 'p', new Map())), ['t1:c1', 't3:c9']);
+  assert.equal(pendingTaskApprovals(tasks, runs, 'p', new Map()).get('t1:c1').call, call);
+  // Answered here: kept out while a snapshot from before the answer shows it.
+  const decided = new Map([['t1', JSON.stringify(call)]]);
+  assert.deepEqual(keys(pendingTaskApprovals(tasks, runs, 'p', decided)), ['t3:c9']);
+  assert.equal(decided.size, 1);
   // Another chat is open, its own task list not loaded yet: offer nothing.
-  assert.deepEqual(keys(pendingTaskApprovals(tasks, runs, 'q', new Set())), []);
-  assert.deepEqual(keys(pendingTaskApprovals(tasks, undefined, 'p', new Set())), []);
+  assert.deepEqual(keys(pendingTaskApprovals(tasks, runs, 'q', new Map())), []);
+  assert.deepEqual(keys(pendingTaskApprovals(tasks, undefined, 'p', new Map())), []);
+});
+
+test('an answer here hides only the request it answered', () => {
+  const tasks = [{ id: 't1', parent_id: 'p' }];
+  const first = { id: 'c1', name: 'shell', arguments: '{"command":"ls"}', expires_at: 10 };
+  const decided = new Map([['t1', JSON.stringify(first)]]);
+  // A new request under a reused call id — with no event seen in between
+  // (polling, a reconnect) — is offered, and the old answer forgotten.
+  const next = { ...first, arguments: '{"command":"rm x"}', expires_at: 20 };
+  const want = pendingTaskApprovals(tasks, new Map([['t1', { pending_approval: next }]]), 'p', decided);
+  assert.equal(want.get('t1:c1').call, next);
+  assert.equal(decided.size, 0);
+  // A snapshot with nothing pending forgets it too.
+  decided.set('t1', JSON.stringify(first));
+  pendingTaskApprovals(tasks, new Map([['t1', { pending_approval: null }]]), 'p', decided);
+  assert.equal(decided.size, 0);
 });

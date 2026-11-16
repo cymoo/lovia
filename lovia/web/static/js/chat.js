@@ -993,11 +993,11 @@ const taskTray = document.getElementById('task-approvals');
 /** The tray's items, by `${task}:${call}`. */
 const _trayItems = new Map();
 /**
- * Requests answered here, kept out while a runs snapshot taken before the
- * answer may still name them — until the task's run says it is running again
- * (run_status), which always arrives, unlike a refresh a newer one supersedes.
+ * The request answered here, by task, as JSON: kept out while the runs
+ * snapshot still shows that very request (see pendingTaskApprovals).
+ * @type {Map<string, string>}
  */
-const _trayDecided = new Set();
+const _trayDecided = new Map();
 
 function renderTaskApprovals() {
   if (!taskTray) return;
@@ -1022,7 +1022,7 @@ function renderTaskApprovals() {
     item.dataset.request = JSON.stringify(call);
     const card = buildApprovalCard(call, task.id, {
       decided: () => {
-        _trayDecided.add(key);
+        _trayDecided.set(task.id, JSON.stringify(call));
         _trayItems.delete(key);
         const hadFocus = item.contains(document.activeElement);
         item.remove();
@@ -1034,7 +1034,7 @@ function renderTaskApprovals() {
       // server says it is no longer pending (answered elsewhere, timed out).
       failed: (err) => {
         if (err.code === 'approval_not_found') return;
-        _trayDecided.delete(key);
+        _trayDecided.delete(task.id);
         toast(t('approval.notSent'), { type: 'error' });
         renderTaskApprovals();
       },
@@ -1082,10 +1082,6 @@ store.on('tasks-changed', renderTaskApprovals);
 // go now, not when its task list is next fetched.
 store.on('session-switched', renderTaskApprovals);
 store.on('reset-chat-view', renderTaskApprovals);
-store.on('run-status', (/** @type {{ session_id: string, status: string }} */ d) => {
-  if (d.status !== 'running') return;
-  for (const key of _trayDecided) if (key.startsWith(`${d.session_id}:`)) _trayDecided.delete(key);
-});
 
 /**
  * "Always allow in this chat", picked per scope: the checkbox takes them all

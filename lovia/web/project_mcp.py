@@ -231,7 +231,7 @@ class ProjectMCP:
         switch says, by server name — who still uses one that is off."""
         out: dict[str, list[str]] = {}
         for project, mine in self._load()["global"].items():
-            for name, on in self._of({project: mine}, project).items():
+            for name, on in mine.items() if isinstance(mine, dict) else ():
                 if on is True:
                     out.setdefault(name, []).append(project)
         return out

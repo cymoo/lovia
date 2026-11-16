@@ -317,6 +317,14 @@ def test_a_server_added_for_one_project_is_on_there_alone(served) -> None:
     client.put("/api/config/mcp/mine/enabled", json={"enabled": True})
     (saved,) = client.get("/api/config").json()["mcp"]["servers"]
     assert saved["projects"] == []
+    # One the pasted document itself disables is saved, and stays off here.
+    doc = {"later": {**_stub(), "disabled": True}}
+    res = client.post("/api/config/mcp", json={"document": doc, "root": str(project)})
+    assert res.status_code == 201, res.text
+    assert {s["name"]: s["on"] for s in client.get(URL).json()["global"]} == {
+        "mine": True,
+        "later": False,
+    }
     # Nothing is saved for a name that is taken.
     res = client.post(
         "/api/config/mcp", json={"document": {"mine": _stub()}, "root": str(project)}

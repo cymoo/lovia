@@ -602,6 +602,7 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         _guard_write(request)
         added = [_with_secrets(s, None) for s in _parsed(body.document)]
         project = None
+        here: list[str] = []
         if body.root is not None:
             # For one project: off for every other, on there — the same
             # record a switch in that project writes.
@@ -613,6 +614,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                     "that directory is no project",
                     hint="add the server for every chat instead",
                 )
+            # One the document itself has disabled stays off there too.
+            here = [s.name for s in added if s.enabled]
             added = [s.model_copy(update={"enabled": False}) for s in added]
         async with mcp_lock:
             taken = {s.name for s in runtime.config.mcp}
@@ -626,8 +629,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                 )
             await _apply_servers([*runtime.config.mcp, *added])
             if project is not None:
-                for server in added:
-                    runtime.project_mcp.override(project, server.name, True)
+                for name in here:
+                    runtime.project_mcp.override(project, name, True)
         return _config_out()
 
     @router.put("/mcp/{name}")

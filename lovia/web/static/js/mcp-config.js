@@ -150,13 +150,26 @@ function buildPane(pick, projects) {
   async function rescope() {
     listing = null;
     view = { name: 'list' };
-    render();
+    await rerenderScoped();
     try {
       await loadListing();
     } catch (err) {
       toast(String(err.message || err), { type: 'error' });
     }
-    render();
+    await rerenderScoped();
+  }
+
+  /** Render, keeping the keyboard in the scope row it was working: the
+   *  row is rebuilt with the list. */
+  async function rerenderScoped() {
+    const scope = pane.querySelector('.lv-scope-row');
+    const at = scope?.contains(document.activeElement) ? document.activeElement?.tagName : null;
+    await render();
+    if (!at) return;
+    const again = pane.querySelector(
+      at === 'SELECT' ? '.lv-scope-row select' : '.lv-scope-row input:checked',
+    );
+    /** @type {HTMLElement | null} */ (again)?.focus();
   }
 
   /**
@@ -331,7 +344,12 @@ function buildPane(pick, projects) {
     if (servers.length) {
       const here = new Map(listing.global.map((g) => [g.name, g]));
       const list = el('div', 'lv-model-list');
-      for (const s of servers) list.appendChild(row(s, cfg().writable, here.get(s.name)));
+      for (const s of servers) {
+        // One the listing hasn't caught up with follows its own switch, as
+        // the project then has it — still a row of this scope.
+        const mine = here.get(s.name) ?? { name: s.name, on: s.enabled, enabled: s.enabled, replaced: false };
+        list.appendChild(row(s, cfg().writable, mine));
+      }
       nodes.push(list);
     } else {
       nodes.push(el('div', 'lv-cfg-hint', t('pmcp.empty')));
@@ -434,7 +452,10 @@ function buildPane(pick, projects) {
     sw.node.addEventListener('change', () =>
       act(() => (here ? setHere('global', s.name, sw.value()) : api.setMcpServerEnabled(s.name, sw.value()))),
     );
-    actions.append(test, edit, del);
+    // Deleting is for every project: from a project's scope, only a server
+    // that isn't on for all of them — the others are switched off here.
+    if (here?.enabled) actions.append(test, edit);
+    else actions.append(test, edit, del);
     // The switch is state, not an action: always in view, unlike the rest.
     node.append(actions, sw.node);
     return node;

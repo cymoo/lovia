@@ -413,7 +413,9 @@ agent gets the same tools, and the same rules decide what they may do. What
 changes is where: the session — policy, path resolution, commands — runs on
 the host, next to the files, and this side forwards each call to it. So a
 `~` or an absolute path in a rule is the host's, a symlink is followed over
-there, and `env=` / `inherit_env=` concern the host's environment.
+there, and `env=` / `inherit_env=` concern the host's environment. The
+system prompt names the host too, so the agent works on it directly instead
+of trying to `ssh` there.
 
 **The host needs `python3` 3.10 or newer, and nothing else.** No lovia, no
 `pip install`, nothing written to its disk: the engine is sent down the

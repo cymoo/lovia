@@ -661,6 +661,9 @@ async def test_remote_workspace_runs_an_agent(host, tmp_path) -> None:
     # Before any session: a plain directory, by its name.
     assert f"named {tmp_path.name!r}" in workspace.instructions()
     assert "git repository" not in workspace.instructions()
+    # It says where it is, so "check the server" never starts with ssh.
+    assert f"on the remote host {host.name!r}" in workspace.instructions()
+    assert "remote host" not in Workspace.local(str(tmp_path)).instructions()
 
     provider = ScriptedProvider(
         [

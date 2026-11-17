@@ -76,4 +76,4 @@ class RemoteWorkspace:
         facts = self.host.facts(self.root) or RootFacts(
             name=PurePosixPath(self.root).name or self.root
         )
-        return render_instructions(self.policy, facts)
+        return render_instructions(self.policy, facts, host=self.host.name)

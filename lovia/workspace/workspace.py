@@ -159,12 +159,15 @@ class LocalWorkspace:
         return render_instructions(self.policy, root_facts(root))
 
 
-def render_instructions(policy: WorkspacePolicy, facts: RootFacts) -> str:
+def render_instructions(
+    policy: WorkspacePolicy, facts: RootFacts, *, host: str | None = None
+) -> str:
     """The workspace fragment of the system prompt.
 
     Derived from the policy so the prompt states what is actually enforced —
     it must never promise more than the session delivers — plus the few
-    ``facts`` about the root that come from its filesystem.
+    ``facts`` about the root that come from its filesystem. ``host`` names
+    the remote machine the workspace lives on, if any.
     """
     lines = [
         "## Workspace",
@@ -175,12 +178,23 @@ def render_instructions(policy: WorkspacePolicy, facts: RootFacts) -> str:
         "'notes/plan.md'; preferred) or absolute ones, never with the "
         "workspace name. Symlinks resolve to their targets and are judged "
         "by where they lead.",
+    ]
+    if host is not None:
+        # Unsaid, a model asked about "the server" reaches for ssh.
+        lines.append(
+            f"The workspace is on the remote host {host!r}: every tool — file "
+            "tools and the shell alike — already runs there, so you are on "
+            "that machine. Never ssh, docker exec or copy files to reach it; "
+            "absolute paths ('/etc', '/var/log') and commands (uptime, df, "
+            "systemctl) are that host's."
+        )
+    lines.append(
         "Explore with list_files and grep_files; read a file before editing "
         "it; use edit_file for targeted changes and write_file for new files "
         "or full rewrites. Large reads and command output are truncated — "
         "page with start/end or narrow the command rather than dumping "
-        "everything.",
-    ]
+        "everything."
+    )
     if policy.write == "deny":
         lines.append(
             "The workspace is read-only: write_file and edit_file are "

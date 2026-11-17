@@ -326,3 +326,50 @@ async def test_a_task_card_is_denied_rather_than_suspended() -> None:
         assert (await ac.get("/api/runs")).json() == []
     assert runs == []
     assert any("did not answer within" in t for t in _texts(provider))
+
+
+@pytest.mark.asyncio
+async def test_a_mode_switch_resumes_a_waiting_run_to_be_judged_again() -> None:
+    mode = {"push": "ask"}
+    runs: list[str] = []
+
+    @tool(permission=lambda args, ctx: mode["push"])
+    async def push() -> str:
+        """Push to the remote."""
+        runs.append("push")
+        return "pushed"
+
+    provider = ScriptedProvider([call("push", {}, call_id="c1"), text("ack")])
+    app = _app(Agent(name="bot", model=provider, tools=[push]), suspend_after=0.2)
+    async with _client(app) as ac:
+        await _suspend(ac)
+        mode["push"] = "allow"  # what the new mode would say about the call
+        await app.state.deps.switch_mode("s1", None)
+        await _wait_run(ac, "s1", gone=True)
+        assert (await _record(ac, "s1"))["status"] == "completed"
+    assert runs == ["push"]  # allowed now: ran without being asked
+
+
+@pytest.mark.asyncio
+async def test_a_message_injected_while_the_run_suspends_waits_with_it() -> None:
+    provider = ScriptedProvider([call("push", {}, call_id="c1"), text("ack")])
+    store = ChatStore.in_memory()
+    app = _app(_agent(provider, []), suspend_after=0.2, store=store)
+    deps = app.state.deps
+    finish = store.finish_run
+
+    async def finish_run(run_id: str, **kw: Any) -> None:
+        if kw.get("status") == "waiting":
+            # A message arrives for the run while its record is being written.
+            live = deps.supervisor.get("s1")
+            assert live is not None
+            live.inject("one more thing")
+        await finish(run_id, **kw)
+
+    store.finish_run = finish_run  # type: ignore[method-assign]
+    async with _client(app) as ac:
+        await _suspend(ac)
+    record = await store.waiting_run("s1")
+    assert record is not None and record.waiting_for is not None
+    queued = [e["content"] for e in record.waiting_for["queued"]]
+    assert queued == ["one more thing"]

@@ -195,22 +195,30 @@ async def stop_waiting(deps: RouterDeps, waiting: Waiting) -> bool:
         }
     if snapshot.context_state:
         meta[STATE_META_KEY] = snapshot.context_state
-    if session is not None and entries:
-        await session.append(
-            sid,
-            normalize_replayed_entries(entries),
-            run_id=snapshot.run_id,
-            meta=meta or None,
+    try:
+        if session is not None and entries:
+            await session.append(
+                sid,
+                normalize_replayed_entries(entries),
+                run_id=snapshot.run_id,
+                meta=meta or None,
+            )
+    except BaseException:
+        # Nothing saved: the run waits on, as it was.
+        await store.unclaim_waiting(waiting.record.id, claimed)
+        raise
+    # The chat holds the run now, so it is over whatever fails from here.
+    try:
+        if store.checkpointer is not None:
+            await store.checkpointer.delete(snapshot.run_id)
+            await store.clear_active_run_id(sid, expected=snapshot.run_id)
+    finally:
+        await store.finish_run(
+            waiting.record.id,
+            status="cancelled",
+            error="cancelled",
+            usage=waiting.record.usage,
         )
-    if store.checkpointer is not None:
-        await store.checkpointer.delete(snapshot.run_id)
-        await store.clear_active_run_id(sid, expected=snapshot.run_id)
-    await store.finish_run(
-        waiting.record.id,
-        status="cancelled",
-        error="cancelled",
-        usage=waiting.record.usage,
-    )
     log.info("run stop requested: session=%s (a stop while it waited on approval)", sid)
     deps.emit(
         "run_finished",

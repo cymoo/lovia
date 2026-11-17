@@ -36,7 +36,7 @@ from ..parts import coerce_parts
 from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
 from ..runtime.loop import pending_tool_calls
-from ..runtime.resume import normalize_replayed_entries
+from ..runtime.resume import normalize_replayed_entries, reachable_agents
 from ..session import STATE_META_KEY, TIMING_META_KEY
 from ..steering import InjectedContent, Mailbox
 from ..transcript import (
@@ -1120,9 +1120,9 @@ class RunController:
             # pointer stay (core classifies this "interrupted"), and the record
             # says what the run waits for. A stop that landed with it wins.
             if self._suspended is not None and not self._user_cancelled:
-                waiting_for = {
-                    "request": cast(JsonObject, approval_data(self._suspended))
-                }
+                # The card no longer has a deadline: it waits for its answer.
+                request = {**approval_data(self._suspended), "expires_at": None}
+                waiting_for = {"request": cast(JsonObject, request)}
             else:
                 final_error = str(exc) or exc.__class__.__name__
                 self.final_exception = exc
@@ -1554,6 +1554,10 @@ class RunSupervisor:
             )
             ctrl.history_runs = history
             ctrl.completed_mirror = list(seed)
+            # The agent that was acting, a handoff target perhaps: what an
+            # answer given before the task replays its turn (a grant written
+            # for a suspended card) must be judged against.
+            ctrl.active_agent = reachable_agents(agent).get(snapshot.agent_name, agent)
             ctrl._answers = dict(answers or {})
             for content in inbox or ():
                 ctrl.mailbox.push(content)

@@ -3084,6 +3084,55 @@ button.lv-question-option:hover {
   white-space: pre-wrap;
 }
 
+/* A background task's report: a user turn no one typed, drawn as a notice
+   card across the column instead of a bubble on the right. */
+.lv-turn.lv-user.lv-report {
+  justify-content: flex-start;
+  margin-bottom: 30px;
+}
+.lv-turn.lv-user.lv-report .lv-bubble {
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+.lv-turn.lv-user.lv-report .lv-turn-footer {
+  display: none;
+}
+.lv-report-card {
+  margin: 0;
+}
+.lv-report-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--lv-muted-2);
+  font-variant-numeric: tabular-nums;
+}
+.lv-report-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lv-report-card:has(> details[open]) > .lv-report-preview {
+  display: none; /* the full report says it */
+}
+.lv-turn.lv-user .lv-report-body {
+  margin-top: 6px;
+  max-height: 480px;
+  padding: 9px 12px;
+  overflow-y: auto;
+  background: var(--lv-surface-2);
+  border: 1px solid var(--lv-border);
+  border-radius: var(--lv-radius-sm);
+  white-space: normal;
+  font-size: calc(13.5px * var(--lv-chat-font-scale, 1));
+}
+
 .lv-retry-row {
   display: flex;
   flex-wrap: wrap;

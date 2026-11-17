@@ -504,6 +504,120 @@ async def test_overlapping_deletes_keep_the_tree_closed_until_the_last_ends() ->
     assert not deps._deleting
 
 
+async def test_a_report_after_a_stop_is_kept_without_starting_a_run() -> None:
+    """The user stopped the chat; a task finishing later must not start the
+    agent again. Its report is kept in the chat, announced to open pages, and
+    the next message's run reads it."""
+    from lovia import tool
+
+    child_gate, parent_gate = asyncio.Event(), asyncio.Event()
+
+    @tool
+    async def wait() -> str:
+        """Block until released."""
+        await parent_gate.wait()
+        return "released"
+
+    child = Agent(
+        name="researcher",
+        model=GatedProvider(ScriptedProvider([text("late findings")]), child_gate),
+    )
+    provider = ScriptedProvider(
+        [
+            call("spawn_subagent", {"prompt": "dig"}),
+            call("wait", {}),
+            text("read it"),  # the next message's reply
+        ]
+    )
+    agent = Agent(name="bot", model=provider, tools=[wait], plugins=[Subagents(child)])
+    app = _app(agent)
+    deps = app.state.deps
+    emitted: list[tuple[str, dict]] = []
+    orig_emit = deps.emit
+    deps.emit = lambda name, data: (
+        emitted.append((name, dict(data))),
+        orig_emit(name, data),
+    )[1]  # type: ignore[method-assign]
+    await deps.store.upsert("s7", agent="bot", title="chat")
+    await deps.supervisor.start(
+        session_id="s7",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="user",
+    )
+    await _task_of(deps, "s7", live=True)
+    deps.supervisor.cancel("s7")  # the user's stop, mid-`wait`
+    # The task finishes while the stopped run still winds down (its tool has
+    # not returned): its record doesn't read "cancelled" yet.
+    child_gate.set()
+
+    async def _kept() -> bool:
+        return any(n == "session_appended" for n, _ in emitted)
+
+    await _poll(_kept)
+    parent_gate.set()
+    await deps.supervisor.drain("s7")
+    assert await deps.store.latest_run_for("subagent-report:t1") is None
+    entries = await deps.session.load("s7")
+    report = entries[-1]  # after the turns the stop saved
+    assert isinstance(report, InputEntry) and "late findings" in str(report.content)
+    assert ("session_appended", {"session_id": "s7"}) in emitted
+
+    # The next message's run reads it.
+    await deps.supervisor.start(
+        session_id="s7",
+        agent=agent,
+        input="what came back?",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="user",
+    )
+    await _poll(lambda: _none(deps.supervisor.get("s7")))
+    seen = [str(m.content) for m in provider.calls[-1]]
+    assert any("late findings" in s for s in seen)
+
+
+def test_the_chat_recognises_what_the_core_renders() -> None:
+    """The chat draws a report as a card by matching the text the core's
+    ``_render`` writes (static/js/subagent-report.js). Both reports match
+    that same pattern, so neither side can change its wording alone."""
+    import re
+    import time
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from lovia.plugins.subagents import _Record, _render
+    from lovia.reliability import CancelToken
+    from lovia.steering import Mailbox
+
+    js = Path(__file__).parents[2] / "lovia/web/static/js/subagent-report.js"
+    literal = re.search(r"const REPORT = /(.+)/;", js.read_text()).group(1)  # type: ignore[union-attr]
+    pattern = re.compile(literal)
+
+    def record(**kw: Any) -> _Record:
+        return _Record(
+            id="t1",
+            agent_name="lovia.sub",
+            prompt="p",
+            token=CancelToken(),
+            mailbox=Mailbox(),
+            started=time.monotonic(),
+            **kw,
+        )
+
+    result = SimpleNamespace(output="## Found\nit")  # all _render reads
+    done = pattern.match(_render(record(result=result), max_chars=None))
+    assert done is not None
+    assert done.groups() == ("t1", "done", "lovia.sub", "0", "## Found\nit")
+    failed = pattern.match(_render(record(error=RuntimeError("boom")), max_chars=None))
+    assert failed is not None and failed.group(2) == "failed"
+    assert failed.group(5) == "RuntimeError: boom"
+
+
 async def test_failed_child_delivers_failure_report() -> None:
     child = Agent(name="doomed", model=ScriptedProvider([call("missing_tool", {})]))
     provider = ScriptedProvider(

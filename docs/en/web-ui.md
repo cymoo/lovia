@@ -878,6 +878,10 @@ directly must call `wire_subagents(deps)` once.
 Each background task has an independent Session. When it completes, its report
 enters the parent's next Turn if the parent Run is active; otherwise the server
 starts a Run to process the report. The browser does not need to remain online.
+If the parent chat's last Run was stopped, the report is only kept in the chat
+and starts nothing — you said stop; the model reads it with your next message.
+A report shows as a collapsed card, not as a message of yours: ↑/↓ recall skips
+it and it has no edit button.
 
 A task is not owned by the parent Run, so stopping the parent does not stop the
 task — the stop notice says which tasks still run and offers **Stop them too**;

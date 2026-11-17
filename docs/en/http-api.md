@@ -248,6 +248,7 @@ that starts meanwhile is still refused, with no injection and no new run.
 | `run_status` | `{session_id, run_id, status}` — a live run started (`blocked_on_approval`) or stopped (`running`) waiting on an approval; `GET /api/runs` carries the request |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
+| `session_appended` | `{session_id}` — entries landed in the chat without a run (a subagent report held after a stop); refetch the session |
 | `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev, workspace_root}` |
 | `config_changed` | `{configured, model, profile_id, name}` — refetch `/api/config` |
 

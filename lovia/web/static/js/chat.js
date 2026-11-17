@@ -7,7 +7,15 @@ import { draftWorkspaceRoot, ensureLinked, scopeRoot, workspaceName } from './wo
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
 import { addCodeBlockControls, copyToClipboard, openImageLightbox, showDialog } from './ui.js';
-import { forkChat, loadSessions, offerToStopTasks, switchSession, updateSessionTitle } from './sessions.js';
+import {
+  fmtElapsed,
+  forkChat,
+  loadSessions,
+  offerToStopTasks,
+  switchSession,
+  updateSessionTitle,
+} from './sessions.js';
+import { parseReport } from './subagent-report.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
 import { enterToSend, followupsEnabled, openSettings } from './settings.js';
@@ -373,7 +381,8 @@ function updateEditButton() {
   // Confirmed turns only: a queued bubble has no ordinal to rewind to yet.
   const users = transcriptEl.querySelectorAll('.lv-turn.lv-user[data-user-turn]');
   const last = /** @type {HTMLElement | undefined} */ (users[users.length - 1]);
-  if (last) addEditButton(last);
+  // A task's report on the tail: nothing the user wrote, nothing to edit.
+  if (last && !last.classList.contains('lv-report')) addEditButton(last);
 }
 
 function addEditButton(node) {
@@ -475,7 +484,8 @@ function updateRegenButton() {
   btn.innerHTML = icon('refresh-cw', { size: 15 });
   btn.addEventListener('click', () => {
     if (store.streaming) return;
-    const text = lastUser.querySelector('.lv-body')?.textContent?.trim();
+    // A report card keeps its text on the turn: its body is the card.
+    const text = (lastUser.dataset.raw ?? lastUser.querySelector('.lv-body')?.textContent)?.trim();
     if (text) rewindTo(lastUser, text);
   });
   ensureFooter(last.querySelector('.lv-bubble'))?.appendChild(btn);
@@ -499,16 +509,12 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
     appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
     emitAttachmentTouches(attachments);
   }
-  if (text) {
-    const body = document.createElement('div');
-    body.className = 'lv-body';
-    body.textContent = text;
-    appendBubbleContent(bubble, body);
-  }
+  if (text) appendUserText(node, bubble, text);
   ensureFooter(bubble);
   if (!queued) {
     node.dataset.userTurn = String(_userTurnCount++);
-    addMessageActions(bubble); // queued bubbles get their actions on confirm
+    // queued bubbles get their actions on confirm; a report card has none
+    if (!node.classList.contains('lv-report')) addMessageActions(bubble);
     // No edit button here: it belongs to whichever turn ends up last, which
     // updateEditButton decides once the run settles.
   }
@@ -521,6 +527,73 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
   renderMessageActions(previousTurn(node)?.querySelector('.lv-bubble'));
   scrollDown();
   return node;
+}
+
+/**
+ * A user turn's text. A background task's report draws as a collapsed card,
+ * the turn marked `lv-report`: it stays a user turn for refs and rewinds (it
+ * is one in the transcript), but no one typed it — ↑ recall and the edit
+ * pencil skip it, and it carries no message actions.
+ * @param {HTMLElement} turn
+ * @param {Element | null} bubble
+ * @param {string} text
+ */
+function appendUserText(turn, bubble, text) {
+  const report = parseReport(text);
+  if (report) {
+    turn.classList.add('lv-report');
+    turn.dataset.raw = text; // what regenerate sends again
+    appendBubbleContent(bubble, makeReportCard(report));
+    return;
+  }
+  const body = document.createElement('div');
+  body.className = 'lv-body';
+  body.textContent = text;
+  appendBubbleContent(bubble, body);
+}
+
+/**
+ * @param {import('./subagent-report.js').SubagentReport} r
+ * @returns {HTMLElement}
+ */
+function makeReportCard(r) {
+  const card = document.createElement('div');
+  card.className = 'lv-context-notice lv-report-card';
+  const row = document.createElement('div');
+  row.className = 'lv-context-row';
+  row.innerHTML = icon('bot', { size: 13, cls: 'lv-context-icon' });
+  const title = document.createElement('span');
+  title.className = 'lv-context-title';
+  title.textContent = t('report.title', { id: r.id });
+  const meta = document.createElement('span');
+  meta.className = 'lv-report-meta';
+  meta.textContent = `${r.agent} · ${fmtElapsed(r.elapsed)}`;
+  const status = document.createElement('span');
+  status.className = `lv-context-trigger lv-context-trigger--${r.ok ? 'proactive' : 'reactive'}`;
+  status.textContent = t(r.ok ? 'task.completed' : 'task.failed');
+  row.append(title, meta, status);
+  card.appendChild(row);
+  const first = r.body.split('\n').find((line) => line.trim());
+  if (!first) return card;
+  const preview = document.createElement('div');
+  preview.className = 'lv-context-detail lv-report-preview';
+  // Its first line as words: no heading, list or emphasis marks.
+  preview.textContent = first.replace(/^[\s#>*+-]+/, '').replace(/[*_`]/g, '');
+  const details = document.createElement('details');
+  details.className = 'lv-context-summary';
+  const label = document.createElement('summary');
+  label.textContent = t('report.full');
+  const body = document.createElement('div');
+  body.className = 'lv-report-body lv-body';
+  details.append(label, body);
+  // Rendered on first open: a report runs to thousands of characters.
+  details.addEventListener('toggle', () => {
+    if (!details.open || body.childNodes.length) return;
+    renderMarkdownInto(body, r.body, { agent: store.agent });
+    highlightCode(body);
+  });
+  card.append(preview, details);
+  return card;
 }
 
 /** @param {Element} node @returns {Element | null} The nearest `.lv-turn` above. */
@@ -2523,15 +2596,10 @@ function renderHistoryWindow({ stickBottom }) {
       // the previews from it and show the clean message — matching live send.
       const { text: bodyText, attachments } = splitAttachmentNote(contentText(it.content));
       if (attachments.length) appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
-      if (bodyText) {
-        const body = document.createElement('div');
-        body.className = 'lv-body';
-        body.textContent = bodyText;
-        appendBubbleContent(bubble, body);
-      }
+      if (bodyText) appendUserText(turn, bubble, bodyText);
       ensureFooter(bubble);
       transcriptEl.appendChild(turn); // first: its actions look for the user turn above
-      addMessageActions(bubble);
+      if (!turn.classList.contains('lv-report')) addMessageActions(bubble);
     } else if (it.role === 'assistant') {
       if (!currentBubble) {
         if (it.timestamp) {
@@ -4764,7 +4832,7 @@ export function initComposer() {
   // first (composer-complete.js).
   let recalled = -1; // index into sentMessages(); -1: not browsing
   const sentMessages = () =>
-    [...document.querySelectorAll('#transcript .lv-turn.lv-user:not(.lv-queued) .lv-body')]
+    [...document.querySelectorAll('#transcript .lv-turn.lv-user:not(.lv-queued, .lv-report) .lv-body')]
       .map((body) => body.textContent ?? '')
       .filter(Boolean)
       .reverse();

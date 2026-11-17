@@ -11,7 +11,10 @@ the same way the scheduler routes a fire (see ``Scheduler._fire``):
 * the session has a live supervised run → inject into its mailbox (the next
   turn sees it; the supervisor's auto-chain covers a run that is just
   finishing);
-* no live run → start a clientless supervised run with the report as its
+* no live run, and the chat's last run was stopped → keep the report in the
+  chat as a message, starting nothing: the user said stop, so the model reads
+  it with their next message (``session_appended`` tells open pages);
+* no live run otherwise → start a clientless supervised run with the report as its
   input (recorded under source ``subagent-report:<task id>``, distinct from
   the child task run's ``subagent:<session>``), so the model reacts to the
   report and the exchange persists in the transcript;
@@ -51,7 +54,8 @@ from ..workspace.remote import RemoteWorkspace
 from ..workspace.workspace import WorkspaceSessionBinding
 from .workspaces import workspace_config
 from .run_deps import RunTrigger, build_run_deps
-from .sse import SessionCreatedData
+from .sse import SessionAppendedData, SessionCreatedData
+from ..transcript import InputEntry
 
 if TYPE_CHECKING:
     from ..runtime.result import RunResult
@@ -93,6 +97,11 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     report.id,
                     sid,
                 )
+                return
+            if deps.supervisor.stopping(sid) or (
+                (await deps.store.latest_run_statuses([sid])).get(sid) == "cancelled"
+            ):
+                await _hold(deps, report, sid)
                 return
             try:
                 agent = deps.pick(deps.agent_of(row))
@@ -175,6 +184,30 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
         )
 
     return deliver
+
+
+async def _hold(deps: "RouterDeps", report: SubagentReport, sid: str) -> None:
+    """The chat's last run was stopped: the user said stop, so the report
+    starts nothing. It is kept in the chat as a message — shown now, read by
+    the model with the user's next one."""
+    # After the stopped run's own save, or the report would sit above the
+    # turns it stopped in.
+    await deps.supervisor.settle(sid)
+    async with deps._chat_alive(sid) as alive:
+        if not alive:
+            log.info("subagent %s: session %s is gone; report dropped", report.id, sid)
+            return
+        if (live := deps.supervisor.get(sid)) is not None:
+            # The user spoke again in the meantime: that run reads it.
+            live.inject(report.text)
+            return
+        await deps.session.append(sid, [InputEntry(role="user", content=report.text)])
+    deps.emit("session_appended", SessionAppendedData(session_id=sid))
+    log.info(
+        "subagent %s: session %s was stopped; report kept for its next message",
+        report.id,
+        sid,
+    )
 
 
 def subagent_runner(deps: "RouterDeps") -> RunChildFn:

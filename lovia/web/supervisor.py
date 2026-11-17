@@ -1498,6 +1498,11 @@ class RunSupervisor:
         ctrl.cancel_run(user=True, reason=reason)
         return True
 
+    def stopping(self, session_id: str) -> bool:
+        """Whether a stopped run of this session is still winding down — its
+        record reads "cancelled" only once it has."""
+        return bool(self._draining.get(session_id))
+
     async def settle(self, session_id: str) -> None:
         """Wait until this session's stopped runs have saved what they showed.
 

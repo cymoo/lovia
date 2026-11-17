@@ -264,6 +264,13 @@ export function initEventStream() {
       updateSessionTitle(d.session_id, d.title);
     } catch { /* ignore */ }
   });
+  // A task's report was kept in a stopped chat, with no run to stream it.
+  es.addEventListener('session_appended', (e) => {
+    try {
+      if (JSON.parse(e.data).session_id === store.sessionId) void refreshTranscript();
+    } catch { /* ignore */ }
+    refresh();
+  });
   // A chat's permission mode was switched (this tab or another).
   es.addEventListener('session_workspace_changed', (e) => {
     try {
@@ -527,7 +534,8 @@ function taskStatusLabel(state) {
   return key ? t(key) : state;
 }
 
-function fmtElapsed(sec) {
+/** `m:ss` for a task's running time (the task list, a report card). */
+export function fmtElapsed(sec) {
   sec = Math.max(0, Math.floor(sec));
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 }

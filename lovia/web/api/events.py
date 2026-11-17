@@ -9,6 +9,8 @@ schedule status reactively. Events are small JSON facts published via
   status?, error?}``; terminal outcomes carry the run-record status
   (``completed | failed | cancelled | interrupted``).
 * ``session_created`` / ``session_retitled`` — ``{session_id, agent?, title}``.
+* ``session_appended`` — ``{session_id}``: entries landed in the chat without
+  a run (a subagent report parked after a stop).
 
 No replay: a (re)connecting client fetches one snapshot (``/api/sessions`` +
 ``/api/runs``) and then trusts the stream — anything missed while disconnected

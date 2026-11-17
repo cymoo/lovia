@@ -338,15 +338,12 @@ async function refreshTranscript() {
 
 /** @returns {Promise<boolean>} True once the run was actually cancelled. */
 async function stopRun(sid) {
-  // Suppress the "finished" notice for a stop the user just asked for.
-  _recentlyStopped.set(sid, Date.now());
-  // Entries only matter within the grace window — don't let the map grow
-  // for the lifetime of the tab.
-  setTimeout(() => _recentlyStopped.delete(sid), STOPPED_GRACE_MS);
+  markStopping(sid);
   let ok = true;
   try {
     await api.cancel(sid);
     toast(t('toast.runStopped'));
+    void offerToStopTasks(sid);
   } catch (err) {
     console.error('stopRun:', err);
     toast(t('toast.stopFailed'), { type: 'error' });
@@ -354,6 +351,57 @@ async function stopRun(sid) {
   }
   loadSessions();
   return ok;
+}
+
+/** Suppress the "finished" notice for a stop the user just asked for. */
+function markStopping(sid) {
+  _recentlyStopped.set(sid, Date.now());
+  // Entries only matter within the grace window — don't let the map grow
+  // for the lifetime of the tab.
+  setTimeout(() => _recentlyStopped.delete(sid), STOPPED_GRACE_MS);
+}
+
+/** Stop the tasks among `ids` still running now — one may have finished
+ * since the offer was made — with one notice and one list reload. */
+async function stopTasks(ids) {
+  let live = ids;
+  try {
+    const running = new Set((await api.listRuns()).map((r) => r.session_id));
+    live = ids.filter((id) => running.has(id));
+  } catch { /* stop them all: a stop of a finished run is harmless */ }
+  if (!live.length) return;
+  live.forEach(markStopping);
+  const results = await Promise.allSettled(live.map((id) => api.cancel(id)));
+  if (results.some((r) => r.status === 'rejected')) {
+    toast(t('toast.stopFailed'), { type: 'error' });
+  } else {
+    toast(t('toast.runStopped'));
+  }
+  loadSessions();
+}
+
+/**
+ * After a chat's run is stopped. Its tasks keep running — they are work of
+ * their own, and the stopped run is often not the one that spawned them — so
+ * say they do, and offer to stop them as well.
+ * @param {string} sid The chat whose run was just stopped.
+ */
+export async function offerToStopTasks(sid) {
+  let tasks, runs;
+  try {
+    // Runs fetched now, not the cached set: a task started a moment ago may
+    // not be in it yet.
+    [tasks, runs] = await Promise.all([api.listSessions({ parent: sid }), api.listRuns()]);
+  } catch {
+    return; // the chat's own stop stands; this is only an offer
+  }
+  const running = new Set(runs.map((r) => r.session_id));
+  const live = tasks.filter((s) => running.has(s.id)).map((s) => s.id);
+  if (!live.length) return;
+  toast(t('toast.tasksStillRunning', { n: live.length }), {
+    timeout: 10_000,
+    action: { label: t('toast.stopTasks'), run: () => void stopTasks(live) },
+  });
 }
 
 // ---- Load ----------------------------------------------------------------

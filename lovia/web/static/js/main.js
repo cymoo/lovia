@@ -2,9 +2,8 @@
 import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { api, configureApi } from './api.js';
-import { closeSidebar, initTheme, initSidebarToggle, menuOpen, promptDialog, showDialog, toggleSidebar } from './ui.js';
+import { closeSidebar, initTheme, initSidebarToggle, promptDialog, showDialog, toggleSidebar } from './ui.js';
 import {
-  cancelStream,
   detachStream,
   initComposer,
   renderEmptyState,
@@ -204,35 +203,9 @@ function isTyping(target) {
 }
 
 function initKeyboardShortcuts() {
-  // Esc stops the current run. Registered in the CAPTURE phase so anything an
-  // existing bubble-phase Esc handler is about to close (context popover,
-  // a popup menu, mobile sidebar, files preview) is still visibly open here and
-  // wins the keypress — the run stops on the next, unclaimed Esc.
-  document.addEventListener(
-    'keydown',
-    (e) => {
-      if (e.key !== 'Escape' || e.isComposing || !store.streaming) return;
-      if (currentView()) return; // the run isn't on screen; Esc belongs to the view
-      if (document.querySelector('dialog[open]')) return;
-      if (document.getElementById('context-popover')?.hidden === false) return;
-      if (menuOpen()) return;
-      if (document.querySelector('.lv-complete-menu')) return; // the composer's `/` or `@` menu
-      if (document.getElementById('sidebar')?.classList.contains('lv-open')) return;
-      const filesOpen = document
-        .getElementById('files-panel')
-        ?.classList.contains('lv-open');
-      const viewerOpen = !document
-        .getElementById('files-viewer')
-        ?.classList.contains('lv-hidden');
-      const phone = window.matchMedia('(max-width: 720px)').matches;
-      // files.js consumes Esc for these: closing the preview, or (on phones)
-      // the panel drawer itself.
-      if (filesOpen && (viewerOpen || phone)) return;
-      cancelStream();
-    },
-    true,
-  );
-
+  // No key stops a run: a stop is final, and Esc — what closes things — is
+  // pressed on reflex, on a task page that is only being watched too. The
+  // Stop button is the one way.
   document.addEventListener('keydown', (e) => {
     // `?` opens the shortcut help — but never while typing a message.
     if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey) {

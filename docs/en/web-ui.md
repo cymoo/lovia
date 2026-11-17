@@ -880,7 +880,8 @@ enters the parent's next Turn if the parent Run is active; otherwise the server
 starts a Run to process the report. The browser does not need to remain online.
 
 A task is not owned by the parent Run, so stopping the parent does not stop the
-task; deleting the parent chat stops its tasks and deletes them with it. Approvals auto-deny after `approval_timeout`; unfinished tasks are not
+task — the stop notice says which tasks still run and offers **Stop them too**;
+deleting the parent chat stops its tasks and deletes them with it. Approvals auto-deny after `approval_timeout`; unfinished tasks are not
 resumed after a server restart.
 
 A task's approval card shows in the chat that spawned it too, above the

@@ -236,8 +236,9 @@ method handles both triggers:
   runner-owned dict: the loop round-trips it through the checkpoint head
   (`RunHead.context_state`, JSON-safe → survives resume) and persists it into
   the finished run's session-segment `meta` (the web's stopped-run segment
-  copies it from the checkpoint too), so a *new run* on the same
-  session inherits the previous run's decisions with no in-process cache. A
+  copies it from the checkpoint too), so a *new run* on the same session
+  inherits the newest segment's carried state — skipping segments written
+  without any — with no in-process cache. A
   structural `fingerprint` of the covered prefix detects a rewritten prefix
   (e.g. history trimmed before a new run reuses a carried summary) and resets
   the summary while keeping call_id-keyed decisions.

@@ -88,6 +88,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# What a stop says when its caller names no one else (the HTTP stop).
+USER_STOP = "user requested stop"
+
 # The result a stopped run's unanswered tool call is saved with.
 _INTERRUPTED = (
     "Interrupted: the run stopped before this tool returned; its outcome is unknown."
@@ -473,9 +476,7 @@ class RunController:
             self.freeze()
         # The reason is what the run's logs say stopped it (the loop's
         # ``run.interrupted`` line); the record keeps the stable "cancelled".
-        self.cancel.cancel(
-            reason or ("user requested stop" if user else "server shutdown")
-        )
+        self.cancel.cancel(reason or (USER_STOP if user else "server shutdown"))
         # Unblock a run parked on a pending approval (deny) so it can wind down.
         self.deps.approvals.deny_pending(self.session_id)
         # Same for a run parked on an ask_human question (cancel).
@@ -1490,7 +1491,7 @@ class RunSupervisor:
         if ctrl.task is not None:
             self._draining.setdefault(session_id, set()).add(ctrl)
         ctrl._discard_partial = discard
-        reason = reason or "user requested stop"
+        reason = reason or USER_STOP
         # One line per stop, whatever the run was doing: a run stopped
         # mid-model-call ends without a ``run.interrupted`` line to say why.
         log.info("run stop requested: session=%s (%s)", session_id, reason)

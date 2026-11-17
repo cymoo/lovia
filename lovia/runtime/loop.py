@@ -664,15 +664,19 @@ class RunLoop:
             run_ctx.entries.extend(self._user_input_entries())
 
         # Seed the context policy's per-run scratch: the resuming run's own
-        # checkpoint wins; otherwise a fresh run inherits the previous run's
-        # carried decisions from the latest session segment's meta; else empty.
+        # checkpoint wins; otherwise a fresh run inherits the carried decisions
+        # of the newest segment that has any — one written without them (a
+        # stopped run saved before its first checkpoint, an appended message)
+        # must not reset calibration and sticky decisions; else empty.
+        context_state: dict[str, Any] = {}
         if snapshot is not None:
             context_state = dict(snapshot.context_state)
-        elif segments:
-            prior = (segments[-1].meta or {}).get(STATE_META_KEY)
-            context_state = dict(prior) if isinstance(prior, dict) else {}
         else:
-            context_state = {}
+            for seg in reversed(segments):
+                prior = (seg.meta or {}).get(STATE_META_KEY)
+                if isinstance(prior, dict):
+                    context_state = dict(prior)
+                    break
 
         return RunState(
             run_ctx=run_ctx,

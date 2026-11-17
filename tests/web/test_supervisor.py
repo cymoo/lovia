@@ -1133,7 +1133,9 @@ async def test_failed_run_persists_partial_transcript() -> None:
 
     # Turn 1 (ping) completes; the turn-2 model call raises a non-retryable error.
     provider = _ScriptThenFail([call("ping", {}, call_id="c1")])
-    agent = Agent(name="bot", model=provider, tools=[ping])
+    agent = Agent(
+        name="bot", model=provider, tools=[ping], context_policy=_CountingPolicy()
+    )
     store = ChatStore.in_memory()
     app = _app(agent, store=store, retry=RetryPolicy(max_attempts=1))
     async with _client(app) as ac:
@@ -1156,6 +1158,9 @@ async def test_failed_run_persists_partial_transcript() -> None:
         detail = (await ac.get("/api/sessions/s1")).json()
     assert detail["active_run_id"] is None
     assert detail["entries"]
+    # Saved like a stopped run's: with the context policy's carried state.
+    (seg,) = await store.session.segments("s1")
+    assert STATE_META_KEY in (seg.meta or {})
 
 
 @pytest.mark.asyncio

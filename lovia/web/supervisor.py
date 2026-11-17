@@ -1364,7 +1364,8 @@ class RunSupervisor:
                     # "running" with no controller: a resume is registering.
                     # Woken by a register or a stop (forget); the timeout is a
                     # safety net for a path that settles it without either.
-                    with contextlib.suppress(TimeoutError):
+                    # asyncio's: not the builtin before Python 3.11.
+                    with contextlib.suppress(asyncio.TimeoutError):
                         await asyncio.wait_for(event.wait(), timeout=5.0)
         finally:
             self._registered.pop(session_id, None)

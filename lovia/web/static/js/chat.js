@@ -7,7 +7,7 @@ import { draftWorkspaceRoot, ensureLinked, scopeRoot, workspaceName } from './wo
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
 import { addCodeBlockControls, copyToClipboard, openImageLightbox, showDialog } from './ui.js';
-import { forkChat, loadSessions, switchSession, updateSessionTitle } from './sessions.js';
+import { forkChat, loadSessions, offerToStopTasks, switchSession, updateSessionTitle } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
 import { enterToSend, followupsEnabled, openSettings } from './settings.js';
@@ -3796,7 +3796,8 @@ export function detachStream() {
 
 /**
  * Cancel the active run server-side (contrast detachStream, which only
- * disconnects) and settle the streaming UI.
+ * disconnects) and settle the streaming UI; the chat's tasks are offered a
+ * stop of their own (offerToStopTasks).
  * @returns {Promise<void>}
  */
 export async function cancelStream() {
@@ -3814,10 +3815,14 @@ export async function cancelStream() {
   const runId = _shownRunId ?? store.runsBySession?.get(store.sessionId ?? '')?.run_id;
   if (runId) sendQueue.markStopped(runId);
   if (_streamAbortController) _streamAbortController.abort();
-  if (store.sessionId) {
+  const sid = store.sessionId;
+  if (sid) {
     try {
-      await api.cancel(store.sessionId);
-    } catch { /* ignore */ }
+      await api.cancel(sid);
+    } catch {
+      return;
+    }
+    void offerToStopTasks(sid);
   }
 }
 

@@ -347,6 +347,7 @@ async function stopRun(sid) {
   try {
     await api.cancel(sid);
     toast(t('toast.runStopped'));
+    void offerToStopTasks(sid);
   } catch (err) {
     console.error('stopRun:', err);
     toast(t('toast.stopFailed'), { type: 'error' });
@@ -354,6 +355,32 @@ async function stopRun(sid) {
   }
   loadSessions();
   return ok;
+}
+
+/**
+ * After a chat's run is stopped. Its tasks keep running — they are work of
+ * their own, and the stopped run is often not the one that spawned them — so
+ * say they do, and offer to stop them as well.
+ * @param {string} sid The chat whose run was just stopped.
+ */
+export async function offerToStopTasks(sid) {
+  let tasks;
+  try {
+    tasks = await api.listSessions({ parent: sid });
+  } catch {
+    return; // the chat's own stop stands; this is only an offer
+  }
+  const live = tasks.filter((s) => store.runsBySession?.has(s.id)).map((s) => s.id);
+  if (!live.length) return;
+  toast(t('toast.tasksStillRunning', { n: live.length }), {
+    timeout: 10_000,
+    action: {
+      label: t('toast.stopTasks'),
+      run: () => {
+        for (const id of live) void stopRun(id);
+      },
+    },
+  });
 }
 
 // ---- Load ----------------------------------------------------------------

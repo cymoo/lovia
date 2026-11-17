@@ -1362,8 +1362,16 @@ function setApprovalBadge(row, { outcome, title }) {
 function resolveApproval(data) {
   // The server's word: a click's failed send (its response lost after the
   // server acted) must not offer this request again.
-  const entry = store.approvals.get(data.id);
-  if (entry) entry.settled = true;
+  let entry = store.approvals.get(data.id);
+  if (!entry) {
+    // Asked before this view began: a run resumed with the answer to the card
+    // it was suspended on settles it as it replays the call. Its row (from
+    // the snapshot, or drawn as it runs) still gets the badge.
+    const tool = findToolNode(data.id)?.dataset.tool ?? '';
+    entry = { call: { id: data.id, name: tool, arguments: '' } };
+    store.approvals.set(data.id, entry);
+  }
+  entry.settled = true;
   // A mode switch answered it: the badge says so, not "you".
   const byMode = data.cause === 'policy' ? t('approval.byMode') : undefined;
   decideApproval(data.id, approvalOutcome(data), byMode);

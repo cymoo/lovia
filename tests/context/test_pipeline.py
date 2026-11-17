@@ -1160,6 +1160,30 @@ async def test_continuation_resumes_summary_across_runs_durably():
     assert len(summarizer.calls) == calls_after_first  # inherited; no re-summarize
 
 
+async def test_a_segment_without_policy_state_does_not_reset_it():
+    """A segment appended without carried state (a message saved outside a
+    run, a stop saved before its first checkpoint) is skipped: the next run
+    inherits the newest state any segment carries."""
+    from lovia.context import CompactionRequest, ContextResult
+
+    seen: list[int] = []
+
+    class Counting:
+        async def compact(self, req: CompactionRequest) -> ContextResult:
+            n = int(req.scratch.get("calls", 0))
+            seen.append(n)
+            req.scratch["calls"] = n + 1
+            return ContextResult(entries=list(req.entries))
+
+    sess = InMemorySession()
+    provider = ScriptedProvider([text("a1"), text("a2")])
+    agent = Agent(name="t", instructions="x", model=provider, context_policy=Counting())
+    await Runner.run(agent, "q1", session=sess, session_id="s1")
+    await sess.append("s1", [user("a note saved outside any run")])
+    await Runner.run(agent, "q2", session=sess, session_id="s1")
+    assert seen == [0, 1]
+
+
 async def test_stale_and_ambiguous_records_are_pruned_from_scratch():
     """Records for ids the body no longer holds (trimmed history) or holds
     twice (a provider reusing call ids) are GC'd instead of replayed —

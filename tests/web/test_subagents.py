@@ -312,7 +312,10 @@ async def test_run_source_filter_tags_task_context_logs() -> None:
     }
 
 
-async def test_cancel_subagent_cancels_supervised_child() -> None:
+async def test_cancel_subagent_cancels_supervised_child(caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.INFO, logger="lovia.web")
     gate = asyncio.Event()  # never set: the child stays parked
     child = Agent(name="slow", model=GatedProvider(ScriptedProvider([text("x")]), gate))
     provider = ScriptedProvider(
@@ -346,11 +349,17 @@ async def test_cancel_subagent_cancels_supervised_child() -> None:
     # A cancelled child delivers no report: no clientless delivery run starts.
     await asyncio.sleep(0.1)
     assert await deps.store.latest_run_for("subagent-report:t1") is None
+    # The task's logs say who stopped it — not "user requested stop".
+    assert "cancelled by the parent agent" in caplog.text
+    assert "user requested stop" not in caplog.text
 
 
-async def test_deleting_a_chat_stops_and_deletes_its_tasks() -> None:
+async def test_deleting_a_chat_stops_and_deletes_its_tasks(caplog) -> None:
+    import logging
+
     import httpx
 
+    caplog.set_level(logging.INFO, logger="lovia.web")
     gate = asyncio.Event()  # parks the child in its model call
     child = Agent(name="slow", model=GatedProvider(ScriptedProvider([text("x")]), gate))
     provider = ScriptedProvider([call("spawn_subagent", {"prompt": "dig"}), text("ok")])
@@ -385,6 +394,9 @@ async def test_deleting_a_chat_stops_and_deletes_its_tasks() -> None:
     # A task stopped by the delete reports nothing to the deleted chat.
     await asyncio.gather(*plugin._detached, return_exceptions=True)
     assert list(deps.supervisor) == []
+    assert (
+        f"run stop requested: session={task.id} (the chat was deleted)" in caplog.text
+    )
 
 
 async def test_a_spawn_still_in_run_deps_does_not_outlive_a_deleted_chat() -> None:

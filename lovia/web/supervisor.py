@@ -36,7 +36,7 @@ from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
 from ..runtime.loop import pending_tool_calls
 from ..runtime.resume import normalize_replayed_entries
-from ..session import TIMING_META_KEY
+from ..session import STATE_META_KEY, TIMING_META_KEY
 from ..steering import InjectedContent, Mailbox
 from ..transcript import (
     AssistantTextEntry,
@@ -467,11 +467,15 @@ class RunController:
     def uninject(self, token: int) -> bool:
         return self.mailbox.remove(token)
 
-    def cancel_run(self, *, user: bool) -> None:
+    def cancel_run(self, *, user: bool, reason: str | None = None) -> None:
         self._user_cancelled = self._user_cancelled or user
         if user and not self._discard_partial:
             self.freeze()
-        self.cancel.cancel("user requested stop" if user else "server shutdown")
+        # The reason is what the run's logs say stopped it (the loop's
+        # ``run.interrupted`` line); the record keeps the stable "cancelled".
+        self.cancel.cancel(
+            reason or ("user requested stop" if user else "server shutdown")
+        )
         # Unblock a run parked on a pending approval (deny) so it can wind down.
         self.deps.approvals.deny_pending(self.session_id)
         # Same for a run parked on an ask_human question (cancel).
@@ -711,15 +715,21 @@ class RunController:
                 if store.checkpointer is not None
                 else None
             )
-            meta: JsonObject | None = None
+            meta: JsonObject = {}
             if snapshot is not None and snapshot.started_at is not None:
-                meta = {
-                    TIMING_META_KEY: {
-                        "started_at": snapshot.started_at,
-                        "finished_at": stopped_at,
-                    }
+                meta[TIMING_META_KEY] = {
+                    "started_at": snapshot.started_at,
+                    "finished_at": stopped_at,
                 }
-            await session.append(self.session_id, entries, run_id=run_id, meta=meta)
+            if snapshot is not None and snapshot.context_state:
+                # The context policy's carried state (calibration + sticky
+                # decisions), as a finished run's segment has it: the next run
+                # in this chat seeds from the latest segment, and without it
+                # would estimate uncalibrated and re-derive every decision.
+                meta[STATE_META_KEY] = snapshot.context_state
+            await session.append(
+                self.session_id, entries, run_id=run_id, meta=meta or None
+            )
             if store.checkpointer is not None and pointer:
                 await store.clear_active_run_id(self.session_id, expected=pointer)
         except Exception as exc:  # noqa: BLE001 — logged; the stop itself stands
@@ -1465,9 +1475,12 @@ class RunSupervisor:
         if cap and len(self._controllers) >= self.max_background_runs:
             raise WebError(429, "too_many_runs", "too many concurrent runs")
 
-    def cancel(self, session_id: str, *, discard: bool = False) -> bool:
+    def cancel(
+        self, session_id: str, *, discard: bool = False, reason: str | None = None
+    ) -> bool:
         """Cancel the live run, if any. ``discard`` additionally drops the
-        partial transcript instead of persisting it — for session deletion."""
+        partial transcript instead of persisting it — for session deletion.
+        ``reason`` names who stopped it, for the logs (default: a user stop)."""
         ctrl = self._controllers.get(session_id)
         if ctrl is None:
             return False
@@ -1477,7 +1490,11 @@ class RunSupervisor:
         if ctrl.task is not None:
             self._draining.setdefault(session_id, set()).add(ctrl)
         ctrl._discard_partial = discard
-        ctrl.cancel_run(user=True)
+        reason = reason or "user requested stop"
+        # One line per stop, whatever the run was doing: a run stopped
+        # mid-model-call ends without a ``run.interrupted`` line to say why.
+        log.info("run stop requested: session=%s (%s)", session_id, reason)
+        ctrl.cancel_run(user=True, reason=reason)
         return True
 
     async def settle(self, session_id: str) -> None:

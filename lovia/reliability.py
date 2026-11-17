@@ -121,6 +121,11 @@ class CancelToken:
     def is_cancelled(self) -> bool:
         return self._cancelled
 
+    @property
+    def reason(self) -> str | None:
+        """What :meth:`cancel` was given, if anything."""
+        return self._reason
+
     def cancel(self, reason: str | None = None) -> None:
         self._cancelled = True
         self._reason = reason

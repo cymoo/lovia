@@ -235,7 +235,8 @@ method handles both triggers:
 - **State location.** Sticky state lives in `CompactionRequest.scratch`, a
   runner-owned dict: the loop round-trips it through the checkpoint head
   (`RunHead.context_state`, JSON-safe → survives resume) and persists it into
-  the finished run's session-segment `meta`, so a *new run* on the same
+  the finished run's session-segment `meta` (the web's stopped-run segment
+  copies it from the checkpoint too), so a *new run* on the same
   session inherits the previous run's decisions with no in-process cache. A
   structural `fingerprint` of the covered prefix detects a rewritten prefix
   (e.g. history trimmed before a new run reuses a carried summary) and resets

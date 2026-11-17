@@ -334,7 +334,9 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         async def watch_token() -> None:
             while not spec.token.is_cancelled:
                 await asyncio.sleep(0.3)
-            deps.supervisor.cancel(child_sid)
+            # Say who stopped it ("cancelled by the parent agent"): the task's
+            # logs would otherwise read as a user stop.
+            deps.supervisor.cancel(child_sid, reason=spec.token.reason)
 
         watcher = asyncio.create_task(watch_token())
         try:

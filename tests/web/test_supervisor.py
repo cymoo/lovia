@@ -22,7 +22,8 @@ from lovia.checkpointer import RunHead  # noqa: E402
 from lovia.exceptions import ProviderError  # noqa: E402
 from lovia.messages import AssistantTurn, ToolCall, Usage  # noqa: E402
 from lovia.reliability import RetryPolicy, RunBudget  # noqa: E402
-from lovia.session import TIMING_META_KEY  # noqa: E402
+from lovia.context import CompactionRequest, ContextResult  # noqa: E402
+from lovia.session import STATE_META_KEY, TIMING_META_KEY  # noqa: E402
 from lovia.transcript import InputEntry, TextDelta, ToolResultEntry  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -864,6 +865,51 @@ async def test_message_after_stop_sees_the_stopped_run() -> None:
         [e.content for e in s.entries if isinstance(e, InputEntry)] for s in segments
     ]
     assert inputs == [["go"], ["next"]]
+
+
+class _CountingPolicy:
+    """Counts its calls in the carried scratch and records what each saw."""
+
+    def __init__(self) -> None:
+        self.seen: list[int] = []
+
+    async def compact(self, req: CompactionRequest) -> ContextResult:
+        n = int(req.scratch.get("calls", 0))
+        self.seen.append(n)
+        req.scratch["calls"] = n + 1
+        return ContextResult(entries=list(req.entries))
+
+
+@pytest.mark.asyncio
+async def test_the_run_after_a_stop_keeps_the_context_policys_state() -> None:
+    """A stopped run's segment carries the context policy's state, as a
+    finished run's does: the next run in the chat starts from it — its
+    calibration and sticky decisions — instead of from nothing."""
+    release = asyncio.Event()
+    provider = ScriptedProvider(
+        [call("block", {}, call_id="c1"), text("next answer"), text("unused")]
+    )
+    policy = _CountingPolicy()
+    agent = Agent(
+        name="bot",
+        model=provider,
+        tools=[_blocking_tool(release)],
+        context_policy=policy,
+    )
+    store = ChatStore.in_memory()
+    async with _client(_app(agent, store=store)) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_calls(provider, 1)
+        await _wait_run(ac, "s1")
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        await ac.post("/api/chat/stream", json={"message": "next", "session_id": "s1"})
+        release.set()
+        await _kill(task)
+    stopped, _ = await store.session.segments("s1")
+    assert (stopped.meta or {})[STATE_META_KEY] == {"calls": 1}
+    assert policy.seen == [0, 1]  # the second run picked up where the first left
 
 
 @pytest.mark.asyncio

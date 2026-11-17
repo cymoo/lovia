@@ -211,7 +211,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         # As in delete_session, the mark keeps new runs and tasks out meanwhile.
         async with deps._deleting_every_chat():
             for sid, _ctrl in deps.supervisor:
-                deps.supervisor.cancel(sid, discard=True)
+                deps.supervisor.cancel(sid, discard=True, reason="the chat was deleted")
             # As in delete_session: let every stopped run wind down first —
             # those stopped just now and those stopped earlier but still
             # winding down.
@@ -478,7 +478,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             # otherwise they keep burning tokens and re-persist entries for the
             # deleted chats when they wind down.
             for sid in tree:
-                deps.supervisor.cancel(sid, discard=True)
+                deps.supervisor.cancel(sid, discard=True, reason="the chat was deleted")
             for sid in tree:
                 # Stopping is cooperative: a final model call already in flight
                 # still completes, and the run then appends itself to the

@@ -6755,15 +6755,15 @@ body.lv-files-resizing {
   border-radius: var(--lv-radius-sm);
   resize: none; /* grows with its text (chat.js), up to a cap, then scrolls */
 }
-/* "Denied at 16:33 if unanswered" — the left end of the button row; on a
-   narrow card it takes a line of its own rather than squeeze the buttons. */
 /* The run stopped at a tool that put its answer off: a message resumes it. */
 .lv-run-waiting {
   margin-top: 8px;
   font-size: 12px;
   color: var(--lv-muted);
 }
-/* The run stopped at this call: answering the card resumes it. */
+/* The run stopped at this call: answering the card resumes it. The left end
+   of the button row; on a narrow card it takes a line of its own rather than
+   squeeze the buttons. */
 .lv-approval-paused {
   flex: 1 1 12em;
   font-size: 12px;

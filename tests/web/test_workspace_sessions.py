@@ -9,6 +9,7 @@ liveness is asserted via ``os.kill(pid, 0)``.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -25,6 +26,10 @@ from lovia.web.workspaces import WorkspaceSessions  # noqa: E402
 from lovia.workspace import LocalWorkspace, Workspace, WorkspacePolicy  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
+
+# POSIX shell commands throughout — and os.kill(pid, 0) is no liveness probe
+# on Windows: signal 0 is CTRL_C_EVENT there, sent to the whole console.
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell")
 
 # Writes the (exec-preserved) shell pid to a file, then parks. The pid is how
 # tests observe process liveness from outside the app.

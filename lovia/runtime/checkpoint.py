@@ -179,8 +179,24 @@ class CheckpointWriter:
             pending_handoff=pending.handoff.target.name if pending else None,
             started_at=state.started_at,
         )
-        await self.checkpointer.append(self.run_id, delta, head)
-        self._persisted = len(run_entries)
+        checkpointer = self.checkpointer
+
+        async def write() -> None:
+            await checkpointer.append(self.run_id, delta, head)
+            self._persisted = len(run_entries)
+
+        # A cancelled caller must not walk away from a write in flight: a
+        # store's thread keeps writing regardless, so the terminal save that
+        # follows would append the same delta again (duplicates, or a seq
+        # clash with the still-running write). Let it land, then cancel.
+        task = asyncio.ensure_future(write())
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await asyncio.wait([task])
+            if not task.cancelled():
+                task.exception()  # retrieved: the cancellation is what propagates
+            raise
 
 
 def error_payload(exc: BaseException) -> JsonObject:

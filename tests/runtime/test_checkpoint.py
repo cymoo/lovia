@@ -8,12 +8,15 @@ output / best-effort-terminal-save behaviours against an in-memory backend.
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
+from typing import Any
 
 import pytest
 
 from lovia import Agent
 from lovia.checkpointer import RunHead
-from lovia.transcript import TranscriptEntry
+from lovia.transcript import InputEntry, TranscriptEntry
 from lovia.exceptions import (
     BudgetExceeded,
     MaxTurnsExceeded,
@@ -24,7 +27,7 @@ from lovia.messages import Usage
 from lovia.run_context import RunContext
 from lovia.runtime.checkpoint import CheckpointWriter, error_payload
 from lovia.runtime.run_state import ActiveAgent, RunState
-from lovia.stores import InMemoryCheckpointer
+from lovia.stores import InMemoryCheckpointer, SQLiteCheckpointer
 from lovia.testing import ScriptedProvider, text
 
 
@@ -156,6 +159,40 @@ async def test_save_terminal_swallows_backend_failure() -> None:
     writer = CheckpointWriter(checkpointer=_BoomCheckpointer(), run_id="r1")
     # A snapshot failure must never mask the original run error -> no raise.
     await writer.save_terminal(_state(), ValueError("original failure"))
+
+
+async def test_a_cancelled_save_lets_its_write_land_first(
+    tmp_path, monkeypatch
+) -> None:
+    """A store's thread keeps writing after its caller is cancelled (a
+    shutdown cancelling the run mid-save): the terminal save that follows
+    must neither append the same entries again nor clash with that write."""
+    cp = SQLiteCheckpointer(tmp_path / "c.db")
+    started = threading.Event()
+    real = cp._append_sync
+
+    def slow(*args: Any) -> None:
+        started.set()
+        time.sleep(0.2)
+        real(*args)
+
+    monkeypatch.setattr(cp, "_append_sync", slow)
+    writer = CheckpointWriter(checkpointer=cp, run_id="r1")
+    state = _state()
+    state.transcript.append(InputEntry(role="user", content="hi"))
+
+    save = asyncio.create_task(writer.save_running(state))
+    while not started.is_set():
+        await asyncio.sleep(0.01)
+    save.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await save
+    await writer.save_terminal(state, asyncio.CancelledError())
+
+    snap = await cp.load("r1")
+    assert snap is not None
+    assert [e.content for e in snap.entries] == ["hi"]
+    assert snap.status == "interrupted"
 
 
 async def test_save_terminal_records_classified_status() -> None:

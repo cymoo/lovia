@@ -1880,7 +1880,11 @@ body.lv-view-open #files-btn {
 .lv-turn .lv-body pre:hover {
   border-color: var(--lv-border-strong);
 }
+/* The code scrolls, not the <pre>: the label and Copy button are the pre's
+   absolute children, which would scroll away with its content. */
 .lv-turn .lv-body pre code {
+  display: block;
+  overflow-x: auto;
   font-family: var(--lv-mono);
   font-size: 0.88em;
   line-height: 1.62;
@@ -2749,13 +2753,12 @@ body.lv-view-open #files-btn {
   background: var(--lv-warn);
   animation: lv-run-pulse 1.6s var(--lv-ease) infinite;
 }
-/* Focused on arrival (never its Approve button): only a keyboard user needs to see it. */
+/* Focused on arrival (never its Approve button) so Tab reaches its controls
+   next — no ring: the browser counts a script's focus after Enter-to-send
+   as keyboard focus and drew one around a card nobody tabbed to. Its
+   buttons carry their own rings. */
 .lv-approval:focus {
   outline: none;
-}
-.lv-approval:focus-visible {
-  outline: 2px solid var(--lv-accent);
-  outline-offset: 2px;
 }
 /* The model's own summary of the call: its words, set apart from what runs. */
 .lv-approval-note {

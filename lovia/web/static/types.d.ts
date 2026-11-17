@@ -42,6 +42,8 @@ interface DOMPurifyStatic {
 /** Minimal surface of highlight.js (https://highlightjs.org). */
 interface HLJSStatic {
   highlightElement(el: Element): void;
+  highlight(code: string, opts: { language: string; ignoreIllegals?: boolean }): { value: string };
+  getLanguage(name: string): object | undefined;
 }
 
 /** One rendered diagram from mermaid's async `render`. */

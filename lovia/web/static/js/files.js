@@ -1447,14 +1447,25 @@ const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 // The header lines worth showing: the rest (index, ---/+++) repeat the path.
 const DIFF_META = /^(rename from|rename to|old mode|new mode|deleted file mode|new file mode) /;
 
-function renderDiff(d) {
+/** The highlight.js language for a file's diff, or null to leave it plain. */
+function diffLanguage(path, size) {
+  const e = ext(path);
+  if (typeof hljs === 'undefined' || size > 200_000 || !/^[a-z0-9]+$/.test(e)) return null;
+  return hljs.getLanguage(e) ? e : null;
+}
+
+function renderDiff(d, path) {
   if (d.binary) return viewerNote(t('files.diffBinary'));
   if (!d.diff.trim()) return viewerNote(t('files.diffEmpty'));
   const box = document.createElement('div');
   if (d.truncated) box.appendChild(viewerNote(t('files.diffCut')));
   const lines = document.createElement('div');
   lines.className = 'lv-files-diff';
-  const line = (cls, oldN, newN, text) => {
+  // Each line is highlighted on its own: a construct spanning lines (a block
+  // comment, a template string) loses its colour past the first, but a diff
+  // holds no whole file to read one from.
+  const lang = diffLanguage(path, d.diff.length);
+  const line = (cls, oldN, newN, text, isCode = false) => {
     const row = document.createElement('div');
     row.className = cls ? `lv-diff-line ${cls}` : 'lv-diff-line';
     for (const n of [oldN, newN]) {
@@ -1465,7 +1476,14 @@ function renderDiff(d) {
     }
     const code = document.createElement('span');
     code.className = 'lv-diff-code';
-    code.textContent = text;
+    if (isCode && lang && hljs) {
+      const src = document.createElement('span');
+      // hljs escapes the source it returns: safe as markup.
+      src.innerHTML = hljs.highlight(text.slice(1), { language: lang, ignoreIllegals: true }).value;
+      code.append(text[0], src);
+    } else {
+      code.textContent = text;
+    }
     row.appendChild(code);
     lines.appendChild(row);
   };
@@ -1486,11 +1504,11 @@ function renderDiff(d) {
     } else if (!inHunk || !text || text.startsWith('\\')) {
       // a header, the closing newline, "\ No newline at end of file"
     } else if (text[0] === '+') {
-      line('lv-add', null, newN++, text);
+      line('lv-add', null, newN++, text, true);
     } else if (text[0] === '-') {
-      line('lv-del', oldN++, null, text);
+      line('lv-del', oldN++, null, text, true);
     } else {
-      line('', oldN++, newN++, text);
+      line('', oldN++, newN++, text, true);
     }
   }
   // Nothing git said is worth a row (a header shape not foreseen): say so,
@@ -1698,7 +1716,7 @@ function renderViewerContent() {
     els.mdToggle.classList.add('lv-hidden');
     els.wrapToggle.classList.toggle('lv-hidden', !v.diff.diff);
     els.copyContent.classList.toggle('lv-hidden', !v.diff.diff);
-    els.viewerBody.appendChild(renderDiff(v.diff));
+    els.viewerBody.appendChild(renderDiff(v.diff, v.path));
     return;
   }
   // Wrap toggling only means something for plain text / raw views.

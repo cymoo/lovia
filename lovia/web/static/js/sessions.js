@@ -5,6 +5,7 @@ import { api, apiError } from './api.js';
 import { closeSidebar, promptDialog, confirmDialog, openMenu } from './ui.js';
 import { toast } from './toast.js';
 import { createRunNotices } from './run-notices.js';
+import { createAttention } from './attention.js';
 import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
 import { notificationsEnabled, playCompletionSound } from './settings.js';
@@ -341,7 +342,53 @@ function takeRuns(stamp, runs) {
     runs.filter((r) => r.status !== 'waiting').map((r) => r.session_id),
   );
   store.runsBySession = new Map(runs.map((r) => [r.session_id, r]));
+  for (const run of _attention.take(runs)) _notifyWaiting(run);
   return true;
+}
+
+// Runs that newly wait on the user (a card asked, or a run suspended on one).
+const _attention = createAttention();
+
+/**
+ * Tell the user a run waits on them — once per call, by the same channels as
+ * a finished run: a toast, or while the tab is hidden the title badge and the
+ * desktop notification. Not when the chat is on screen: the card is the news.
+ * @param {import('./attention.js').AttentionRun} run
+ */
+function _notifyWaiting(run) {
+  const sid = run.session_id;
+  if (sid === store.sessionId && !document.hidden && !currentView()) return;
+  const title = store.sessions.find((s) => s.id === sid)?.title
+    || store.currentTasks?.find((s) => s.id === sid)?.title
+    || t('toast.backgroundRun');
+  const kind = run.waits_on?.kind;
+  const message = t(
+    kind === 'approval' ? 'toast.runWaitsApproval'
+      : kind === 'question' ? 'toast.runWaitsAnswer'
+        : 'toast.runWaits',
+    { title },
+  );
+  const open = () => {
+    window.focus();
+    void switchSession(sid);
+  };
+  playCompletionSound(); // no-op unless the sound preference is on
+  if (!document.hidden) {
+    toast(message, { action: { label: t('toast.openChat'), run: open } });
+    return;
+  }
+  _unseenFinished += 1;
+  document.title = `(${_unseenFinished}) ${_baseTitle}`;
+  if (notificationsEnabled()) {
+    try {
+      // One per chat: a later wait replaces its notification, not stacks.
+      const note = new Notification(_baseTitle, { body: message, tag: `lovia-wait:${sid}` });
+      note.onclick = () => {
+        note.close();
+        open();
+      };
+    } catch { /* platform quirks (e.g. no Notification in this context) */ }
+  }
 }
 
 /**

@@ -84,6 +84,7 @@ async def test_an_unanswered_card_suspends_the_run() -> None:
 
         (row,) = (await ac.get("/api/runs")).json()
         assert row["status"] == "waiting" and row["pending_approval"]["id"] == "c1"
+        assert row["waits_on"] == {"kind": "approval", "id": "c1"}
         detail = (await ac.get("/api/sessions/s1")).json()
         # The card instead of a reconnect pointer: opening the chat must not
         # resume the run.
@@ -577,6 +578,7 @@ async def test_an_unanswered_question_suspends_and_its_answer_resumes() -> None:
         assert "done" not in kinds and "error" not in kinds
         (row,) = (await ac.get("/api/runs")).json()
         assert row["status"] == "waiting" and row["pending_approval"] is None
+        assert row["waits_on"] == {"kind": "question", "id": "q1"}
         waiting = (await ac.get("/api/sessions/s1")).json()["waiting"]
         assert waiting["kind"] == "question" and waiting["id"] == "q1"
         assert waiting["question"] == "Which branch?"

@@ -292,6 +292,12 @@ class SessionRetitledData(TypedDict):
     title: str | None
 
 
+class SessionAppendedData(TypedDict):
+    """Entries landed in a chat without a run (a parked subagent report)."""
+
+    session_id: str
+
+
 class SessionWorkspaceChangedData(TypedDict):
     session_id: str
     workspace_mode: str | None
@@ -312,6 +318,7 @@ LIFECYCLE_EVENTS: dict[str, type] = {
     "run_status": RunStatusData,
     "session_created": SessionCreatedData,
     "session_retitled": SessionRetitledData,
+    "session_appended": SessionAppendedData,
     "session_workspace_changed": SessionWorkspaceChangedData,
     "config_changed": ConfigChangedData,
 }

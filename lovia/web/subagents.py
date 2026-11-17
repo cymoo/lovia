@@ -11,7 +11,10 @@ the same way the scheduler routes a fire (see ``Scheduler._fire``):
 * the session has a live supervised run → inject into its mailbox (the next
   turn sees it; the supervisor's auto-chain covers a run that is just
   finishing);
-* no live run → start a clientless supervised run with the report as its
+* no live run, and the chat's last run was stopped → keep the report in the
+  chat as a message, starting nothing: the user said stop, so the model reads
+  it with their next message (``session_appended`` tells open pages);
+* no live run otherwise → start a clientless supervised run with the report as its
   input (recorded under source ``subagent-report:<task id>``, distinct from
   the child task run's ``subagent:<session>``), so the model reacts to the
   report and the exchange persists in the transcript;
@@ -51,7 +54,8 @@ from ..workspace.remote import RemoteWorkspace
 from ..workspace.workspace import WorkspaceSessionBinding
 from .workspaces import workspace_config
 from .run_deps import RunTrigger, build_run_deps
-from .sse import SessionCreatedData
+from .sse import SessionAppendedData, SessionCreatedData
+from ..transcript import InputEntry
 
 if TYPE_CHECKING:
     from ..runtime.result import RunResult
@@ -94,6 +98,9 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     sid,
                 )
                 return
+            if await _stopped(deps, sid):
+                await _hold(deps, report, sid)
+                return
             try:
                 agent = deps.pick(deps.agent_of(row))
             except WebError:
@@ -135,7 +142,8 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                 )
                 return
             try:
-                # The chat may have been deleted while run_deps ran.
+                # While run_deps ran, the chat may have been deleted, or the
+                # user may have started a run in it and stopped it.
                 async with deps._chat_alive(sid) as alive:
                     if not alive:
                         log.info(
@@ -144,17 +152,22 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                             sid,
                         )
                         return
-                    await deps.supervisor.start(
-                        session_id=sid,
-                        agent=agent,
-                        input=report.text,
-                        is_new=False,
-                        title_message=None,
-                        autostart=True,  # clientless: consume the report unattended
-                        source=source,
-                        client=client,
-                        run_deps=run_deps,
-                    )
+                    held = await _stopped(deps, sid)
+                    if not held:
+                        await deps.supervisor.start(
+                            session_id=sid,
+                            agent=agent,
+                            input=report.text,
+                            is_new=False,
+                            title_message=None,
+                            autostart=True,  # clientless: consume it unattended
+                            source=source,
+                            client=client,
+                            run_deps=run_deps,
+                        )
+                if held:  # outside the block: _hold takes the chat itself
+                    await _hold(deps, report, sid)
+                    return
                 log.info(
                     "subagent %s: report delivered to idle session %s via a new run",
                     report.id,
@@ -175,6 +188,38 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
         )
 
     return deliver
+
+
+async def _stopped(deps: "RouterDeps", sid: str) -> bool:
+    """Whether the chat's last run was stopped: one still winding down (its
+    record reads "cancelled" only once it has), or the newest record says so."""
+    if deps.supervisor.stopping(sid):
+        return True
+    return (await deps.store.latest_run_statuses([sid])).get(sid) == "cancelled"
+
+
+async def _hold(deps: "RouterDeps", report: SubagentReport, sid: str) -> None:
+    """The chat's last run was stopped: the user said stop, so the report
+    starts nothing. It is kept in the chat as a message — shown now, read by
+    the model with the user's next one."""
+    # After the stopped run's own save, or the report would sit above the
+    # turns it stopped in.
+    await deps.supervisor.settle(sid)
+    async with deps._chat_alive(sid) as alive:
+        if not alive:
+            log.info("subagent %s: session %s is gone; report dropped", report.id, sid)
+            return
+        if (live := deps.supervisor.get(sid)) is not None:
+            # The user spoke again in the meantime: that run reads it.
+            live.inject(report.text)
+            return
+        await deps.session.append(sid, [InputEntry(role="user", content=report.text)])
+    deps.emit("session_appended", SessionAppendedData(session_id=sid))
+    log.info(
+        "subagent %s: session %s was stopped; report kept for its next message",
+        report.id,
+        sid,
+    )
 
 
 def subagent_runner(deps: "RouterDeps") -> RunChildFn:

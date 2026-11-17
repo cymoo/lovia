@@ -207,6 +207,8 @@ def _truncate(s: str, limit: int | None) -> str:
 
 
 def _render(rec: _Record, *, max_chars: int | None) -> str:
+    # The web chat recognises this exact head to draw the report as a card
+    # (web/static/js/subagent-report.js); tests/web pins the two together.
     tag = f"agent={rec.agent_name} elapsed={rec.elapsed()}s"
     if rec.error is None:
         body = _truncate(

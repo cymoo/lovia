@@ -15,6 +15,7 @@ settles it, and a subagent's report waits in its queue.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -61,10 +62,30 @@ class Waiting:
         return cast(str, self.record.session_id)
 
     @property
+    def kind(self) -> str:
+        """``approval`` (a card, its ``approval_required`` frame as
+        :attr:`request`) or ``call`` (a tool that put its answer off — an
+        ``ask_human`` question —, its call as ``{id, name, arguments}``)."""
+        waiting_for = self.record.waiting_for or {}
+        return str(waiting_for.get("kind") or "approval")
+
+    @property
     def request(self) -> JsonObject:
-        """The card the run waits on, as its ``approval_required`` frame."""
+        """What the run waits on: see :attr:`kind`."""
         waiting_for = self.record.waiting_for or {}
         return cast(JsonObject, waiting_for.get("request") or {})
+
+    @property
+    def question(self) -> str | None:
+        """The ``ask_human`` question the run waits on, if that is what it is."""
+        if self.kind != "call":
+            return None
+        try:
+            args = json.loads(str(self.request.get("arguments") or "{}"))
+        except ValueError:
+            return None
+        question = args.get("question") if isinstance(args, dict) else None
+        return question if isinstance(question, str) else None
 
     @property
     def call_id(self) -> str | None:
@@ -111,13 +132,14 @@ async def resume_waiting(
     waiting: Waiting,
     *,
     answer: Approval | None = None,
+    reply: str | None = None,
     message: InjectedContent | None = None,
     request: Request | None = None,
 ) -> RunController | None:
     """Resume ``waiting`` now, with no subscriber (a page attaches with
-    reconnect): ``answer`` settles its card, ``message`` joins what it reads
-    next. None when another request took the run first (it is live then, or
-    stopped)."""
+    reconnect): ``answer`` settles its approval card, ``reply`` answers its
+    ``ask_human`` question, ``message`` joins what it reads next. None when
+    another request took the run first (it is live then, or stopped)."""
     store, sid = deps.store, waiting.session_id
     await _wound_down(deps, sid)
     claimed = await store.claim_waiting(waiting.record.id)
@@ -156,7 +178,7 @@ async def resume_waiting(
         if message is not None:
             inbox.append(message)
         answers = {waiting.call_id: answer} if answer and waiting.call_id else {}
-        return await deps.supervisor.start_resume(
+        ctrl = await deps.supervisor.start_resume(
             session_id=sid,
             agent=agent,
             snapshot=waiting.snapshot,
@@ -169,6 +191,11 @@ async def resume_waiting(
             source=kept.source if kept is not None else waiting.record.source,
             autostart=True,
         )
+        if reply is not None and waiting.question is not None and deps.questions:
+            # Set before the task first runs (no await since it was begun):
+            # the resumed run asks the question again, and is answered.
+            deps.questions.preanswer(sid, waiting.question, reply)
+        return ctrl
     except BaseException:
         # Nothing resumed: the run waits on, as it was.
         await store.unclaim_waiting(waiting.record.id, claimed)

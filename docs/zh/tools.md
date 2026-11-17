@@ -284,6 +284,10 @@ result = await Runner.run(agent, text, checkpoint=checkpoint)  # 续跑
 
 续跑时重新判定：期间权限变成 `allow` 的调用直接执行，变成 `deny` 的被拒绝。
 
+工具也可以用同样的方式把自己的回答延后：`raise RunSuspended("等 CI 跑完")` 让运行停在这个调用上
+（不重试，也不写结果），续跑时再执行一次这个工具。`ask_human` 就是通过 `HumanChannel.suspend`
+这样做的。子运行的暂停（agent-as-tool 的审批）仍算作那个工具的错误。
+
 ## 工具策略
 
 如果要围绕**单次尝试**组合横切行为，如缓存、脱敏、限流、自定义鉴权，可以使用

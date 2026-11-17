@@ -778,9 +778,10 @@ live for an answer).
 
 The default Agent includes the [`ask_human`](built-in-tools.md#ask-a-human)
 Tool. A pending question is stored on the server, so refreshes and reconnects
-do not lose it. After the default ten-minute timeout, the call is cancelled
-and the model continues with a Tool error. This also prevents scheduled and
-background work from occupying a run slot indefinitely.
+do not lose it. Like an approval card, a question nobody answers within a
+minute pauses its run (it frees its slot; the card stays): answer it whenever,
+after a reload or a restart, and the run picks up with your answer. So
+scheduled and background work never occupies a run slot indefinitely.
 
 A custom Agent must share one `HumanChannel` between the Tool and the Web app:
 
@@ -791,7 +792,7 @@ from lovia.web import create_app, serve
 
 channel = HumanChannel()
 agent = Agent(name="bot", model="<model>", tools=[ask_human(channel)])
-serve(create_app(agent, question_channel=channel, question_timeout=600))
+serve(create_app(agent, question_channel=channel, suspend_after=60))
 ```
 
 ## Follow-up suggestions

@@ -92,13 +92,14 @@ class ApprovalResolvedData(TypedDict):
     approved: bool
     # Who decided: the user (from any tab), a stop, or the chat's permission
     # mode, switched while the request waited. (Nobody in time: the run
-    # suspends instead, see approval_suspended.)
+    # suspends instead, see ``suspended``.)
     cause: Literal["user", "cancel", "policy"]
 
 
-class ApprovalSuspendedData(TypedDict):
-    # The call whose card nobody answered in time: the run has stopped at it
-    # and resumes once the card is answered.
+class SuspendedData(TypedDict):
+    # The call the run stopped at to wait for an answer — an approval card or
+    # an ask_human question nobody answered in time, or a tool that put its
+    # answer off. Answering it resumes the run.
     id: str
 
 
@@ -218,9 +219,10 @@ class ApprovalResolved:
 
 
 @dataclass(frozen=True)
-class ApprovalSuspended:
-    """Nobody answered a card in time: the run stops at the call and waits,
-    holding no slot. The card stays open; answering it resumes the run."""
+class Suspended:
+    """The run stopped at a call to wait for its answer (a card nobody
+    answered in time, or a tool that put its answer off), holding no slot.
+    The card stays open; answering it resumes the run."""
 
     call_id: str
 
@@ -249,7 +251,7 @@ LegFrame = (
     | LegTiming
     | ApprovalAsked
     | ApprovalResolved
-    | ApprovalSuspended
+    | Suspended
     | MCPUnavailable
 )
 
@@ -267,7 +269,7 @@ CHAT_EVENTS: dict[str, type] = {
     "todo": TodoData,
     "approval_required": ApprovalRequiredData,
     "approval_resolved": ApprovalResolvedData,
-    "approval_suspended": ApprovalSuspendedData,
+    "suspended": SuspendedData,
     "handoff": HandoffData,
     "turn_started": TurnStartedData,
     "retrying": RetryingData,
@@ -472,8 +474,8 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
             "approval_resolved",
             ApprovalResolvedData(id=ev.call_id, approved=ev.approved, cause=ev.cause),
         )
-    if isinstance(ev, ApprovalSuspended):
-        return frame("approval_suspended", ApprovalSuspendedData(id=ev.call_id))
+    if isinstance(ev, Suspended):
+        return frame("suspended", SuspendedData(id=ev.call_id))
     if isinstance(ev, LegTiming):
         return frame(
             "timing", TimingData(finished_at=ev.finished_at, duration=ev.duration)

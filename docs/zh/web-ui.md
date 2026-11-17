@@ -543,8 +543,9 @@ Agent 会按同样的规则读取主机上这个目录的 [`AGENTS.md`](#项目�
 ## 来自 Agent 的提问
 
 默认 Agent 带有 [`ask_human`](built-in-tools.md#询问人工) Tool。等待中的问题保存在服务端，
-所以刷新或重新连接不会丢失。默认 10 分钟无人回答时，调用会取消，模型收到 Tool 错误后继续；
-这也避免定时任务和后台任务长期占用运行槽位。
+所以刷新或重新连接不会丢失。和审批卡片一样，问题一分钟无人回答时运行会暂停（释放槽位，卡片保留）：
+之后随时回答都可以——刷新后、服务重启后也行——运行带着你的回答接着跑。这样定时任务和后台任务
+不会长期占用运行槽位。
 
 自定义 Agent 需要把同一个 `HumanChannel` 同时交给 Tool 和 Web 应用：
 
@@ -555,7 +556,7 @@ from lovia.web import create_app, serve
 
 channel = HumanChannel()
 agent = Agent(name="bot", model="<model>", tools=[ask_human(channel)])
-serve(create_app(agent, question_channel=channel, question_timeout=600))
+serve(create_app(agent, question_channel=channel, suspend_after=60))
 ```
 
 ## 追问建议

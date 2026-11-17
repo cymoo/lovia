@@ -13,8 +13,11 @@ so "the pending question of session X" is unambiguous — the registry keys by
 
 Questions parked with nobody watching are the same hazard as approvals: a
 clientless (scheduled) run would hold its concurrency slot forever. The same
-remedy applies — ``timeout`` cancels the question after N seconds, the tool
-call fails with a ToolError the model can route around, and the run moves on.
+remedy applies — after ``suspend_after`` seconds the question is suspended
+(:meth:`HumanChannel.suspend`): the run stops at its ``ask_human`` call and
+frees its slot, and the card stays. Answering it then resumes the run, which
+asks the same question again: :meth:`QuestionRegistry.preanswer` has the
+answer ready, so it is answered as it arrives.
 """
 
 from __future__ import annotations
@@ -35,11 +38,16 @@ class QuestionRegistry:
     any parked tool calls so runs wind down) and stops the consumer.
     """
 
-    def __init__(self, channel: HumanChannel, *, timeout: float | None = None) -> None:
+    def __init__(
+        self, channel: HumanChannel, *, suspend_after: float | None = None
+    ) -> None:
         self._channel = channel
-        self._timeout = timeout
+        self._suspend_after = suspend_after
         self._by_session: dict[str, HumanQuestion] = {}
         self._timers: dict[str, asyncio.TimerHandle] = {}
+        # A suspended question's answer, by session, given before its resumed
+        # run asks it again: (question, answer).
+        self._preanswers: dict[str, tuple[str, str]] = {}
         self._task: asyncio.Task[None] | None = None
 
     # -- lifecycle --------------------------------------------------------- #
@@ -70,20 +78,31 @@ class QuestionRegistry:
             # One live run per session and ask_human is a barrier, so a
             # previous entry can only be a resolved leftover — replace it.
             self._drop_timer(sid)
+            ready = self._preanswers.pop(sid, None)
+            if ready is not None and ready[0] == q.question:
+                # The question its run was suspended on, answered meanwhile.
+                self._channel.answer(q.id, ready[1])
+                log.info("question for session %s answered on resume", sid or "<none>")
+                continue
             self._by_session[sid] = q
-            if self._timeout is not None:
+            if self._suspend_after is not None:
                 loop = asyncio.get_running_loop()
                 self._timers[sid] = loop.call_later(
-                    self._timeout, self._expire, sid, q.id
+                    self._suspend_after, self._expire, sid, q.id
                 )
             log.info(
-                "question parked: session=%s options=%d (timeout: %s)",
+                "question parked: session=%s options=%d (%s)",
                 sid or "<none>",
                 len(q.options),
-                "none — waits for an answer"
-                if self._timeout is None
-                else f"auto-cancel after {self._timeout:.0f}s",
+                "waits for an answer"
+                if self._suspend_after is None
+                else f"suspends after {self._suspend_after:.0f}s",
             )
+
+    def preanswer(self, session_id: str, question: str, answer: str) -> None:
+        """Answer ``question`` for the session's resumed run as soon as it
+        asks it again (a suspended question was answered while it waited)."""
+        self._preanswers[session_id] = (question, answer)
 
     # -- resolution -------------------------------------------------------- #
     def pending(self, session_id: str) -> HumanQuestion | None:
@@ -120,21 +139,26 @@ class QuestionRegistry:
             if (pending.session_id or "") == session_id:
                 self._channel.cancel(pending.id, reason)
 
+    def suspend_session(self, session_id: str) -> bool:
+        """Suspend the session's pending question: its run stops at the call
+        and resumes when it is answered. Whether there was one."""
+        q = self.pending(session_id)
+        if q is None:
+            return False
+        self._forget(session_id)
+        self._channel.suspend(q.id)
+        return True
+
     # -- internals --------------------------------------------------------- #
     def _expire(self, session_id: str, question_id: str) -> None:
         q = self._by_session.get(session_id)
         if q is None or q.id != question_id:  # answered or replaced meanwhile
             return
-        self._forget(session_id)
-        if all(p.id != question_id for p in self._channel.pending):
-            # Resolved out-of-band (a custom operator loop answered the
-            # channel directly): only the stale index entry needed dropping.
-            return
-        self._channel.cancel(
-            question_id,
-            f"no answer within {self._timeout:.0f}s — continue without one",
-        )
-        log.info("question for session %s timed out: cancelled", session_id or "<none>")
+        if self.suspend_session(session_id):
+            log.info(
+                "question for session %s unanswered: run suspended",
+                session_id or "<none>",
+            )
 
     def _forget(self, session_id: str) -> None:
         self._by_session.pop(session_id, None)

@@ -199,7 +199,6 @@ def create_app(
     max_background_runs: int = 8,
     suspend_after: float | None = None,
     question_channel: HumanChannel | None = None,
-    question_timeout: float | None = None,
     scheduler_poll: float = 1.0,
     wire_subagents: bool = True,
     ui: bool | ChatUI = True,
@@ -257,9 +256,9 @@ def create_app(
     ``question_channel`` wires an agent's ``ask_human`` tool into the UI: pass
     the same :class:`~lovia.tools.HumanChannel` the tool was built with, and
     pending questions render as interactive cards answered over
-    ``POST /api/chat/answer``. ``question_timeout`` cancels an unanswered
-    question after that many seconds (the tool call fails with an error the
-    model can route around), so a clientless run never parks forever.
+    ``POST /api/chat/answer``. ``suspend_after`` applies to them as to
+    approval cards: an unanswered question suspends its run, and answering
+    it later resumes the run.
 
     ``ui`` controls the bundled single-page chat UI: when ``True`` (default) the
     app also serves ``GET /`` and ``/static``; a :class:`~lovia.web.ChatUI`
@@ -328,7 +327,7 @@ def create_app(
         chat_store = ChatStore.sqlite(_default_db_path(next(iter(agents), "lovia")))
 
     questions = (
-        QuestionRegistry(question_channel, timeout=question_timeout)
+        QuestionRegistry(question_channel, suspend_after=suspend_after)
         if question_channel is not None
         else None
     )

@@ -26,6 +26,8 @@ from lovia import (
 )
 from lovia.approvals import ApprovalChannel
 from lovia.checkpointer import CheckpointOptions
+from lovia.messages import ToolCall
+from lovia.tools import HumanChannel, ask_human
 from lovia.runtime.loop import pending_tool_calls
 from lovia.stores import InMemoryCheckpointer
 from lovia.transcript import ToolResultEntry, TranscriptEntry
@@ -253,3 +255,130 @@ async def test_a_suspension_reads_as_a_denial_to_code_that_only_checks() -> None
     channel.suspend("c1", reason="later")
     approval = fut.result()
     assert approval.approved is False and approval.reason == "later"
+
+
+# ---- a tool puts its own answer off --------------------------------------
+
+
+async def test_a_tool_raising_run_suspended_stops_the_run_at_its_call() -> None:
+    attempts: list[str] = []
+    ready = {"ci": False}
+
+    @tool(retries=3)
+    async def wait_for_ci() -> str:
+        """Wait for the CI."""
+        attempts.append("try")
+        if not ready["ci"]:
+            raise RunSuspended("the CI is still running")
+        return "green"
+
+    cp = InMemoryCheckpointer()
+    agent = Agent(
+        name="t",
+        model=ScriptedProvider([call("wait_for_ci", {}, call_id="c1"), text("done")]),
+        tools=[wait_for_ci],
+    )
+    checkpoint = CheckpointOptions(cp, "r7")
+    with pytest.raises(RunSuspended) as info:
+        await Runner.run(agent, "go", checkpoint=checkpoint)
+    assert info.value.call is not None and info.value.call.id == "c1"
+    assert attempts == ["try"]  # not retried: it is not a failure
+    snap = await cp.load("r7")
+    assert snap is not None and snap.status == "interrupted"
+    assert [c.id for c in pending_tool_calls(snap.entries)] == ["c1"]
+
+    ready["ci"] = True
+    result = await Runner.run(agent, "go", checkpoint=checkpoint)
+    assert result.output == "done"
+    assert _results(result.entries)["c1"] == "green"
+
+
+async def test_a_parallel_call_putting_its_answer_off_lets_siblings_finish() -> None:
+    runs: list[str] = []
+
+    @tool
+    async def slow() -> str:
+        await asyncio.sleep(0.05)
+        runs.append("slow")
+        return "slow done"
+
+    @tool
+    async def later() -> str:
+        raise RunSuspended("ask me later")
+
+    @tool
+    async def unstarted() -> str:
+        runs.append("unstarted")
+        return "ran"
+
+    cp = InMemoryCheckpointer()
+    agent = Agent(
+        name="t",
+        model=ScriptedProvider(
+            [
+                batch(("slow", {}, "c1"), ("later", {}, "c2")),
+                text("done"),
+            ]
+        ),
+        tools=[slow, later, unstarted],
+    )
+    with pytest.raises(RunSuspended) as info:
+        await Runner.run(agent, "go", checkpoint=CheckpointOptions(cp, "r8"))
+    assert info.value.call is not None and info.value.call.id == "c2"
+    assert runs == ["slow"]
+    snap = await cp.load("r8")
+    assert snap is not None
+    assert _results(snap.entries) == {"c1": "slow done"}
+    assert [c.id for c in pending_tool_calls(snap.entries)] == ["c2"]
+
+
+async def test_a_sub_runs_suspension_stays_that_tools_error() -> None:
+    # Raised with another call named (an agent-as-tool's own approval): the
+    # sub-run's affair, so the tool fails and this run goes on.
+    other = ToolCall(id="inner", name="push", arguments="{}")
+
+    @tool
+    async def delegate() -> str:
+        raise RunSuspended("Tool push is waiting for approval", call=other)
+
+    agent = Agent(
+        name="t",
+        model=ScriptedProvider([call("delegate", {}, call_id="c1"), text("ok")]),
+        tools=[delegate],
+    )
+    result = await Runner.run(agent, "go")
+    assert result.output == "ok"
+    assert "waiting for approval" in _results(result.entries)["c1"]
+
+
+async def test_ask_human_suspends_and_a_resume_asks_again() -> None:
+    channel = HumanChannel()
+    answers: dict[str, str] = {}
+
+    async def operator() -> None:
+        async for q in channel.questions():
+            if q.question in answers:
+                channel.answer(q.id, answers.pop(q.question))
+            else:
+                channel.suspend(q.id)  # nobody here to answer now
+
+    consumer = asyncio.create_task(operator())
+    cp = InMemoryCheckpointer()
+    agent = Agent(
+        name="t",
+        model=ScriptedProvider(
+            [call("ask_human", {"question": "Which branch?"}, call_id="q1"), text("ok")]
+        ),
+        tools=[ask_human(channel)],
+    )
+    checkpoint = CheckpointOptions(cp, "r9")
+    try:
+        with pytest.raises(RunSuspended):
+            await Runner.run(agent, "go", checkpoint=checkpoint)
+        answers["Which branch?"] = "main"
+        result = await Runner.run(agent, "go", checkpoint=checkpoint)
+    finally:
+        channel.close()
+        await consumer
+    assert result.output == "ok"
+    assert _results(result.entries)["q1"] == "main"

@@ -108,7 +108,7 @@ async def _session_view(
         runs = segments_runs(await session.segments(session_id))
         runs.append(_in_flight(waiting.snapshot))
         view = view_messages(runs, created_at=created_at, updated_at=updated_at)
-        return view, None, waiting.request
+        return view, None, {**waiting.request, "kind": waiting.kind}
 
     candidate = (
         await store.get_active_run_id(session_id)
@@ -200,10 +200,14 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 turns=0,
                 source=row.source,
                 started_at=row.started_at,
+                # An approval card only: a question or a tool's own wait has
+                # no card a page could answer outside its chat.
                 pending_approval=cast(
                     "dict[str, Any] | None",
                     (row.waiting_for or {}).get("request") or None,
-                ),
+                )
+                if (row.waiting_for or {}).get("kind", "approval") == "approval"
+                else None,
             )
             for row in await store.waiting_runs()
             if row.session_id is not None and row.session_id not in busy

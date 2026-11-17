@@ -338,7 +338,9 @@ class ToolCallProcessor:
         only a call whose task is canceled mid-flight (sibling cancellation
         when the batch aborts) appends nothing — it stays a pending call that
         a resume re-executes. Re-raises :class:`RunCancelled` (a run-global
-        signal); converts every other failure into an error result.
+        signal) and the tool's own :class:`RunSuspended` (it put its answer
+        off: the call stays pending too); converts every other failure into
+        an error result.
 
         May run concurrently with other ``execute`` calls of the same turn:
         it only appends to ``state.transcript`` (order-insensitive — results
@@ -383,6 +385,14 @@ class ToolCallProcessor:
             # execution.
             raise
         except Exception as exc:
+            if isinstance(exc, RunSuspended) and exc.call in (None, call):
+                # The tool put its answer off (ask_human, say): the run stops
+                # at this call, which keeps no result for a resume to run it
+                # again. (A sub-run's own suspension — an agent-as-tool's
+                # approval — names its own call: that run's affair, reported
+                # below like its other failures.)
+                exc.call = call
+                raise
             # Libraries do raise message-less exceptions (a bare ConnectError
             # from a dropped connection); the class name beats "Tool error: ".
             result = f"Tool error: {str(exc) or type(exc).__name__}"

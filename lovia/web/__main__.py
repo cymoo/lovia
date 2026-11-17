@@ -44,7 +44,7 @@ from fastapi import FastAPI  # after .app: its import names a missing [web] extr
 from .api import RouterDeps
 from .auth import is_loopback
 from .builder import Deployment
-from .default import ANSWER_TIMEOUT, SUSPEND_AFTER, default_app
+from .default import SUSPEND_AFTER, default_app
 
 log = logging.getLogger("lovia.web.cli")
 
@@ -586,7 +586,6 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     token=token or _generated_token(host),
                     followups=True,
                     suspend_after=SUSPEND_AFTER,
-                    question_timeout=ANSWER_TIMEOUT,
                 )
             for custom_agent in custom_agents:
                 _warn_if_exposed(host, custom_agent.workspace)

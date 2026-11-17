@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 
 from lovia import Agent
-from lovia.exceptions import ToolError
+from lovia.exceptions import RunSuspended, ToolError
 from lovia.plugins import Subagents
 from lovia.tools.human import HumanChannel
 from lovia.web import QuestionRegistry, RouterDeps, build_api_router, create_app
@@ -23,9 +23,9 @@ from ..scripted_provider import ScriptedProvider
 
 # ----------------------------------------------------------- registry unit -
 async def _registry(
-    channel: HumanChannel, *, timeout: float | None = None
+    channel: HumanChannel, *, suspend_after: float | None = None
 ) -> QuestionRegistry:
-    registry = QuestionRegistry(channel, timeout=timeout)
+    registry = QuestionRegistry(channel, suspend_after=suspend_after)
     registry.start()
     await asyncio.sleep(0)  # let the consumer task pick up the feed
     return registry
@@ -62,21 +62,38 @@ async def test_registry_prunes_entries_resolved_behind_its_back() -> None:
     await registry.aclose()
 
 
-async def test_registry_timeout_cancels_the_question() -> None:
+async def test_registry_deadline_suspends_the_question() -> None:
     channel = HumanChannel()
-    registry = await _registry(channel, timeout=0.05)
+    registry = await _registry(channel, suspend_after=0.05)
     _, fut = channel._new_question("anyone?", session_id="s1")
     await asyncio.sleep(0)
 
-    with pytest.raises(ToolError, match="no answer within"):
+    with pytest.raises(RunSuspended):
         await asyncio.wait_for(fut, timeout=1)
     assert registry.pending("s1") is None
     await registry.aclose()
 
 
+async def test_registry_answers_a_resumed_question_from_its_preanswer() -> None:
+    channel = HumanChannel()
+    registry = await _registry(channel)
+    registry.preanswer("s1", "which branch?", "main")
+    _, other = channel._new_question("something else?", session_id="s2")
+    _, fut = channel._new_question("which branch?", session_id="s1")
+    await asyncio.sleep(0)
+    assert await asyncio.wait_for(fut, timeout=1) == "main"
+    assert registry.pending("s1") is None
+    assert registry.pending("s2") is not None  # another session's: still asked
+    # Used once: the same question asked again waits for a person.
+    _, again = channel._new_question("which branch?", session_id="s1")
+    await asyncio.sleep(0)
+    assert not again.done() and registry.pending("s1") is not None
+    await registry.aclose()
+
+
 async def test_registry_answer_beats_the_timer() -> None:
     channel = HumanChannel()
-    registry = await _registry(channel, timeout=5.0)
+    registry = await _registry(channel, suspend_after=5.0)
     _, fut = channel._new_question("quick!", session_id="s1")
     await asyncio.sleep(0)
 
@@ -158,7 +175,7 @@ async def test_answer_endpoint_resolves_pending_question() -> None:
         ok = await ac.post(
             "/api/chat/answer", json={"session_id": "s1", "answer": "that one"}
         )
-        assert ok.status_code == 200 and ok.json() == {"ok": True}
+        assert ok.status_code == 200 and ok.json() == {"ok": True, "resumed": False}
         assert await asyncio.wait_for(fut, timeout=1) == "that one"
 
         # Nothing pending anymore → 404 (the card shows as expired).

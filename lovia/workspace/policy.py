@@ -306,9 +306,9 @@ _NOT_A_PROGRAM = _THIN_WRAPPERS | {"timeout", "for", "case", "select"}
 # * a word that looks like an output option — the command may write wherever
 #   it points (``sort -o x``, ``-ox``, ``-ro x``, ``'-ox'``, ``--output=x``;
 #   a table of spellings is only ever one short, so: a long option starting
-#   ``--out`` / ``--log-file`` / ``--junit``, or a short-option group with an
-#   ``o`` first, last or in at most three letters — see :func:`_short_output`)
-#   — unless it points at a pseudo-device (``curl -o /dev/null``);
+#   ``--out`` / ``--log-file`` / ``--junit``, or a single-dash word with an
+#   ``o`` anywhere in it) — unless it points at a pseudo-device (``curl -o
+#   /dev/null``);
 # * a glob, variable or substitution — the shell turns it into paths the
 #   guard never sees (``cat *`` reads ``id_rsa``; ``cat $F``; ``$(…)``), or
 #   into a program it never sees (``$CMD``, ``./tool*``), which a grant for
@@ -427,40 +427,26 @@ def _uncertain_word(
 
 def _output_target(word: str, following: list[str]) -> str | None:
     """Where ``word`` would write if it is an output option, or None if it
-    does not look like one. ``""`` when it would but names nothing."""
+    does not look like one; ``""`` when it would but names nothing.
+
+    Any single-dash word with an ``o`` counts — where the option letters end
+    and a glued-on file name starts is not lexical (``-foid_rsa``), so
+    ``-connect`` counts too. Only a word with one ``o`` has one reading of
+    its target; any other is the word itself, never a stream."""
     name, eq, value = word.partition("=")
     if name.startswith("--"):
         if not name.startswith(_OUTPUT_LIKE):
             return None
         rest = ""
-    elif name.startswith("-"):
-        match = _LETTERS.match(name, 1)
-        letters = match.group() if match else ""
-        if not _short_output(letters):
-            return None
-        rest = name[2 + letters.index("o") :]
+    elif name.startswith("-") and "o" in name:
+        if name.count("o") > 1:
+            return word
+        rest = name[name.index("o") + 1 :]
     else:
         return None
     if eq:
         return value
     return rest or (following[0] if following else "")
-
-
-# A single-dash word's option letters; what follows the first non-letter is
-# a value glued on (`-xo.git/config`, `-o/dev/null`).
-_LETTERS = re.compile(r"[A-Za-z]*")
-
-
-def _short_output(letters: str) -> bool:
-    """Whether a single-dash group of option letters may hold an ``-o``
-    taking a value: ``o`` first (``-o``, ``-ox``), last (``-sLo x``,
-    ``-xo.git/config``), or in a group too short to be a long option
-    (``-rox``). Not ``-connect`` or ``-noout`` (openssl). An all-letter miss
-    (``-xofile``) names a bare file in the working directory; every
-    protected path holds a ``.``, ``/`` or ``~``, which ends the letters."""
-    if "o" not in letters:
-        return False
-    return letters[0] == "o" or letters[-1] == "o" or len(letters) <= 3
 
 
 def _words(segment: str) -> list[str]:

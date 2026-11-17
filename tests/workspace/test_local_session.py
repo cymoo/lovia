@@ -792,6 +792,11 @@ async def test_coding_reads_outside_but_an_allowed_command_naming_it_asks(
     assert session.decide_command(f"curl -o /dev/null {outside}") == Verdict(
         "ask", "", ("shell:curl",)
     )
+    # The working directory is where a bare `pytest` / `ruff format` writes.
+    for cmd in ("pytest", "pytest --cache-clear", "ruff format"):
+        verdict = session.decide_command(cmd, cwd=str(outside))
+        assert verdict.action == "ask" and verdict.scopes == (f"read:{where}",), cmd
+    assert session.decide_command("pytest").action == "allow"
     # Streams are no paths; trusted writes outside anyway.
     assert session.decide_command("ls 2>/dev/null").action == "allow"
     trusted = await _session(

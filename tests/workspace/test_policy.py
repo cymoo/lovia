@@ -400,18 +400,26 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
         verdict = policy.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scopes == (), cmd
         assert "output option" in verdict.reason, cmd
-    # Not an output option: `--oneline`, anything after a bare `--`, a
-    # single-dash long option with an `o` inside (`-connect`, `-noout`), or
-    # one aimed at a stream.
+    # Not an output option: `--oneline`, anything after a bare `--`, or one
+    # aimed at a stream.
     for cmd in (
         "git log --oneline",
         "ls README -- -o",
-        "echo -connect host:443 -noout -follow",
         "ls -o /dev/null",
         "ls -o/dev/null",
         "tree --output=/dev/null",
     ):
         assert policy.decide_command(cmd).action == "allow", cmd
+    # Where option letters end and a glued file name starts is not lexical:
+    # any `o` counts (`-connect` with it), and a stream exempts only a word
+    # with one reading of its target.
+    for cmd in (
+        "tree -foid_rsa",
+        "tree -foout.pem",
+        "echo -connect host:443",
+        "ls -oo /dev/null",
+    ):
+        assert policy.decide_command(cmd).action == "ask", cmd
     # A deny still bites through it.
     assert policy.decide_command("git push --force -o x").action == "deny"
     # Words as the shell sees them: a `#` inside a word is not a comment, so
@@ -594,6 +602,8 @@ def test_recursive_readers_are_not_allowed_outright() -> None:
         "x#y -o {p}",  # a `#` inside a word is not a comment
         "-o/dev/fd/../../{p}",  # a stream only when spelled plainly
         "-xo /dev/fd/../{p}",
+        "-fo{p}",  # the file's own letters read as option letters
+        "-fo/dev/null -o{p}",
     ],
 )
 @pytest.mark.parametrize("target", [".git/config", "/etc/hosts", "~/.ssh/config"])

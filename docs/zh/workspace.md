@@ -94,7 +94,8 @@ ACL 有三个决策值，分别作用于两个执行环节：
 路径守卫能逐个判定的那种——所以三种情况会把一段封顶在 ask，不管它命中了什么规则：段首的 `VAR=value`
 或薄包装（`command`、`exec`、`env`、`nice`、`nohup`、`time`、`timeout N`——`PATH=…` 会改变实际运行的程序）；看起来像输出
 选项的参数（`-o …`、`-oPATH`、`-ro`、`-sLo …`、`--output=…`、`--log-file`、`--junitxml`——命令可能写到它指向的
-任何地方；指向 `/dev/null` 的不算，openssl 的 `-connect` 这类单横线长选项也不算）；以及会被 shell 展开的参数
+任何地方；带 `o` 的单横线词都算，因为选项字母在哪里结束、粘连的文件名从哪里开始无法从词法上判断（`-foid_rsa`）；
+指向 `/dev/null` 的不算）；以及会被 shell 展开的参数
 （`cat *`、`cat $F`、`$(…)`——守卫看不到它展开成的路径）。allow 降为 ask 并说明原因，deny 照样生效
 （`env git push --force`）；这种 ask 不可记忆。本来就要问的命令只是不再提供“总是允许”，卡片上不写原因——
 守卫的内部记账不是需要人权衡的东西。用引号挡住 shell 的词（`find . -name '*.py'`、`echo "done?"`）和其他字面参数一样，

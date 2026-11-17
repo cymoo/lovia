@@ -132,8 +132,9 @@ three things cap a segment at `ask` whatever rule it matched: a leading
 `VAR=value` or thin wrapper (`command`, `exec`, `env`, `nice`, `nohup`,
 `time`, `timeout N` — `PATH=…` changes which program runs); an argument that looks like an output
 option (`-o …`, `-oPATH`, `-ro`, `-sLo …`, `--output=…`, `--log-file`,
-`--junitxml` — the command may write wherever it points; not one aimed at
-`/dev/null`, nor a single-dash long option like openssl's `-connect`); and
+`--junitxml` — any single-dash word with an `o`, since where option letters
+end and a glued file name starts is not lexical (`-foid_rsa`); the command
+may write wherever it points; not one aimed at `/dev/null`); and
 an argument the shell expands (`cat *`, `cat $F`, `$(…)` — the guard never
 sees the paths it becomes). An allow becomes an ask, saying why, a deny
 still bites (`env git push --force`); the ask is not grantable. A command

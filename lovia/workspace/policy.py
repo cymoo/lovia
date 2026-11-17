@@ -42,6 +42,7 @@ from typing import Any, Callable, Literal
 
 from ..approvals import Decision, Verdict, as_verdict, merge_verdicts
 from . import paths
+from .paths import is_pseudo_device
 
 FileOp = Literal["read", "write"]
 
@@ -305,15 +306,23 @@ _NOT_A_PROGRAM = _THIN_WRAPPERS | {"timeout", "for", "case", "select"}
 # * a word that looks like an output option — the command may write wherever
 #   it points (``sort -o x``, ``-ox``, ``-ro x``, ``'-ox'``, ``--output=x``;
 #   a table of spellings is only ever one short, so: a long option starting
-#   ``--out`` / ``--log-file`` / ``--junit``, or a short-option group with an
-#   ``o`` anywhere in it);
+#   ``--out`` / ``--log-file`` / ``--junit``, or a single-dash word with an
+#   ``o`` anywhere in it) — unless it points at a pseudo-device (``curl -o
+#   /dev/null``);
 # * a glob, variable or substitution — the shell turns it into paths the
 #   guard never sees (``cat *`` reads ``id_rsa``; ``cat $F``; ``$(…)``), or
 #   into a program it never sees (``$CMD``, ``./tool*``), which a grant for
 #   the word as spelled would then cover. Quoted against the shell, the same
-#   characters are literal (``find . -name '*.py'``, ``awk '{print $2}'``):
-#   no allow rule covers them still (a program may glob them itself), but a
-#   gray command keeps the grant the person may give for it.
+#   characters are literal (``find . -name '*.py'``, ``awk '{print $2}'``,
+#   ``echo "done?"``) and the word is an argument like any other. A program
+#   that globs a quoted pattern itself still names its directory to the path
+#   guard (``'~/.ssh/*'``).
+#
+# Each check is a heuristic with false hits, so its reason is shown only when
+# it changes the outcome — an allowed command that now asks. A command that
+# asks anyway just loses its "always allow" offer, silently: the card's
+# reason line is for what the person should weigh, not for the guard's
+# bookkeeping.
 _OUTPUT_LIKE = ("--out", "--log-file", "--junit")
 # cmd.exe expands `%VAR%` and strips the `^` escape (`type .e^nv` is `.env`).
 _EXPANSION_CHARS = frozenset("*?[{$`" + ("%^" if os.name == "nt" else ""))
@@ -383,12 +392,6 @@ def _segments(command: str, reading: str | None = None) -> list[tuple[str, str]]
     return [(seg, read) for seg, read in pairs if seg]
 
 
-# Why a grant is not on offer for a line the mask cannot read.
-_NOT_READ = (
-    "uses shell syntax the guard does not read (a here-document, comment or "
-    "substitution): approve it once"
-)
-
 # Characters whose literal use matters to the split or to expansion.
 _SEPARATORS = frozenset("|&;\n\r")
 _LITERAL_TELLING = _EXPANSION_CHARS | _SEPARATORS
@@ -412,15 +415,38 @@ def _uncertain_word(
     for word, judged in zip(segment, seen):
         if any(c in judged for c in _EXPANSION_CHARS):
             return f"'{word}' is expanded by the shell"
-    for word in command[1:]:
+    args = command[1:]
+    for i, word in enumerate(args):
         if word == "--":
             break  # ends options
-        if word.startswith("--"):
-            if word.startswith(_OUTPUT_LIKE):
-                return f"'{word}' looks like an output option"
-        elif word.startswith("-") and "o" in word.partition("=")[0]:
-            return f"'{word}' looks like an output option"
+        target = _output_target(word, args[i + 1 : i + 2])
+        if target is not None and not is_pseudo_device(target):
+            return f"'{word}' may be an output option"
     return None
+
+
+def _output_target(word: str, following: list[str]) -> str | None:
+    """Where ``word`` would write if it is an output option, or None if it
+    does not look like one; ``""`` when it would but names nothing.
+
+    Any single-dash word with an ``o`` counts — where the option letters end
+    and a glued-on file name starts is not lexical (``-foid_rsa``), so
+    ``-connect`` counts too. Only a word with one ``o`` has one reading of
+    its target; any other is the word itself, never a stream."""
+    name, eq, value = word.partition("=")
+    if name.startswith("--"):
+        if not name.startswith(_OUTPUT_LIKE):
+            return None
+        rest = ""
+    elif name.startswith("-") and "o" in name:
+        if name.count("o") > 1:
+            return word
+        rest = name[name.index("o") + 1 :]
+    else:
+        return None
+    if eq:
+        return value
+    return rest or (following[0] if following else "")
 
 
 def _words(segment: str) -> list[str]:
@@ -658,9 +684,13 @@ class WorkspacePolicy:
         baseline: tuple["PathRule | CommandRule", ...] | None = None,
         shell_default: Decision = "ask",
     ) -> "WorkspacePolicy":
-        """Full workspace access; anything outside asks for approval or is denied.
+        """Full workspace access; reads anywhere, writes outside denied.
 
-        Reads outside the root require approval, writes outside are denied.
+        Reads outside the root are allowed: what is worth protecting there —
+        credential stores, ``.env`` files — is the baseline's to deny or ask,
+        whatever the preset, and a question for every config file a task
+        looks at (``/etc/nginx``, a sibling repository) only trains people
+        to click Approve. Writes outside are denied.
         Shell: the hard-to-undo commands ask with a reason (``IRREVERSIBLE``),
         everything else follows ``shell_default`` — ``ask`` unless you choose
         the kits-style ``"allow"``. The preset vouches for *no* command: the
@@ -673,7 +703,7 @@ class WorkspacePolicy:
 
         return cls(
             write="allow",
-            read_outside="ask",
+            read_outside="allow",
             write_outside="deny",
             path_rules=path_rules,
             denied_paths=denied_paths,
@@ -736,6 +766,27 @@ class WorkspacePolicy:
         # Normal verdict first: on a tie its reason (the deployer's own rule)
         # is the one worth repeating.
         return merge_verdicts(verdict, base) if base is not None else verdict
+
+    def decide_argument(self, *, rel: str | None, abs_posix: str) -> Verdict:
+        """The verdict for a path a shell command names as an argument.
+
+        The ACL reads it as a read, but the program may write it (``ruff
+        format ../repo``, ``pytest --basetemp=/x``) and the guard cannot tell
+        which. So where outside reads are allowed by default but outside
+        writes are not (``coding``), an outside argument asks — the session
+        asks this only of a command that would otherwise run unasked."""
+        verdict = self.decide_path(rel=rel, abs_posix=abs_posix, op="read")
+        if (
+            rel is None
+            and verdict.action == "allow"
+            and self.write_outside != "allow"
+            and not self.rule_bound(rel=rel, abs_posix=abs_posix, op="read")
+        ):
+            where = _dir_of(None, abs_posix)
+            return Verdict(
+                "ask", f"'{where}' is outside the workspace.", (f"read:{where}",)
+            )
+        return verdict
 
     def rule_bound(self, *, rel: str | None, abs_posix: str, op: FileOp) -> bool:
         """Whether a *rule* (``denied_paths``, ``path_rules`` or the baseline)
@@ -839,8 +890,9 @@ class WorkspacePolicy:
         verdict = merge_verdicts(*(self._decide_segment(s, m) for s, m in segments))
         if masked is None and verdict.scopes:
             # A line read as spelled has its pieces judged, but a piece is no
-            # program to remember: approve it once.
-            verdict = Verdict("ask", verdict.reason or _NOT_READ)
+            # program to remember: approve it once (silently, as for any
+            # other withheld grant).
+            verdict = Verdict("ask", verdict.reason)
         # What the lexical cut used to refuse stays refused — a user's deny
         # rule, the baseline, a decider, over every spelled-out piece
         # (`bash -c 'x; rm -rf /; true'`). It only tightens: none of its asks
@@ -859,13 +911,8 @@ class WorkspacePolicy:
     def _decide_segment(self, segment: str, masked: str) -> Verdict:
         lexed = _words(segment)
         words, stripped = _strip_wrappers(lexed)
-        # Two readings of the words. As spelled, any expansion character caps
-        # an allow rule: a rule vouches in advance for literal arguments, and
-        # a program may glob a quoted '*' itself (git pathspecs). As the shell
-        # reads them, a quoted literal is an argument like any other, so a
-        # gray ask keeps the grant the person can choose to give.
-        uncertain = _uncertain_word(lexed, words)
-        expands = _uncertain_word(lexed, words, _words(masked))
+        # The words as the shell reads them: a quoted '*' is literal.
+        uncertain = _uncertain_word(lexed, words, _words(masked))
         if not words:
             # Syntax alone (`fi`, `done`, `}`) runs nothing — unless the
             # shell expands something in it.
@@ -879,16 +926,11 @@ class WorkspacePolicy:
             # choice not to judge commands — and is left alone.
             why = f"'{' '.join(stripped)}' wraps the command" if stripped else uncertain
             if by_rule and verdict.action == "allow":
-                verdict = Verdict(
-                    "ask", f"{why}; allow rules cover literal arguments only"
-                )
-            elif verdict.action == "ask" and (stripped or expands):
-                # Without a reason of its own, the ask says why no "always
-                # allow" is on offer.
-                why = (
-                    f"'{' '.join(stripped)}' wraps the command" if stripped else expands
-                )
-                verdict = Verdict("ask", verdict.reason or str(why))
+                verdict = Verdict("ask", f"{why}, so it needs approval")
+            elif verdict.action == "ask":
+                # It asked anyway: only the "always allow" offer goes, and
+                # the guard's why stays off the card (see _OUTPUT_LIKE).
+                verdict = Verdict("ask", verdict.reason)
         base = self._command_rule_verdict(self._baseline_commands, words, every=True)
         return merge_verdicts(verdict, base) if base is not None else verdict
 

@@ -222,17 +222,16 @@ PROTECTED_CONFIG: tuple[PathRule, ...] = tuple(
 
 ENV_FILES: tuple[PathRule, ...] = (
     PathRule(
-        "**/.env*",
+        ".env*",
         "ask",
         ops=frozenset({"read"}),
         reason="Environment files usually hold secrets.",
     ),
 )
-"""Reading a ``.env`` inside the workspace asks (and bulk walks skip it).
-Part of the baseline like every other protection, so it can only tighten:
-reads only, workspace-relative (``**/`` never reaches outside the root).
-To let an agent read them: ``baseline=DANGEROUS_COMMANDS + CREDENTIAL_PATHS
-+ PROTECTED_CONFIG``."""
+"""Reading a ``.env`` asks, inside the workspace or out (and bulk walks skip
+it). Part of the baseline like every other protection, so it can only
+tighten: reads only. To let an agent read them: ``baseline=DANGEROUS_COMMANDS
++ CREDENTIAL_PATHS + PROTECTED_CONFIG``."""
 
 DEFAULT_BASELINE: tuple[PathRule | CommandRule, ...] = (
     DANGEROUS_COMMANDS + CREDENTIAL_PATHS + PROTECTED_CONFIG + ENV_FILES

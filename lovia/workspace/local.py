@@ -605,18 +605,22 @@ class LocalWorkspaceSession:
         verdict = self.policy.decide_command(command)
         if verdict.action == "deny":
             return verdict
+        # A command that asks anyway gains nothing from an argument's ask but
+        # a reason the person need not weigh; one that would run unasked may
+        # be writing where it reads (see WorkspacePolicy.decide_argument) —
+        # the working directory included: a bare `pytest` or `ruff format`
+        # writes there.
+        allowed = verdict.action == "allow"
+
+        def judge(rp: ResolvedPath, op: FileOp) -> Verdict:
+            if op == "read" and allowed:
+                return self.policy.decide_argument(rel=rp.rel, abs_posix=rp.abs_posix)
+            return self.policy.decide_path(rel=rp.rel, abs_posix=rp.abs_posix, op=op)
+
         cwd_rp = resolve_path(self._root, cwd)
-        verdicts: list[Verdict] = [
-            verdict,
-            self.policy.decide_path(
-                rel=cwd_rp.rel, abs_posix=cwd_rp.abs_posix, op="read"
-            ),
-        ]
+        verdicts: list[Verdict] = [verdict, judge(cwd_rp, "read")]
         for op, token in extract_path_claims(command):
-            rp = resolve_path(self._root, token, base=cwd_rp.abs)
-            verdicts.append(
-                self.policy.decide_path(rel=rp.rel, abs_posix=rp.abs_posix, op=op)
-            )
+            verdicts.append(judge(resolve_path(self._root, token, base=cwd_rp.abs), op))
         return merge_verdicts(*verdicts)
 
     # ------------------------------------------------------------------ #

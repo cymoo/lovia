@@ -132,15 +132,19 @@ def test_deny_rule_verdict_carries_reason_and_no_scope() -> None:
 def test_gray_command_asks_with_the_command_word_as_scope() -> None:
     # The grant on offer is the command word, as shown on the card, and no
     # reason — nothing stands out; an argument the guard cannot vouch for
-    # withholds the grant and says why.
+    # withholds the grant, silently: it asked anyway, so the guard's why is
+    # not something the person needs to weigh.
     policy = WorkspacePolicy(shell_default="ask")
     verdict = policy.decide_command("make deploy")
     assert verdict == Verdict("ask", "", ("shell:make",))
-    star = policy.decide_command("make *")
-    assert star.scopes == () and "expanded by the shell" in star.reason
-    wrapped = policy.decide_command("FOO=1 make")
-    assert wrapped.scopes == () and "wraps the command" in wrapped.reason
-    assert policy.decide_command("make -o x").scopes == ()
+    for cmd in ("make *", "FOO=1 make", "make -o x"):
+        assert policy.decide_command(cmd) == Verdict("ask", ""), cmd
+    # A reason of the rule's own stays.
+    ruled = WorkspacePolicy(command_rules=(CommandRule("make", "ask", "Builds."),))
+    assert ruled.decide_command("make *") == Verdict("ask", "Builds.")
+    # An output option aimed at a stream writes no file: the grant stays.
+    for cmd in ("make -o /dev/null", "make --output=/dev/stdout", "make -so /dev/null"):
+        assert policy.decide_command(cmd).scopes == ("shell:make",), cmd
     # Nor the command word itself, when the shell decides what it runs...
     for cmd in ("$CMD build", "./tool* x", "`which make` x"):
         assert policy.decide_command(cmd).scopes == (), cmd
@@ -396,9 +400,26 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
         verdict = policy.decide_command(cmd)
         assert verdict.action == "ask" and verdict.scopes == (), cmd
         assert "output option" in verdict.reason, cmd
-    # Not an output option: `--oneline`, or anything after a bare `--`.
-    assert policy.decide_command("git log --oneline").action == "allow"
-    assert policy.decide_command("ls README -- -o").action == "allow"
+    # Not an output option: `--oneline`, anything after a bare `--`, or one
+    # aimed at a stream.
+    for cmd in (
+        "git log --oneline",
+        "ls README -- -o",
+        "ls -o /dev/null",
+        "ls -o/dev/null",
+        "tree --output=/dev/null",
+    ):
+        assert policy.decide_command(cmd).action == "allow", cmd
+    # Where option letters end and a glued file name starts is not lexical:
+    # any `o` counts (`-connect` with it), and a stream exempts only a word
+    # with one reading of its target.
+    for cmd in (
+        "tree -foid_rsa",
+        "tree -foout.pem",
+        "echo -connect host:443",
+        "ls -oo /dev/null",
+    ):
+        assert policy.decide_command(cmd).action == "ask", cmd
     # A deny still bites through it.
     assert policy.decide_command("git push --force -o x").action == "deny"
     # Words as the shell sees them: a `#` inside a word is not a comment, so
@@ -457,14 +478,12 @@ def test_quoted_against_the_shell_a_word_is_literal() -> None:
         "find . -name '*.py' # all of them",
         "rg 'a' \"${X:-'*'}\"",
     ):
-        verdict = gray.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scopes == (), cmd
-        assert "expanded by the shell" in verdict.reason, cmd
-    # An allow rule still covers literal arguments only, quoted ones included
-    # (a program may glob '*' itself): those ask, as before.
+        assert gray.decide_command(cmd) == Verdict("ask", ""), cmd
+    # An allow rule covers a quoted literal like any other argument.
     allowed = _opted_in()
-    for cmd in ("echo '$HOME'", 'ls "*.py"', r"ls \*.py"):
-        assert allowed.decide_command(cmd).action == "ask", cmd
+    for cmd in ("echo '$HOME'", 'ls "*.py"', r"ls \*.py", 'echo "--- done? ---"'):
+        assert allowed.decide_command(cmd).action == "allow", cmd
+    assert allowed.decide_command('echo "$HOME"').action == "ask"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="cmd.exe quotes differently")
@@ -490,9 +509,7 @@ def test_a_command_ends_where_the_shell_ends_it() -> None:
         "cat > f.py <<'EOF'\nprint(1)\nEOF",
         "make # it's done",
     ):
-        verdict = gray.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scopes == (), cmd
-        assert "approve it once" in verdict.reason, cmd
+        assert gray.decide_command(cmd) == Verdict("ask", ""), cmd
     # Text an allowed command prints is only text.
     assert _opted_in().decide_command("echo 'a; rm x'").action == "allow"
     # A line continued with a backslash is one command, not one per line.
@@ -583,6 +600,10 @@ def test_recursive_readers_are_not_allowed_outright() -> None:
         "--log-file={p}",
         "--junitxml={p}",
         "x#y -o {p}",  # a `#` inside a word is not a comment
+        "-o/dev/fd/../../{p}",  # a stream only when spelled plainly
+        "-xo /dev/fd/../{p}",
+        "-fo{p}",  # the file's own letters read as option letters
+        "-fo/dev/null -o{p}",
     ],
 )
 @pytest.mark.parametrize("target", [".git/config", "/etc/hosts", "~/.ssh/config"])
@@ -600,7 +621,7 @@ def test_no_allowed_command_writes_a_protected_path_through_an_option(
         assert policy.decide_command(cmd).action != "allow", cmd
 
 
-@pytest.mark.parametrize("argument", ["*", "'*'", "$F", "$(ls)", "id_rs?", "~/{a,b}"])
+@pytest.mark.parametrize("argument", ["*", "$F", "$(ls)", "id_rs?", "~/{a,b}", '"$F"'])
 def test_no_allowed_command_reads_through_an_expansion(argument: str) -> None:
     # The read-side twin of the output-option invariant: for every command
     # the presets allow outright, an argument the shell expands must not
@@ -744,7 +765,7 @@ def test_coding_preset_vouches_for_no_command_and_takes_bundles_opt_in() -> None
     from lovia.workspace import CREDENTIAL_PATHS, DANGEROUS_COMMANDS, PROTECTED_CONFIG
 
     assert policy.decide_path(rel=".env", abs_posix="/ws/.env", op="read").scopes == (
-        "read:**/.env*",
+        "read:.env*",
     )
     not_lifted = WorkspacePolicy.coding(path_rules=(PathRule("**/.env*", "allow"),))
     assert (
@@ -760,10 +781,10 @@ def test_coding_preset_vouches_for_no_command_and_takes_bundles_opt_in() -> None
     )
 
 
-def test_env_files_rule_gates_inside_reads_only() -> None:
-    # The preset rule is about reading secrets *inside* the workspace; writes
-    # and outside reads keep following the mode, so it must not lift
-    # readonly's denies to an ask that a direct session call lets through.
+def test_env_files_rule_gates_reads_only() -> None:
+    # The baseline rule is about reading secrets, inside the workspace or
+    # out; writes keep following the mode, and it must not lift readonly's
+    # denies to an ask that a direct session call lets through.
     ro = WorkspacePolicy.readonly()
     assert ro.decide_path(rel=".env", abs_posix="/ws/.env", op="write").action == "deny"
     assert ro.decide_path(rel=".env", abs_posix="/ws/.env", op="read").action == "ask"
@@ -776,12 +797,13 @@ def test_env_files_rule_gates_inside_reads_only() -> None:
     assert (
         ro.decide_path(rel=None, abs_posix="/srv/app/.env", op="read").action == "deny"
     )
-    # Outside, coding falls to its own default (ask with the directory scope).
-    outside = WorkspacePolicy.coding().decide_path(
-        rel=None, abs_posix="/srv/app/.env", op="read"
-    )
-    assert outside.action == "ask" and outside.scopes == ("read:/srv/app",)
+    # Outside, where coding reads freely, a .env still asks; trusted too.
     coding = WorkspacePolicy.coding()
+    for policy in (coding, WorkspacePolicy.trusted()):
+        outside = policy.decide_path(rel=None, abs_posix="/srv/app/.env", op="read")
+        assert outside.action == "ask" and outside.scopes == ("read:.env*",)
+        plain = policy.decide_path(rel=None, abs_posix="/srv/app/a.conf", op="read")
+        assert plain.action == "allow"
     assert (
         coding.decide_path(rel=None, abs_posix="/srv/app/.env", op="write").action
         == "deny"
@@ -1097,7 +1119,7 @@ def test_presets() -> None:
 
     coding = WorkspacePolicy.coding(denied_paths=(".git/**",))
     assert coding.write == "allow" and coding.shell_default == "ask"
-    assert coding.read_outside == "ask" and coding.write_outside == "deny"
+    assert coding.read_outside == "allow" and coding.write_outside == "deny"
     assert (
         coding.decide_path(
             rel=".git/config", abs_posix="/ws/.git/config", op="read"

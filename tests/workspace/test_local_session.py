@@ -11,10 +11,12 @@ import shutil
 import signal
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from lovia.approvals import Verdict
 from lovia.exceptions import UserError
 from lovia.workspace import local as local_module
 from lovia.workspace import (
@@ -32,6 +34,11 @@ from lovia.workspace import (
 
 async def _session(tmp_path, **kwargs) -> LocalWorkspaceSession:
     return LocalWorkspaceSession(root=str(tmp_path), **kwargs)
+
+
+def _asks_outside(**kwargs) -> WorkspacePolicy:
+    """coding, but asking before reads outside the root (it allows them)."""
+    return replace(WorkspacePolicy.coding(**kwargs), read_outside="ask")
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +91,8 @@ async def test_symlink_is_judged_by_its_target(tmp_path) -> None:
 
 
 async def test_session_decide_path_reports_ask_for_outside_reads(tmp_path) -> None:
-    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    assert WorkspacePolicy.coding().read_outside == "allow"
+    session = await _session(tmp_path, policy=_asks_outside())
     assert session.decide_path("/etc/hosts").action == "ask"
     assert session.decide_path("inside.txt").action == "allow"
     assert session.decide_path("/etc/hosts", write=True).action == "deny"
@@ -705,23 +713,22 @@ async def test_listing_an_approved_outside_directory_shows_its_entries(
     outside = tmp_path.parent / "shared_dir"
     outside.mkdir(exist_ok=True)
     (outside / "notes.txt").write_text("needle\n", encoding="utf-8")
-    # A credential store (baseline deny) and a .env: the preset's .env rule is
-    # inside-only, so out here .env is just another file of the approved
-    # directory, while the credential stays hidden.
+    # A credential store (baseline deny) and a .env (baseline ask, inside the
+    # root or out): both stay hidden.
     (outside / "id_rsa").write_text("needle\n", encoding="utf-8")
     (outside / ".env").write_text("needle\n", encoding="utf-8")
-    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    session = await _session(tmp_path, policy=_asks_outside())
     assert session.decide_path(str(outside)).action == "ask"  # the tool asks once
     names = {
         e.path.rsplit("/", 1)[-1]
         for e in await session.list_files(str(outside), include_hidden=True)
     }
-    assert {"notes.txt", ".env"} <= names and "id_rsa" not in names
+    assert "notes.txt" in names and not {"id_rsa", ".env"} & names
     found = {
         m.path.rsplit("/", 1)[-1]
         for m in await session.grep("needle", path=str(outside), include_hidden=True)
     }
-    assert found == {"notes.txt", ".env"}
+    assert found == {"notes.txt"}
 
 
 async def test_allowed_commands_still_meet_the_path_rules(tmp_path) -> None:
@@ -756,6 +763,48 @@ async def test_allowed_commands_still_meet_the_path_rules(tmp_path) -> None:
     assert session.decide_command("git log --stat").action == "allow"
 
 
+async def test_coding_reads_outside_but_an_allowed_command_naming_it_asks(
+    tmp_path,
+) -> None:
+    # coding reads outside the root unasked (file tools, gray commands), but
+    # a path argument may be a write the guard cannot tell from a read: a
+    # command that would run unasked asks when it names one, with the
+    # directory as the grant. One that asks anyway gets no reason added.
+    from lovia.workspace import DEV_TOOLS, READ_ONLY
+
+    outside = tmp_path.parent / "elsewhere"
+    outside.mkdir(exist_ok=True)
+    where = os.path.realpath(outside)
+    session = await _session(
+        tmp_path, policy=WorkspacePolicy.coding(command_rules=READ_ONLY + DEV_TOOLS)
+    )
+    assert session.decide_path(str(outside / "a.conf")).action == "allow"
+    for cmd in (
+        f"ruff format {outside}",
+        f"pytest --basetemp={outside}/t",
+        f"ls {outside}",
+    ):
+        verdict = session.decide_command(cmd)
+        assert verdict.action == "ask" and "outside the workspace" in verdict.reason, (
+            cmd
+        )
+        assert verdict.scopes == (f"read:{where}",), cmd
+    assert session.decide_command(f"curl -o /dev/null {outside}") == Verdict(
+        "ask", "", ("shell:curl",)
+    )
+    # The working directory is where a bare `pytest` / `ruff format` writes.
+    for cmd in ("pytest", "pytest --cache-clear", "ruff format"):
+        verdict = session.decide_command(cmd, cwd=str(outside))
+        assert verdict.action == "ask" and verdict.scopes == (f"read:{where}",), cmd
+    assert session.decide_command("pytest").action == "allow"
+    # Streams are no paths; trusted writes outside anyway.
+    assert session.decide_command("ls 2>/dev/null").action == "allow"
+    trusted = await _session(
+        tmp_path, policy=WorkspacePolicy.trusted(command_rules=READ_ONLY)
+    )
+    assert trusted.decide_command(f"ls {outside}").action == "allow"
+
+
 async def test_grep_follows_symlinks_within_an_approved_outside_directory(
     tmp_path,
 ) -> None:
@@ -769,7 +818,7 @@ async def test_grep_follows_symlinks_within_an_approved_outside_directory(
     if not escaping.exists():
         escaping.symlink_to(tmp_path.parent / "elsewhere_needle.txt")
     (tmp_path.parent / "elsewhere_needle.txt").write_text("needle\n", encoding="utf-8")
-    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    session = await _session(tmp_path, policy=_asks_outside())
     # The link stays within the approved directory: covered. The one that
     # escapes it does not ride on that approval.
     found = {
@@ -1149,7 +1198,7 @@ async def test_workspace_instructions_follow_the_effective_rules(tmp_path) -> No
     text = Workspace.local(str(tmp_path), mode="coding").instructions()
     assert "Credential stores" in text and "'~/.ssh'" in text
     assert "Writes to '.git'" in text
-    assert "'**/.env*' ask the user before being read" in text
+    assert "'.env*' ask the user before being read" in text
 
     # Protections are baseline; a baseline composed without one drops its
     # sentence. (User path rules are not described: they are the user's.)
@@ -1908,10 +1957,8 @@ async def test_shell_outside_read_claims_escalate_to_ask(tmp_path) -> None:
     assert session.decide_command("cat /etc/hosts").action == "allow"
     from lovia.workspace import READ_ONLY
 
-    coding = await _session(
-        tmp_path, policy=WorkspacePolicy.coding(command_rules=READ_ONLY)
-    )
-    # coding asks for outside reads; the shell tool routes this to approval.
+    coding = await _session(tmp_path, policy=_asks_outside(command_rules=READ_ONLY))
+    # A policy asking for outside reads; the shell tool routes this to approval.
     # ``ls`` itself is on the (opted-in) allow list, so the outside read is
     # the one condition: its reason and directory scope ride along.
     verdict = coding.decide_command("ls /etc/hosts")

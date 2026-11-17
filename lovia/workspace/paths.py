@@ -14,7 +14,39 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["FOLD_CASE", "ResolvedPath", "complete_dirs", "resolve_path"]
+__all__ = [
+    "FOLD_CASE",
+    "ResolvedPath",
+    "complete_dirs",
+    "is_pseudo_device",
+    "resolve_path",
+]
+
+# Shell-plumbing pseudo-devices, not data: `2>/dev/null`, `< /dev/stdin` or
+# `curl -o /dev/null` touch no file worth a question. Other /dev paths still
+# count — a redirect onto /dev/disk0 *should* trip the ACL.
+_PSEUDO_DEVICES = frozenset(
+    {
+        "/dev/null",
+        "/dev/zero",
+        "/dev/stdin",
+        "/dev/stdout",
+        "/dev/stderr",
+        "/dev/tty",
+        "/dev/random",
+        "/dev/urandom",
+    }
+)
+
+
+def is_pseudo_device(path: str) -> bool:
+    """Whether ``path``, as spelled, is a stream rather than a file. Spelled
+    plainly only: ``/dev/fd/../../x`` is ``/x``."""
+    if path in _PSEUDO_DEVICES:
+        return True
+    fd = path.removeprefix("/dev/fd/")
+    return fd != path and fd.isdigit()
+
 
 # macOS volumes ignore case by default while ``Path.resolve`` keeps a name
 # as typed: ``~/.SSH/config`` opens ``~/.ssh/config`` and still reads

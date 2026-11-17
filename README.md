@@ -413,7 +413,8 @@ agent = Agent(
 )
 ```
 
-`coding` vouches for no command itself: the irreversible ask with a reason
+`coding` edits inside the root, reads anywhere and writes nowhere else. It
+vouches for no command itself: the irreversible ask with a reason
 (`git push`, `rm -r`, `sudo`, …), everything else asks once and the user can
 remember it per chat ("always allow `ls`" — a chained `ls; git status`
 offers both at once), and under every mode a baseline

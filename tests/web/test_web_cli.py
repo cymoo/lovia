@@ -291,10 +291,10 @@ def test_resolve_workspace_default_mode_is_coding(tmp_path: Path) -> None:
     ws = builder.resolve_workspace(builder.Deployment(workspace=str(tmp_path)))
     assert ws is not None
     # Matches the core ``Workspace.local`` default: writes allowed inside the
-    # root, but shell and out-of-root reads go through approval — no unprompted
+    # root, reads anywhere, but shell goes through approval — no unprompted
     # shell (that posture is ``trusted``, now opt-in).
     assert ws.policy.shell_default == "ask"
-    assert ws.policy.read_outside == "ask"
+    assert ws.policy.read_outside == "allow"
     assert ws.policy.write == "allow"
 
 

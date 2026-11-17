@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from lovia import Agent, Runner, events, tool
-from lovia.workspace import CommandRule, Workspace, WorkspaceSessionBinding
-
+from lovia.workspace import (
+    CommandRule,
+    Workspace,
+    WorkspacePolicy,
+    WorkspaceSessionBinding,
+)
 from tests.scripted_provider import ScriptedProvider, call, text
+
+
+def _asks_outside(**kwargs) -> WorkspacePolicy:
+    """coding, but asking before reads outside the root (it allows them)."""
+    return replace(WorkspacePolicy.coding(**kwargs), read_outside="ask")
 
 
 @pytest.mark.asyncio
@@ -322,7 +333,7 @@ async def test_outside_read_asks_then_succeeds_when_approved(tmp_path) -> None:
     agent = Agent(
         name="coder",
         model=provider,
-        workspace=Workspace.local(str(root), mode="coding"),
+        workspace=Workspace.local(str(root), policy=_asks_outside()),
     )
 
     handle = Runner.stream(agent, "read the shared file")
@@ -352,7 +363,7 @@ async def test_outside_read_rejected_reports_denial(tmp_path) -> None:
     agent = Agent(
         name="coder",
         model=provider,
-        workspace=Workspace.local(str(root), mode="coding"),
+        workspace=Workspace.local(str(root), policy=_asks_outside()),
     )
 
     handle = Runner.stream(agent, "read the shared file")
@@ -412,8 +423,7 @@ async def test_shell_touching_outside_path_asks_under_coding(tmp_path) -> None:
         model=provider,
         workspace=Workspace.local(
             str(root),
-            mode="coding",
-            command_rules=(CommandRule("head", "allow"),),
+            policy=_asks_outside(command_rules=(CommandRule("head", "allow"),)),
         ),
     )
 

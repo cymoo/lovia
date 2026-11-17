@@ -100,11 +100,11 @@ async def test_describe_image_size_cap_is_actionable(
         await tool.invoke({"path": "big.png"}, _ctx(_session(tmp_path)))
 
 
-def test_describe_image_outside_read_asks_under_coding_policy(
+def test_describe_image_outside_read_asks_when_the_policy_does(
     tmp_path: Path,
 ) -> None:
     tool = make_describe_image_tool(ScriptedProvider([text("x")]))
-    session = _session(tmp_path, policy=WorkspacePolicy.coding())
+    session = _session(tmp_path, policy=WorkspacePolicy(read_outside="ask"))
     ctx = _ctx(session)
     # Same read pipeline as read_file: outside-root reads ask, inside don't.
     assert tool.decide({"path": "/tmp/shot.png"}, ctx).action == "ask"

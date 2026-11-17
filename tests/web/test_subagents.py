@@ -228,6 +228,12 @@ async def test_wired_plugin_delivers_end_to_end(caplog) -> None:
     assert not [r for r in await deps.store.list() if r.parent_id]  # chats only
     assert task.title is not None and task.title.startswith("[t1]")
     assert task.agent == "bot"  # follow-ups in the task chat use a served key
+
+    async def _child_recorded() -> bool:
+        return await deps.store.latest_run_for(f"subagent:{task.id}") is not None
+
+    # The child's own task writes its run record, after the session registers.
+    await _poll(_child_recorded)
     child_run = await deps.store.latest_run_for(f"subagent:{task.id}")
     assert child_run is not None and child_run.session_id == task.id
 

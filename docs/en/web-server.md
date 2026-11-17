@@ -91,7 +91,7 @@ run the app under another ASGI server, skip `serve()`.
 | `tracer` | `None` | Span recorder for served Runs |
 | `titles` / `title_model` | `True` / Agent model | Generate conversation titles in the background |
 | `followups` / `followup_model` | `False` / Agent model | Suggest follow-up questions after a reply (see below) |
-| `approval_timeout` | `None` | Auto-deny unresolved approvals after N seconds |
+| `suspend_after` | `None` | Suspend a run whose approval card is unanswered after N seconds: it keeps its checkpoint and frees its slot, and answering the card resumes it (a subagent task's card is denied instead) |
 | `max_background_runs` | `8` | Concurrent supervised Runs; excess starts return 429 |
 | `ui` | `True` | `False` serves the API only; a `ChatUI` customizes the bundled page (below) |
 | `cors_origins` | `None` | Allowed browser origins; unset sends no CORS headers |
@@ -418,7 +418,7 @@ and doesn't stop the others.
 | `session` | `{ sessionId }` | Another chat is on screen (`null`: a new one); also when a new chat gets saved |
 | `agent` | `{ agent }` | The user picked another agent |
 | `run-start` | `{ sessionId }` | A run began streaming into the chat: sent, or reattached after a reload |
-| `run-end` | `{ sessionId, status, usage }` | The chat stopped streaming it. `status`: `done` (answered), `error`, `cancelled` (stopped by the user), or `detached` (the user switched chats or the connection dropped; the run may go on server-side). `usage` is the answered run's token usage, else `null` |
+| `run-end` | `{ sessionId, status, usage }` | The chat stopped streaming it. `status`: `done` (answered), `error`, `cancelled` (stopped by the user), `detached` (the user switched chats or the connection dropped; the run may go on server-side), or `waiting` (the run suspended on an approval card; answering the card resumes it). `usage` is the answered run's token usage, else `null` |
 | `theme` | `{ theme }` | Light or dark took effect |
 | `view` | `{ view }` | A [view](#views) opened (`'exec/perf'`), or the chat came back (`null`) |
 
@@ -1271,7 +1271,7 @@ leaves no chat behind.
   treat it like a password.
 - Restrict or disable writable Workspace access for untrusted users: anyone
   holding the token can make the agent edit files or run shell commands.
-- Configure `approval_timeout` so abandoned dialogs do not occupy capacity.
+- Configure `suspend_after` so unanswered approvals suspend their runs instead of occupying capacity.
 - Use one worker and back up the SQLite database.
 - For real multi-user exposure add TLS, per-user auth (`auth=`), and rate
   limiting — a shared token is single-user security.

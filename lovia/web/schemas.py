@@ -387,6 +387,9 @@ class ApprovalResponse(BaseModel):
     # Whether the approval was remembered. False when not asked, when the
     # request had no scopes, or when saving failed (the call still went ahead).
     remembered: bool = False
+    # True when the answer resumed a run suspended on this request: it runs
+    # again now, and a page attaches to it with POST /api/chat/reconnect.
+    resumed: bool = False
 
 
 class GrantInfo(BaseModel):
@@ -478,6 +481,9 @@ class SessionDetail(BaseModel):
     updated_at: float
     entries: list[MessageOut] = Field(default_factory=list)
     active_run_id: str | None = None
+    # The approval a suspended run waits on (its approval_required frame), with
+    # ``active_run_id`` null: show the card; answering it resumes the run.
+    waiting: dict[str, Any] | None = None
     pinned: bool = False
     # Put away by the user: left out of GET /api/sessions unless asked for.
     archived: bool = False
@@ -531,14 +537,17 @@ class ChatSessionInfo(BaseModel):
 
 
 class RunInfo(BaseModel):
-    """A live supervised (background) run, for ``GET /api/runs``."""
+    """A live supervised (background) run, or one suspended on an approval
+    (``waiting``), for ``GET /api/runs``."""
 
     session_id: str
     # The run's id, stable across its auto-chained legs and a resume: the
     # one run_started / run_finished and GET /api/runs/history carry.
     run_id: str
     agent: str
-    status: Literal["running", "blocked_on_approval"]
+    # "waiting": suspended on ``pending_approval``, holding no slot; answering
+    # it resumes the run.
+    status: Literal["running", "blocked_on_approval", "waiting"]
     turns: int
     # What started the run: "user" | "schedule:<id>" | "subagent:<session>"
     # | "subagent-report:<task>" | "spawn:<session>" — lets a UI tie a live
@@ -546,8 +555,8 @@ class RunInfo(BaseModel):
     source: str = "user"
     # Epoch seconds when the run began — the sidebar's elapsed ticker.
     started_at: float | None = None
-    # The approval it waits on (status "blocked_on_approval"), as the run's
-    # own approval_required frame carries it — so a page can offer the card
+    # The approval it waits on (status "blocked_on_approval" or "waiting"), as
+    # the run's own approval_required frame carries it — so a page can offer the card
     # outside that run's chat (a task's, in the chat that spawned it).
     pending_approval: dict[str, Any] | None = None
 
@@ -561,9 +570,16 @@ class RunRecordInfo(BaseModel):
     agent: str | None = None
     # What started the run: "user" | "schedule:<id>".
     source: str
-    # "skipped": a schedule's fire that started nothing (``error`` says why).
+    # "skipped": a schedule's fire that started nothing (``error`` says why);
+    # "waiting": suspended on an approval nobody answered in time.
     status: Literal[
-        "running", "completed", "failed", "cancelled", "interrupted", "skipped"
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted",
+        "skipped",
+        "waiting",
     ]
     error: str | None = None
     started_at: float

@@ -234,7 +234,11 @@ async def test_remembered_approval_answers_the_next_call(tmp_path: Path) -> None
                 "remember": True,
             },
         )
-        assert r.status_code == 200 and r.json() == {"ok": True, "remembered": True}
+        assert r.status_code == 200 and r.json() == {
+            "ok": True,
+            "remembered": True,
+            "resumed": False,
+        }
         await asyncio.wait_for(task, timeout=5)
         await _wait_run(ac, "s1", gone=True)
         (req,) = _frames(lines, "approval_required")
@@ -305,7 +309,7 @@ async def test_deny_with_reason_reaches_the_model(tmp_path: Path) -> None:
                 "reason": "open a PR instead",
             },
         )
-        assert r.json() == {"ok": True, "remembered": False}
+        assert r.json() == {"ok": True, "remembered": False, "resumed": False}
         # A second decision for the same call finds nothing to decide.
         again = await ac.post(
             "/api/chat/approve",
@@ -356,7 +360,7 @@ async def test_remember_keeps_only_the_picked_scopes(tmp_path: Path) -> None:
                 "scopes": ["shell:git", "shell:pwd"],
             },
         )
-        assert r.json() == {"ok": True, "remembered": True}
+        assert r.json() == {"ok": True, "remembered": True, "resumed": False}
         await asyncio.wait_for(task, timeout=5)
         await _wait_run(ac, "s1", gone=True)
         assert any("ran" in str(d.get("result")) for d in _frames(lines, "tool_result"))
@@ -408,7 +412,7 @@ async def test_remember_rejects_a_scope_the_request_did_not_offer(
             },
         )
         # An empty pick approves and remembers nothing.
-        assert ok.json() == {"ok": True, "remembered": False}
+        assert ok.json() == {"ok": True, "remembered": False, "resumed": False}
         await asyncio.wait_for(task, timeout=5)
         assert await store.list_grants("s1") == []
 
@@ -437,7 +441,7 @@ async def test_remember_without_scope_approves_but_saves_nothing(
                 "remember": True,
             },
         )
-        assert r.json() == {"ok": True, "remembered": False}
+        assert r.json() == {"ok": True, "remembered": False, "resumed": False}
         await asyncio.wait_for(task, timeout=5)
         (req,) = _frames(lines, "approval_required")
         assert req["scopes"] == [] and req["reason"] == ""
@@ -488,7 +492,7 @@ async def test_grant_context_follows_the_active_agent_after_a_handoff(
                 "remember": True,
             },
         )
-        assert r.json() == {"ok": True, "remembered": True}
+        assert r.json() == {"ok": True, "remembered": True, "resumed": False}
         await asyncio.wait_for(task, timeout=5)
         await _wait_run(ac, "s1", gone=True)
         contexts = {g.context for g in await store.list_grants("s1")}
@@ -531,7 +535,7 @@ async def test_grant_context_uses_the_registry_key_not_the_internal_name(
                 "remember": True,
             },
         )
-        assert r.json() == {"ok": True, "remembered": True}
+        assert r.json() == {"ok": True, "remembered": True, "resumed": False}
         await asyncio.wait_for(task, timeout=5)
         await _wait_run(ac, "s1", gone=True)
         listed = (await ac.get("/api/sessions/s1/grants")).json()
@@ -611,7 +615,7 @@ async def test_cancel_during_a_claimed_approval_keeps_the_grant(tmp_path: Path) 
         await ac.post("/api/chat/cancel", params={"session_id": "s1"})
         release.set()
         r = await approve
-        assert r.json() == {"ok": True, "remembered": True}
+        assert r.json() == {"ok": True, "remembered": True, "resumed": False}
         await asyncio.wait_for(task, timeout=5)
         await _wait_run(ac, "s1", gone=True)
         assert [
@@ -690,7 +694,7 @@ async def test_always_allow_in_a_task_is_remembered_for_its_chat(
                 "remember": True,
             },
         )
-        assert r.json() == {"ok": True, "remembered": True}
+        assert r.json() == {"ok": True, "remembered": True, "resumed": False}
         await _wait_run(ac, "t", gone=True)
         root = str(tmp_path.resolve())
         assert await store.has_grants(

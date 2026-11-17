@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 try:
@@ -41,6 +42,7 @@ from ..sse import SessionCreatedData, _coerce, usage_dict
 from ..store import ChatMeta
 from ..supervisor import RunController, forward
 from ..titles import provisional_title
+from ..waiting import Waiting, find_waiting, resume_waiting, stop_waiting
 from ..workspaces import ChatBinding, own_root
 from .deps import RouterDeps
 from .serialization import Run, segments_runs
@@ -167,6 +169,14 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 "a run is active for this session",
                 hint="use /api/chat/stream to attach or inject",
             )
+        if await find_waiting(deps, sid) is not None:
+            # Nor can it resume one suspended on a card: that waits on a person.
+            raise WebError(
+                409,
+                "run_waiting",
+                "this chat's run waits on an approval",
+                hint="answer its approval card, or send with /api/chat/stream",
+            )
         scoped = scope(agent, meta, req, binding)
         user_input = await build_user_input(req, scoped)
         if isinstance(user_input, str) and not user_input.strip():
@@ -254,10 +264,22 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             request=request,
             client_context=client,
         )
+        # A run suspended on a card is still the chat's run: a message joins
+        # it as one joins a live run (resuming it), never starts another.
+        waiting = (
+            await find_waiting(deps, sid) if deps.supervisor.get(sid) is None else None
+        )
+        if waiting is not None and req.busy == "reject":
+            raise WebError(
+                409,
+                "run_waiting",
+                "this chat's run waits on an approval",
+                hint='sent with busy="reject": send it again once that run has ended',
+            )
         # A message for a live run joins it, in that run's context. Any other
         # starts one: the run_deps hook decides first, before anything is
         # written, so a refused message leaves no trace.
-        decided = deps.supervisor.get(sid) is None
+        decided = deps.supervisor.get(sid) is None and waiting is None
         run_deps = None
         if decided:
             run_deps = await build_run_deps(deps.run_deps, trigger)
@@ -282,6 +304,23 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         if empty:
             # The live run we would have attached to ended mid-request.
             raise WebError(422, "invalid_request", "empty message")
+        if waiting is not None:
+            # Resumed with the message in its mailbox: it asks its card again,
+            # live, and reads the message once the card is answered.
+            resumed = await resume_waiting(
+                deps, waiting, message=content, request=request
+            )
+            if resumed is None:  # another request took it first: join that
+                if (live := deps.supervisor.get(sid)) is not None:
+                    return attach(live)
+                raise WebError(404, "run_not_found", "the waiting run was stopped")
+            return EventSourceResponse(
+                forward(
+                    resumed.attach(with_snapshot=True),
+                    sid=sid,
+                    run_id=resumed.record_id,
+                )
+            )
         if not decided:  # ... and so did the one this message was to join
             run_deps = await build_run_deps(deps.run_deps, trigger)
             # Another may have started while the hook ran: join that one,
@@ -355,7 +394,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         return {"removed": bool(ctrl is not None and ctrl.uninject(req.id))}
 
     @router.post("/api/chat/approve", response_model=ApprovalResponse)
-    async def approve(req: ApprovalRequest) -> ApprovalResponse:
+    async def approve(req: ApprovalRequest, request: Request) -> ApprovalResponse:
         """Decide a pending approval; optionally remember an approval.
 
         Claim → (write the grant) → resolve, in that order: the runner wakes
@@ -367,39 +406,73 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
 
         ``scopes`` narrows what is remembered to some of the request's own —
         checked before the claim, so a malformed request decides nothing.
+
+        A card whose run was suspended waiting for it resumes that run with
+        the answer (``resumed``), with no client attached: a page follows it
+        with ``POST /api/chat/reconnect``.
         """
         sid, cid = req.session_id, req.call_id
         pending = deps.approvals.pending(sid, cid)
-        if (
-            req.scopes is not None
-            and pending is not None
-            and not set(req.scopes) <= set(pending.scopes)
-        ):
-            raise WebError(
-                400,
-                "invalid_request",
-                "scopes must be among the pending request's own",
-                hint=f"offered: {', '.join(pending.scopes) or '(none)'}",
-            )
+        if pending is None:
+            waiting = await find_waiting(deps, sid)
+            if waiting is not None and waiting.call_id == cid:
+                return await _answer_waiting(waiting, req, request)
+        _check_scopes(req.scopes, pending.scopes if pending is not None else None)
         if not deps.approvals.claim(sid, cid):
             raise WebError(404, "approval_not_found", "no pending approval matches")
         approved = req.decision == "approve"
         remembered = False
         try:
-            if approved and req.remember:
-                remembered = await _remember(sid, cid, req.scopes)
+            if approved and req.remember and pending is not None:
+                remembered = await _remember(sid, pending.scopes, req.scopes)
         finally:
             await deps.approvals.resolve(sid, cid, Approval(approved, req.reason))
         return ApprovalResponse(ok=True, remembered=remembered)
 
-    async def _remember(sid: str, cid: str, picked: list[str] | None) -> bool:
+    async def _answer_waiting(
+        waiting: Waiting, req: ApprovalRequest, request: Request
+    ) -> ApprovalResponse:
+        offered = waiting.scopes
+        _check_scopes(req.scopes, offered)
+        approved = req.decision == "approve"
+        ctrl = await resume_waiting(
+            deps, waiting, answer=Approval(approved, req.reason), request=request
+        )
+        if ctrl is None:  # another tab's answer, or a stop, took it first
+            raise WebError(404, "approval_not_found", "no pending approval matches")
+        # Saved once the run is under way: its first step is this answered
+        # call, so a later call in the same scope still finds the grant.
+        remembered = (
+            await _remember(req.session_id, offered, req.scopes)
+            if approved and req.remember
+            else False
+        )
+        return ApprovalResponse(ok=True, remembered=remembered, resumed=True)
+
+    def _check_scopes(
+        picked: Sequence[str] | None, offered: Sequence[str] | None
+    ) -> None:
+        if (
+            picked is not None
+            and offered is not None
+            and not set(picked) <= set(offered)
+        ):
+            raise WebError(
+                400,
+                "invalid_request",
+                "scopes must be among the pending request's own",
+                hint=f"offered: {', '.join(offered) or '(none)'}",
+            )
+
+    async def _remember(
+        sid: str, offered: Sequence[str], picked: list[str] | None
+    ) -> bool:
         # The scopes come from the pending request itself — the client may
         # only narrow them; the context from the run as it is bound right now.
-        pending = deps.approvals.pending(sid, cid)
         ctrl = deps.supervisor.get(sid)
-        if pending is None or ctrl is None:
+        if ctrl is None:
             return False
-        scopes = [s for s in pending.scopes if picked is None or s in picked]
+        scopes = [s for s in offered if picked is None or s in picked]
         if not scopes:
             return False
         try:
@@ -408,7 +481,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 ctrl.grant_owner[0], scopes, ctrl.grant_context()
             )
         except Exception as exc:  # noqa: BLE001 — the approval itself still stands
-            log.warning("could not remember approval %s for %s: %s", cid, sid, exc)
+            log.warning("could not remember approval for %s: %s", sid, exc)
             return False
         return True
 
@@ -442,6 +515,16 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # Answer once the stopped chat is saved: a reload after this shows it.
             await deps.supervisor.settle(session_id)
             return {"ok": True}
+        # A run suspended on a card is stopped like a live one: the chat keeps
+        # what it showed.
+        if (waiting := await find_waiting(deps, session_id)) is not None:
+            if await stop_waiting(deps, waiting):
+                return {"ok": True}
+            if deps.supervisor.get(session_id) is not None:
+                # Resumed by an answer meanwhile: stop that run instead.
+                deps.supervisor.cancel(session_id)
+                await deps.supervisor.settle(session_id)
+                return {"ok": True}
         # No live run: still let the user clear a stranded interrupted run so a
         # page reload doesn't trigger an unwanted reconnect.
         if store.checkpointer is not None:
@@ -473,6 +556,15 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
 
         if store.checkpointer is None:
             raise WebError(404, "feature_unavailable", "no checkpointer configured")
+        # A run suspended on a card resumes when the card is answered, not
+        # because a page opened the chat.
+        if await find_waiting(deps, session_id) is not None:
+            raise WebError(
+                409,
+                "run_waiting",
+                "this chat's run waits on an approval",
+                hint="answer its approval card to resume it",
+            )
         # A run stopped a moment ago retires its pointer once saved: never
         # resume it from the window before that.
         await deps.supervisor.settle(session_id)

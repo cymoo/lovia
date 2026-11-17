@@ -33,7 +33,7 @@ app.include_router(build_api_router(deps))
 ```
 
 `RouterDeps` 是普通 dataclass，只有 `agents` 和 `store` 为必填字段。
-`max_turns`、`budget`、`retry`、`tracer`、`approval_timeout`、`max_background_runs`、
+`max_turns`、`budget`、`retry`、`tracer`、`suspend_after`、`max_background_runs`、
 `scheduler_poll` 及标题设置均有与 `create_app()` 相同的默认值。
 
 `deps.lifespan` 负责 API 背后的后台机制：启动时把上个进程遗留的 `running` 运行记录标记为中断，
@@ -127,6 +127,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `feature_unavailable` | 404 / 501 | 服务端或 Agent 不具备该功能（工作区、Memory、checkpointer、提问通道或 `rewind`） |
 | `run_active` | 409 | 该聊天已有 Run 在执行 |
 | `run_stopping` | 409 | 已停止的 Run 仍在收尾，请稍后重试 |
+| `run_waiting` | 409 | 对话的 Run 因审批而暂停：回答审批卡片即可续跑，也可以停止它 |
 | `run_unfinished` | 409 | 该聊天的上一个 Run 被中断且仍可恢复；复制整个聊天要等它结束 |
 | `nothing_to_fork` | 409 | fork 结果会是空的：该位置之前没有已完成的历史 |
 | `run_cancelled` | 409 | 阻塞式 Turn 的 Run 被停止（取消、删除聊天或服务端关闭） |
@@ -159,11 +160,11 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/chat` | 执行一次**阻塞式** Turn → `{output, session_id, usage}`：托管 Run，请求等待其结束（[详见](#阻塞式-turn)） |
 | `POST /api/chat/stream` | **SSE**：启动 Run，或连接到 Session 中正在执行的 Run（新消息会作为追加指令注入） |
 | `POST /api/chat/reconnect?session_id=` | **SSE**：重新连接，或从 Checkpoint 恢复中断的 Run |
-| `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision, remember?, scopes?, reason?}` → `{ok, remembered}`。`remember`（仅允许时）同时为这条请求自己的每个 `scopes` 在本对话各记一条“总是允许”——传了 `scopes` 时只记其中列出的，只能缩小、不能扩大（列出请求没有的范围 → `400 invalid_request`，本次不做任何决定）；`reason`（仅拒绝时）会传给模型。授权先落库再唤醒运行，同范围的下一条调用不会在此期间再问；一个都没选、请求没有 scopes 或保存失败时 `remembered` 为 false（本次允许照常生效） |
+| `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision, remember?, scopes?, reason?}` → `{ok, remembered, resumed}`。回答一个因这条请求而暂停的运行（`approval_suspended`）时，会带着回答把它续跑起来，此时没有客户端连着（`resumed: true`）：用 `POST /api/chat/reconnect` 接上。`remember`（仅允许时）同时为这条请求自己的每个 `scopes` 在本对话各记一条“总是允许”——传了 `scopes` 时只记其中列出的，只能缩小、不能扩大（列出请求没有的范围 → `400 invalid_request`，本次不做任何决定）；`reason`（仅拒绝时）会传给模型。授权先落库再唤醒运行，同范围的下一条调用不会在此期间再问；一个都没选、请求没有 scopes 或保存失败时 `remembered` 为 false（本次允许照常生效） |
 | `POST /api/chat/cancel?session_id=` | 取消正在执行的 Run（保留已完成的 Turn） |
 | `POST /api/chat/inject` / `uninject` | 为正在执行的 Run 排队或撤回[追加指令](cancellation.md#在运行中追加指令) |
 | `GET /api/sessions?q=&limit=&offset=&per_workspace=&archived=` | 列出或搜索对话（置顶优先，支持分页）。`per_workspace=N` 改为按目录分页：全部置顶对话，加上每个目录最近的 `N` 个，对话多的目录不会把别的目录挤出去（没有目录的对话全部返回）。默认不含已归档的对话；`archived=true` 改为只列已归档的，搜索（`q`）两者都包含，每行的 `archived` 标明是哪一种。`DELETE` 清空全部对话 |
-| `GET /api/runs` | 正在运行的服务端托管任务。`run_id` 与该 Run 的生命周期事件和运行记录一致，自动续跑和恢复后都不变。`pending_approval` 是状态为 `blocked_on_approval` 的运行正在等待的请求，结构与它的 `approval_required` 帧相同（否则为 `null`）——页面可以在那个运行的对话之外提供审批，web UI 就这样在对话里显示子任务的审批；用该运行的 `session_id` 调 `POST /api/chat/approve` 回答 |
+| `GET /api/runs` | 正在运行的服务端托管任务，以及因审批而暂停的任务（`status: "waiting"`，不占运行槽位）。`run_id` 与该 Run 的生命周期事件和运行记录一致，自动续跑和恢复后都不变。`pending_approval` 是状态为 `blocked_on_approval` 或 `waiting` 的运行正在等待的请求，结构与它的 `approval_required` 帧相同（否则为 `null`）——页面可以在那个运行的对话之外提供审批，web UI 就这样在对话里显示子任务的审批；用该运行的 `session_id` 调 `POST /api/chat/approve` 回答 |
 | `GET /api/runs/history?session_id=&source=&since=&run_id=&limit=&offset=` | 查询持久化的运行记录，包括结果、错误、时长和 token 用量；`since` 按结束时间过滤，`run_id` 查询单个 Run |
 | `GET /api/events` | **SSE**：订阅进程级生命周期事件（不重放历史事件） |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名、置顶、归档或切换 `workspace_mode`；删除（连同其后台任务和绑定它的定时任务）。`{"archived": true}` 把对话收起来而不删除任何内容（同时取消置顶）；置顶它，或用户再发一条消息，就会恢复。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null`。每次 Run 的最后一条回答带 `duration`（秒）；记录了用时的 Run，其消息时间戳为真实时间。来自另一个对话的聊天带 `origin`：`kind` 为 `"fork"`（分支）或 `"spawn"`（由那个对话的 agent 用 `start_session` 启动）；定时任务触发时新建的对话为 `"schedule"`（带 `schedule_id` 而不是 `session_id`，`title` 是任务名称）；列表中的 `origin_kind` 与之一致。存储里没有的 id（来自另一个数据库，或已删除）也返回一份空占位，带 `exists: false`；用它发第一条消息就是新开一个对话 |
@@ -277,8 +278,9 @@ API 路由抛出的错误都使用同一种响应体：
 | `tool_call` | `{id, name, arguments}`：`arguments` 是原始 JSON 字符串 |
 | `tool_result` | `{id, name, result, is_error, images?}`：`images` 列出 `{index, mime_type}`，图片本身通过 `GET /api/sessions/{id}/tool-images/{call_id}/{index}` 获取 |
 | `todo` | `{call_id, name, todos}`：结构化 todo 更新，替代该调用的 `tool_result` |
-| `approval_required` | `{id, name, arguments, reason, scopes, granted, expires_at}` → 通过 `POST /api/chat/approve` 回答。`reason` 是为什么要问（除了“不在允许清单上”之外没什么特别时为空）；`scopes` 是“总是允许”会放开的范围——全部列出、一起记住（`[]` = 不提供）；`granted` 为 true 表示已有授权替用户答了——显示一行提示而不是卡片；`expires_at`（epoch 秒，`null` = 不过期）是无人回答时自动拒绝的时刻 |
-| `approval_resolved` | `{id, approved, cause}`——请求 `id` 已有结论：`cause` 为 `user`（任一标签页的回答）、`timeout`（到 `expires_at` 仍无人回答）或 `cancel`（运行被停止）或 `policy`（等待期间对话切换了权限模式，由新模式允许或拒绝）。发给所有连接中的客户端，并随当前 Turn 回放，卡片一旦有结论就不再可点 |
+| `approval_required` | `{id, name, arguments, reason, scopes, granted, expires_at}` → 通过 `POST /api/chat/approve` 回答。`reason` 是为什么要问（除了“不在允许清单上”之外没什么特别时为空）；`scopes` 是“总是允许”会放开的范围——全部列出、一起记住（`[]` = 不提供）；`granted` 为 true 表示已有授权替用户答了——显示一行提示而不是卡片；`expires_at`（epoch 秒，`null` = 不过期）是无人回答时不再在线等待的时刻：运行就此暂停（子任务的请求则被拒绝） |
+| `approval_resolved` | `{id, approved, cause}`——请求 `id` 已有结论：`cause` 为 `user`（任一标签页的回答）、`timeout`（子任务的请求到 `expires_at` 仍无人回答）或 `cancel`（运行被停止）或 `policy`（等待期间对话切换了权限模式，由新模式允许或拒绝）。发给所有连接中的客户端，并随当前 Turn 回放，卡片一旦有结论就不再可点 |
+| `approval_suspended` | `{id}`——请求 `id` 到 `expires_at` 仍无人回答：运行停在这个调用上，事件流结束，没有 `done`。卡片仍然有效；之后随时回答它（`POST /api/chat/approve`，重启后也可以）都会续跑。期间该对话的 `GET /api/sessions/{id}` 以 `waiting` 带上这张卡片，`GET /api/runs` 把这个运行列为 `waiting` |
 | `handoff` | `{from, to}` |
 | `turn_started` | `{turn, agent}` |
 | `retrying` | `{attempt, max_attempts, delay, message}`：模型调用遇到暂时性错误，`delay` 秒后进行第 `attempt + 1` 次尝试 |

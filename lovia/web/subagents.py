@@ -55,7 +55,8 @@ from ..workspace.workspace import WorkspaceSessionBinding
 from .workspaces import workspace_config
 from .run_deps import RunTrigger, build_run_deps
 from .sse import SessionAppendedData, SessionCreatedData
-from ..transcript import InputEntry
+from ..transcript import InputEntry, entry_to_dict
+from .waiting import find_waiting
 
 if TYPE_CHECKING:
     from ..runtime.result import RunResult
@@ -101,6 +102,20 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
             if await _stopped(deps, sid):
                 await _hold(deps, report, sid)
                 return
+            if (waiting := await find_waiting(deps, sid)) is not None:
+                # The chat's run is suspended on a card: the report waits with
+                # it and is read once the card is answered. A fresh run would
+                # take the suspended one's place, and a resume would only
+                # suspend again: the card is the user's to answer.
+                entry = entry_to_dict(InputEntry(role="user", content=report.text))
+                if await deps.store.queue_for_waiting(waiting.record.id, entry):
+                    log.info(
+                        "subagent %s: report queued for session %s's waiting run",
+                        report.id,
+                        sid,
+                    )
+                    return
+                continue  # resumed meanwhile: the next attempt injects into it
             try:
                 agent = deps.pick(deps.agent_of(row))
             except WebError:
@@ -177,8 +192,9 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
             except WebError as exc:
                 # run_active: another run claimed the session between get() and
                 # start() — the next attempt injects into it. too_many_runs: at
-                # the concurrency cap — wait for a slot.
-                if exc.code not in ("run_active", "too_many_runs"):
+                # the concurrency cap — wait for a slot. run_waiting: suspended
+                # on a card meanwhile — the next attempt queues for it.
+                if exc.code not in ("run_active", "too_many_runs", "run_waiting"):
                     raise
         log.warning(
             "subagent %s: could not deliver to session %s "

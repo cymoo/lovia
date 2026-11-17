@@ -32,12 +32,13 @@ interface LoviaEvents {
   'run-start': { sessionId: string | null };
   /**
    * The chat stopped streaming it: `done` (answered), `error`, `cancelled`
-   * (stopped by the user), or `detached` (the user switched chats, or the
-   * connection dropped — the run may go on server-side).
+   * (stopped by the user), `detached` (the user switched chats, or the
+   * connection dropped — the run may go on server-side), or `waiting` (it
+   * suspended on an approval card; answering the card resumes it).
    */
   'run-end': {
     sessionId: string | null;
-    status: 'done' | 'error' | 'cancelled' | 'detached';
+    status: 'done' | 'error' | 'cancelled' | 'detached' | 'waiting';
     /** The last answered leg's token usage, when the run answered. */
     usage: Record<string, number> | null;
   };

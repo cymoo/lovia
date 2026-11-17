@@ -26,8 +26,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .. import events
-from ..approvals import Approval
+from ..approvals import Approval, _Suspension
 from ..checkpointer import CheckpointOptions
+from ..exceptions import RunSuspended
 from ..log_config import CURRENT_AGENT
 from ..messages import Message, Usage
 from ..reliability import CancelToken
@@ -44,6 +45,7 @@ from ..transcript import (
     ReasoningEntry,
     ToolResultEntry,
     TranscriptEntry,
+    entry_to_dict,
     input_to_entries,
 )
 from .api.serialization import (
@@ -61,6 +63,7 @@ from .schemas import MessageOut
 from .sse import (
     ApprovalAsked,
     ApprovalResolved,
+    ApprovalSuspended,
     RunFinishedData,
     RunStartedData,
     RunStatusData,
@@ -70,6 +73,7 @@ from .sse import (
     MCPUnavailable,
     SnapshotData,
     UserTurnRefs,
+    approval_data,
     event_to_sse,
     frame,
     usage_dict,
@@ -79,6 +83,7 @@ from ..workspace.remote import RemoteWorkspace
 from ..workspace.workspace import LocalWorkspace, WorkspaceSessionBinding
 from .run_deps import RUN_CLIENT, RUN_PROJECT, RUN_SERVER
 from .store import RunRow, grant_context
+from .waiting import find_waiting
 from .workspaces import ChatBinding
 
 if TYPE_CHECKING:
@@ -384,6 +389,13 @@ class RunController:
         # The call id a mode switch settled (recheck_pending): its card says
         # the permission mode decided, not a person.
         self._policy_settled: str | None = None
+        # A resume's answers to the cards its run was suspended on, by call
+        # id: the resumed run asks again (core judges a dangling call afresh)
+        # and is answered from here, once.
+        self._answers: dict[str, Approval] = {}
+        # The card the run suspended on, once nobody answered it in time: the
+        # record keeps it, so the chat can offer it with no run attached.
+        self._suspended: ApprovalAsked | None = None
         # first-run spec
         self._first_input = first_input
         self._first_ckpt = first_checkpoint
@@ -545,24 +557,36 @@ class RunController:
             log.warning("grant lookup failed for %s: %s", self.session_id, exc)
             return False
 
-    async def _await_approval(self, ev: events.ApprovalRequired) -> ApprovalResolved:
-        """Await the HTTP decision for ``ev``, denying after ``approval_timeout``;
-        returns how it was settled, for the clients' cards.
+    @property
+    def _suspends(self) -> bool:
+        """Whether an unanswered card suspends this run rather than denying.
+        A task's run is awaited by the run that spawned it, which a suspension
+        would end early: its card is denied instead."""
+        return not self.source.startswith("subagent:")
 
-        Without the timeout a clientless (scheduled) run parked on an approval
+    async def _await_approval(
+        self, ev: events.ApprovalRequired
+    ) -> ApprovalResolved | None:
+        """Await the HTTP decision for ``ev``; returns how it was settled, for
+        the clients' cards, or None when nobody answered within
+        ``suspend_after`` and the run suspends on it (a task's card is denied
+        instead, see :attr:`_suspends`).
+
+        Without the deadline a clientless (scheduled) run parked on an approval
         holds its concurrency slot forever — ``RunBudget.max_seconds`` is only
         checked at turn boundaries, which a parked run never reaches.
         """
         # Visible before the wait, not only after a timeout: a clientless run
         # (schedule fire, subagent task) parked here is otherwise a silent
-        # stall of up to ``approval_timeout`` seconds.
+        # stall of up to ``suspend_after`` seconds.
+        after = self.deps.suspend_after
         log.info(
-            "run parked on approval: session=%s tool=%s (timeout: %s)",
+            "run parked on approval: session=%s tool=%s (%s)",
             self.session_id,
             ev.call.name,
-            "none — waits for a decision"
-            if self.deps.approval_timeout is None
-            else f"auto-deny after {self.deps.approval_timeout:.0f}s",
+            "waits for a decision"
+            if after is None
+            else f"{'suspends' if self._suspends else 'denied'} after {after:.0f}s",
         )
         # ``await_decision`` registers the pending future in its first step,
         # before it yields — so awaiting the coroutine directly leaves no
@@ -578,19 +602,29 @@ class RunController:
         def expire() -> None:
             nonlocal timed_out
             # False when a tab had already claimed the decision.
-            timed_out = self._deny_timed_out(ev.call.id)
+            if self._suspends:
+                timed_out = self.deps.approvals.suspend_pending(self.session_id)
+            else:
+                timed_out = self._deny_timed_out(ev.call.id)
 
-        timeout = self.deps.approval_timeout
         timer = (
             None
-            if timeout is None
-            else asyncio.get_running_loop().call_later(timeout, expire)
+            if after is None
+            else asyncio.get_running_loop().call_later(after, expire)
         )
         try:
             approval = await decision
         finally:
             if timer is not None:
                 timer.cancel()
+        if isinstance(approval, _Suspension):
+            log.info(
+                "approval %s for session %s unanswered after %.0fs: run suspended",
+                ev.call.id,
+                self.session_id,
+                after or 0,
+            )
+            return None
         # A sweep that found the approval still unclaimed decided it: the
         # timer, or a stop (deny_pending); or a mode switch did
         # (recheck_pending). Anything else was a tab's answer.
@@ -612,7 +646,7 @@ class RunController:
         has already claimed it (its decision stands)."""
         # Preflight is serial, so the session has at most one pending approval:
         # the registry's per-session deny is exactly this call.
-        timeout = self.deps.approval_timeout or 0
+        timeout = self.deps.suspend_after or 0
         # Told to the model, which otherwise guesses at a policy block.
         denied = self.deps.approvals.deny_pending(
             self.session_id,
@@ -890,6 +924,8 @@ class RunController:
         error_seen = False
         final_error: str | None = None  # message for the durable run record
         failed_terminally = False  # ended in a non-resumable failure (drop checkpoint)
+        # Set when the run suspended on a card: what its record waits for.
+        waiting_for: JsonObject | None = None
         # The durable run record, under the run's stable id — so a resumed run
         # finalizes the row it opened. Best-effort bookkeeping: never let it
         # break the run itself.
@@ -969,6 +1005,19 @@ class RunController:
                             # Left undecided, the call goes to the agent's
                             # approval_handler, else is denied.
                             continue
+                        answer = self._answers.pop(ev.call.id, None)
+                        if answer is not None:
+                            # The card this run was suspended on, answered
+                            # while it waited: asked again by the resume (core
+                            # judges a dangling call afresh), settled here.
+                            if answer.approved:
+                                ev.approve()
+                            else:
+                                ev.reject(answer.reason)
+                            self._publish_frame(
+                                ApprovalResolved(ev.call.id, answer.approved, "user")
+                            )
+                            continue
                         if await self._granted(ev):
                             # Remembered: answer it here and publish a note in
                             # the card's place. Never for a deny — a verdict
@@ -986,13 +1035,12 @@ class RunController:
                         # iterator until the decision lands. The awaiter is
                         # THIS task, not the HTTP request, so a detach can't
                         # release it. The card goes out with its deadline and
-                        # is settled by a frame naming who decided.
-                        timeout = self.deps.approval_timeout
+                        # is settled by a frame naming who decided — or, left
+                        # unanswered, said to wait while the run suspends.
+                        after = self.deps.suspend_after
                         asked = ApprovalAsked(
                             ev,
-                            expires_at=None
-                            if timeout is None
-                            else time.time() + timeout,
+                            expires_at=None if after is None else time.time() + after,
                         )
                         self._publish_frame(asked)
                         self.pending_approval = asked
@@ -1002,10 +1050,18 @@ class RunController:
                         finally:
                             self.pending_approval = None
                             self._set_status("running")
-                        self._publish_frame(resolved)
+                        if resolved is None:
+                            self._suspended = asked
+                            self._publish_frame(ApprovalSuspended(ev.call.id))
+                        else:
+                            self._publish_frame(resolved)
                         continue
                     if isinstance(ev, events.RunFailed):
                         error_seen = True
+                        if isinstance(ev.error, RunSuspended):
+                            # Not a failure: approval_suspended said the run
+                            # waits on its card. The run ends just below.
+                            continue
                     if isinstance(ev, events.RunCompleted) and self.run_id:
                         self._publish_refs(ev.result.entries)
                     if isinstance(ev, events.RunCompleted):
@@ -1051,6 +1107,17 @@ class RunController:
                 )
             if succeeded and store.checkpointer is not None:
                 await store.clear_active_run_id(sid, expected=self.run_id)
+        except RunSuspended as exc:
+            # Suspended on a card nobody answered: the checkpoint and its
+            # pointer stay (core classifies this "interrupted"), and the record
+            # says what the run waits for. A stop that landed with it wins.
+            if self._suspended is not None and not self._user_cancelled:
+                waiting_for = {
+                    "request": cast(JsonObject, approval_data(self._suspended))
+                }
+            else:
+                final_error = str(exc) or exc.__class__.__name__
+                self.final_exception = exc
         except Exception as exc:
             # A terminal failure (MaxTurnsExceeded, provider error, …) that the
             # loop didn't already surface as an `error` event: synthesize one so
@@ -1105,6 +1172,22 @@ class RunController:
                     await self._frozen
                 await store.checkpointer.delete(rid)
                 await store.clear_active_run_id(sid, expected=rid)
+            if waiting_for is not None and self._user_cancelled:
+                waiting_for = None  # a stop landed meanwhile: it wins
+            if waiting_for is not None:
+                # What the run had not read yet goes with it: a resume puts it
+                # back in the mailbox. Recorded before the run leaves the
+                # registry, so no start can slip in while the chat looks idle.
+                waiting_for["queued"] = [
+                    entry_to_dict(InputEntry(role="user", content=content))
+                    for content in self.mailbox.drain()
+                ]
+                try:
+                    await store.finish_run(
+                        record_id, status="waiting", waiting_for=waiting_for
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    log.warning("run record write failed for %s: %s", sid, exc)
             await deps.approvals.release(sid)
             self.hub.close()
             self.supervisor._evict(sid, self)
@@ -1122,6 +1205,9 @@ class RunController:
                 status = "cancelled"
             elif succeeded:
                 status = "completed"
+            elif waiting_for is not None:
+                # Answering its card resumes it (start_run flips the row back).
+                status = "waiting"
             elif failed_terminally:
                 status = "failed"
             else:
@@ -1129,7 +1215,7 @@ class RunController:
                 # survives, so a reconnect may pick this run back up — in which
                 # case start_run flips this same row back to "running".
                 status = "interrupted"
-            error = None if status == "completed" else final_error
+            error = None if status in ("completed", "waiting") else final_error
             self.final_status = status
             self.final_error = error
             try:
@@ -1142,6 +1228,7 @@ class RunController:
                     )
                     if self.usage.total_tokens
                     else None,
+                    waiting_for=waiting_for if status == "waiting" else None,
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 log.warning("run record write failed for %s: %s", sid, exc)
@@ -1272,6 +1359,16 @@ class RunSupervisor:
         # lose to a concurrent one must never do under the winner's run.
         async with self._start_lock(session_id):
             self._check_slot(session_id)
+            # A run suspended on a card is still this chat's run: a fresh one
+            # would take over its checkpoint pointer and lose it. Each starter
+            # decides what to do instead (resume it, queue for it, skip).
+            if await find_waiting(self.deps, session_id) is not None:
+                raise WebError(
+                    409,
+                    "run_waiting",
+                    "this chat's run waits on an approval",
+                    hint="answer its approval card to resume it, or stop it",
+                )
             meta = await self.deps.store.get(session_id)
             agent_name = self.deps.name_of(agent)  # before binding copies the agent
             grants = await self.deps.grant_owner(session_id)
@@ -1354,8 +1451,17 @@ class RunSupervisor:
         snapshot: RunSnapshot,
         client: JsonObject | None = None,
         run_deps: Any = None,
+        answers: dict[str, Approval] | None = None,
+        inbox: list[InjectedContent] | None = None,
+        autostart: bool = False,
     ) -> RunController:
-        """Register a resume of ``snapshot``; ``run_deps`` as for :meth:`start`."""
+        """Register a resume of ``snapshot``; ``run_deps`` and ``autostart`` as
+        for :meth:`start`.
+
+        A run suspended on a card resumes with that card's answer in
+        ``answers`` (by call id: the resumed run asks again, see
+        ``RunController._answers``) and the messages it had not read yet,
+        plus any new one, in ``inbox`` — read at its next turn."""
         # One start at a time per chat: binding the workspace may switch
         # the chat session's policy (set_policy), which a start about to
         # lose to a concurrent one must never do under the winner's run.
@@ -1387,6 +1493,14 @@ class RunSupervisor:
                 session_id, snapshot.run_id
             )
             records = await self.deps.store.list_runs(run_id=record_id, limit=1)
+            # What a page attaching before the task opens its leg is shown (an
+            # autostarted resume has no subscriber of its own): the task sets
+            # the same again when it starts.
+            history = (
+                segments_runs(await self.deps.session.segments(session_id))
+                if self.deps.session is not None
+                else []
+            )
             self._check_slot(session_id, cap=False)  # those awaits, as above
             ctrl = RunController(
                 deps=self.deps,
@@ -1412,8 +1526,16 @@ class RunSupervisor:
             ctrl.usage = _spent_before(
                 records[0].usage if records else None, snapshot.usage
             )
+            ctrl.history_runs = history
+            ctrl.completed_mirror = list(seed)
+            ctrl._answers = dict(answers or {})
+            for content in inbox or ():
+                ctrl.mailbox.push(content)
             self._controllers[session_id] = ctrl
             self.last_client[session_id] = client
+        if autostart:
+            # Begun with no subscriber: a page attaches with reconnect.
+            ctrl._ensure_begun()
         return ctrl
 
     async def retune(self, session_id: str) -> bool:

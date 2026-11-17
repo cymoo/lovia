@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 
 from .. import events
-from ..approvals import Approval, ApprovalChannel
+from ..approvals import Approval, ApprovalChannel, _Suspension
 
 
 class ApprovalRegistry:
@@ -64,7 +64,9 @@ class ApprovalRegistry:
             self._pending.pop(key, None)
             self._claimed.discard(key)
 
-        if decision.approved:
+        if isinstance(decision, _Suspension):
+            ev.suspend(decision.reason)
+        elif decision.approved:
             ev.approve()
         else:
             ev.reject(decision.reason)
@@ -109,10 +111,18 @@ class ApprovalRegistry:
         ``session_id`` (a cancel signal, the approval timeout). A claimed one
         is a decision already taken — its owner resolves it. Returns whether
         anything was denied."""
-        denied = False
+        return self._settle_unclaimed(session_id, Approval(False, reason))
+
+    def suspend_pending(self, session_id: str) -> bool:
+        """Put off the unclaimed approvals pending for ``session_id``: the run
+        stops at the call (:class:`~lovia.exceptions.RunSuspended`) to be
+        resumed once someone answers. A claimed one is already being answered.
+        Returns whether anything was suspended."""
+        return self._settle_unclaimed(session_id, _Suspension(False))
+
+    def _settle_unclaimed(self, session_id: str, decision: Approval) -> bool:
+        settled = False
         for (sid, call_id), _ev in list(self._pending.items()):
             if sid == session_id and (sid, call_id) not in self._claimed:
-                denied |= self._channel.resolve(
-                    call_id, Approval(False, reason), scope=sid
-                )
-        return denied
+                settled |= self._channel.resolve(call_id, decision, scope=sid)
+        return settled

@@ -44,7 +44,7 @@ from fastapi import FastAPI  # after .app: its import names a missing [web] extr
 from .api import RouterDeps
 from .auth import is_loopback
 from .builder import Deployment
-from .default import ANSWER_TIMEOUT, default_app
+from .default import ANSWER_TIMEOUT, SUSPEND_AFTER, default_app
 
 log = logging.getLogger("lovia.web.cli")
 
@@ -585,7 +585,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     max_turns=webconfig.DEFAULT_MAX_TURNS,
                     token=token or _generated_token(host),
                     followups=True,
-                    approval_timeout=ANSWER_TIMEOUT,
+                    suspend_after=SUSPEND_AFTER,
                     question_timeout=ANSWER_TIMEOUT,
                 )
             for custom_agent in custom_agents:

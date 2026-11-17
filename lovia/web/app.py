@@ -197,7 +197,7 @@ def create_app(
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
     max_background_runs: int = 8,
-    approval_timeout: float | None = None,
+    suspend_after: float | None = None,
     question_channel: HumanChannel | None = None,
     question_timeout: float | None = None,
     scheduler_poll: float = 1.0,
@@ -245,19 +245,21 @@ def create_app(
     :class:`RetryPolicy`) overrides the agent's own provider-retry posture for
     server-driven turns; ``None`` inherits it.
 
-    ``approval_timeout`` auto-denies a pending tool approval after that many
-    seconds (default ``None``: wait forever). Set it when using scheduled runs
-    with approval-gated tools — a clientless run parked on an approval otherwise
-    occupies one of the ``max_background_runs`` slots until someone opens the
-    chat and decides.
+    ``suspend_after`` suspends a run whose approval card is unanswered after
+    that many seconds (default ``None``: wait live forever). The run stops at
+    the call, keeps its checkpoint and frees its slot; the card stays, and
+    answering it — whenever, even after a restart — resumes the run (a
+    subagent task's card is denied instead). Set it when using scheduled runs
+    with approval-gated tools — a clientless run parked on an approval
+    otherwise occupies one of the ``max_background_runs`` slots until someone
+    opens the chat and decides.
 
     ``question_channel`` wires an agent's ``ask_human`` tool into the UI: pass
     the same :class:`~lovia.tools.HumanChannel` the tool was built with, and
     pending questions render as interactive cards answered over
-    ``POST /api/chat/answer``. ``question_timeout`` is the question's
-    ``approval_timeout`` twin — after that many seconds an unanswered question
-    is cancelled (the tool call fails with an error the model can route
-    around), so a clientless run never parks forever.
+    ``POST /api/chat/answer``. ``question_timeout`` cancels an unanswered
+    question after that many seconds (the tool call fails with an error the
+    model can route around), so a clientless run never parks forever.
 
     ``ui`` controls the bundled single-page chat UI: when ``True`` (default) the
     app also serves ``GET /`` and ``/static``; a :class:`~lovia.web.ChatUI`
@@ -363,7 +365,7 @@ def create_app(
         retry=retry,
         tracer=tracer,
         max_background_runs=max_background_runs,
-        approval_timeout=approval_timeout,
+        suspend_after=suspend_after,
         scheduler_poll=scheduler_poll,
         questions=questions,
     )

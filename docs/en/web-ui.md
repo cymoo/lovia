@@ -760,11 +760,19 @@ carries the outcome as a badge: **Approved** (hover: what was remembered),
 **Auto-approved** for a call grants answered — click it to list the chat's
 grants and revoke one (revoking affects later calls only). A refused call
 gets its row at once, filled by its error result, as a reloaded chat shows
-it. `lovia web` denies an approval nobody
-answers within ten minutes (the card says when, up front; the model is told
-the user did not answer), so a scheduled or background run never holds a run
-slot indefinitely; `create_app(approval_timeout=...)` sets it for your own
-app (`None`: wait for an answer).
+it.
+
+An approval nobody answers within a minute pauses its run in `lovia web`:
+the run stops at the call and frees its slot, and the card stays, marked
+**Paused · approve to continue**. Answer it whenever — after a reload, after
+a server restart — and the run picks up from that call; a message sent to
+the chat resumes it too (the card is asked again and the message is read once
+it is answered). The sidebar marks a chat that waits like this, a scheduled
+fire into it is skipped, and a subagent report that arrives meanwhile waits
+with the run. So a scheduled or background run never holds a run slot
+indefinitely, and nothing is denied for want of an answer.
+`create_app(suspend_after=...)` sets the delay for your own app (`None`: wait
+live for an answer).
 
 ## Questions from the Agent
 
@@ -885,7 +893,7 @@ it and it has no edit button.
 
 A task is not owned by the parent Run, so stopping the parent does not stop the
 task — the stop notice says which tasks still run and offers **Stop them too**;
-deleting the parent chat stops its tasks and deletes them with it. Approvals auto-deny after `approval_timeout`; unfinished tasks are not
+deleting the parent chat stops its tasks and deletes them with it. A task's approval is denied after `suspend_after` rather than paused; unfinished tasks are not
 resumed after a server restart.
 
 A task's approval card shows in the chat that spawned it too, above the

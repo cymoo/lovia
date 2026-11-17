@@ -27,11 +27,16 @@ from .store import ChatStore
 from .ui import ChatUI
 from .workspaces import WorkspaceSwitch
 
-# An unanswered approval or question is given up on after this long. Without
-# it a clientless run (a scheduled fire, a background task) parked on one
-# holds a concurrency slot forever; in a chat someone is watching, ten idle
-# minutes means the answer is no.
+# An unanswered question is given up on after this long. Without it a
+# clientless run (a scheduled fire, a background task) parked on one holds a
+# concurrency slot forever; in a chat someone is watching, ten idle minutes
+# means the answer is no.
 ANSWER_TIMEOUT = 600
+
+# An unanswered approval card suspends its run after this long: the slot is
+# freed and nothing is lost, since answering the card later resumes the run.
+# Someone watching answers within a minute; anyone else answers whenever.
+SUSPEND_AFTER = 60
 
 
 def default_app(
@@ -134,7 +139,7 @@ def default_app(
         followups=runtime.followups,
         title_model=aux_model,
         followup_model=aux_model,
-        approval_timeout=ANSWER_TIMEOUT,
+        suspend_after=SUSPEND_AFTER,
         question_channel=question_channel,
         question_timeout=ANSWER_TIMEOUT,
         ui=ui,

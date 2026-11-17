@@ -31,7 +31,7 @@ from lovia.web.subagents import subagent_runner  # noqa: E402
 from lovia.web.scheduler import Scheduler  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
-from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
+from ..scripted_provider import ScriptedProvider, batch, call, text  # noqa: E402
 from .test_scheduler import _row  # noqa: E402
 from .test_subagents import _report  # noqa: E402
 from .test_supervisor import _client, _spawn, _wait_run  # noqa: E402
@@ -598,10 +598,16 @@ async def test_an_unanswered_question_suspends_and_its_answer_resumes() -> None:
 @pytest.mark.asyncio
 async def test_a_live_question_is_announced_as_its_call() -> None:
     # Asked, not yet suspended: the runs say the run waits on its question,
-    # under the call's id — the one a later suspension of it carries too.
+    # under the call's id — the one a later suspension of it carries too, not
+    # that of a call after it in its turn (it has no result yet either).
     channel = HumanChannel()
     provider = ScriptedProvider(
-        [call("ask_human", {"question": "Which branch?"}, call_id="q1"), text("ok")]
+        [
+            batch(
+                ("ask_human", {"question": "Which branch?"}, "q1"), ("lookup", {}, "c2")
+            ),
+            text("ok"),
+        ]
     )
     app = _app(_asking(provider, channel), question_channel=channel)
     deps = app.state.deps

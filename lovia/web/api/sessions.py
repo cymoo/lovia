@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import json
 import time
 from typing import Any, cast
 from weakref import WeakValueDictionary
@@ -80,6 +81,15 @@ def _waits_on(waiting_for: JsonObject | None) -> WaitsOn | None:
     if kind not in ("approval", "question", "call"):
         return None
     return WaitsOn(kind=kind, id=call_id)
+
+
+def _asks(arguments: str, question: str) -> bool:
+    """Whether a call's raw JSON ``arguments`` ask ``question``."""
+    try:
+        args = json.loads(arguments)
+    except ValueError:
+        return False
+    return isinstance(args, dict) and args.get("question") == question
 
 
 def _in_flight(snapshot: RunSnapshot) -> Run:
@@ -234,15 +244,22 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
     def _live_waits_on(sid: str, ctrl: RunController) -> WaitsOn | None:
         if ctrl.pending_approval is not None:
             return WaitsOn(kind="approval", id=ctrl.pending_approval.request.call.id)
-        if deps.questions is None or deps.questions.pending(sid) is None:
+        q = deps.questions.pending(sid) if deps.questions is not None else None
+        if q is None:
             return None
-        # ask_human is an execution barrier: while its question waits, its
-        # call is the run's one call without a result — the same id a
-        # suspension of it records, so a page tells the user once.
+        # Name the asking call — the same id a suspension of it records, so a
+        # page tells the user once. Calls after it in its turn have no result
+        # yet either, so match its question; ask_human is an execution
+        # barrier, so failing that it is the first call still open.
         open_calls = pending_tool_calls(
             [*ctrl.completed_mirror, *ctrl.current_turn_entries]
         )
-        return WaitsOn(kind="question", id=open_calls[-1].id) if open_calls else None
+        if not open_calls:
+            return None
+        asking = next(
+            (c for c in open_calls if _asks(c.arguments, q.question)), open_calls[0]
+        )
+        return WaitsOn(kind="question", id=asking.id)
 
     @router.get("/api/runs/history", response_model=list[RunRecordInfo])
     async def run_history(

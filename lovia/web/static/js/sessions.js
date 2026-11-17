@@ -364,7 +364,11 @@ function markStopping(sid) {
 /** Stop the tasks among `ids` still running now — one may have finished
  * since the offer was made — with one notice and one list reload. */
 async function stopTasks(ids) {
-  const live = ids.filter((id) => store.runsBySession?.has(id));
+  let live = ids;
+  try {
+    const running = new Set((await api.listRuns()).map((r) => r.session_id));
+    live = ids.filter((id) => running.has(id));
+  } catch { /* stop them all: a stop of a finished run is harmless */ }
   if (!live.length) return;
   live.forEach(markStopping);
   const results = await Promise.allSettled(live.map((id) => api.cancel(id)));
@@ -383,13 +387,16 @@ async function stopTasks(ids) {
  * @param {string} sid The chat whose run was just stopped.
  */
 export async function offerToStopTasks(sid) {
-  let tasks;
+  let tasks, runs;
   try {
-    tasks = await api.listSessions({ parent: sid });
+    // Runs fetched now, not the cached set: a task started a moment ago may
+    // not be in it yet.
+    [tasks, runs] = await Promise.all([api.listSessions({ parent: sid }), api.listRuns()]);
   } catch {
     return; // the chat's own stop stands; this is only an offer
   }
-  const live = tasks.filter((s) => store.runsBySession?.has(s.id)).map((s) => s.id);
+  const running = new Set(runs.map((r) => r.session_id));
+  const live = tasks.filter((s) => running.has(s.id)).map((s) => s.id);
   if (!live.length) return;
   toast(t('toast.tasksStillRunning', { n: live.length }), {
     timeout: 10_000,

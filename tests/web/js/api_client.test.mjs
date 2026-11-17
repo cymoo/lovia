@@ -50,8 +50,17 @@ test('a burst of 401s calls the handler once, with the error code', async () => 
   for (const call of calls) await assert.rejects(call, { status: 401 });
   assert.equal(seen.length, 1);
   assert.equal(seen[0].code, 'server_token');
-  // Raw-Response methods (cancel, export, raw bytes) go through the same gate.
-  assert.equal((await api.cancel('s1')).status, 401);
+  // Raw-Response methods (export, raw bytes) go through the same gate.
+  await assert.rejects(api.cancel('s1'), { status: 401 });
   assert.equal((await api.exportChat('s1')).status, 401);
   assert.equal(seen.length, 1);
+});
+
+test('a stop that fails rejects; one for a run already over resolves', async () => {
+  status = 500;
+  body = { detail: { code: 'internal', message: 'boom' } };
+  await assert.rejects(api.cancel('s1'), { status: 500 });
+  status = 404;
+  body = { detail: { code: 'run_not_found', message: 'no active stream' } };
+  assert.deepEqual(await api.cancel('s1'), { ok: true });
 });

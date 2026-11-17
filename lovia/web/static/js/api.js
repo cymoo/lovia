@@ -170,8 +170,12 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }),
+  // Rejects when the stop didn't land; a run that already ended (404
+  // run_not_found) has nothing left to stop, so it resolves.
   cancel: (sessionId) =>
-    request(`/api/chat/cancel${qs({ session_id: sessionId })}`, { method: 'POST' }),
+    request(`/api/chat/cancel${qs({ session_id: sessionId })}`, { method: 'POST' }).then(
+      (res) => (res.status === 404 ? { ok: true } : _json(res)),
+    ),
   // Queue a message into the active run. `body`: { session_id, message }.
   inject: (body) =>
     request('/api/chat/inject', {

@@ -11,12 +11,13 @@ const source = readFileSync(new URL('../../../lovia/web/static/js/sessions.js', 
   .replace(/^import .*;$/gm, '')
   .replace(/^export /gm, '');
 
-function fixture(tasks, live) {
+function fixture(tasks, live, { failing = [] } = {}) {
   const toasts = [];
   const cancelled = [];
+  // The cached runs know none of them: the offer must read runs fetched now.
   const store = {
     sessions: [], activeRuns: new Set(), shownRuns: new Set(), emit: () => {},
-    runsBySession: new Map(live.map((id) => [id, { run_id: `r-${id}`, session_id: id }])),
+    runsBySession: new Map(),
   };
   const context = {
     document: { title: 'Lovia', hidden: false, getElementById: () => null },
@@ -30,13 +31,16 @@ function fixture(tasks, live) {
     playCompletionSound: () => {},
     api: {
       listSessions: async ({ parent } = {}) => (parent ? tasks.map((id) => ({ id })) : []),
-      listRuns: async () => [],
+      listRuns: async () => live.map((id) => ({ run_id: `r-${id}`, session_id: id })),
       runHistory: async () => [],
-      cancel: async (sid) => { cancelled.push(sid); },
+      cancel: async (sid) => {
+        if (failing.includes(sid)) throw new Error('500');
+        cancelled.push(sid);
+      },
     },
   };
   runInNewContext(`${source}\nglobalThis.offer = offerToStopTasks;`, context);
-  return { toasts, cancelled, store, offer: context.offer };
+  return { toasts, cancelled, live, offer: context.offer };
 }
 
 test('no notice when none of the chat\'s tasks is running', async () => {
@@ -56,9 +60,18 @@ test('the notice counts the running tasks and its action stops only those', asyn
   assert.equal(message.params.n, 2);
   assert.equal(opts.action.label.key, 'toast.stopTasks');
 
-  f.store.runsBySession.delete('t3'); // finished before the click
+  f.live.splice(f.live.indexOf('t3'), 1); // finished before the click
   opts.action.run();
   await setImmediate();
   assert.deepEqual(f.cancelled, ['t1']);
   assert.deepEqual(f.toasts.slice(1).map((x) => x.message.key), ['toast.runStopped']);
+});
+
+test('a stop that fails says so', async () => {
+  const f = fixture(['t1', 't2'], ['t1', 't2'], { failing: ['t2'] });
+  await f.offer('chat');
+  f.toasts[0].opts.action.run();
+  await setImmediate();
+  assert.deepEqual(f.cancelled, ['t1']);
+  assert.deepEqual(f.toasts.slice(1).map((x) => x.message.key), ['toast.stopFailed']);
 });

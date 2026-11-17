@@ -581,6 +581,27 @@ async def test_a_report_after_a_stop_is_kept_without_starting_a_run() -> None:
     assert any("late findings" in s for s in seen)
 
 
+async def test_a_settled_stop_still_holds_reports() -> None:
+    """Once the stopped run has wound down only its record says so. A later
+    finished run ends the hold."""
+    from lovia.web.store import RunRow
+    from lovia.web.subagents import _stopped
+
+    deps = _app(Agent(name="bot", model=ScriptedProvider([]))).state.deps
+    await deps.store.upsert("s8", agent="bot", title="chat")
+
+    async def record(rid: str, status: str, at: float) -> None:
+        await deps.store.start_run(
+            RunRow(rid, "s8", "bot", "user", status, None, at, at, None)
+        )
+
+    assert not await _stopped(deps, "s8")  # no runs yet
+    await record("r1", "cancelled", 1.0)
+    assert await _stopped(deps, "s8")
+    await record("r2", "completed", 2.0)
+    assert not await _stopped(deps, "s8")
+
+
 def test_the_chat_recognises_what_the_core_renders() -> None:
     """The chat draws a report as a card by matching the text the core's
     ``_render`` writes (static/js/subagent-report.js). Both reports match

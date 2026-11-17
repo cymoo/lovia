@@ -98,9 +98,7 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     sid,
                 )
                 return
-            if deps.supervisor.stopping(sid) or (
-                (await deps.store.latest_run_statuses([sid])).get(sid) == "cancelled"
-            ):
+            if await _stopped(deps, sid):
                 await _hold(deps, report, sid)
                 return
             try:
@@ -184,6 +182,14 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
         )
 
     return deliver
+
+
+async def _stopped(deps: "RouterDeps", sid: str) -> bool:
+    """Whether the chat's last run was stopped: one still winding down (its
+    record reads "cancelled" only once it has), or the newest record says so."""
+    if deps.supervisor.stopping(sid):
+        return True
+    return (await deps.store.latest_run_statuses([sid])).get(sid) == "cancelled"
 
 
 async def _hold(deps: "RouterDeps", report: SubagentReport, sid: str) -> None:

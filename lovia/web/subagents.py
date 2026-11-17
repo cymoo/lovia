@@ -142,7 +142,8 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                 )
                 return
             try:
-                # The chat may have been deleted while run_deps ran.
+                # While run_deps ran, the chat may have been deleted, or the
+                # user may have started a run in it and stopped it.
                 async with deps._chat_alive(sid) as alive:
                     if not alive:
                         log.info(
@@ -151,17 +152,22 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                             sid,
                         )
                         return
-                    await deps.supervisor.start(
-                        session_id=sid,
-                        agent=agent,
-                        input=report.text,
-                        is_new=False,
-                        title_message=None,
-                        autostart=True,  # clientless: consume the report unattended
-                        source=source,
-                        client=client,
-                        run_deps=run_deps,
-                    )
+                    held = await _stopped(deps, sid)
+                    if not held:
+                        await deps.supervisor.start(
+                            session_id=sid,
+                            agent=agent,
+                            input=report.text,
+                            is_new=False,
+                            title_message=None,
+                            autostart=True,  # clientless: consume it unattended
+                            source=source,
+                            client=client,
+                            run_deps=run_deps,
+                        )
+                if held:  # outside the block: _hold takes the chat itself
+                    await _hold(deps, report, sid)
+                    return
                 log.info(
                     "subagent %s: report delivered to idle session %s via a new run",
                     report.id,

@@ -485,6 +485,51 @@ async def test_a_report_still_in_run_deps_does_not_restart_a_deleted_chat() -> N
     assert await deps.store.list_runs() == []
 
 
+async def test_a_stop_while_the_report_is_in_run_deps_still_holds_it() -> None:
+    """The chat was idle when the report came; while its run_deps ran, the
+    user started a run there and stopped it. The stop holds."""
+    import time
+
+    from lovia.web.store import RunRow
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def run_deps(trigger: Any) -> None:
+        if trigger.source.startswith("subagent-report:"):
+            entered.set()
+            await release.wait()
+
+    child = Agent(name="child", model=ScriptedProvider([text("findings")]))
+    plugin = Subagents(child)
+    provider = ScriptedProvider([call("spawn_subagent", {"prompt": "dig"}), text("ok")])
+    agent = Agent(name="bot", model=provider, plugins=[plugin])
+    app = create_app(
+        agent, store=ChatStore.in_memory(), titles=False, run_deps=run_deps
+    )
+    deps = app.state.deps
+    await deps.store.upsert("s9", agent="bot", title="chat")
+    await deps.supervisor.start(
+        session_id="s9",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="user",
+    )
+    await asyncio.wait_for(entered.wait(), 5)  # past the first stop check
+    await _poll(lambda: _none(deps.supervisor.get("s9")))
+    now = time.time() + 1  # the user's run, started and stopped meanwhile
+    await deps.store.start_run(
+        RunRow("r-stopped", "s9", "bot", "user", "cancelled", None, now, now, None)
+    )
+    release.set()
+    await asyncio.gather(*plugin._detached, return_exceptions=True)
+    assert await deps.store.latest_run_for("subagent-report:t1") is None
+    report = (await deps.session.load("s9"))[-1]
+    assert isinstance(report, InputEntry) and "findings" in str(report.content)
+
+
 async def test_overlapping_deletes_keep_the_tree_closed_until_the_last_ends() -> None:
     deps = _app(Agent(name="bot", model=ScriptedProvider([]))).state.deps
     await deps.store.upsert("c", agent="bot")

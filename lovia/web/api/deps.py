@@ -98,8 +98,8 @@ class RouterDeps:
     max_background_runs: int = 8
     # Suspend a run whose approval card is unanswered after this many seconds
     # (None = wait live forever): it stops at the call, keeps its checkpoint
-    # and frees its slot, and answering the card resumes it (a task's card is
-    # denied instead). Without it a clientless (scheduled) run parked on an
+    # and frees its slot, and answering the card resumes it. Without it a
+    # clientless (scheduled) run parked on an
     # approval holds one of the ``max_background_runs`` slots indefinitely.
     suspend_after: float | None = None
     # How often (seconds) the scheduler started by ``lifespan`` checks for due

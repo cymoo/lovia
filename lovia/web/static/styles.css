@@ -2840,7 +2840,6 @@ body.lv-view-open #files-btn {
   background: color-mix(in srgb, var(--lv-ok) 10%, transparent);
 }
 .lv-tool-approval.lv-deny,
-.lv-tool-approval.lv-timeout,
 .lv-tool-approval.lv-cancel {
   color: var(--lv-danger);
   background: color-mix(in srgb, var(--lv-danger) 9%, transparent);

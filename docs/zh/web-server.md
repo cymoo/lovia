@@ -81,7 +81,7 @@ customize=None, ...)`：前五个就是命令行的开关（`--home`、`DIR`（`
 | `tracer` | `None` | 托管 Run 的 Span 记录器 |
 | `titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
 | `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后生成追问建议（见下文） |
-| `suspend_after` | `None` | 审批卡片超过指定秒数无人回答时暂停运行：保留 checkpoint、释放槽位，回答卡片后续跑（子任务的审批则被拒绝） |
+| `suspend_after` | `None` | 审批卡片超过指定秒数无人回答时暂停运行：保留 checkpoint、释放槽位，回答卡片后续跑 |
 | `max_background_runs` | `8` | 并发托管 Run；达到上限后，新请求返回 429 |
 | `ui` | `True` | 设为 `False` 时只提供 API；传入 `ChatUI` 可定制内置页面（见下文） |
 | `cors_origins` | `None` | 允许跨域访问的浏览器 Origin；不设置时不发送 CORS 响应头 |

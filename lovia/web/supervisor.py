@@ -16,6 +16,7 @@ loop or the endpoints.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import logging
 import time
@@ -102,17 +103,21 @@ _INTERRUPTED = (
 )
 
 
+@dataclass(frozen=True)
+class Kept:
+    """What a run suspended in this process resumes with (see
+    ``RunSupervisor.kept``): the agent it was handed, its mailbox and the
+    source that started it."""
+
+    agent: Agent[Any]
+    mailbox: Mailbox
+    source: str
+    is_task: bool
+
+
 def _queued_entry(content: InjectedContent) -> JsonObject:
     """A message a suspended run has not read yet, as its record keeps it."""
     return entry_to_dict(InputEntry(role="user", content=content))
-
-
-def _span(seconds: float) -> str:
-    """``600`` → ``"10 minutes"``, ``90`` → ``"90 seconds"``."""
-    if seconds >= 60 and seconds % 60 == 0:
-        minutes = int(seconds // 60)
-        return f"{minutes} minute{'s' if minutes != 1 else ''}"
-    return f"{seconds:.0f} seconds"
 
 
 def agent_grant_context(name: str, agent: "Agent[Any]") -> str:
@@ -401,6 +406,9 @@ class RunController:
         # The card the run suspended on, once nobody answered it in time: the
         # record keeps it, so the chat can offer it with no run attached.
         self._suspended: ApprovalAsked | None = None
+        # A subagent task's run (its chat has a parent): a shutdown stops it
+        # rather than suspending it, since the run awaiting it ends too.
+        self.is_task = False
         # first-run spec
         self._first_input = first_input
         self._first_ckpt = first_checkpoint
@@ -562,20 +570,12 @@ class RunController:
             log.warning("grant lookup failed for %s: %s", self.session_id, exc)
             return False
 
-    @property
-    def _suspends(self) -> bool:
-        """Whether an unanswered card suspends this run rather than denying.
-        A task's run is awaited by the run that spawned it, which a suspension
-        would end early: its card is denied instead."""
-        return not self.source.startswith("subagent:")
-
     async def _await_approval(
         self, ev: events.ApprovalRequired
     ) -> ApprovalResolved | None:
         """Await the HTTP decision for ``ev``; returns how it was settled, for
         the clients' cards, or None when nobody answered within
-        ``suspend_after`` and the run suspends on it (a task's card is denied
-        instead, see :attr:`_suspends`).
+        ``suspend_after`` and the run suspends on it.
 
         Without the deadline a clientless (scheduled) run parked on an approval
         holds its concurrency slot forever — ``RunBudget.max_seconds`` is only
@@ -589,33 +589,23 @@ class RunController:
             "run parked on approval: session=%s tool=%s (%s)",
             self.session_id,
             ev.call.name,
-            "waits for a decision"
-            if after is None
-            else f"{'suspends' if self._suspends else 'denied'} after {after:.0f}s",
+            "waits for a decision" if after is None else f"suspends after {after:.0f}s",
         )
         # ``await_decision`` registers the pending future in its first step,
         # before it yields — so awaiting the coroutine directly leaves no
         # window in which a concurrent ``cancel_run()`` → ``deny_pending()``
         # could run before registration and miss it (a task spawned via
-        # ensure_future would open exactly that window). The timeout is a
-        # timer that *resolves* the pending approval with its own reason,
-        # rather than cancelling the awaiter, so the model is told "timed
-        # out" and not the cancellation path's "run was cancelled".
+        # ensure_future would open exactly that window). The deadline is a
+        # timer that *suspends* the pending approval rather than cancelling
+        # the awaiter: the run stops at the call to be resumed, not stopped.
+        # (A tab's claim already in flight wins: the timer then finds nothing.)
         decision = self.deps.approvals.await_decision(self.session_id, ev)
-        timed_out = False
-
-        def expire() -> None:
-            nonlocal timed_out
-            # False when a tab had already claimed the decision.
-            if self._suspends:
-                timed_out = self.deps.approvals.suspend_pending(self.session_id)
-            else:
-                timed_out = self._deny_timed_out(ev.call.id)
-
         timer = (
             None
             if after is None
-            else asyncio.get_running_loop().call_later(after, expire)
+            else asyncio.get_running_loop().call_later(
+                after, self.deps.approvals.suspend_pending, self.session_id
+            )
         )
         try:
             approval = await decision
@@ -630,13 +620,11 @@ class RunController:
                 after or 0,
             )
             return None
-        # A sweep that found the approval still unclaimed decided it: the
-        # timer, or a stop (deny_pending); or a mode switch did
-        # (recheck_pending). Anything else was a tab's answer.
-        cause: Literal["user", "timeout", "cancel", "policy"] = (
-            "timeout"
-            if timed_out
-            else "cancel"
+        # A sweep that found the approval still unclaimed decided it: a stop
+        # (deny_pending) or a mode switch (recheck_pending). Anything else was
+        # a tab's answer.
+        cause: Literal["user", "cancel", "policy"] = (
+            "cancel"
             if self.cancel.is_cancelled and not approval.approved
             else "policy"
             if self._policy_settled == ev.call.id
@@ -645,26 +633,6 @@ class RunController:
         # Spent: a provider may reuse the call id for a later request.
         self._policy_settled = None
         return ApprovalResolved(ev.call.id, approval.approved, cause)
-
-    def _deny_timed_out(self, call_id: str) -> bool:
-        """Deny the pending approval for want of an answer; False when a tab
-        has already claimed it (its decision stands)."""
-        # Preflight is serial, so the session has at most one pending approval:
-        # the registry's per-session deny is exactly this call.
-        timeout = self.deps.suspend_after or 0
-        # Told to the model, which otherwise guesses at a policy block.
-        denied = self.deps.approvals.deny_pending(
-            self.session_id,
-            reason=f"the user did not answer within {_span(timeout)}",
-        )
-        if denied:
-            log.info(
-                "approval %s for session %s timed out after %.0fs: denied",
-                call_id,
-                self.session_id,
-                timeout,
-            )
-        return denied
 
     def freeze(self) -> None:
         """Fold what the user has seen of this leg into the durable Session.
@@ -1212,6 +1180,9 @@ class RunController:
                             )
                 except Exception as exc:  # pragma: no cover - defensive
                     log.warning("run record write failed for %s: %s", sid, exc)
+                self.supervisor._kept[sid] = Kept(
+                    self.source_agent, self.mailbox, self.source, self.is_task
+                )
             await deps.approvals.release(sid)
             self.hub.close()
             self.supervisor._evict(sid, self)
@@ -1321,10 +1292,83 @@ class RunSupervisor:
         # session starts on nobody's request: its subagent tasks, and the
         # report runs that deliver their results back into it.
         self.last_client: dict[str, JsonObject] = {}
+        # What a run suspended on a card resumes with in this process: the
+        # agent it was handed (a subagent task's is an unregistered clone,
+        # which no registry lookup finds) and its mailbox (a task's is shared
+        # with the run that spawned it). A restart loses it; a chat's run
+        # then resumes by the registry, a task's is settled at startup.
+        self._kept: dict[str, Kept] = {}
+        # Set when a controller registers for a session, so a caller following
+        # that session's run across suspensions (see :meth:`follow`) wakes.
+        self._registered: dict[str, asyncio.Event] = {}
 
     @property
     def max_background_runs(self) -> int:
         return self.deps.max_background_runs
+
+    def kept(self, session_id: str) -> Kept | None:
+        """What the session's suspended run resumes with here, if this
+        process suspended it."""
+        return self._kept.get(session_id)
+
+    def forget(self, session_id: str) -> None:
+        """Drop what a suspended run was kept with: it was stopped, or its
+        chat deleted. Wakes whoever follows it (:meth:`follow`)."""
+        self._kept.pop(session_id, None)
+        if (event := self._registered.pop(session_id, None)) is not None:
+            event.set()
+
+    def forget_all(self) -> None:
+        """:meth:`forget` every suspended run (every chat was deleted)."""
+        for session_id in [*self._kept, *self._registered]:
+            self.forget(session_id)
+
+    def _register(self, session_id: str, ctrl: RunController) -> None:
+        self._controllers[session_id] = ctrl
+        self._kept.pop(session_id, None)
+        if (event := self._registered.pop(session_id, None)) is not None:
+            event.set()
+
+    async def follow(
+        self, session_id: str, ctrl: RunController
+    ) -> RunController | None:
+        """Wait for ``ctrl``'s run to end, following it across suspensions:
+        the controller it finally ended with, or None when it was stopped (or
+        its chat deleted) while it waited on a card."""
+        from .waiting import find_waiting
+
+        try:
+            while True:
+                if ctrl.task is not None:
+                    await asyncio.wait([ctrl.task])
+                if ctrl.final_status != "waiting":
+                    return ctrl
+                while True:
+                    event = self._registered.setdefault(session_id, asyncio.Event())
+                    # Its resume runs under the same record; any other run in
+                    # the chat is a new one, started after it was stopped.
+                    live = self.get(session_id)
+                    if live is not None and live.record_id == ctrl.record_id:
+                        if live is not ctrl:
+                            ctrl = live
+                            break
+                    rows = await self.deps.store.list_runs(
+                        run_id=ctrl.record_id, limit=1
+                    )
+                    status = rows[0].status if rows else None
+                    if status == "waiting":
+                        if await find_waiting(self.deps, session_id) is None:
+                            return None  # its checkpoint went: settled
+                    elif status != "running":
+                        return None  # stopped, or its chat deleted
+                    # "running" with no controller: a resume is registering.
+                    # Woken by a register or a stop (forget); the timeout is a
+                    # safety net for a path that settles it without either.
+                    # asyncio's: not the builtin before Python 3.11.
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(event.wait(), timeout=5.0)
+        finally:
+            self._registered.pop(session_id, None)
 
     def get(self, session_id: str) -> RunController | None:
         return self._controllers.get(session_id)
@@ -1443,11 +1487,12 @@ class RunSupervisor:
             )
             ctrl.binding, ctrl.source_agent = binding, handed
             ctrl.grant_owner = grants
+            ctrl.is_task = bool(meta and meta.parent_id)
             # Reserve the session slot BEFORE the checkpoint await: two concurrent
             # starts (e.g. two tabs submitting at once) would otherwise both pass the
             # caller's live-check and the second would silently orphan the first's
             # running task. The loser now gets the 409 above and attaches instead.
-            self._controllers[session_id] = ctrl
+            self._register(session_id, ctrl)
             self.last_client[session_id] = client
         # The first leg's checkpoint id is the run's id too.
         ctrl.record_id = uuid.uuid4().hex
@@ -1479,10 +1524,12 @@ class RunSupervisor:
         run_deps: Any = None,
         answers: dict[str, Approval] | None = None,
         inbox: list[InjectedContent] | None = None,
+        mailbox: Mailbox | None = None,
+        source: str = "user",
         autostart: bool = False,
     ) -> RunController:
-        """Register a resume of ``snapshot``; ``run_deps`` and ``autostart`` as
-        for :meth:`start`.
+        """Register a resume of ``snapshot``; ``run_deps``, ``mailbox``,
+        ``source`` and ``autostart`` as for :meth:`start`.
 
         A run suspended on a card resumes with that card's answer in
         ``answers`` (by call id: the resumed run asks again, see
@@ -1541,11 +1588,13 @@ class RunSupervisor:
                 title_message=None,
                 # The resumer's identity; if the run already has a record (it
                 # normally does — same run_id), start_run keeps the original source.
-                source="user",
+                source=source,
+                mailbox=mailbox,
                 client=client,
                 run_deps=run_deps,
                 chat_created_at=meta.created_at if meta else None,
             )
+            ctrl.is_task = bool(meta and meta.parent_id)
             ctrl.binding, ctrl.source_agent = binding, handed
             ctrl.grant_owner = grants
             ctrl.record_id = record_id
@@ -1561,7 +1610,7 @@ class RunSupervisor:
             ctrl._answers = dict(answers or {})
             for content in inbox or ():
                 ctrl.mailbox.push(content)
-            self._controllers[session_id] = ctrl
+            self._register(session_id, ctrl)
             self.last_client[session_id] = client
         if autostart:
             # Begun with no subscriber: a page attaches with reconnect.
@@ -1721,9 +1770,17 @@ class RunSupervisor:
                 self._draining.pop(session_id, None)
 
     async def shutdown(self, *, grace: float = 10.0) -> None:
+        from .waiting import find_waiting, stop_waiting
+
         ctrls = list(self._controllers.values())
         for c in ctrls:
-            c.cancel_run(user=False)  # cooperative stop; KEEP the checkpoint
+            if c.pending_approval is not None and not c.is_task:
+                # Parked on a card: suspend it, so the card outlives the
+                # restart and answering it resumes the run. (A task stops: the
+                # run that awaits it ends with this process.)
+                self.deps.approvals.suspend_pending(c.session_id)
+            else:
+                c.cancel_run(user=False)  # cooperative stop; KEEP the checkpoint
         tasks = [c.task for c in ctrls if c.task is not None]
         if tasks:
             _done, pending = await asyncio.wait(tasks, timeout=grace)
@@ -1731,6 +1788,12 @@ class RunSupervisor:
                 t.cancel()
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
+        # A task already suspended goes the same way: nothing here would
+        # resume it after the restart.
+        for sid, kept in list(self._kept.items()):
+            if kept.is_task and (waiting := await find_waiting(self.deps, sid)):
+                with contextlib.suppress(Exception):
+                    await stop_waiting(self.deps, waiting)
 
 
 # --------------------------------------------------------------------------- #

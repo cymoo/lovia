@@ -1358,7 +1358,7 @@ function setApprovalBadge(row, { outcome, title }) {
   else summary.append(badge);
 }
 
-/** @param {{ id: string, approved: boolean, cause: 'user' | 'timeout' | 'cancel' | 'policy' }} data */
+/** @param {{ id: string, approved: boolean, cause: 'user' | 'cancel' | 'policy' }} data */
 function resolveApproval(data) {
   // The server's word: a click's failed send (its response lost after the
   // server acted) must not offer this request again.

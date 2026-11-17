@@ -91,7 +91,7 @@ run the app under another ASGI server, skip `serve()`.
 | `tracer` | `None` | Span recorder for served Runs |
 | `titles` / `title_model` | `True` / Agent model | Generate conversation titles in the background |
 | `followups` / `followup_model` | `False` / Agent model | Suggest follow-up questions after a reply (see below) |
-| `suspend_after` | `None` | Suspend a run whose approval card is unanswered after N seconds: it keeps its checkpoint and frees its slot, and answering the card resumes it (a subagent task's card is denied instead) |
+| `suspend_after` | `None` | Suspend a run whose approval card is unanswered after N seconds: it keeps its checkpoint and frees its slot, and answering the card resumes it |
 | `max_background_runs` | `8` | Concurrent supervised Runs; excess starts return 429 |
 | `ui` | `True` | `False` serves the API only; a `ChatUI` customizes the bundled page (below) |
 | `cors_origins` | `None` | Allowed browser origins; unset sends no CORS headers |

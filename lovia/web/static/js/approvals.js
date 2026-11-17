@@ -108,30 +108,30 @@ export function scopeList(scopes) {
 /**
  * How a call's approval went: decided by someone (`approve` … `cancel`), or
  * answered by remembered approvals before anyone saw it (`auto`).
- * @typedef {'approve' | 'deny' | 'timeout' | 'cancel' | 'auto'} ApprovalOutcome
+ * @typedef {'approve' | 'deny' | 'cancel' | 'auto'} ApprovalOutcome
  */
 
 /**
  * How an `approval_resolved` frame settles a request. The chat's permission
  * mode (`policy`: switched while it waited) approves or denies like a person.
- * @param {{ approved: boolean, cause: 'user' | 'timeout' | 'cancel' | 'policy' }} data
+ * (One nobody answers in time is not settled: its run suspends on it.)
+ * @param {{ approved: boolean, cause: 'user' | 'cancel' | 'policy' }} data
  * @returns {ApprovalOutcome}
  */
 export function approvalOutcome(data) {
   if (data.approved) return 'approve';
-  return data.cause === 'user' || data.cause === 'policy' ? 'deny' : data.cause;
+  return data.cause === 'cancel' ? 'cancel' : 'deny';
 }
 
 /** @type {Record<ApprovalOutcome, [badge: string, sentence: string]>} */
 const OUTCOME_TEXT = {
   approve: ['approval.badgeApprove', 'approval.approved'],
   deny: ['approval.badgeDeny', 'approval.denied'],
-  timeout: ['approval.badgeTimeout', 'approval.timedOut'],
   cancel: ['approval.badgeCancel', 'approval.cancelled'],
   auto: ['approval.badgeAuto', 'approval.badgeAuto'],
 };
 
-/** The badge's word on the tool row ("Approved", "Timed out"). @param {ApprovalOutcome} outcome */
+/** The badge's word on the tool row ("Approved", "Stopped"). @param {ApprovalOutcome} outcome */
 export const badgeText = (outcome) => t(OUTCOME_TEXT[outcome][0]);
 
 /** The outcome as a sentence, for its tooltip and announcement. @param {ApprovalOutcome} outcome */

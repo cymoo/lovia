@@ -47,7 +47,8 @@ from ..schemas import (
     TodoItemOut,
     TodosResponse,
 )
-from ..supervisor import agent_grant_context
+from ...runtime.loop import pending_tool_calls
+from ..supervisor import RunController, agent_grant_context
 from ..titles import provisional_title
 from ..waiting import RESUMABLE, find_waiting
 from ..workspaces import ChatBinding
@@ -201,9 +202,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 pending_approval=dict(approval_data(c.pending_approval))
                 if c.pending_approval is not None
                 else None,
-                waits_on=WaitsOn(kind="approval", id=c.pending_approval.request.call.id)
-                if c.pending_approval is not None
-                else None,
+                waits_on=_live_waits_on(sid, c),
             )
             for sid, c in deps.supervisor
         ]
@@ -231,6 +230,19 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             if row.session_id is not None and row.session_id not in busy
         ]
         return [*live, *waiting]
+
+    def _live_waits_on(sid: str, ctrl: RunController) -> WaitsOn | None:
+        if ctrl.pending_approval is not None:
+            return WaitsOn(kind="approval", id=ctrl.pending_approval.request.call.id)
+        if deps.questions is None or deps.questions.pending(sid) is None:
+            return None
+        # ask_human is an execution barrier: while its question waits, its
+        # call is the run's one call without a result — the same id a
+        # suspension of it records, so a page tells the user once.
+        open_calls = pending_tool_calls(
+            [*ctrl.completed_mirror, *ctrl.current_turn_entries]
+        )
+        return WaitsOn(kind="question", id=open_calls[-1].id) if open_calls else None
 
     @router.get("/api/runs/history", response_model=list[RunRecordInfo])
     async def run_history(

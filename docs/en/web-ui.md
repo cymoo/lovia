@@ -774,9 +774,8 @@ indefinitely, and nothing is denied for want of an answer.
 `create_app(suspend_after=...)` sets the delay for your own app (`None`: wait
 live for an answer).
 
-A run that waits on you — an approval card in a chat you're not looking at,
-or a run that paused on a card or a question — tells you once, the way a
-finished run does:
+A run that waits on you — a card or a question in a chat you're not looking
+at, or a run that paused on one — tells you once, the way a finished run does:
 a toast with **Open**, or while the tab is in the background the title's
 count and (when turned on in Settings) a desktop notification that opens the
 chat when clicked.

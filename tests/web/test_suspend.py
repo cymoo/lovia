@@ -596,6 +596,37 @@ async def test_an_unanswered_question_suspends_and_its_answer_resumes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_live_question_is_announced_as_its_call() -> None:
+    # Asked, not yet suspended: the runs say the run waits on its question,
+    # under the call's id — the one a later suspension of it carries too.
+    channel = HumanChannel()
+    provider = ScriptedProvider(
+        [call("ask_human", {"question": "Which branch?"}, call_id="q1"), text("ok")]
+    )
+    app = _app(_asking(provider, channel), question_channel=channel)
+    deps = app.state.deps
+    emitted: list[tuple[str, Any]] = []
+    emit = deps.emit
+    deps.emit = lambda event, data: (emitted.append((event, data)), emit(event, data))
+    async with app.router.lifespan_context(app), _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        for _ in range(250):
+            if deps.questions.pending("s1") is not None:
+                break
+            await asyncio.sleep(0.02)
+        (row,) = (await ac.get("/api/runs")).json()
+        assert row["status"] == "running"
+        assert row["waits_on"] == {"kind": "question", "id": "q1"}
+        await ac.post("/api/chat/answer", json={"session_id": "s1", "answer": "main"})
+        await asyncio.wait_for(task, timeout=5)
+    statuses = [d for e, d in emitted if e == "run_status"]
+    assert len(statuses) == 2  # asked, then answered
+    assert all(d["session_id"] == "s1" for d in statuses)
+
+
+@pytest.mark.asyncio
 async def test_shutdown_suspends_a_parked_question() -> None:
     channel = HumanChannel()
     provider = ScriptedProvider(

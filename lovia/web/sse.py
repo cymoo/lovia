@@ -300,8 +300,9 @@ class RunFinishedData(TypedDict):
 
 
 class RunStatusData(TypedDict):
-    # A live run started or stopped waiting on an approval: ``GET /api/runs``
-    # says which (its ``pending_approval``).
+    # A live run started or stopped waiting on an approval or an ask_human
+    # question: ``GET /api/runs`` says which (``pending_approval``,
+    # ``waits_on``).
     session_id: str
     run_id: str
     status: str

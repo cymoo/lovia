@@ -338,11 +338,7 @@ async function refreshTranscript() {
 
 /** @returns {Promise<boolean>} True once the run was actually cancelled. */
 async function stopRun(sid) {
-  // Suppress the "finished" notice for a stop the user just asked for.
-  _recentlyStopped.set(sid, Date.now());
-  // Entries only matter within the grace window — don't let the map grow
-  // for the lifetime of the tab.
-  setTimeout(() => _recentlyStopped.delete(sid), STOPPED_GRACE_MS);
+  markStopping(sid);
   let ok = true;
   try {
     await api.cancel(sid);
@@ -355,6 +351,29 @@ async function stopRun(sid) {
   }
   loadSessions();
   return ok;
+}
+
+/** Suppress the "finished" notice for a stop the user just asked for. */
+function markStopping(sid) {
+  _recentlyStopped.set(sid, Date.now());
+  // Entries only matter within the grace window — don't let the map grow
+  // for the lifetime of the tab.
+  setTimeout(() => _recentlyStopped.delete(sid), STOPPED_GRACE_MS);
+}
+
+/** Stop the tasks among `ids` still running now — one may have finished
+ * since the offer was made — with one notice and one list reload. */
+async function stopTasks(ids) {
+  const live = ids.filter((id) => store.runsBySession?.has(id));
+  if (!live.length) return;
+  live.forEach(markStopping);
+  const results = await Promise.allSettled(live.map((id) => api.cancel(id)));
+  if (results.some((r) => r.status === 'rejected')) {
+    toast(t('toast.stopFailed'), { type: 'error' });
+  } else {
+    toast(t('toast.runStopped'));
+  }
+  loadSessions();
 }
 
 /**
@@ -374,12 +393,7 @@ export async function offerToStopTasks(sid) {
   if (!live.length) return;
   toast(t('toast.tasksStillRunning', { n: live.length }), {
     timeout: 10_000,
-    action: {
-      label: t('toast.stopTasks'),
-      run: () => {
-        for (const id of live) void stopRun(id);
-      },
-    },
+    action: { label: t('toast.stopTasks'), run: () => void stopTasks(live) },
   });
 }
 

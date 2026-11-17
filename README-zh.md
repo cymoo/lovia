@@ -250,7 +250,8 @@ assistant = Agent(
 ### 人工介入
 
 给敏感工具一个 `permission`；`ask` 的决策可以来自 UI、服务端规则，也可以通过单独接口处理。
-无人决策时默认拒绝，所以运行不会挂住；拒绝的理由会回到模型那里：
+无人决策时默认拒绝，所以运行不会挂住；拒绝的理由会回到模型那里。暂时没人能回答时，
+`ev.suspend()` 让运行停在这个调用上，从 checkpoint 续跑时会再次询问：
 
 ```python
 from lovia import Runner, events, tool
@@ -264,7 +265,7 @@ async def refund(order_id: str, amount_cents: int) -> str:
 
 async for ev in Runner.stream(agent, "给订单 A123 退款。"):
     if isinstance(ev, events.ApprovalRequired):
-        ev.approve()          # 或 ev.reject("改用店内积分")
+        ev.approve()          # 或 ev.reject("改用店内积分")、ev.suspend()
 ```
 
 → [工具审批](https://cymoo.github.io/lovia/zh/tools/#工具审批)

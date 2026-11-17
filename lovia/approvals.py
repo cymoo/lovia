@@ -118,6 +118,13 @@ class Approval:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class _Suspension(Approval):
+    """Not an answer yet: the run stops at the call so it can be resumed and
+    asked again (the runner raises :class:`~lovia.exceptions.RunSuspended`).
+    ``approved`` is False, so code that reads only ``approved`` denies."""
+
+
 @dataclass
 class ApprovalChannel:
     """Maps ``(scope, ToolCall.id)`` → pending ``Future[Approval]``."""
@@ -148,6 +155,14 @@ class ApprovalChannel:
         """Deny the tool call; ``reason`` reaches the model. No-op if already
         resolved or unknown."""
         self.resolve(call_id, Approval(False, reason), scope=scope)
+
+    def suspend(
+        self, call_id: str, *, scope: str | None = None, reason: str = ""
+    ) -> None:
+        """Answer later: the run stops at the call, keeping it for a resume
+        (:class:`~lovia.exceptions.RunSuspended`). No-op if already resolved
+        or unknown."""
+        self.resolve(call_id, _Suspension(False, reason), scope=scope)
 
     def is_pending(self, call_id: str, *, scope: str | None = None) -> bool:
         fut = self._pending.get((scope, call_id))

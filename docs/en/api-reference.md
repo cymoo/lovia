@@ -161,6 +161,7 @@ Every framework exception inherits `LoviaError` and may expose `.hint`.
 | `MaxTurnsExceeded` | Run exhausted `max_turns` without a final answer |
 | `BudgetExceeded` | A `RunBudget` limit was exceeded |
 | `RunCancelled` | The Run's `CancelToken` was triggered |
+| `RunSuspended` | An approval was suspended to be answered later; includes `call`, `reason`. Resumable from its checkpoint |
 | `GuardrailTripped` | An input or output guardrail rejected the value |
 | `MCPError` | MCP connection or protocol call failed |
 

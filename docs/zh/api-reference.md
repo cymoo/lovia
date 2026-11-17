@@ -157,6 +157,7 @@ Schema 推导、执行、审批和错误语义见[工具](tools.md)。
 | `MaxTurnsExceeded` | Run 用完 `max_turns` 仍未得到最终答案 |
 | `BudgetExceeded` | 超出某项 `RunBudget` 限制 |
 | `RunCancelled` | Run 的 `CancelToken` 被触发 |
+| `RunSuspended` | 一次审批被暂停，留待稍后回答；包含 `call`、`reason`。可以从 checkpoint 续跑 |
 | `GuardrailTripped` | 输入或输出护栏拒绝了值 |
 | `MCPError` | MCP 连接或协议调用失败 |
 

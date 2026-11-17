@@ -247,6 +247,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             # winding down.
             await deps.supervisor.drain()
             deps.supervisor.last_client.clear()
+            deps.supervisor.forget_all()  # runs suspended there end too
             # Reap every chat's workspace session (and its background processes).
             await deps.workspaces.aclose()
             await store.delete_all()
@@ -517,6 +518,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 # a timeout, delete anyway).
                 await deps.supervisor.drain(sid)
                 deps.supervisor.last_client.pop(sid, None)
+                deps.supervisor.forget(sid)  # a run suspended there ends too
                 # Deleting the chat is what ends its workspace session —
                 # background processes deliberately survive run ends, so this
                 # is where they die.

@@ -214,7 +214,6 @@ async def stop_waiting(deps: RouterDeps, waiting: Waiting) -> bool:
         await store.unclaim_waiting(waiting.record.id, claimed)
         raise
     # The chat holds the run now, so it is over whatever fails from here.
-    deps.supervisor.forget(sid)
     try:
         if store.checkpointer is not None:
             await store.checkpointer.delete(snapshot.run_id)
@@ -226,6 +225,8 @@ async def stop_waiting(deps: RouterDeps, waiting: Waiting) -> bool:
             error="cancelled",
             usage=waiting.record.usage,
         )
+        # After the record says so: a follower woken here reads "cancelled".
+        deps.supervisor.forget(sid)
     log.info("run stop requested: session=%s (a stop while it waited on approval)", sid)
     deps.emit(
         "run_finished",

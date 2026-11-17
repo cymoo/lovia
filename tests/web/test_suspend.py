@@ -16,8 +16,10 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from lovia import Agent, Mailbox, tool  # noqa: E402
+from lovia import Agent, CancelToken, Mailbox, RunCancelled, tool  # noqa: E402
+from lovia.plugins.subagents import ChildSpec  # noqa: E402
 from lovia.web import subagent_deliver  # noqa: E402
+from lovia.web.subagents import subagent_runner  # noqa: E402
 from lovia.web.scheduler import Scheduler  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -468,3 +470,70 @@ async def test_a_message_injected_while_the_run_suspends_waits_with_it() -> None
     assert record is not None and record.waiting_for is not None
     queued = [e["content"] for e in record.waiting_for["queued"]]
     assert queued == ["one more thing"]
+
+
+def _child_spec(agent: Agent[Any], token: CancelToken, mailbox: Mailbox) -> ChildSpec:
+    return ChildSpec(
+        id="t1",
+        agent=agent,
+        prompt="go",
+        token=token,
+        parent_session_id="p1",
+        max_turns=5,
+        budget=None,
+        mailbox=mailbox,
+    )
+
+
+async def _task_session(deps: Any) -> str:
+    """The task chat run_child created under parent ``p1``."""
+    for _ in range(250):
+        if children := await deps.store.list_children("p1"):
+            return str(children[0].id)
+        await asyncio.sleep(0.02)
+    raise AssertionError("no task chat")
+
+
+@pytest.mark.asyncio
+async def test_a_parent_cancel_stops_a_waiting_task() -> None:
+    provider = ScriptedProvider([call("push", {}, call_id="c1"), text("ack")])
+    app = _app(_agent(provider, []), suspend_after=0.2)
+    deps = app.state.deps
+    token = CancelToken()
+    async with _client(app) as ac:
+        await deps.store.upsert("p1", agent="bot", title="parent")
+        child = _agent(provider, []).clone(name="bot-sub")
+        run = asyncio.create_task(
+            subagent_runner(deps)(_child_spec(child, token, Mailbox()))
+        )
+        sid = await _task_session(deps)
+        await _wait_run(ac, sid, status="waiting")
+        token.cancel("cancelled by the parent agent")
+        with pytest.raises(RunCancelled):
+            await asyncio.wait_for(run, timeout=5)
+        assert await deps.store.waiting_run(sid) is None
+
+
+@pytest.mark.asyncio
+async def test_a_message_sent_to_a_waiting_task_is_read_after_the_resume() -> None:
+    runs: list[str] = []
+    provider = ScriptedProvider([call("push", {}, call_id="c1"), text("found it")])
+    app = _app(_agent(provider, runs), suspend_after=0.2)
+    deps = app.state.deps
+    mailbox = Mailbox()
+    async with _client(app) as ac:
+        await deps.store.upsert("p1", agent="bot", title="parent")
+        child = _agent(provider, runs).clone(name="bot-sub")
+        run = asyncio.create_task(
+            subagent_runner(deps)(_child_spec(child, CancelToken(), mailbox))
+        )
+        sid = await _task_session(deps)
+        await _wait_run(ac, sid, status="waiting")
+        mailbox.push("check the tags too")  # the parent's send_to_subagent
+        await ac.post(
+            "/api/chat/approve",
+            json={"session_id": sid, "call_id": "c1", "decision": "approve"},
+        )
+        result = await asyncio.wait_for(run, timeout=5)
+    assert result.output == "found it" and runs == ["push"]
+    assert "check the tags too" in _texts(provider)

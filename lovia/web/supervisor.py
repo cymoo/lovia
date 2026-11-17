@@ -1312,8 +1312,16 @@ class RunSupervisor:
         return self._kept.get(session_id)
 
     def forget(self, session_id: str) -> None:
-        """Drop what a suspended run was kept with: it was stopped."""
+        """Drop what a suspended run was kept with: it was stopped, or its
+        chat deleted. Wakes whoever follows it (:meth:`follow`)."""
         self._kept.pop(session_id, None)
+        if (event := self._registered.pop(session_id, None)) is not None:
+            event.set()
+
+    def forget_all(self) -> None:
+        """:meth:`forget` every suspended run (every chat was deleted)."""
+        for session_id in [*self._kept, *self._registered]:
+            self.forget(session_id)
 
     def _register(self, session_id: str, ctrl: RunController) -> None:
         self._controllers[session_id] = ctrl
@@ -1329,22 +1337,37 @@ class RunSupervisor:
         its chat deleted) while it waited on a card."""
         from .waiting import find_waiting
 
-        while True:
-            if ctrl.task is not None:
-                await asyncio.wait([ctrl.task])
-            if ctrl.final_status != "waiting":
-                return ctrl
+        try:
             while True:
-                event = self._registered.setdefault(session_id, asyncio.Event())
-                if (live := self.get(session_id)) is not None and live is not ctrl:
-                    ctrl = live
-                    break
-                if await find_waiting(self.deps, session_id) is None:
-                    return None
-                # Woken by a resume; the timeout re-checks for a stop or a
-                # delete, which settle the record without registering a run.
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(event.wait(), timeout=2.0)
+                if ctrl.task is not None:
+                    await asyncio.wait([ctrl.task])
+                if ctrl.final_status != "waiting":
+                    return ctrl
+                while True:
+                    event = self._registered.setdefault(session_id, asyncio.Event())
+                    # Its resume runs under the same record; any other run in
+                    # the chat is a new one, started after it was stopped.
+                    live = self.get(session_id)
+                    if live is not None and live.record_id == ctrl.record_id:
+                        if live is not ctrl:
+                            ctrl = live
+                            break
+                    rows = await self.deps.store.list_runs(
+                        run_id=ctrl.record_id, limit=1
+                    )
+                    status = rows[0].status if rows else None
+                    if status == "waiting":
+                        if await find_waiting(self.deps, session_id) is None:
+                            return None  # its checkpoint went: settled
+                    elif status != "running":
+                        return None  # stopped, or its chat deleted
+                    # "running" with no controller: a resume is registering.
+                    # Woken by a register or a stop (forget); the timeout is a
+                    # safety net for a path that settles it without either.
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(event.wait(), timeout=5.0)
+        finally:
+            self._registered.pop(session_id, None)
 
     def get(self, session_id: str) -> RunController | None:
         return self._controllers.get(session_id)

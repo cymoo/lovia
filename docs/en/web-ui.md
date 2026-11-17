@@ -756,7 +756,7 @@ its tasks.
 The card is there only while the decision is open. Once decided — by you,
 another tab, the timeout or a stop — it goes, and the call's own tool row
 carries the outcome as a badge: **Approved** (hover: what was remembered),
-**Denied** (hover: your reason), **Timed out**, **Stopped**, or
+**Denied** (hover: your reason), **Stopped**, or
 **Auto-approved** for a call grants answered — click it to list the chat's
 grants and revoke one (revoking affects later calls only). A refused call
 gets its row at once, filled by its error result, as a reloaded chat shows
@@ -893,7 +893,7 @@ it and it has no edit button.
 
 A task is not owned by the parent Run, so stopping the parent does not stop the
 task — the stop notice says which tasks still run and offers **Stop them too**;
-deleting the parent chat stops its tasks and deletes them with it. A task's approval is denied after `suspend_after` rather than paused; unfinished tasks are not
+deleting the parent chat stops its tasks and deletes them with it. A task's approval pauses it like any other run: the chat that spawned it keeps waiting on it, and answering the card (in the task's chat or the parent's tray) lets it finish. A server shutdown stops tasks rather than pausing them, and unfinished tasks are not
 resumed after a server restart.
 
 A task's approval card shows in the chat that spawned it too, above the

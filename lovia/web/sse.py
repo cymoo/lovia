@@ -83,16 +83,17 @@ class ApprovalRequiredData(TypedDict):
     # True when remembered approvals already answered it: no card, just a note.
     granted: bool
     # When an unanswered request stops waiting live (epoch seconds): the run
-    # suspends (a task's request is denied); null = never.
+    # suspends; null = never.
     expires_at: float | None
 
 
 class ApprovalResolvedData(TypedDict):
     id: str
     approved: bool
-    # Who decided: the user (from any tab), the approval timeout, a stop, or
-    # the chat's permission mode, switched while the request waited.
-    cause: Literal["user", "timeout", "cancel", "policy"]
+    # Who decided: the user (from any tab), a stop, or the chat's permission
+    # mode, switched while the request waited. (Nobody in time: the run
+    # suspends instead, see approval_suspended.)
+    cause: Literal["user", "cancel", "policy"]
 
 
 class ApprovalSuspendedData(TypedDict):
@@ -213,7 +214,7 @@ class ApprovalResolved:
 
     call_id: str
     approved: bool
-    cause: Literal["user", "timeout", "cancel", "policy"]
+    cause: Literal["user", "cancel", "policy"]
 
 
 @dataclass(frozen=True)

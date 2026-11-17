@@ -56,7 +56,7 @@ from .workspaces import workspace_config
 from .run_deps import RunTrigger, build_run_deps
 from .sse import SessionAppendedData, SessionCreatedData
 from ..transcript import InputEntry, entry_to_dict
-from .waiting import find_waiting
+from .waiting import find_waiting, stop_waiting
 
 if TYPE_CHECKING:
     from ..runtime.result import RunResult
@@ -397,13 +397,20 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 await asyncio.sleep(0.3)
             # Say who stopped it — the token's own reason ("cancelled by the
             # parent agent"), never the default user stop: no one clicked.
-            deps.supervisor.cancel(
+            if deps.supervisor.cancel(
                 child_sid, reason=spec.token.reason or "cancelled by its parent run"
-            )
+            ):
+                return
+            # Suspended on a card: no run to cancel, so stop the waiting one.
+            if (waiting := await find_waiting(deps, child_sid)) is not None:
+                await stop_waiting(deps, waiting)
 
         watcher = asyncio.create_task(watch_token())
         try:
-            await ctrl.task
+            # Across suspensions: a card nobody answered in time suspends the
+            # task, and answering it (in its chat, or in the tray of the chat
+            # that spawned it) resumes it under a new controller.
+            final = await deps.supervisor.follow(child_sid, ctrl)
         finally:
             # Cancel *and* join (the Scheduler.stop() idiom) so no pending
             # watcher outlives run_child.
@@ -414,8 +421,11 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             "subagent %s: task session %s ended: %s",
             spec.id,
             child_sid,
-            ctrl.final_status,
+            final.final_status if final is not None else "stopped while waiting",
         )
+        if final is None:
+            raise RunCancelled("subagent stopped")
+        ctrl = final
         if ctrl.final_status == "completed":
             return RunResult(
                 output=ctrl.final_output,

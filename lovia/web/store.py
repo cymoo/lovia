@@ -1735,10 +1735,24 @@ class ChatStore:
 
         Call once at startup, before any run starts: live runs are per-process
         (the supervisor's), so at that point every ``running`` row is a run the
-        previous process took down with it.
+        previous process took down with it. So is a subagent task's
+        ``waiting`` one: its agent and the run awaiting it lived in that
+        process too (a top-level chat's waiting run outlives it).
         """
-        await self._write(
-            "UPDATE chat_runs SET status = 'interrupted', finished_at = ? "
-            "WHERE status = 'running'",
-            (time.time(),),
-        )
+
+        def _impl() -> None:
+            now = time.time()
+            with self._meta._tx() as conn:
+                conn.execute(
+                    "UPDATE chat_runs SET status = 'interrupted', finished_at = ? "
+                    "WHERE status = 'running'",
+                    (now,),
+                )
+                conn.execute(
+                    "UPDATE chat_runs SET status = 'interrupted', finished_at = ?, "
+                    "waiting_for = NULL WHERE status = 'waiting' AND session_id IN "
+                    "(SELECT id FROM chat_sessions WHERE parent_id IS NOT NULL)",
+                    (now,),
+                )
+
+        await self._meta._run(_impl)

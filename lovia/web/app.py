@@ -249,7 +249,7 @@ def create_app(
     that many seconds (default ``None``: wait live forever). The run stops at
     the call, keeps its checkpoint and frees its slot; the card stays, and
     answering it — whenever, even after a restart — resumes the run (a
-    subagent task's card is denied instead). Set it when using scheduled runs
+    subagent task's, while this process lives). Set it when using scheduled runs
     with approval-gated tools — a clientless run parked on an approval
     otherwise occupies one of the ``max_background_runs`` slots until someone
     opens the chat and decides.

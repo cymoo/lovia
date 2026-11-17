@@ -9,17 +9,20 @@ report waits for it, and nothing starts a fresh run over it.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import pytest
 
 pytest.importorskip("fastapi")
 
-from lovia import Agent, tool  # noqa: E402
+from lovia import Agent, Mailbox, tool  # noqa: E402
 from lovia.web import subagent_deliver  # noqa: E402
+from lovia.web.scheduler import Scheduler  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
+from .test_scheduler import _row  # noqa: E402
 from .test_subagents import _report  # noqa: E402
 from .test_supervisor import _client, _spawn, _wait_run  # noqa: E402
 from .test_web import _app, _parse_sse  # noqa: E402
@@ -301,31 +304,123 @@ async def test_a_waiting_run_without_its_checkpoint_frees_the_chat() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_task_card_is_denied_rather_than_suspended() -> None:
-    # A task's run is awaited by the run that spawned it: it must end.
+async def _start_task(app: Any, agent: Agent[Any]) -> Any:
+    """Start ``agent`` in task chat ``t1`` (parent ``p1``) the way run_child
+    does: an unregistered clone, a mailbox of its own, autostarted."""
+    store = app.state.deps.store
+    await store.upsert("p1", agent="bot", title="parent")
+    await store.upsert("t1", agent="bot", title="task", parent_id="p1")
+    return await app.state.deps.supervisor.start(
+        session_id="t1",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="subagent:t1",
+        mailbox=Mailbox(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_task_suspends_and_its_follower_waits_across_the_resume() -> None:
+    # The task's agent is an unregistered clone: the resume uses the one this
+    # process kept, and run_child (follow) sees the run end once answered.
     runs: list[str] = []
-    provider = ScriptedProvider([call("push", {}, call_id="c1"), text("ack")])
-    agent = _agent(provider, runs)
-    store = ChatStore.in_memory()
-    app = _app(agent, suspend_after=0.2, store=store)
+    provider = ScriptedProvider([call("push", {}, call_id="c1"), text("found it")])
+    task_agent = _agent(provider, runs).clone(name="bot-sub")
+    app = _app(_agent(provider, runs), suspend_after=0.2)
     deps = app.state.deps
     async with _client(app) as ac:
-        await store.upsert("t1", agent="bot", title="task")
-        ctrl = await deps.supervisor.start(
-            session_id="t1",
-            agent=agent,
-            input="go",
-            is_new=False,
-            title_message=None,
-            autostart=True,
-            source="subagent:t1",
+        ctrl = await _start_task(app, task_agent)
+        follow = asyncio.create_task(deps.supervisor.follow("t1", ctrl))
+        await _wait_run(ac, "t1", status="waiting")
+        assert not follow.done()  # still the task's run: it only waits
+        res = await ac.post(
+            "/api/chat/approve",
+            json={"session_id": "t1", "call_id": "c1", "decision": "approve"},
         )
-        assert ctrl.task is not None
-        await asyncio.wait_for(ctrl.task, timeout=5)
-        assert ctrl.final_status == "completed"
-        assert (await ac.get("/api/runs")).json() == []
-    assert runs == []
-    assert any("did not answer within" in t for t in _texts(provider))
+        assert res.json()["resumed"] is True
+        final = await asyncio.wait_for(follow, timeout=5)
+    assert final is not None and final is not ctrl
+    assert final.final_status == "completed" and final.final_output == "found it"
+    assert final.source == "subagent:t1"
+    assert runs == ["push"]
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_waiting_task_ends_its_follower() -> None:
+    provider = ScriptedProvider([call("push", {}, call_id="c1"), text("ack")])
+    app = _app(_agent(provider, []), suspend_after=0.2)
+    deps = app.state.deps
+    async with _client(app) as ac:
+        ctrl = await _start_task(app, _agent(provider, []).clone(name="bot-sub"))
+        follow = asyncio.create_task(deps.supervisor.follow("t1", ctrl))
+        await _wait_run(ac, "t1", status="waiting")
+        await ac.post("/api/chat/cancel", params={"session_id": "t1"})
+        assert await asyncio.wait_for(follow, timeout=5) is None
+        assert deps.supervisor.kept("t1") is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_suspends_a_parked_run_and_stops_a_task() -> None:
+    provider = ScriptedProvider(
+        [call("push", {}, call_id="c1"), call("push", {}, call_id="t-c1")]
+    )
+    store = ChatStore.in_memory()
+    app = _app(_agent(provider, []), store=store)  # no deadline: waits live
+    deps = app.state.deps
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1", status="blocked_on_approval")
+        await _start_task(app, _agent(provider, []).clone(name="bot-sub"))
+        await _wait_run(ac, "t1", status="blocked_on_approval")
+        await deps.supervisor.shutdown()
+        await asyncio.wait_for(task, timeout=5)
+        # The chat's card outlives the restart; the task does not.
+        detail = (await ac.get("/api/sessions/s1")).json()
+        assert detail["waiting"]["id"] == "c1"
+        assert await store.waiting_run("t1") is None
+
+
+@pytest.mark.asyncio
+async def test_startup_settles_a_waiting_task() -> None:
+    # A task's agent and the run awaiting it died with the old process.
+    provider = ScriptedProvider([call("push", {}, call_id="c1")])
+    store = ChatStore.in_memory()
+    app = _app(_agent(provider, []), suspend_after=0.2, store=store)
+    async with _client(app) as ac:
+        await _start_task(app, _agent(provider, []).clone(name="bot-sub"))
+        await _wait_run(ac, "t1", status="waiting")
+    await store.sweep_stale_runs()
+    assert await store.waiting_run("t1") is None
+    (record,) = await store.list_runs(session_id="t1")
+    assert record.status == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_chat_schedule_skips_while_its_last_fire_waits() -> None:
+    provider = ScriptedProvider([call("push", {}, call_id="c1"), text("ack")])
+    store = ChatStore.in_memory()
+    app = _app(_agent(provider, []), suspend_after=0.2, store=store)
+    sched = Scheduler(app.state.deps)
+    now = time.time()
+    await store.add_schedule(_row(id="s", next_fire=now - 1, now=now))
+    async with _client(app) as ac:
+        await sched.run_due()
+        first = await store.get_schedule("s")
+        assert first is not None and first.last_session_id is not None
+        await _wait_run(ac, first.last_session_id, status="waiting")
+        await store.set_schedule_active("s", active=True, next_fire=time.time() - 1)
+        await sched.run_due()
+    skipped = [
+        r for r in await store.list_runs(source="schedule:s") if r.status == "skipped"
+    ]
+    assert len(skipped) == 1 and "waiting for approval" in (skipped[0].error or "")
+    again = await store.get_schedule("s")
+    assert again is not None and again.last_session_id == first.last_session_id
 
 
 @pytest.mark.asyncio

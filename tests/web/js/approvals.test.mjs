@@ -89,21 +89,19 @@ test("the model's description is set apart from the arguments that act", () => {
 test('a frame settles the request by who decided', () => {
   assert.equal(approvalOutcome({ approved: true, cause: 'user' }), 'approve');
   assert.equal(approvalOutcome({ approved: false, cause: 'user' }), 'deny');
-  assert.equal(approvalOutcome({ approved: false, cause: 'timeout' }), 'timeout');
   assert.equal(approvalOutcome({ approved: false, cause: 'cancel' }), 'cancel');
   // The chat's mode, switched while it waited, decides like a person.
   assert.equal(approvalOutcome({ approved: true, cause: 'policy' }), 'approve');
   assert.equal(approvalOutcome({ approved: false, cause: 'policy' }), 'deny');
-  assert.match(outcomeText('timeout'), /denied automatically/);
+  assert.match(outcomeText('cancel'), /stopped/);
 });
 
 test('the badge names the outcome; only a call that ran gets its own row', () => {
   assert.equal(badgeText('approve'), 'Approved');
   assert.equal(badgeText('auto'), 'Auto-approved');
-  assert.equal(badgeText('timeout'), 'Timed out');
   assert.deepEqual(
-    ['approve', 'auto', 'deny', 'timeout', 'cancel'].map(ranAfter),
-    [true, true, false, false, false],
+    ['approve', 'auto', 'deny', 'cancel'].map(ranAfter),
+    [true, true, false, false],
   );
 });
 

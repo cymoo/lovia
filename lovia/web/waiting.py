@@ -124,11 +124,14 @@ async def resume_waiting(
     if claimed is None:
         return None
     try:
-        # The run's entry agent, by the registry key its record keeps: the
-        # snapshot names the agent that was acting, a handoff target perhaps,
-        # which the resume finds again from the entry agent's handoffs.
+        # The agent the run was handed, when this process suspended it (a
+        # subagent task's is an unregistered clone); else the run's entry
+        # agent by the registry key its record keeps. (The snapshot names the
+        # agent that was acting, a handoff target perhaps, which the resume
+        # finds again from the entry agent's handoffs.)
+        kept = deps.supervisor.kept(sid)
         name = waiting.record.agent or waiting.snapshot.agent_name
-        agent = deps.agents.get(name)
+        agent = kept.agent if kept is not None else deps.agents.get(name)
         if agent is None:
             raise WebError(
                 409,
@@ -161,6 +164,9 @@ async def resume_waiting(
             run_deps=run_deps,
             answers=answers,
             inbox=inbox,
+            # A task's mailbox is shared with the run that spawned it.
+            mailbox=kept.mailbox if kept is not None else None,
+            source=kept.source if kept is not None else waiting.record.source,
             autostart=True,
         )
     except BaseException:
@@ -208,6 +214,7 @@ async def stop_waiting(deps: RouterDeps, waiting: Waiting) -> bool:
         await store.unclaim_waiting(waiting.record.id, claimed)
         raise
     # The chat holds the run now, so it is over whatever fails from here.
+    deps.supervisor.forget(sid)
     try:
         if store.checkpointer is not None:
             await store.checkpointer.delete(snapshot.run_id)

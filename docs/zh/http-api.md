@@ -278,8 +278,8 @@ API 路由抛出的错误都使用同一种响应体：
 | `tool_call` | `{id, name, arguments}`：`arguments` 是原始 JSON 字符串 |
 | `tool_result` | `{id, name, result, is_error, images?}`：`images` 列出 `{index, mime_type}`，图片本身通过 `GET /api/sessions/{id}/tool-images/{call_id}/{index}` 获取 |
 | `todo` | `{call_id, name, todos}`：结构化 todo 更新，替代该调用的 `tool_result` |
-| `approval_required` | `{id, name, arguments, reason, scopes, granted, expires_at}` → 通过 `POST /api/chat/approve` 回答。`reason` 是为什么要问（除了“不在允许清单上”之外没什么特别时为空）；`scopes` 是“总是允许”会放开的范围——全部列出、一起记住（`[]` = 不提供）；`granted` 为 true 表示已有授权替用户答了——显示一行提示而不是卡片；`expires_at`（epoch 秒，`null` = 不过期）是无人回答时不再在线等待的时刻：运行就此暂停（子任务的请求则被拒绝） |
-| `approval_resolved` | `{id, approved, cause}`——请求 `id` 已有结论：`cause` 为 `user`（任一标签页的回答）、`timeout`（子任务的请求到 `expires_at` 仍无人回答）或 `cancel`（运行被停止）或 `policy`（等待期间对话切换了权限模式，由新模式允许或拒绝）。发给所有连接中的客户端，并随当前 Turn 回放，卡片一旦有结论就不再可点 |
+| `approval_required` | `{id, name, arguments, reason, scopes, granted, expires_at}` → 通过 `POST /api/chat/approve` 回答。`reason` 是为什么要问（除了“不在允许清单上”之外没什么特别时为空）；`scopes` 是“总是允许”会放开的范围——全部列出、一起记住（`[]` = 不提供）；`granted` 为 true 表示已有授权替用户答了——显示一行提示而不是卡片；`expires_at`（epoch 秒，`null` = 不过期）是无人回答时不再在线等待的时刻：运行就此暂停 |
+| `approval_resolved` | `{id, approved, cause}`——请求 `id` 已有结论：`cause` 为 `user`（任一标签页的回答）、`cancel`（运行被停止）或 `policy`（等待期间对话切换了权限模式，由新模式允许或拒绝）。发给所有连接中的客户端，并随当前 Turn 回放，卡片一旦有结论就不再可点 |
 | `approval_suspended` | `{id}`——请求 `id` 到 `expires_at` 仍无人回答：运行停在这个调用上，事件流结束，没有 `done`。卡片仍然有效；之后随时回答它（`POST /api/chat/approve`，重启后也可以）都会续跑。期间该对话的 `GET /api/sessions/{id}` 以 `waiting` 带上这张卡片，`GET /api/runs` 把这个运行列为 `waiting` |
 | `handoff` | `{from, to}` |
 | `turn_started` | `{turn, agent}` |

@@ -160,7 +160,7 @@ def _every_chat_event() -> list[events.Event | LegFrame]:
             call=call, result=[TodoItem(content="x", status="pending")], output=""
         ),
         ApprovalAsked(request=events.ApprovalRequired(call=call), expires_at=1.0),
-        ApprovalResolved(call_id="c1", approved=False, cause="timeout"),
+        ApprovalResolved(call_id="c1", approved=False, cause="cancel"),
         ApprovalSuspended(call_id="c1"),
         events.HandoffOccurred(from_agent=agent, to_agent=agent),
         events.TurnStarted(agent=agent, turn=1),

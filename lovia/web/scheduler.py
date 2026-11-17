@@ -267,6 +267,17 @@ class Scheduler:
                     "the previous run was still going",
                 )
                 return None
+            if prev is not None and await find_waiting(self.deps, prev) is not None:
+                # Not over either: suspended on its card. A fire a day must not
+                # leave a waiting chat a day behind the same card.
+                await self._skip_waiting(
+                    sched,
+                    now,
+                    agent_name,
+                    prev,
+                    "the previous run is waiting for approval",
+                )
+                return None
             target = uuid.uuid4().hex
             meta = None
             is_new = True
@@ -383,15 +394,18 @@ class Scheduler:
         return target
 
     async def _skip_waiting(
-        self, sched: ScheduleRow, now: float, agent_name: str | None, target: str
+        self,
+        sched: ScheduleRow,
+        now: float,
+        agent_name: str | None,
+        target: str,
+        why: str = "the chat's run is waiting for approval",
     ) -> None:
         log.info(
             "schedule %s: chat %s waits on an approval; skipping", sched.id, target
         )
         await self._advance(sched, now, last_session_id=target)
-        await self._record(
-            sched, now, agent_name, "skipped", "the chat's run is waiting for approval"
-        )
+        await self._record(sched, now, agent_name, "skipped", why)
 
     async def _miss(
         self, sched: ScheduleRow, now: float, agent_name: str | None, detail: str

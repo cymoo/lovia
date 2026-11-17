@@ -902,12 +902,25 @@ function upsertTodoCard(todos) {
 // (`granted: true`): no card, an "auto-approved" badge that opens the grants
 // dialog below.
 
-/** @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], granted?: boolean, expires_at?: number | null }} call */
-function appendApproval(call) {
+// Left unanswered past its deadline, a card's run suspends (`approval_suspended`):
+// the run stops at the call and frees its slot, the card stays and says so,
+// and answering it resumes the run — the answer's response says `resumed`, and
+// the page attaches to it as to any run it finds going. A chat opened while
+// its run waits gets the card from the session (`waiting`), drawn under the
+// history the same way.
+
+/**
+ * @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], granted?: boolean, expires_at?: number | null }} call
+ * @param {{ restored?: boolean }} [opts] `restored`: drawn with the chat's
+ *   history, not just asked — no announcement, no focus.
+ */
+function appendApproval(call, { restored = false } = {}) {
   if (!store.bubble) return;
   const scopes = call.scopes ?? [];
   // Newest wins: a provider may reuse a call id across turns, and a frame is
-  // always about the latest request under it.
+  // always about the latest request under it — a resumed run asking a
+  // suspended card again replaces it.
+  store.approvals.get(call.id)?.card?.remove();
   store.approvals.set(call.id, { call });
   if (call.granted) {
     const covered = scopes.length ? scopeList(scopes) : call.name;
@@ -925,6 +938,10 @@ function appendApproval(call) {
         reason ? t('approval.deniedWhy', { reason }) : undefined,
       ),
     remembered: (text) => noteRemembered(call.id, text),
+    // The answer resumed the run it was suspended on: follow it here.
+    resumed: () => {
+      if (store.sessionId === sessionId) store.emit('reconnect', sessionId);
+    },
     // The answer never reached the server, so the request still waits:
     // take back what the click showed and offer the card again. Not when
     // the server says it no longer waits — by its answer, or by an
@@ -937,14 +954,21 @@ function appendApproval(call) {
       if (store.sessionId !== sessionId || entry?.call !== call || entry.settled) return;
       findToolNode(call.id)?.querySelector('summary > .lv-tool-approval')?.remove();
       toast(t('approval.notSent'), { type: 'error' });
-      appendApproval(call);
+      const bubble = store.bubble;
+      if (entry.suspended) store.bubble = entry.bubble ?? bubble;
+      appendApproval(call, { restored: !!entry.suspended });
+      if (entry.suspended) suspendApproval(call.id);
+      store.bubble = bubble;
     },
   });
-  store.approvals.get(call.id).card = node;
+  const entry = store.approvals.get(call.id);
+  entry.card = node;
+  entry.bubble = store.bubble;
   appendBubbleContent(store.bubble, node);
   store.body = null;
   store.rawText = '';
   scrollDown();
+  if (restored) return;
   // The run is now blocked on the user — say so past the aria-busy transcript,
   // and put the keyboard on the decision unless it's busy typing elsewhere.
   announce(t('a11y.approvalNeeded', { name: call.name }), { assertive: true });
@@ -952,17 +976,49 @@ function appendApproval(call) {
 }
 
 /**
+ * The run stopped at `id` to wait for its card: the card stays, says so, and
+ * answering it resumes the run.
+ * @param {string} id
+ */
+function suspendApproval(id) {
+  const entry = store.approvals.get(id);
+  if (!entry?.card || entry.suspended) return;
+  entry.suspended = true;
+  const note = document.createElement('span');
+  note.className = 'lv-approval-paused';
+  note.textContent = t('approval.paused');
+  entry.card.querySelector('.lv-approval-actions')?.prepend(note);
+}
+
+/**
+ * Draw the card the chat's suspended run waits on (the session's `waiting`)
+ * under the last reply of the history just rendered.
+ * @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[] }} call
+ */
+export function showWaitingCard(call) {
+  const bubbles = document.querySelectorAll('#transcript .lv-turn:not(.lv-user) .lv-bubble');
+  const bubble = /** @type {HTMLElement | undefined} */ (bubbles[bubbles.length - 1]);
+  if (!bubble || store.streaming) return;
+  const prev = store.bubble;
+  store.bubble = bubble;
+  appendApproval({ ...call, expires_at: null }, { restored: true });
+  suspendApproval(call.id);
+  store.bubble = prev;
+}
+
+/**
  * An approval card for `call`, decided for the run of `sessionId` that asked
  * it — this chat's, or one of its tasks' (the task tray). `decided` runs at
  * the click, before the server confirms; `remembered` once the server has
- * saved what "always allow" picked; `failed`, when given, if the decision
+ * saved what "always allow" picked; `resumed`, when given, once the answer
+ * resumed a run suspended on the card; `failed`, when given, if the decision
  * never reached the server.
  * @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], expires_at?: number | null }} call
  * @param {string} sessionId
- * @param {{ decided: (decision: 'approve' | 'deny', reason: string) => void, remembered: (text: string) => void, failed?: (err: Error & { code?: string }) => void }} hooks
+ * @param {{ decided: (decision: 'approve' | 'deny', reason: string) => void, remembered: (text: string) => void, resumed?: () => void, failed?: (err: Error & { code?: string }) => void }} hooks
  * @returns {HTMLElement}
  */
-function buildApprovalCard(call, sessionId, { decided, remembered, failed }) {
+function buildApprovalCard(call, sessionId, { decided, remembered, resumed, failed }) {
   const scopes = call.scopes ?? [];
   const node = /** @type {HTMLElement} */ (cloneTemplate('tmpl-approval'));
   node.dataset.callId = call.id;
@@ -1023,17 +1079,8 @@ function buildApprovalCard(call, sessionId, { decided, remembered, failed }) {
     }
   });
   actions?.before(why);
-  // When the server will stop waiting: said up front, not discovered after.
-  if (call.expires_at) {
-    const expiry = document.createElement('span');
-    expiry.className = 'lv-approval-expiry';
-    const time = new Date(call.expires_at * 1000).toLocaleTimeString(currentLang(), {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    expiry.textContent = t('approval.expires', { time });
-    actions?.prepend(expiry);
-  }
+  // No deadline on the card: one left unanswered suspends its run and stays
+  // open (suspendApproval), so nothing is lost by answering late.
 
   /** @param {'approve' | 'deny'} decision */
   const resolve = async (decision) => {
@@ -1054,6 +1101,7 @@ function buildApprovalCard(call, sessionId, { decided, remembered, failed }) {
         scopes: kept,
         reason,
       });
+      if (res.resumed) resumed?.();
       if (!kept.length) return;
       if (res.remembered) {
         remembered(t('approval.remembered', { scopes: scopeList(kept) }));
@@ -1314,8 +1362,16 @@ function setApprovalBadge(row, { outcome, title }) {
 function resolveApproval(data) {
   // The server's word: a click's failed send (its response lost after the
   // server acted) must not offer this request again.
-  const entry = store.approvals.get(data.id);
-  if (entry) entry.settled = true;
+  let entry = store.approvals.get(data.id);
+  if (!entry) {
+    // Asked before this view began: a run resumed with the answer to the card
+    // it was suspended on settles it as it replays the call. Its row (from
+    // the snapshot, or drawn as it runs) still gets the badge.
+    const tool = findToolNode(data.id)?.dataset.tool ?? '';
+    entry = { call: { id: data.id, name: tool, arguments: '' } };
+    store.approvals.set(data.id, entry);
+  }
+  entry.settled = true;
   // A mode switch answered it: the badge says so, not "you".
   const byMode = data.cause === 'policy' ? t('approval.byMode') : undefined;
   decideApproval(data.id, approvalOutcome(data), byMode);
@@ -2837,6 +2893,10 @@ let _lastEventWasError = false;
 // from "cancelled or died", which is what gates the follow-up chips.
 let _sawDone = false;
 
+// True once this stream's run suspended on a card (`approval_suspended`): it
+// ended on purpose, waiting for the card's answer.
+let _sawSuspended = false;
+
 // This stream's latest event: a run that answered ends on `done`, while an
 // auto-chained one that broke off after a leg's `done` ends on something else.
 let _lastEvent = '';
@@ -3077,6 +3137,13 @@ async function applyEvent({ event, data }) {
 
     case 'approval_resolved':
       resolveApproval(data);
+      break;
+
+    case 'approval_suspended':
+      // The run stops here and the stream ends with no `done`: neither a
+      // dropped connection to recover nor a reply to follow up on.
+      _sawSuspended = true;
+      suspendApproval(data.id);
       break;
 
     case 'handoff':
@@ -3463,7 +3530,7 @@ function runStarted() {
   store.emit('run-start', { sessionId: store.sessionId });
 }
 
-/** @param {'done' | 'error' | 'cancelled' | 'detached'} status */
+/** @param {'done' | 'error' | 'cancelled' | 'detached' | 'waiting'} status */
 function runEnded(status) {
   if (!_shownRun) return;
   const { sessionId, usage } = _shownRun;
@@ -3481,12 +3548,13 @@ function runEnded(status) {
  * @param {{ cancelled: boolean, readFailed: boolean, terminal: boolean }} flags
  *   `readFailed`: reading the stream itself failed (the connection broke), as
  *   opposed to the run reporting an error or the page failing on an event.
- * @returns {'done' | 'error' | 'cancelled' | 'detached'}
+ * @returns {'done' | 'error' | 'cancelled' | 'detached' | 'waiting'}
  */
 function runStatus({ cancelled, readFailed, terminal }) {
   if (cancelled) return 'cancelled';
   if (readFailed) return 'detached'; // the run may go on server-side
   if (terminal || _lastEventWasError) return 'error';
+  if (_sawSuspended) return 'waiting'; // on its card: answering it resumes the run
   if (_lastEvent === 'done') return 'done';
   return 'detached'; // ended mid-run without a failure: the connection dropped
 }
@@ -3538,7 +3606,7 @@ function enterStreamingUI() {
   updateEditButton(); // …and no edit either: rewind is refused during a live run
 }
 
-/** @param {'done' | 'error' | 'cancelled' | 'detached'} [status] How the run shown went. */
+/** @param {'done' | 'error' | 'cancelled' | 'detached' | 'waiting'} [status] How the run shown went. */
 function exitStreamingUI(status = 'detached') {
   store.streaming = false;
   _shownRunId = null;
@@ -3601,6 +3669,7 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
+  _sawSuspended = false;
   _lastEvent = '';
   _lastReply = '';
   // Set on every path that already surfaced a failure (or a deliberate abort),
@@ -3695,7 +3764,7 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
       if (_lastEventWasError && store.bubble) appendRetry();
       // Clean EOF with no `done` and no surfaced failure: the connection
       // dropped mid-run and the reply on screen may be missing its tail.
-      const dropped = !terminal && !_lastEventWasError && !_sawDone;
+      const dropped = !terminal && !_lastEventWasError && !_sawDone && !_sawSuspended;
       if (dropped && !store.sessionId && store.bubble) {
         // Nothing persisted to reconnect to — surface it as a failure.
         appendErrorNotice(t('chat.connectionLost'));
@@ -3744,6 +3813,7 @@ export async function runReconnect(sessionId) {
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
+  _sawSuspended = false;
   _lastEvent = '';
   _lastReply = '';
   let terminal = false; // see runStream — gates the dropped-connection check
@@ -3803,7 +3873,7 @@ export async function runReconnect(sessionId) {
       // Retry re-sends store.lastMessage — only offer it when there is one
       // (a reconnect after a page refresh has nothing to re-send).
       if (_lastEventWasError && store.bubble && store.lastMessage) appendRetry();
-      const dropped = !terminal && !_lastEventWasError && !_sawDone;
+      const dropped = !terminal && !_lastEventWasError && !_sawDone && !_sawSuspended;
       finalizeCurrentAssistantTurn();
       flushQueuedTurns();
       exitStreamingUI(runStatus({ cancelled, readFailed: flags.readFailed, terminal }));

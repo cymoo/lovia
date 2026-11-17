@@ -140,12 +140,15 @@ async function checkMissedRuns(seen) {
     return;
   }
   _markRunsSeen();
-  runNotices.add(records, { missed: true });
+  // A run suspended on a card hasn't finished: no notice for it.
+  runNotices.add(records.filter((r) => r.status !== 'waiting'), { missed: true });
 }
 
 function _notifyRunFinished(sid, runId, status = 'completed') {
   // Whatever else happens below, this browser has now seen results up to here.
   _markRunsSeen();
+  // Suspended on a card, not finished: its chat's dot says it waits.
+  if (status === 'waiting') return;
   const run = { run_id: runId, session_id: sid, status };
   const stoppedAt = _recentlyStopped.get(sid);
   // A run this page streamed, in the chat still on screen, showed its own
@@ -332,7 +335,11 @@ async function refreshRuns() {
 function takeRuns(stamp, runs) {
   if (stamp < _runsShown) return false;
   _runsShown = stamp;
-  store.activeRuns = new Set(runs.map((r) => r.session_id));
+  // A `waiting` run is suspended on its card: not running, holding no slot,
+  // but still the chat's run (its row says so, and a queue waits on it).
+  store.activeRuns = new Set(
+    runs.filter((r) => r.status !== 'waiting').map((r) => r.session_id),
+  );
   store.runsBySession = new Map(runs.map((r) => [r.session_id, r]));
   return true;
 }
@@ -354,6 +361,7 @@ async function refreshTranscript() {
     if (chatTitleEl) chatTitleEl.textContent = data.title || t('session.newChat');
     store.emit('render-history', data.entries || []);
     if (data.active_run_id) store.emit('reconnect', id);
+    else if (data.waiting) store.emit('waiting-card', data.waiting);
   } catch { /* transient — the next event or a manual switch repaints */ }
 }
 
@@ -531,7 +539,7 @@ function sessionsSignature() {
 /** Lifecycle bucket for a task session: live status wins, else last outcome. */
 function taskState(s) {
   const live = store.runsBySession?.get(s.id);
-  if (live) return live.status === 'blocked_on_approval' ? 'approval' : 'running';
+  if (live) return live.status === 'running' ? 'running' : 'approval';
   return s.last_run_status || 'done';
 }
 
@@ -620,7 +628,7 @@ function renderTasksButton() {
   if (!tasksBtn.hasAttribute('aria-expanded')) {
     tasksBtn.setAttribute('aria-expanded', 'false');
   }
-  const liveCount = tasks.filter((s) => store.runsBySession?.has(s.id)).length;
+  const liveCount = tasks.filter((s) => store.activeRuns?.has(s.id)).length;
   const attention = tasks.some((s) => taskState(s) === 'approval');
   tasksBtn.classList.toggle('lv-attention', attention);
   tasksBtn.innerHTML = '';
@@ -662,7 +670,7 @@ function buildTaskRow(s) {
   const trail = document.createElement('span');
   trail.className = 'lv-task-elapsed';
   const live = store.runsBySession?.get(s.id);
-  if (live?.started_at) {
+  if (live?.started_at && live.status !== 'waiting') {
     trail.dataset.started = String(live.started_at);
     trail.textContent = fmtElapsed(Date.now() / 1000 - live.started_at);
   } else {
@@ -774,6 +782,8 @@ function buildRow(s, { age = false, folder = false } = {}) {
     item.className = 'lv-session-item';
     if (s.id === store.sessionId) item.classList.add('lv-active');
     if (store.activeRuns?.has(s.id)) item.classList.add('lv-running');
+    const waiting = store.runsBySession?.get(s.id)?.status === 'waiting';
+    if (waiting) item.classList.add('lv-waiting');
     if (s.pinned) item.classList.add('lv-pinned');
     item.dataset.id = s.id;
 
@@ -1029,7 +1039,11 @@ function syncHeader() {
 
 /** A sidebar row's tooltip: its group says roughly when, this says exactly. */
 function sidebarTooltip(s) {
-  return `${s.title || s.id} · ${formatDateTime(s.updated_at)}`;
+  const tip = `${s.title || s.id} · ${formatDateTime(s.updated_at)}`;
+  // Its run is suspended on a card: the dot alone doesn't say what it wants.
+  return store.runsBySession?.get(s.id)?.status === 'waiting'
+    ? `${tip} · ${t('task.needsApproval')}`
+    : tip;
 }
 
 // ---- Update a single session's title wherever it shows ------------------
@@ -1069,8 +1083,8 @@ function chatActions(s) {
   });
   return [
     // A running chat can be stopped from the list — no need to open it just
-    // to end its background run.
-    ...(store.activeRuns?.has(s.id)
+    // to end its background run — and so can one whose run waits on a card.
+    ...(store.runsBySession?.has(s.id)
       ? [{
           label: t('session.stop'),
           icon: icon('square', { size: 14 }),
@@ -1362,6 +1376,10 @@ export async function switchSession(id) {
     // already-rendered checkpoint history.
     if (data.active_run_id && !store.streaming) {
       store.emit('reconnect', id);
+    } else if (data.waiting) {
+      // Its run is suspended on a card: show the card; answering it resumes
+      // the run (opening the chat must not).
+      store.emit('waiting-card', data.waiting);
     } else {
       // Settled history — repaint cached follow-up chips if they still fit the
       // tail. Skipped while a run is live: its own completion produces fresh ones.

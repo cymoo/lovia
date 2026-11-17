@@ -33,6 +33,7 @@ from .sse import SessionCreatedData
 from .stop_check import with_stop_check
 from .store import RunRow
 from .titles import provisional_title
+from .waiting import find_waiting
 
 if TYPE_CHECKING:
     from .api.deps import RouterDeps
@@ -244,6 +245,11 @@ class Scheduler:
                 # Delivered into a live run — that run's outcome is its own
                 # (and recorded under the run's own source), so no record here.
                 return target
+            if await find_waiting(self.deps, target) is not None:
+                # Its run waits on an approval: no run to deliver into, and a
+                # fresh one would take that one's place.
+                await self._skip_waiting(sched, now, agent_name, target)
+                return None
             meta = await self.store.get(target)
             is_new = meta is None
         else:
@@ -343,6 +349,10 @@ class Scheduler:
                 live.inject(fire_input(sched))
                 await self._advance(sched, now, last_session_id=target)
                 return target
+            if exc.code == "run_waiting":
+                # Suspended on a card since the check above.
+                await self._skip_waiting(sched, now, agent_name, target)
+                return None
             if exc.code == "too_many_runs":
                 # At the concurrency cap: defer (leave next_fire due → retried).
                 # Drop the freshly-created session row so repeated 429s on a
@@ -371,6 +381,17 @@ class Scheduler:
             )
         await self._advance(sched, now, last_session_id=target)
         return target
+
+    async def _skip_waiting(
+        self, sched: ScheduleRow, now: float, agent_name: str | None, target: str
+    ) -> None:
+        log.info(
+            "schedule %s: chat %s waits on an approval; skipping", sched.id, target
+        )
+        await self._advance(sched, now, last_session_id=target)
+        await self._record(
+            sched, now, agent_name, "skipped", "the chat's run is waiting for approval"
+        )
 
     async def _miss(
         self, sched: ScheduleRow, now: float, agent_name: str | None, detail: str

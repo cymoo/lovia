@@ -96,10 +96,12 @@ class RouterDeps:
     # Cap on concurrent supervised (background) runs; over-cap interactive
     # starts are rejected (the scheduler, later, will defer).
     max_background_runs: int = 8
-    # Auto-deny a pending tool approval after this many seconds (None = wait
-    # forever). Without it a clientless (scheduled) run parked on an approval
-    # holds one of the ``max_background_runs`` slots indefinitely.
-    approval_timeout: float | None = None
+    # Suspend a run whose approval card is unanswered after this many seconds
+    # (None = wait live forever): it stops at the call, keeps its checkpoint
+    # and frees its slot, and answering the card resumes it (a task's card is
+    # denied instead). Without it a clientless (scheduled) run parked on an
+    # approval holds one of the ``max_background_runs`` slots indefinitely.
+    suspend_after: float | None = None
     # How often (seconds) the scheduler started by ``lifespan`` checks for due
     # schedules.
     scheduler_poll: float = 1.0
@@ -641,8 +643,20 @@ class RouterDeps:
             await self._switch_tree(session_id, mode)
 
     async def _switch_tree(self, session_id: str, mode: str | None) -> None:
+        from ..waiting import find_waiting, resume_waiting
+
         await self.store.set_workspace_mode(session_id, mode)
         await self.supervisor.retune(session_id)
+        # A run suspended on a card resumes under the new mode, which judges
+        # the call again (as a live run's card is, see recheck_pending): run,
+        # refused, or asked again, live.
+        if (waiting := await find_waiting(self, session_id)) is not None:
+            try:
+                await resume_waiting(self, waiting)
+            except Exception as exc:  # noqa: BLE001 — the switch itself stands
+                log.warning(
+                    "could not resume %s after a mode switch: %s", session_id, exc
+                )
         for task in await self.store.list_children(session_id):
             await self._switch_tree(task.id, mode)
             if (moved := await self.store.get(task.id)) is not None:

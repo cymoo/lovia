@@ -39,6 +39,7 @@ from lovia.web.sse import (  # noqa: E402
     LIFECYCLE_EVENTS,
     ApprovalAsked,
     ApprovalResolved,
+    ApprovalSuspended,
     ContextCompactedData,
     LegFrame,
     LegTiming,
@@ -160,6 +161,7 @@ def _every_chat_event() -> list[events.Event | LegFrame]:
         ),
         ApprovalAsked(request=events.ApprovalRequired(call=call), expires_at=1.0),
         ApprovalResolved(call_id="c1", approved=False, cause="timeout"),
+        ApprovalSuspended(call_id="c1"),
         events.HandoffOccurred(from_agent=agent, to_agent=agent),
         events.TurnStarted(agent=agent, turn=1),
         events.ModelRetrying(

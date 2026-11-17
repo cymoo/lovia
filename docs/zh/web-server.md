@@ -81,7 +81,7 @@ customize=None, ...)`：前五个就是命令行的开关（`--home`、`DIR`（`
 | `tracer` | `None` | 托管 Run 的 Span 记录器 |
 | `titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
 | `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后生成追问建议（见下文） |
-| `approval_timeout` | `None` | 超过指定秒数后自动拒绝未处理的审批 |
+| `suspend_after` | `None` | 审批卡片超过指定秒数无人回答时暂停运行：保留 checkpoint、释放槽位，回答卡片后续跑（子任务的审批则被拒绝） |
 | `max_background_runs` | `8` | 并发托管 Run；达到上限后，新请求返回 429 |
 | `ui` | `True` | 设为 `False` 时只提供 API；传入 `ChatUI` 可定制内置页面（见下文） |
 | `cors_origins` | `None` | 允许跨域访问的浏览器 Origin；不设置时不发送 CORS 响应头 |
@@ -376,7 +376,7 @@ document.getElementById('acme-summarize')?.addEventListener('click', () => {
 | `session` | `{ sessionId }` | 屏幕上换了一个对话（`null` 表示新对话）；新对话首次保存时也会触发 |
 | `agent` | `{ agent }` | 用户切换了 agent |
 | `run-start` | `{ sessionId }` | 一次运行开始在对话里流式输出：用户发送，或刷新后重新接上 |
-| `run-end` | `{ sessionId, status, usage }` | 对话不再流式输出这次运行。`status`：`done`（已回答）、`error`、`cancelled`（用户停止）或 `detached`（用户切换了对话或连接断开，服务端可能还在运行）。`usage` 是已回答运行的 token 用量，否则为 `null` |
+| `run-end` | `{ sessionId, status, usage }` | 对话不再流式输出这次运行。`status`：`done`（已回答）、`error`、`cancelled`（用户停止）、`detached`（用户切换了对话或连接断开，服务端可能还在运行）或 `waiting`（运行因审批卡片而暂停，回答卡片即可续跑）。`usage` 是已回答运行的 token 用量，否则为 `null` |
 | `theme` | `{ theme }` | 浅色或深色主题生效 |
 | `view` | `{ view }` | 打开了一个[视图](#视图)（如 `'exec/perf'`），或回到了对话（`null`） |
 
@@ -1074,7 +1074,7 @@ Web 包会持久化定时任务，支持三种触发方式：
 
 插件还提供无需审批的 `list_schedules` 和 `cancel_schedule`。取消只会停用任务，不会删除记录。
 停止条件通常由无人值守的定时运行自行处理，而这类运行中的
-审批请求会被自动拒绝，因此 `cancel_schedule` 不能依赖审批。
+审批请求只会让运行暂停、直到有人回答，因此 `cancel_schedule` 不能依赖审批。
 
 如果工作要立即开始、但放在单独的对话里，插件还提供 `start_session(instruction, title=None)`。
 它新建一个顶层对话，立即用当前对话的 agent 执行 `instruction`，沿用发起调用的那次 Run 的上下文，
@@ -1088,7 +1088,7 @@ Web 包会持久化定时任务，支持三种触发方式：
   请妥善保管 token，将其视同密码。
 - 面向不可信用户时，应限制或关闭可写 Workspace。任何持有 token 的人都可以让 Agent
   修改文件或执行 Shell 命令。
-- 设置 `approval_timeout`，避免无人处理的弹窗长期占用容量。
+- 设置 `suspend_after`，让无人处理的审批暂停运行，而不是长期占用容量。
 - 只使用一个 Worker，并备份 SQLite 数据库。
 - 多用户部署还需要 TLS、按用户认证（`auth=`）和限流。共享 token 只适合单用户场景。
 - 审批卡片由正在聊天的人回答，所以面向别人提供服务时 `ask` 等于 `allow`：把工作区外的访问设成

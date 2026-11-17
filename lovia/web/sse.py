@@ -82,7 +82,8 @@ class ApprovalRequiredData(TypedDict):
     scopes: list[str]
     # True when remembered approvals already answered it: no card, just a note.
     granted: bool
-    # When an unanswered request is denied (epoch seconds); null = never.
+    # When an unanswered request stops waiting live (epoch seconds): the run
+    # suspends (a task's request is denied); null = never.
     expires_at: float | None
 
 
@@ -92,6 +93,12 @@ class ApprovalResolvedData(TypedDict):
     # Who decided: the user (from any tab), the approval timeout, a stop, or
     # the chat's permission mode, switched while the request waited.
     cause: Literal["user", "timeout", "cancel", "policy"]
+
+
+class ApprovalSuspendedData(TypedDict):
+    # The call whose card nobody answered in time: the run has stopped at it
+    # and resumes once the card is answered.
+    id: str
 
 
 class _ToolResultRequired(TypedDict):
@@ -209,6 +216,14 @@ class ApprovalResolved:
     cause: Literal["user", "timeout", "cancel", "policy"]
 
 
+@dataclass(frozen=True)
+class ApprovalSuspended:
+    """Nobody answered a card in time: the run stops at the call and waits,
+    holding no slot. The card stays open; answering it resumes the run."""
+
+    call_id: str
+
+
 class UnavailableServer(TypedDict):
     name: str
     error: str
@@ -228,7 +243,14 @@ class MCPUnavailable:
 
 
 #: What the supervisor publishes besides the run's own events.
-LegFrame = UserTurnRefs | LegTiming | ApprovalAsked | ApprovalResolved | MCPUnavailable
+LegFrame = (
+    UserTurnRefs
+    | LegTiming
+    | ApprovalAsked
+    | ApprovalResolved
+    | ApprovalSuspended
+    | MCPUnavailable
+)
 
 
 CHAT_EVENTS: dict[str, type] = {
@@ -244,6 +266,7 @@ CHAT_EVENTS: dict[str, type] = {
     "todo": TodoData,
     "approval_required": ApprovalRequiredData,
     "approval_resolved": ApprovalResolvedData,
+    "approval_suspended": ApprovalSuspendedData,
     "handoff": HandoffData,
     "turn_started": TurnStartedData,
     "retrying": RetryingData,
@@ -448,6 +471,8 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
             "approval_resolved",
             ApprovalResolvedData(id=ev.call_id, approved=ev.approved, cause=ev.cause),
         )
+    if isinstance(ev, ApprovalSuspended):
+        return frame("approval_suspended", ApprovalSuspendedData(id=ev.call_id))
     if isinstance(ev, LegTiming):
         return frame(
             "timing", TimingData(finished_at=ev.finished_at, duration=ev.duration)

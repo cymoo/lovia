@@ -23,8 +23,8 @@ The plugin also exposes ``list_schedules`` and ``cancel_schedule``, which —
 unlike ``schedule_run`` — need **no** approval: cancelling only *deactivates*
 a schedule (the user can resume or delete it in the panel; hard delete stays
 user-only), and the self-cancel path of a stop condition (``until``) must work
-inside a clientless scheduled run, where an approval request would park until
-the timeout auto-denies it (see ``RunSupervisor._await_approval``).
+inside a clientless scheduled run, where an approval request would only
+suspend the run until someone answers it (see ``RunSupervisor._await_approval``).
 
 ``start_session`` is the "now, but elsewhere" sibling: it opens a new
 top-level chat (provenance ``origin_kind = "spawn"``, no owner — unlike a

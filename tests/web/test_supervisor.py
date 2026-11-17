@@ -1545,42 +1545,6 @@ async def test_delete_all_outlasts_a_run_stopped_before_it() -> None:
 
 
 @pytest.mark.asyncio
-async def test_approval_timeout_denies_and_completes_run() -> None:
-    @tool(permission="ask")
-    async def sensitive() -> str:
-        """Sensitive."""
-        return "did it"
-
-    provider = ScriptedProvider([call("sensitive", {}, call_id="c1"), text("ack")])
-    agent = Agent(name="bot", model=provider, tools=[sensitive])
-    app = _app(agent, approval_timeout=0.3)
-    async with _client(app) as ac:
-        task, lines = _spawn(
-            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
-        )
-        await _wait_run(ac, "s1", status="blocked_on_approval")
-        # Nobody approves: the timeout must deny and let the run finish.
-        await asyncio.wait_for(task, timeout=5)
-        await _wait_run(ac, "s1", gone=True)
-    evs = _parse_sse("\n".join(lines))
-    kinds = [e for e, _ in evs]
-    assert kinds[-1] == "done"
-    # The card carries its deadline, and is settled as timed out — before
-    # the denied result, so the client can say so.
-    (asked,) = [d for (e, d) in evs if e == "approval_required"]
-    assert asked["expires_at"] is not None and asked["expires_at"] > 0
-    (settled,) = [d for (e, d) in evs if e == "approval_resolved"]
-    assert settled == {"id": "c1", "approved": False, "cause": "timeout"}
-    assert kinds.index("approval_resolved") < kinds.index("tool_result")
-    denied = [d for (e, d) in evs if e == "tool_result"]
-    # The model is told *why*: nobody answered, not "run cancelled".
-    assert denied and "not approved: the user did not answer within 0 seconds" in str(
-        denied[0].get("result")
-    )
-    assert not any("did it" in str(d.get("result")) for d in denied)
-
-
-@pytest.mark.asyncio
 async def test_a_reattach_replays_a_decided_card_as_settled() -> None:
     # Reloading while the approved tool still runs replays the current turn:
     # the card must come back decided, not as an open question.
@@ -1631,7 +1595,7 @@ async def test_a_stop_settles_the_pending_card_as_cancelled() -> None:
         await _wait_run(ac, "s1", gone=True)
     evs = _parse_sse("\n".join(lines))
     (asked,) = [d for (e, d) in evs if e == "approval_required"]
-    assert asked["expires_at"] is None  # no approval_timeout: waits for an answer
+    assert asked["expires_at"] is None  # no suspend_after: waits for an answer
     (settled,) = [d for (e, d) in evs if e == "approval_resolved"]
     assert settled == {"id": "c1", "approved": False, "cause": "cancel"}
 

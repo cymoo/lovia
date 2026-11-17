@@ -6,7 +6,7 @@ import asyncio
 import base64
 import binascii
 import time
-from typing import Any
+from typing import Any, cast
 from weakref import WeakValueDictionary
 
 try:
@@ -21,6 +21,7 @@ from ...checkpointer import RunSnapshot
 from ...parts import ImagePart
 from ...plugins import todos_from_entries
 from ...transcript import InputEntry, ToolResultEntry, entries_to_messages
+from ...types import JsonObject
 from ..errors import WebError
 from ..followups import FollowupRequest
 from ..sse import (
@@ -47,6 +48,7 @@ from ..schemas import (
 )
 from ..supervisor import agent_grant_context
 from ..titles import provisional_title
+from ..waiting import RESUMABLE, find_waiting
 from ..workspaces import ChatBinding
 from .deps import RouterDeps
 from .serialization import (
@@ -64,8 +66,6 @@ from .serialization import (
     view_messages,
 )
 
-_RESUMABLE = ("interrupted", "running")
-
 
 def _in_flight(snapshot: RunSnapshot) -> Run:
     """A checkpointed run still going, as the last of a view's runs: no run_id,
@@ -76,12 +76,15 @@ def _in_flight(snapshot: RunSnapshot) -> Run:
 
 async def _session_view(
     deps: RouterDeps, session_id: str, *, created_at: float, updated_at: float
-) -> tuple[list[MessageOut], str | None]:
-    """Resolve the transcript view + reconnect pointer for one session.
+) -> tuple[list[MessageOut], str | None, JsonObject | None]:
+    """Resolve the transcript view + reconnect pointer for one session, and
+    the card a suspended run waits on.
 
     * Live supervised run → flat history spliced with the checkpoint's entries
       so far, advertising the run's id (even before its first checkpoint) so
       the client reconnects — attach then delivers the authoritative snapshot.
+    * Run suspended on a card → the same splice, and the card instead of a
+      pointer: answering it resumes the run, opening the chat must not.
     * No live run but a resumable checkpoint (restart recovery) → the same
       splice, advertising the stored pointer; a stale pointer is cleaned up.
     * Finished → rebuilt from segments so persisted per-run compaction notices
@@ -96,10 +99,16 @@ async def _session_view(
         runs = segments_runs(await session.segments(session_id))
         if store.checkpointer is not None and live.run_id is not None:
             snapshot = await store.checkpointer.load(live.run_id)
-            if snapshot is not None and snapshot.status in _RESUMABLE:
+            if snapshot is not None and snapshot.status in RESUMABLE:
                 runs.append(_in_flight(snapshot))
         view = view_messages(runs, created_at=created_at, updated_at=updated_at)
-        return view, live.run_id
+        return view, live.run_id, None
+
+    if (waiting := await find_waiting(deps, session_id)) is not None:
+        runs = segments_runs(await session.segments(session_id))
+        runs.append(_in_flight(waiting.snapshot))
+        view = view_messages(runs, created_at=created_at, updated_at=updated_at)
+        return view, None, waiting.request
 
     candidate = (
         await store.get_active_run_id(session_id)
@@ -108,11 +117,11 @@ async def _session_view(
     )
     if candidate and store.checkpointer is not None:
         snapshot = await store.checkpointer.load(candidate)
-        if snapshot is not None and snapshot.status in _RESUMABLE:
+        if snapshot is not None and snapshot.status in RESUMABLE:
             runs = segments_runs(await session.segments(session_id))
             runs.append(_in_flight(snapshot))
             view = view_messages(runs, created_at=created_at, updated_at=updated_at)
-            return view, candidate
+            return view, candidate, None
         # Stale pointer — clean it up so a reload doesn't offer a dead reconnect.
         await store.clear_active_run_id(session_id)
         if snapshot is not None:
@@ -121,6 +130,7 @@ async def _session_view(
     segments = await session.segments(session_id)
     return (
         segments_to_out(segments, created_at=created_at, updated_at=updated_at),
+        None,
         None,
     )
 
@@ -163,8 +173,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
 
     @router.get("/api/runs", response_model=list[RunInfo])
     async def list_runs() -> list[RunInfo]:
-        """Currently-live supervised runs (in-memory; authoritative for active)."""
-        return [
+        """Currently-live supervised runs (in-memory; authoritative for active),
+        then the runs suspended on a card (``waiting``, from their records)."""
+        live = [
             RunInfo(
                 session_id=sid,
                 run_id=c.record_id,
@@ -179,6 +190,25 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             )
             for sid, c in deps.supervisor
         ]
+        busy = {r.session_id for r in live}
+        waiting = [
+            RunInfo(
+                session_id=row.session_id,
+                run_id=row.id,
+                agent=row.agent or "",
+                status="waiting",
+                turns=0,
+                source=row.source,
+                started_at=row.started_at,
+                pending_approval=cast(
+                    "dict[str, Any] | None",
+                    (row.waiting_for or {}).get("request") or None,
+                ),
+            )
+            for row in await store.waiting_runs()
+            if row.session_id is not None and row.session_id not in busy
+        ]
+        return [*live, *waiting]
 
     @router.get("/api/runs/history", response_model=list[RunRecordInfo])
     async def run_history(
@@ -228,7 +258,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         now = time.time()
         created = meta.created_at if meta else now
         updated = meta.updated_at if meta else now
-        entries, active_run_id = await _session_view(
+        entries, active_run_id, waiting = await _session_view(
             deps, session_id, created_at=created, updated_at=updated
         )
         origin = None
@@ -258,6 +288,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             updated_at=updated,
             entries=entries,
             active_run_id=active_run_id,
+            waiting=waiting,
             pinned=meta.pinned if meta else False,
             archived=meta.archived if meta else False,
             parent_id=meta.parent_id if meta else None,
@@ -549,7 +580,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         stale = await store.get_active_run_id(session_id)
         if stale and store.checkpointer is not None:
             snapshot = await store.checkpointer.load(stale)
-            if snapshot is not None and snapshot.status in _RESUMABLE:
+            if snapshot is not None and snapshot.status in RESUMABLE:
                 ckpt_user_turns = sum(
                     1
                     for e in snapshot.entries
@@ -587,7 +618,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         removed = 0 if cut is None else await rewind(session_id, keep_entries=cut)
         meta = await store.get(session_id)
         now = time.time()
-        view, _ = await _session_view(
+        view, _, _ = await _session_view(
             deps,
             session_id,
             created_at=meta.created_at if meta else now,
@@ -628,7 +659,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             stale = await store.get_active_run_id(session_id)
             if stale and store.checkpointer is not None:
                 snapshot = await store.checkpointer.load(stale)
-                if snapshot is not None and snapshot.status in _RESUMABLE:
+                if snapshot is not None and snapshot.status in RESUMABLE:
                     raise WebError(
                         409,
                         "run_unfinished",

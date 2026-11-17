@@ -41,15 +41,15 @@ model sees them and adapts).
 | Mode | Writes inside | Reads outside | Writes outside | Shell |
 | --- | --- | --- | --- | --- |
 | `readonly` | deny | deny | deny | none |
-| `coding` (default) | allow | **ask** | deny | the irreversible asks with a reason, the rest **asks** (rememberable per chat) |
+| `coding` (default) | allow | allow | deny | the irreversible asks with a reason, the rest **asks** (rememberable per chat) |
 | `trusted` | allow | allow | allow | allow |
 
 Under every mode the **baseline** holds: dangerous commands are denied
 (`git push --force`, `rm -rf /`, `mkfs`, …), credential stores are off-limits
 (`~/.ssh`, `~/.aws`, `*.pem`, lovia's own `~/.lovia/config.*`,
 `/proc/*/environ`, …), and writes to `.git`, `.github/workflows`,
-`.vscode`, `.husky`, `.lovia` ask every time, and `.env*` files inside the
-workspace ask before being read. Every *protection* is baseline — it only
+`.vscode`, `.husky`, `.lovia` ask every time, and `.env*` files, inside the
+workspace or out, ask before being read. Every *protection* is baseline — it only
 ever tightens, so nothing in the user layer can undo one by accident; inside
 it every matching rule counts and the strictest wins, so bundles compose in
 any order without shadowing each other — and
@@ -131,14 +131,17 @@ rules miss still asks, with the spelling on the card. An allow rule covers
 three things cap a segment at `ask` whatever rule it matched: a leading
 `VAR=value` or thin wrapper (`command`, `exec`, `env`, `nice`, `nohup`,
 `time`, `timeout N` — `PATH=…` changes which program runs); an argument that looks like an output
-option (`-o …`, `-oPATH`, `-ro`, `--output=…`, `--log-file`, `--junitxml` —
-the command may write wherever it points); and an argument the shell
-expands (`cat *`, `cat $F`, `$(…)` — the guard never sees the paths it
-becomes). An allow becomes an ask, a deny still bites (`env git push
---force`); the ask is not grantable. A word quoted against the shell
-(`find . -name '*.py'`, `awk '{print $2}'`) still keeps an allow rule out —
-a program may glob it itself — but a gray command asked about with one
-keeps its "always allow" grant: the shell expands nothing there. The same
+option (`-o …`, `-oPATH`, `-ro`, `-sLo …`, `--output=…`, `--log-file`,
+`--junitxml` — the command may write wherever it points; not one aimed at
+`/dev/null`, nor a single-dash long option like openssl's `-connect`); and
+an argument the shell expands (`cat *`, `cat $F`, `$(…)` — the guard never
+sees the paths it becomes). An allow becomes an ask, saying why, a deny
+still bites (`env git push --force`); the ask is not grantable. A command
+that asks anyway just loses its "always allow" offer, with no reason on the
+card — the guard's bookkeeping is not something to weigh. A word quoted
+against the shell (`find . -name '*.py'`, `echo "done?"`) is a literal
+argument like any other, for allow rules and grants alike: the shell expands
+nothing there. The same
 reading decides where a command ends: a quoted or escaped `|`, `;` or `&` is
 text (`jq '.[] | .name'`, `git commit -m "a; b"`), so every grant on offer
 names a program at a real command's start. Only plain quoting is read that
@@ -181,8 +184,10 @@ case (macOS, Windows) so do the rules: `~/.SSH/config` is `~/.ssh/config`.
 
 **`ask` is answered by whoever is chatting.** That is the point on your own
 machine, and no protection at all where the person chatting is not the one
-the files belong to — a hosted, multi-user service. There, make the boundary
-a `deny` and keep secrets off the agent's file system (or run it in a
+the files belong to — a hosted, multi-user service. And `coding` reads
+outside the root without asking: on your own machine the baseline guards
+what matters there, on a shared host it is everyone's files. There, make
+the boundary a `deny` and keep secrets off the agent's file system (or run it in a
 container):
 
 ```python

@@ -337,7 +337,9 @@ async def test_policy_is_judged_where_the_files_are(host, tmp_path) -> None:
     outside.mkdir()
     (outside / "secret.txt").write_text("s", encoding="utf-8")
     (tmp_path / "root" / "link.txt").symlink_to(outside / "secret.txt")
-    session = await host.open(str(tmp_path / "root"), policy=WorkspacePolicy.coding())
+    session = await host.open(
+        str(tmp_path / "root"), policy=WorkspacePolicy(read_outside="ask")
+    )
 
     assert (await session.decide_path("plain.txt")).action == "allow"
     # The symlink is followed over there: it leads outside the root.

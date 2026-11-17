@@ -612,11 +612,19 @@ class LocalWorkspaceSession:
                 rel=cwd_rp.rel, abs_posix=cwd_rp.abs_posix, op="read"
             ),
         ]
+        # A command that asks anyway gains nothing from an argument's ask but
+        # a reason the person need not weigh; one that would run unasked may
+        # be writing where it reads (see WorkspacePolicy.decide_argument).
+        allowed = verdict.action == "allow"
         for op, token in extract_path_claims(command):
             rp = resolve_path(self._root, token, base=cwd_rp.abs)
-            verdicts.append(
-                self.policy.decide_path(rel=rp.rel, abs_posix=rp.abs_posix, op=op)
-            )
+            if op == "read" and allowed:
+                path = self.policy.decide_argument(rel=rp.rel, abs_posix=rp.abs_posix)
+            else:
+                path = self.policy.decide_path(
+                    rel=rp.rel, abs_posix=rp.abs_posix, op=op
+                )
+            verdicts.append(path)
         return merge_verdicts(*verdicts)
 
     # ------------------------------------------------------------------ #

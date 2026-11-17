@@ -492,7 +492,9 @@ def test_shell_permission_fails_closed_on_bad_args(session) -> None:
 def test_shell_permission_consults_path_claims(tmp_path) -> None:
     from lovia.workspace import WorkspacePolicy
 
-    coding = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
+    coding = LocalWorkspaceSession(
+        root=str(tmp_path), policy=WorkspacePolicy(read_outside="ask")
+    )
     # Outside read claim escalates to ask even without a command rule, and
     # the verdict says why.
     verdict = _shell_permission({"command": "cat /etc/hosts"}, _ctx(coding))
@@ -536,7 +538,9 @@ class _FarSession:
 async def test_tool_permissions_await_a_session_that_answers_later(tmp_path) -> None:
     from lovia.workspace import WorkspacePolicy
 
-    local = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
+    local = LocalWorkspaceSession(
+        root=str(tmp_path), policy=WorkspacePolicy(read_outside="ask")
+    )
     ctx = _ctx(_FarSession(local))  # type: ignore[arg-type]
 
     assert (await read_file.decide({"path": "inside.txt"}, ctx)).action == "allow"
@@ -557,12 +561,12 @@ async def test_tool_permissions_ask_when_the_session_cannot_answer(tmp_path) -> 
     assert (await shell.decide({"command": "ls"}, ctx)).action == "ask"
 
 
-def test_file_tools_ask_for_outside_paths_under_coding(tmp_path) -> None:
+def test_file_tools_judge_outside_paths_under_coding(tmp_path) -> None:
     from lovia.workspace import WorkspacePolicy
 
     session = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
     ctx = _ctx(session)
-    assert read_file.decide({"path": "/etc/hosts"}, ctx).action == "ask"
+    assert read_file.decide({"path": "/etc/hosts"}, ctx).action == "allow"
     # Inside the root: no approval needed.
     assert read_file.decide({"path": "inside.txt"}, ctx).action == "allow"
     # Outside writes are denied under coding: the verdict says so up front,
@@ -676,10 +680,12 @@ async def test_view_image_denied_outside_root_under_readonly(tmp_path) -> None:
         await view_image.invoke({"path": "/etc/whatever.png"}, _ctx(session))
 
 
-def test_view_image_outside_read_asks_under_coding_policy(tmp_path) -> None:
+def test_view_image_outside_read_asks_when_the_policy_does(tmp_path) -> None:
     from lovia.workspace import WorkspacePolicy
 
-    session = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
+    session = LocalWorkspaceSession(
+        root=str(tmp_path), policy=WorkspacePolicy(read_outside="ask")
+    )
     ctx = _ctx(session)
     # Same read pipeline as read_file: outside-root reads ask, inside don't.
     assert view_image.decide({"path": "/tmp/shot.png"}, ctx).action == "ask"

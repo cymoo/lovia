@@ -41,9 +41,10 @@ semantics are unbounded (``-o x``, ``-ox``, ``--output=x``, ``--output x``,
 that gap the other way round — a command that *names* an output-looking
 option is never allowed outright, whatever the spelling (see
 ``WorkspacePolicy.decide_command``) — and the consequence of the remaining
-read/write blur is bounded: in ``coding`` (``read_outside="ask"``) an
-outside write argument still stops at approval; only in ``trusted`` does it
-pass unprompted, which is the point of ``trusted``. Mandatory write
+read/write blur is bounded: in ``coding``, which reads outside the root but
+never writes there, an outside argument still stops a command that would
+otherwise run unasked (``WorkspacePolicy.decide_argument``); only in
+``trusted`` does it pass unprompted, which is the point of ``trusted``. Mandatory write
 enforcement is the job of a sandboxed executor (Seatbelt/bubblewrap) or an
 isolated backend implementing the same session protocol.
 """
@@ -54,6 +55,7 @@ import os
 import re
 import shlex
 
+from .paths import is_pseudo_device
 from .policy import FileOp
 
 __all__ = ["extract_path_claims"]
@@ -73,29 +75,9 @@ _PUNCTUATION = set("();<>|&")
 # (``/a:d``). Longer slash-words (``/Users/neo``) are paths.
 _CMD_SWITCH = re.compile(r"/[A-Za-z]{1,2}(:\S*)?")
 
-# Shell-plumbing pseudo-devices, not data access: `2>/dev/null` or
-# `< /dev/stdin` must never escalate a decision (under coding,
-# write_outside="deny" would otherwise turn every `2>/dev/null` into a hard
-# deny). Other /dev paths still count — a redirect onto /dev/disk0 *should*
-# trip the ACL.
-_PSEUDO_DEVICES = {
-    "/dev/null",
-    "/dev/zero",
-    "/dev/stdin",
-    "/dev/stdout",
-    "/dev/stderr",
-    "/dev/tty",
-    "/dev/random",
-    "/dev/urandom",
-}
-
 
 def _is_operator(token: str) -> bool:
     return bool(token) and all(ch in _PUNCTUATION for ch in token)
-
-
-def _is_pseudo_device(token: str) -> bool:
-    return token in _PSEUDO_DEVICES or token.startswith("/dev/fd/")
 
 
 def _pathish(token: str, *, command: bool = False) -> str | None:
@@ -182,7 +164,9 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
             # `2>&1` tokenizes as `2`, `>&`, `1`: after `>&` / `<&` a digit
             # (or `-`) is a descriptor, not a file; after `>` it is a file.
             dup = fd_dup and (token.isdigit() or token == "-")
-            if not (dup or _is_pseudo_device(token)):
+            # Under coding (write_outside="deny") a claimed `2>/dev/null`
+            # would hard-deny the command.
+            if not (dup or is_pseudo_device(token)):
                 claims.append((op, token))
             continue
         # A number before a redirect is its descriptor when written as one
@@ -196,6 +180,6 @@ def extract_path_claims(command: str) -> list[tuple[FileOp, str]]:
         name, eq, _ = token.partition("=")
         at_start = at_command and bool(eq) and name.isidentifier()
         path = _pathish(token, command=at_command)
-        if path is not None and not _is_pseudo_device(path):
+        if path is not None and not is_pseudo_device(path):
             claims.append(("read", path))
     return claims

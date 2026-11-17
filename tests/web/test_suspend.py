@@ -16,7 +16,14 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from lovia import Agent, CancelToken, Mailbox, RunCancelled, tool  # noqa: E402
+from lovia import (  # noqa: E402
+    Agent,
+    CancelToken,
+    Mailbox,
+    RunCancelled,
+    RunSuspended,
+    tool,
+)
 from lovia.plugins.subagents import ChildSpec  # noqa: E402
 from lovia.tools import HumanChannel, ask_human  # noqa: E402
 from lovia.web import subagent_deliver  # noqa: E402
@@ -571,7 +578,8 @@ async def test_an_unanswered_question_suspends_and_its_answer_resumes() -> None:
         (row,) = (await ac.get("/api/runs")).json()
         assert row["status"] == "waiting" and row["pending_approval"] is None
         waiting = (await ac.get("/api/sessions/s1")).json()["waiting"]
-        assert waiting["kind"] == "call" and waiting["id"] == "q1"
+        assert waiting["kind"] == "question" and waiting["id"] == "q1"
+        assert waiting["question"] == "Which branch?"
 
         res = await ac.post(
             "/api/chat/answer", json={"session_id": "s1", "answer": "main"}
@@ -605,4 +613,39 @@ async def test_shutdown_suspends_a_parked_question() -> None:
         await asyncio.wait_for(task, timeout=5)
         waiting = await store.waiting_run("s1")
         assert waiting is not None and waiting.waiting_for is not None
-        assert waiting.waiting_for["kind"] == "call"
+        assert waiting.waiting_for["kind"] == "question"
+
+
+@pytest.mark.asyncio
+async def test_another_tools_wait_resumes_on_a_message_not_an_answer() -> None:
+    ready = {"ci": False}
+
+    @tool
+    async def wait_for_ci(question: str = "") -> str:
+        """Wait for the CI (its argument only looks like a question)."""
+        if not ready["ci"]:
+            raise RunSuspended("the CI is still running")
+        return "green"
+
+    channel = HumanChannel()
+    provider = ScriptedProvider(
+        [call("wait_for_ci", {"question": "ok?"}, call_id="c1"), text("done")]
+    )
+    agent = Agent(name="bot", model=provider, tools=[wait_for_ci, ask_human(channel)])
+    app = _app(agent, question_channel=channel)
+    async with app.router.lifespan_context(app), _client(app) as ac:
+        await _ask(ac)
+        waiting = (await ac.get("/api/sessions/s1")).json()["waiting"]
+        assert waiting["kind"] == "call" and "question" not in waiting
+        # Not a question: the answer endpoint has nothing to answer.
+        res = await ac.post(
+            "/api/chat/answer", json={"session_id": "s1", "answer": "x"}
+        )
+        assert res.status_code == 404
+        ready["ci"] = True
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "check again", "session_id": "s1"}
+        )
+        await asyncio.wait_for(task, timeout=5)
+        await _wait_run(ac, "s1", gone=True)
+        assert (await _record(ac, "s1"))["status"] == "completed"

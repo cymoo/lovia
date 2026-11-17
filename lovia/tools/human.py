@@ -189,9 +189,16 @@ class HumanChannel:
         (:class:`~lovia.exceptions.RunSuspended`), which a resume of that run
         asks again — answer it then. No-op once resolved."""
         fut = self._futures.pop(question_id, None)
-        self._pending.pop(question_id, None)
+        q = self._pending.pop(question_id, None)
         if fut is not None and not fut.done():
-            fut.set_exception(RunSuspended(reason or "waiting for the human's answer"))
+            # ``question`` tells a serving layer what the run waits on, so it
+            # can offer the question and resume the run with its answer.
+            fut.set_exception(
+                RunSuspended(
+                    reason or "waiting for the human's answer",
+                    question=q.question if q is not None else None,
+                )
+            )
 
     def close(self, reason: str = "channel closed") -> None:
         """Cancel every outstanding question and end :meth:`questions`.

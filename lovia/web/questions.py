@@ -45,8 +45,9 @@ class QuestionRegistry:
         self._suspend_after = suspend_after
         self._by_session: dict[str, HumanQuestion] = {}
         self._timers: dict[str, asyncio.TimerHandle] = {}
-        # A suspended question's answer, by session, given before its resumed
-        # run asks it again: (question, answer).
+        # A suspended question's answer, by the run that asked it (a resume
+        # keeps its run_id), given before that run asks it again:
+        # (question, answer). Another run's question never matches.
         self._preanswers: dict[str, tuple[str, str]] = {}
         self._task: asyncio.Task[None] | None = None
 
@@ -78,7 +79,7 @@ class QuestionRegistry:
             # One live run per session and ask_human is a barrier, so a
             # previous entry can only be a resolved leftover — replace it.
             self._drop_timer(sid)
-            ready = self._preanswers.pop(sid, None)
+            ready = self._preanswers.pop(q.run_id, None) if q.run_id else None
             if ready is not None and ready[0] == q.question:
                 # The question its run was suspended on, answered meanwhile.
                 self._channel.answer(q.id, ready[1])
@@ -99,10 +100,10 @@ class QuestionRegistry:
                 else f"suspends after {self._suspend_after:.0f}s",
             )
 
-    def preanswer(self, session_id: str, question: str, answer: str) -> None:
-        """Answer ``question`` for the session's resumed run as soon as it
-        asks it again (a suspended question was answered while it waited)."""
-        self._preanswers[session_id] = (question, answer)
+    def preanswer(self, run_id: str, question: str, answer: str) -> None:
+        """Answer ``question`` for run ``run_id``, resumed, as soon as it asks
+        it again (a suspended question was answered while it waited)."""
+        self._preanswers[run_id] = (question, answer)
 
     # -- resolution -------------------------------------------------------- #
     def pending(self, session_id: str) -> HumanQuestion | None:

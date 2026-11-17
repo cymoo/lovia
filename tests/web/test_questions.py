@@ -77,15 +77,16 @@ async def test_registry_deadline_suspends_the_question() -> None:
 async def test_registry_answers_a_resumed_question_from_its_preanswer() -> None:
     channel = HumanChannel()
     registry = await _registry(channel)
-    registry.preanswer("s1", "which branch?", "main")
-    _, other = channel._new_question("something else?", session_id="s2")
-    _, fut = channel._new_question("which branch?", session_id="s1")
+    registry.preanswer("r1", "which branch?", "main")
+    # Another run's question, even the same words, is still asked.
+    _, other = channel._new_question("which branch?", session_id="s2", run_id="r2")
+    _, fut = channel._new_question("which branch?", session_id="s1", run_id="r1")
     await asyncio.sleep(0)
     assert await asyncio.wait_for(fut, timeout=1) == "main"
     assert registry.pending("s1") is None
-    assert registry.pending("s2") is not None  # another session's: still asked
-    # Used once: the same question asked again waits for a person.
-    _, again = channel._new_question("which branch?", session_id="s1")
+    assert not other.done() and registry.pending("s2") is not None
+    # Used once: the same run asking again waits for a person.
+    _, again = channel._new_question("which branch?", session_id="s1", run_id="r1")
     await asyncio.sleep(0)
     assert not again.done() and registry.pending("s1") is not None
     await registry.aclose()

@@ -129,11 +129,13 @@ class RunSuspended(LoviaError):
     that run's own call and stays that tool's error.
 
     Fields: ``call`` — the suspended :class:`~lovia.messages.ToolCall`;
-    ``reason`` — the approver's note, possibly empty.
+    ``reason`` — the approver's note, possibly empty; ``question`` — the
+    ``ask_human`` question the call waits on, when that is what it is.
     """
 
     call: ToolCall | None = None
     reason: str = ""
+    question: str | None = None
 
 
 class GuardrailTripped(LoviaError):

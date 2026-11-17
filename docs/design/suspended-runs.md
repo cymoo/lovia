@@ -1,6 +1,6 @@
 # 无人值守时的审批：暂停，批准后继续
 
-> 状态：已实施（#476 core、#477 web、#478 子任务与关闭服务、本 PR `ask_human`）。实施时与本稿不同的两处：SSE 帧最终叫 `suspended`（审批卡片、问题和工具共用），`waiting_for` 多了 `kind`（`approval` 或 `call`）。五项决定见文末"已定"；评审补的四处缺口在 §2–§6，标"评审补充" · 2026-11-17 · 范围：core（`exceptions.py`、`events.py`、`approvals.py`、`runtime/tool_calls.py`、`runtime/loop.py`、`runtime/checkpoint.py`）、`lovia/web`（`supervisor.py`、`approvals.py`、`questions.py`、`store.py`、`scheduler.py`、`subagents.py`、`api/chat.py`、`api/sessions.py`、`schemas.py`、`static/js/approvals.js`、`sessions.js`）。session engine 不改。
+> 状态：已实施（#476 core、#477 web、#478 子任务与关闭服务、本 PR `ask_human`）。实施时与本稿不同的两处：SSE 帧最终叫 `suspended`（审批卡片、问题和工具共用），`waiting_for` 多了 `kind`（`approval`、`question` 或 `call`）。五项决定见文末"已定"；评审补的四处缺口在 §2–§6，标"评审补充" · 2026-11-17 · 范围：core（`exceptions.py`、`events.py`、`approvals.py`、`runtime/tool_calls.py`、`runtime/loop.py`、`runtime/checkpoint.py`）、`lovia/web`（`supervisor.py`、`approvals.py`、`questions.py`、`store.py`、`scheduler.py`、`subagents.py`、`api/chat.py`、`api/sessions.py`、`schemas.py`、`static/js/approvals.js`、`sessions.js`）。session engine 不改。
 >
 > 行号指向 `main`（`84fc0682`，v0.9.229）。
 

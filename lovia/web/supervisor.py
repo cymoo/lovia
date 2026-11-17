@@ -1095,16 +1095,22 @@ class RunController:
                 self.final_exception = exc
             elif self._suspended is not None:
                 # The card no longer has a deadline: it waits for its answer.
-                request = {**approval_data(self._suspended), "expires_at": None}
-                waiting_for = {"kind": "approval", "request": cast(JsonObject, request)}
+                card = {**approval_data(self._suspended), "expires_at": None}
+                waiting_for = {"kind": "approval", "request": cast(JsonObject, card)}
             elif exc.call is not None:
+                # An ask_human question (the exception carries its text: it is
+                # answered with POST /api/chat/answer), or another tool that
+                # put its answer off (a message resumes it).
+                request: JsonObject = {
+                    "id": exc.call.id,
+                    "name": exc.call.name,
+                    "arguments": exc.call.arguments,
+                }
+                if exc.question is not None:
+                    request["question"] = exc.question
                 waiting_for = {
-                    "kind": "call",
-                    "request": {
-                        "id": exc.call.id,
-                        "name": exc.call.name,
-                        "arguments": exc.call.arguments,
-                    },
+                    "kind": "question" if exc.question is not None else "call",
+                    "request": request,
                 }
             else:
                 final_error = str(exc) or exc.__class__.__name__

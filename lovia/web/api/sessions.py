@@ -39,6 +39,7 @@ from ..schemas import (
     RewindRequest,
     RewindResponse,
     RunInfo,
+    WaitsOn,
     RunRecordInfo,
     SessionDetail,
     SessionOrigin,
@@ -187,6 +188,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 pending_approval=dict(approval_data(c.pending_approval))
                 if c.pending_approval is not None
                 else None,
+                waits_on=WaitsOn(kind="approval", id=c.pending_approval.request.call.id)
+                if c.pending_approval is not None
+                else None,
             )
             for sid, c in deps.supervisor
         ]
@@ -208,11 +212,23 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 )
                 if (row.waiting_for or {}).get("kind", "approval") == "approval"
                 else None,
+                waits_on=_waits_on(row.waiting_for),
             )
             for row in await store.waiting_runs()
             if row.session_id is not None and row.session_id not in busy
         ]
         return [*live, *waiting]
+
+    def _waits_on(waiting_for: JsonObject | None) -> WaitsOn | None:
+        waiting_for = waiting_for or {}
+        request = waiting_for.get("request")
+        call_id = request.get("id") if isinstance(request, dict) else None
+        if not isinstance(call_id, str):
+            return None
+        kind = waiting_for.get("kind") or "approval"
+        if kind not in ("approval", "question", "call"):
+            return None
+        return WaitsOn(kind=kind, id=call_id)
 
     @router.get("/api/runs/history", response_model=list[RunRecordInfo])
     async def run_history(

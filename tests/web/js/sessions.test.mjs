@@ -6,6 +6,7 @@ import { setImmediate } from 'node:timers/promises';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { createRunNotices } from '../../../lovia/web/static/js/run-notices.js';
+import { createAttention } from '../../../lovia/web/static/js/attention.js';
 
 const source = readFileSync(new URL('../../../lovia/web/static/js/sessions.js', import.meta.url), 'utf8')
   .replace(/^import .*;$/gm, '')
@@ -17,6 +18,7 @@ const result = (run_id, status = 'completed', session_id = run_id) => [{ run_id,
 function fixture(t) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const shown = [];
+  const notified = [];
   const history = new Map();
   const requests = [];
   const storage = new Map([['lovia-runs-seen', '10']]);
@@ -25,21 +27,27 @@ function fixture(t) {
     emit: () => {}, // the real store's event hook (no listeners here)
   };
   const state = { runs: [] };
+  const document = { title: 'Lovia', hidden: false, getElementById: () => null };
+  class FakeNotification {
+    constructor(title, opts) { notified.push({ title, ...opts }); }
+  }
   const context = {
-    document: { title: 'Lovia', hidden: false, getElementById: () => null },
+    document,
     localStorage: {
       getItem: (key) => storage.get(key),
       setItem: (key, value) => storage.set(key, value),
     },
-    store, createRunNotices, console, setTimeout, clearTimeout,
+    store, createRunNotices, createAttention, console, setTimeout, clearTimeout,
+    Notification: FakeNotification,
+    notificationsEnabled: () => true,
     icon: () => '',
     currentView: () => null,
     canAddWorkspace: () => false,
     t: (key, params) => ({ key, params }),
-    toast: (message) => shown.push(message),
+    toast: (message, opts) => shown.push({ ...message, action: opts?.action?.label }),
     playCompletionSound: () => {},
     api: {
-      listSessions: async () => [],
+      listSessions: async () => state.sessions ?? [],
       listRuns: async () => state.runs,
       runHistory: async ({ run_id }) => {
         requests.push(run_id);
@@ -51,7 +59,7 @@ function fixture(t) {
   };
   runInNewContext(`${source}\nglobalThis.poll = loadSessions;`, context);
   return {
-    shown, history, requests, storage, store,
+    shown, notified, history, requests, storage, store, document, state,
     tick: () => t.mock.timers.tick(1000),
     async poll(runs = []) {
       state.runs = runs;
@@ -148,6 +156,44 @@ test('the open chat gets no notice for a run this page streamed, but does for on
   assert.deepEqual(f.shown.map((m) => m.key), ['toast.runFinished']);
 });
 
+const waiting = (run_id, session_id, kind, id) => ({
+  run_id, session_id, status: kind === 'approval' ? 'blocked_on_approval' : 'waiting',
+  waits_on: { kind, id },
+});
+
+test('a run that starts waiting on the user is told once, by kind', async (t) => {
+  const f = fixture(t);
+  f.state.sessions = [{ id: 'a', title: 'Deploy' }];
+  await f.poll([waiting('old', 'z', 'approval', 'c0')]); // seeds: no news
+  await f.poll([waiting('r1', 'a', 'approval', 'c1')]);
+  // The same card, now with the run suspended on it: the same wait.
+  await f.poll([{ ...waiting('r1', 'a', 'approval', 'c1'), status: 'waiting' }]);
+  await f.poll([waiting('r2', 'b', 'question', 'q1')]);
+  const title = (p) => p?.title?.key ?? p?.title; // t() returns {key, params} here
+  assert.deepEqual(
+    f.shown.map((m) => [m.key, title(m.params), m.action?.key]),
+    [
+      ['toast.runWaitsApproval', 'Deploy', 'toast.openChat'],
+      ['toast.runWaitsAnswer', 'toast.backgroundRun', 'toast.openChat'],
+    ],
+  );
+});
+
+test('no notice for the chat on screen; a hidden tab gets the badge and a notification', async (t) => {
+  const f = fixture(t);
+  f.store.sessionId = 'a';
+  await f.poll();
+  await f.poll([waiting('r1', 'a', 'approval', 'c1')]);
+  assert.deepEqual(f.shown, []);
+
+  f.document.hidden = true;
+  await f.poll([waiting('r1', 'a', 'approval', 'c1'), waiting('r2', 'a', 'call', 'c2')]);
+  assert.deepEqual(f.shown, []);
+  assert.equal(f.document.title, '(1) Lovia');
+  assert.equal(f.notified.length, 1);
+  assert.equal(f.notified[0].tag, 'lovia-wait:a');
+});
+
 // Opening a chat by id (a reload's ?session=…) with the server's detail.
 function opener(detail) {
   const events = [];
@@ -165,7 +211,7 @@ function opener(detail) {
   const context = {
     document: { title: 'Lovia', hidden: false, getElementById: (id) => elements[id] ?? null },
     localStorage: { getItem: () => null, setItem: () => {} },
-    store, createRunNotices, console, setTimeout, clearTimeout,
+    store, createRunNotices, createAttention, console, setTimeout, clearTimeout,
     icon: () => '',
     t: (key) => key,
     toast: () => {},

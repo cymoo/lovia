@@ -7,6 +7,7 @@ import { setImmediate } from 'node:timers/promises';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { createRunNotices } from '../../../lovia/web/static/js/run-notices.js';
+import { createAttention } from '../../../lovia/web/static/js/attention.js';
 
 const source = readFileSync(new URL('../../../lovia/web/static/js/sessions.js', import.meta.url), 'utf8')
   .replace(/^import .*;$/gm, '')
@@ -29,7 +30,7 @@ function fixture() {
   const context = {
     document: { title: 'Lovia', hidden: false, getElementById: () => null },
     localStorage: { getItem: () => null, setItem: () => {} },
-    store, createRunNotices, console, setTimeout, clearTimeout,
+    store, createRunNotices, createAttention, console, setTimeout, clearTimeout,
     EventSource: FakeEventSource,
     icon: () => '',
     currentView: () => null,

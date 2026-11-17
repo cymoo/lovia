@@ -540,6 +540,13 @@ class ChatSessionInfo(BaseModel):
     model: str | None = None
 
 
+class WaitsOn(BaseModel):
+    """The call a run waits on a person for (see ``RunInfo.waits_on``)."""
+
+    kind: Literal["approval", "question", "call"]
+    id: str
+
+
 class RunInfo(BaseModel):
     """A live supervised (background) run, or one suspended on an approval
     (``waiting``), for ``GET /api/runs``."""
@@ -563,6 +570,11 @@ class RunInfo(BaseModel):
     # the run's own approval_required frame carries it — so a page can offer the card
     # outside that run's chat (a task's, in the chat that spawned it).
     pending_approval: dict[str, Any] | None = None
+    # What the run waits on from a person, if anything: an approval card
+    # ("blocked_on_approval", or "waiting" on one), an ask_human question or
+    # another tool's wait ("waiting"), with the call's id — what a page tells
+    # the user about, once per call.
+    waits_on: WaitsOn | None = None
 
 
 class RunRecordInfo(BaseModel):

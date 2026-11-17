@@ -1562,7 +1562,8 @@ async def test_a_reattach_replays_a_decided_card_as_settled() -> None:
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
-        await _wait_run(ac, "s1", status="blocked_on_approval")
+        blocked = await _wait_run(ac, "s1", status="blocked_on_approval")
+        assert blocked["waits_on"] == {"kind": "approval", "id": "c1"}
         await ac.post(
             "/api/chat/approve",
             json={"session_id": "s1", "call_id": "c1", "decision": "approve"},
@@ -1589,7 +1590,8 @@ async def test_a_stop_settles_the_pending_card_as_cancelled() -> None:
         task, lines = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
-        await _wait_run(ac, "s1", status="blocked_on_approval")
+        blocked = await _wait_run(ac, "s1", status="blocked_on_approval")
+        assert blocked["waits_on"] == {"kind": "approval", "id": "c1"}
         await ac.post("/api/chat/cancel", params={"session_id": "s1"})
         await asyncio.wait_for(task, timeout=5)
         await _wait_run(ac, "s1", gone=True)

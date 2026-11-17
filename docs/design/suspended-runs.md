@@ -61,8 +61,8 @@ class RunSuspended(LoviaError):
 暂停审批的动词和 approve/reject 放在一起：
 
 ```python
-ev.suspend(reason="")                                   # ApprovalRequired
-channel.suspend(call_id, *, scope=None, reason="")      # ApprovalChannel
+ev.suspend(reason="")                             # ApprovalRequired
+channel.suspend(call_id, scope=None, reason="")   # ApprovalChannel
 ```
 
 语义：

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 from ..tools.human import HumanChannel, HumanQuestion
 
@@ -50,6 +51,9 @@ class QuestionRegistry:
         # (question, answer). Another run's question never matches.
         self._preanswers: dict[str, tuple[str, str]] = {}
         self._task: asyncio.Task[None] | None = None
+        # Called with a session id when its pending question starts or stops
+        # waiting (``RouterDeps`` announces it, so pages refetch the runs).
+        self.on_change: Callable[[str], None] | None = None
 
     # -- lifecycle --------------------------------------------------------- #
     def start(self) -> None:
@@ -99,6 +103,7 @@ class QuestionRegistry:
                 if self._suspend_after is None
                 else f"suspends after {self._suspend_after:.0f}s",
             )
+            self._changed(sid)
 
     def preanswer(self, run_id: str, question: str, answer: str) -> None:
         """Answer ``question`` for run ``run_id``, resumed, as soon as it asks
@@ -162,8 +167,16 @@ class QuestionRegistry:
             )
 
     def _forget(self, session_id: str) -> None:
-        self._by_session.pop(session_id, None)
+        if self._by_session.pop(session_id, None) is not None:
+            self._changed(session_id)
         self._drop_timer(session_id)
+
+    def _changed(self, session_id: str) -> None:
+        if self.on_change is not None:
+            try:
+                self.on_change(session_id)
+            except Exception:  # noqa: BLE001 — a listener must not break the registry
+                log.exception("question listener failed for %s", session_id)
 
     def _drop_timer(self, session_id: str) -> None:
         timer = self._timers.pop(session_id, None)

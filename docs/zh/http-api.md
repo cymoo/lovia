@@ -225,7 +225,7 @@ API 路由抛出的错误都使用同一种响应体：
 | --- | --- |
 | `run_started` | `{session_id, run_id, agent, source}` |
 | `run_finished` | `{session_id, run_id, status, error, source}` |
-| `run_status` | `{session_id, run_id, status}`：运行开始（`blocked_on_approval`）或结束（`running`）等待审批；请求本身见 `GET /api/runs` |
+| `run_status` | `{session_id, run_id, status}`：运行开始（`blocked_on_approval`）或结束（`running`）等待审批，或者开始、结束等待 `ask_human` 的问题（此时 `status` 仍是 `running`）；请求本身和 `waits_on` 见 `GET /api/runs` |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
 | `session_appended` | `{session_id}`：没有 run 时向对话追加了内容（停止后暂存的子任务报告）；重新拉取该会话即可 |

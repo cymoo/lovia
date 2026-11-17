@@ -103,6 +103,21 @@ async def test_registry_answer_beats_the_timer() -> None:
     await registry.aclose()  # timer must have been dropped with the entry
 
 
+async def test_registry_says_when_a_question_starts_and_stops_waiting() -> None:
+    channel = HumanChannel()
+    registry = await _registry(channel)
+    changed: list[str] = []
+    registry.on_change = changed.append
+    channel._new_question("which branch?", session_id="s1")
+    await asyncio.sleep(0)
+    assert changed == ["s1"]
+    registry.resolve("s1", "main")
+    assert changed == ["s1", "s1"]
+    registry.resolve("s1", "again")  # nothing pending: no news
+    assert changed == ["s1", "s1"]
+    await registry.aclose()
+
+
 async def test_registry_cancel_session_fails_the_parked_call() -> None:
     channel = HumanChannel()
     registry = await _registry(channel)

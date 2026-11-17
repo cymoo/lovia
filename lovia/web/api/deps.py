@@ -36,7 +36,12 @@ from ..followups import (
     coerce_suggestions,
     generate_followups,
 )
-from ..sse import SessionRetitledData, SessionWorkspaceChangedData, frame
+from ..sse import (
+    RunStatusData,
+    SessionRetitledData,
+    SessionWorkspaceChangedData,
+    frame,
+)
 from ..store import ChatMeta, ChatStore
 from ..titles import generate_title, provisional_title
 from ..workspaces import (
@@ -252,6 +257,7 @@ class RouterDeps:
         scheduler = Scheduler(self, poll_interval=self.scheduler_poll)
         scheduler.start()
         if self.questions is not None:
+            self.questions.on_change = self._question_changed
             self.questions.start()
         try:
             yield
@@ -666,6 +672,19 @@ class RouterDeps:
             await self._switch_tree(task.id, mode)
             if (moved := await self.store.get(task.id)) is not None:
                 self.emit_workspace(moved)
+
+    def _question_changed(self, session_id: str) -> None:
+        """A live run's ask_human question started or stopped waiting: say so
+        (``run_status``), as for an approval, so pages refetch the runs and
+        see it in ``waits_on``."""
+        ctrl = self.supervisor.get(session_id)
+        if ctrl is not None:
+            self.emit(
+                "run_status",
+                RunStatusData(
+                    session_id=session_id, run_id=ctrl.record_id, status=ctrl.status
+                ),
+            )
 
     def emit_workspace(self, meta: ChatMeta) -> None:
         """Announce a chat's binding (``session_workspace_changed``)."""

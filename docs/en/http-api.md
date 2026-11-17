@@ -246,7 +246,7 @@ that starts meanwhile is still refused, with no injection and no new run.
 | --- | --- |
 | `run_started` | `{session_id, run_id, agent, source}` |
 | `run_finished` | `{session_id, run_id, status, error, source}` |
-| `run_status` | `{session_id, run_id, status}` — a live run started (`blocked_on_approval`) or stopped (`running`) waiting on an approval; `GET /api/runs` carries the request |
+| `run_status` | `{session_id, run_id, status}` — a live run started (`blocked_on_approval`) or stopped (`running`) waiting on an approval, or started or stopped waiting on an `ask_human` question (`status` stays `running`); `GET /api/runs` carries the request and `waits_on` |
 | `session_created` | `{session_id, agent, title}` |
 | `session_retitled` | `{session_id, title}` |
 | `session_appended` | `{session_id}` — entries landed in the chat without a run (a subagent report held after a stop); refetch the session |

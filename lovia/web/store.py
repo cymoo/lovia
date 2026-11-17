@@ -329,6 +329,11 @@ def _run_waiting(conn: sqlite3.Connection) -> None:
     present = {r[1] for r in conn.execute("PRAGMA table_info(chat_runs)")}
     if "waiting_for" not in present:
         conn.execute("ALTER TABLE chat_runs ADD COLUMN waiting_for TEXT")
+    # GET /api/runs lists them on every refresh; the table keeps every run.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_runs_waiting "
+        "ON chat_runs(started_at) WHERE status = 'waiting'"
+    )
 
 
 _MIGRATIONS: tuple[Migration, ...] = (

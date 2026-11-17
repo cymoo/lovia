@@ -1074,7 +1074,7 @@ Web 包会持久化定时任务，支持三种触发方式：
 
 插件还提供无需审批的 `list_schedules` 和 `cancel_schedule`。取消只会停用任务，不会删除记录。
 停止条件通常由无人值守的定时运行自行处理，而这类运行中的
-审批请求会被自动拒绝，因此 `cancel_schedule` 不能依赖审批。
+审批请求只会让运行暂停、直到有人回答，因此 `cancel_schedule` 不能依赖审批。
 
 如果工作要立即开始、但放在单独的对话里，插件还提供 `start_session(instruction, title=None)`。
 它新建一个顶层对话，立即用当前对话的 agent 执行 `instruction`，沿用发起调用的那次 Run 的上下文，

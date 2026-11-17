@@ -403,6 +403,7 @@ function runEl(r) {
     skipped: 'minus',
     cancelled: 'square',
     interrupted: 'pause',
+    waiting: 'shield-alert', // suspended on an approval card
     running: 'loader-circle',
   }[r.status] || 'minus';
   const mark = el('span', 'lv-sched-run-mark');

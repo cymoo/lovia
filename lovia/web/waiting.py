@@ -14,6 +14,7 @@ settles it, and a subagent's report waits in its queue.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -41,7 +42,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_RESUMABLE = ("interrupted", "running")
+#: Checkpoint statuses a run can resume from.
+RESUMABLE = ("interrupted", "running")
 
 # The result a stop gives the call its run was suspended on.
 _STOPPED = "Not run: the run was stopped while this call waited for approval."
@@ -90,7 +92,7 @@ async def find_waiting(deps: RouterDeps, session_id: str) -> Waiting | None:
         run_id = await store.get_active_run_id(session_id)
         if run_id and await store.get_active_record_id(session_id, run_id) == record.id:
             snapshot = await store.checkpointer.load(run_id)
-    if snapshot is not None and snapshot.status in _RESUMABLE:
+    if snapshot is not None and snapshot.status in RESUMABLE:
         return Waiting(record, snapshot)
     await store.finish_run(
         record.id,
@@ -117,16 +119,21 @@ async def resume_waiting(
     next. None when another request took the run first (it is live then, or
     stopped)."""
     store, sid = deps.store, waiting.session_id
+    await _wound_down(deps, sid)
     claimed = await store.claim_waiting(waiting.record.id)
     if claimed is None:
         return None
     try:
-        agent = deps.agents.get(waiting.snapshot.agent_name)
+        # The run's entry agent, by the registry key its record keeps: the
+        # snapshot names the agent that was acting, a handoff target perhaps,
+        # which the resume finds again from the entry agent's handoffs.
+        name = waiting.record.agent or waiting.snapshot.agent_name
+        agent = deps.agents.get(name)
         if agent is None:
             raise WebError(
                 409,
                 "agent_unregistered",
-                f"agent {waiting.snapshot.agent_name!r} is no longer served",
+                f"agent {name!r} is no longer served",
                 hint="serve it again to resume this run, or stop the run",
             )
         binding = deps.chat_binding(agent, await store.get(sid))
@@ -142,8 +149,7 @@ async def resume_waiting(
                 resumed=True,
             ),
         )
-        queued = cast("list[dict[str, Any]]", claimed.get("queued") or [])
-        inbox = [cast(InputEntry, entry_from_dict(e)).content for e in queued]
+        inbox = [entry.content for entry in _queued(claimed)]
         if message is not None:
             inbox.append(message)
         answers = {waiting.call_id: answer} if answer and waiting.call_id else {}
@@ -168,6 +174,7 @@ async def stop_waiting(deps: RouterDeps, waiting: Waiting) -> bool:
     what it showed, its card's call is recorded as not run, and the
     checkpoint goes. False when another request took the run first."""
     store, session, sid = deps.store, deps.session, waiting.session_id
+    await _wound_down(deps, sid)
     claimed = await store.claim_waiting(waiting.record.id)
     if claimed is None:
         return False
@@ -177,6 +184,9 @@ async def stop_waiting(deps: RouterDeps, waiting: Waiting) -> bool:
         ToolResultEntry(call_id=call.id, output=_STOPPED, is_error=True)
         for call in pending_tool_calls(entries)
     ]
+    # What it had not read yet stays in the chat, as a report that arrives
+    # after a stop does: read with the user's next message.
+    entries += _queued(claimed)
     meta: JsonObject = {}
     if snapshot.started_at is not None:
         meta[TIMING_META_KEY] = {
@@ -213,3 +223,18 @@ async def stop_waiting(deps: RouterDeps, waiting: Waiting) -> bool:
         ),
     )
     return True
+
+
+def _queued(waiting_for: JsonObject) -> list[InputEntry]:
+    """The messages a waiting run had not read yet, oldest first."""
+    queued = cast("list[dict[str, Any]]", waiting_for.get("queued") or [])
+    return [cast(InputEntry, entry_from_dict(e)) for e in queued]
+
+
+async def _wound_down(deps: RouterDeps, session_id: str) -> None:
+    """Let the run that just suspended leave the registry. Its record reads
+    ``waiting`` a moment before it does (so no fresh start slips in), and a
+    resume can't register beside it — nor may a stop race its last writes."""
+    live = deps.supervisor.get(session_id)
+    if live is not None and live.task is not None and not live.task.done():
+        await asyncio.wait([live.task])

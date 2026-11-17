@@ -164,6 +164,8 @@ async def test_a_stop_settles_the_waiting_run() -> None:
     app = _app(_agent(provider, runs), suspend_after=0.2, store=store)
     async with _client(app) as ac:
         await _suspend(ac)
+        # A report that waited with the run stays in the chat after the stop.
+        await subagent_deliver(app.state.deps)(_report("s1", text="[subagent t1] news"))
         res = await ac.post("/api/chat/cancel", params={"session_id": "s1"})
         assert res.json() == {"ok": True}
         assert (await _record(ac, "s1"))["status"] == "cancelled"
@@ -175,6 +177,7 @@ async def test_a_stop_settles_the_waiting_run() -> None:
         assert any(
             "waited for approval" in str(getattr(e, "output", "")) for e in entries
         )
+        assert any(getattr(e, "content", None) == "[subagent t1] news" for e in entries)
         assert await store.get_active_run_id("s1") is None
         # The chat is free again: a message starts a run of its own.
         task, _ = _spawn(
@@ -182,6 +185,32 @@ async def test_a_stop_settles_the_waiting_run() -> None:
         )
         await asyncio.wait_for(task, timeout=5)
     assert runs == []
+
+
+@pytest.mark.asyncio
+async def test_a_run_suspended_after_a_handoff_resumes() -> None:
+    # The acting agent is a handoff target, served under no name of its own:
+    # the resume starts from the chat's agent, as its record names it.
+    runs: list[str] = []
+    provider = ScriptedProvider(
+        [
+            call("transfer_to_billing", {}, call_id="h1"),
+            call("push", {}, call_id="c1"),
+            text("ack"),
+        ]
+    )
+    billing = _agent(provider, runs).clone(name="billing")
+    agent = Agent(name="bot", model=provider, handoffs=[billing])
+    app = _app(agent, suspend_after=0.2)
+    async with _client(app) as ac:
+        await _suspend(ac)
+        res = await ac.post(
+            "/api/chat/approve",
+            json={"session_id": "s1", "call_id": "c1", "decision": "approve"},
+        )
+        assert res.status_code == 200 and res.json()["resumed"] is True
+        await _wait_run(ac, "s1", gone=True)
+    assert runs == ["push"]
 
 
 @pytest.mark.asyncio

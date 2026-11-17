@@ -140,12 +140,15 @@ async function checkMissedRuns(seen) {
     return;
   }
   _markRunsSeen();
-  runNotices.add(records, { missed: true });
+  // A run suspended on a card hasn't finished: no notice for it.
+  runNotices.add(records.filter((r) => r.status !== 'waiting'), { missed: true });
 }
 
 function _notifyRunFinished(sid, runId, status = 'completed') {
   // Whatever else happens below, this browser has now seen results up to here.
   _markRunsSeen();
+  // Suspended on a card, not finished: its chat's dot says it waits.
+  if (status === 'waiting') return;
   const run = { run_id: runId, session_id: sid, status };
   const stoppedAt = _recentlyStopped.get(sid);
   // A run this page streamed, in the chat still on screen, showed its own

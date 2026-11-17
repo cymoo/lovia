@@ -42,7 +42,13 @@ from ..sse import SessionCreatedData, _coerce, usage_dict
 from ..store import ChatMeta
 from ..supervisor import RunController, forward
 from ..titles import provisional_title
-from ..waiting import Waiting, find_waiting, resume_waiting, stop_waiting
+from ..waiting import (
+    RESUMABLE,
+    Waiting,
+    find_waiting,
+    resume_waiting,
+    stop_waiting,
+)
 from ..workspaces import ChatBinding, own_root
 from .deps import RouterDeps
 from .serialization import Run, segments_runs
@@ -572,7 +578,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         if run_id is None:
             raise WebError(404, "run_not_found", "no interrupted run")
         snapshot = await store.checkpointer.load(run_id)
-        if snapshot is None or snapshot.status not in ("interrupted", "running"):
+        if snapshot is None or snapshot.status not in RESUMABLE:
             await store.clear_active_run_id(session_id)
             raise WebError(404, "run_not_found", "no resumable run")
         if snapshot.agent_name not in deps.agents:
@@ -606,7 +612,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         if await store.get_active_run_id(session_id) != run_id:
             raise WebError(404, "run_not_found", "no resumable run")
         snapshot = await store.checkpointer.load(run_id)
-        if snapshot is None or snapshot.status not in ("interrupted", "running"):
+        if snapshot is None or snapshot.status not in RESUMABLE:
             raise WebError(404, "run_not_found", "no resumable run")
 
         # Built BEFORE start_resume: that call registers the controller, and

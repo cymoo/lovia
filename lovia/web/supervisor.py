@@ -102,6 +102,11 @@ _INTERRUPTED = (
 )
 
 
+def _queued_entry(content: InjectedContent) -> JsonObject:
+    """A message a suspended run has not read yet, as its record keeps it."""
+    return entry_to_dict(InputEntry(role="user", content=content))
+
+
 def _span(seconds: float) -> str:
     """``600`` → ``"10 minutes"``, ``90`` → ``"90 seconds"``."""
     if seconds >= 60 and seconds % 60 == 0:
@@ -1058,7 +1063,10 @@ class RunController:
                         continue
                     if isinstance(ev, events.RunFailed):
                         error_seen = True
-                        if isinstance(ev.error, RunSuspended):
+                        if (
+                            isinstance(ev.error, RunSuspended)
+                            and self._suspended is not None
+                        ):
                             # Not a failure: approval_suspended said the run
                             # waits on its card. The run ends just below.
                             continue
@@ -1178,14 +1186,30 @@ class RunController:
                 # What the run had not read yet goes with it: a resume puts it
                 # back in the mailbox. Recorded before the run leaves the
                 # registry, so no start can slip in while the chat looks idle.
+                # This is the record's one write: a report queued for it from
+                # here on goes straight to the row (queue_for_waiting).
                 waiting_for["queued"] = [
-                    entry_to_dict(InputEntry(role="user", content=content))
-                    for content in self.mailbox.drain()
+                    _queued_entry(content) for content in self.mailbox.drain()
                 ]
                 try:
                     await store.finish_run(
-                        record_id, status="waiting", waiting_for=waiting_for
+                        record_id,
+                        status="waiting",
+                        usage=usage_dict(
+                            self.usage, last_input_tokens=self.last_input_tokens
+                        )
+                        if self.usage.total_tokens
+                        else None,
+                        waiting_for=waiting_for,
                     )
+                    # A message injected while that write was under way, into
+                    # a run that will not read it: it waits with the run too.
+                    # (No await between the last drain and the eviction below.)
+                    while late := self.mailbox.drain():
+                        for content in late:
+                            await store.queue_for_waiting(
+                                record_id, _queued_entry(content)
+                            )
                 except Exception as exc:  # pragma: no cover - defensive
                     log.warning("run record write failed for %s: %s", sid, exc)
             await deps.approvals.release(sid)
@@ -1219,17 +1243,19 @@ class RunController:
             self.final_status = status
             self.final_error = error
             try:
-                await store.finish_run(
-                    record_id,
-                    status=status,
-                    error=error,
-                    usage=usage_dict(
-                        self.usage, last_input_tokens=self.last_input_tokens
+                # A waiting record was written above, before the eviction; a
+                # second write here would drop what was queued for it since.
+                if status != "waiting":
+                    await store.finish_run(
+                        record_id,
+                        status=status,
+                        error=error,
+                        usage=usage_dict(
+                            self.usage, last_input_tokens=self.last_input_tokens
+                        )
+                        if self.usage.total_tokens
+                        else None,
                     )
-                    if self.usage.total_tokens
-                    else None,
-                    waiting_for=waiting_for if status == "waiting" else None,
-                )
             except Exception as exc:  # pragma: no cover - defensive
                 log.warning("run record write failed for %s: %s", sid, exc)
             log.info(

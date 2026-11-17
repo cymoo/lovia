@@ -48,7 +48,7 @@ from ..schemas import (
 )
 from ..supervisor import agent_grant_context
 from ..titles import provisional_title
-from ..waiting import find_waiting
+from ..waiting import RESUMABLE, find_waiting
 from ..workspaces import ChatBinding
 from .deps import RouterDeps
 from .serialization import (
@@ -65,8 +65,6 @@ from .serialization import (
     user_turn_refs,
     view_messages,
 )
-
-_RESUMABLE = ("interrupted", "running")
 
 
 def _in_flight(snapshot: RunSnapshot) -> Run:
@@ -101,7 +99,7 @@ async def _session_view(
         runs = segments_runs(await session.segments(session_id))
         if store.checkpointer is not None and live.run_id is not None:
             snapshot = await store.checkpointer.load(live.run_id)
-            if snapshot is not None and snapshot.status in _RESUMABLE:
+            if snapshot is not None and snapshot.status in RESUMABLE:
                 runs.append(_in_flight(snapshot))
         view = view_messages(runs, created_at=created_at, updated_at=updated_at)
         return view, live.run_id, None
@@ -119,7 +117,7 @@ async def _session_view(
     )
     if candidate and store.checkpointer is not None:
         snapshot = await store.checkpointer.load(candidate)
-        if snapshot is not None and snapshot.status in _RESUMABLE:
+        if snapshot is not None and snapshot.status in RESUMABLE:
             runs = segments_runs(await session.segments(session_id))
             runs.append(_in_flight(snapshot))
             view = view_messages(runs, created_at=created_at, updated_at=updated_at)
@@ -582,7 +580,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         stale = await store.get_active_run_id(session_id)
         if stale and store.checkpointer is not None:
             snapshot = await store.checkpointer.load(stale)
-            if snapshot is not None and snapshot.status in _RESUMABLE:
+            if snapshot is not None and snapshot.status in RESUMABLE:
                 ckpt_user_turns = sum(
                     1
                     for e in snapshot.entries
@@ -661,7 +659,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             stale = await store.get_active_run_id(session_id)
             if stale and store.checkpointer is not None:
                 snapshot = await store.checkpointer.load(stale)
-                if snapshot is not None and snapshot.status in _RESUMABLE:
+                if snapshot is not None and snapshot.status in RESUMABLE:
                     raise WebError(
                         409,
                         "run_unfinished",

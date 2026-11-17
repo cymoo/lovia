@@ -1252,7 +1252,7 @@ even if the condition is never met; the tool requires one when `until` is set.
 The plugin also contributes `list_schedules` and `cancel_schedule`, which need
 no approval: cancelling deactivates the schedule without deleting its record,
 and self-cancel must work inside a clientless scheduled run, where an
-approval request would be auto-denied.
+approval request would only suspend the run until someone answers it.
 
 For work that should start now but in its own chat, the plugin also
 contributes `start_session(instruction, title=None)`. It opens a new top-level

@@ -1,6 +1,6 @@
 # 无人值守时的审批：暂停，批准后继续
 
-> 状态：已定稿，待实施（五项决定见文末"已定"） · 2026-11-17 · 范围：core（`exceptions.py`、`events.py`、`approvals.py`、`runtime/tool_calls.py`、`runtime/loop.py`、`runtime/checkpoint.py`）、`lovia/web`（`supervisor.py`、`approvals.py`、`questions.py`、`store.py`、`scheduler.py`、`subagents.py`、`api/chat.py`、`api/sessions.py`、`schemas.py`、`static/js/approvals.js`、`sessions.js`）。session engine 不改。
+> 状态：已定稿，待实施（五项决定见文末"已定"；评审补的四处缺口在 §2–§6，标"评审补充"） · 2026-11-17 · 范围：core（`exceptions.py`、`events.py`、`approvals.py`、`runtime/tool_calls.py`、`runtime/loop.py`、`runtime/checkpoint.py`）、`lovia/web`（`supervisor.py`、`approvals.py`、`questions.py`、`store.py`、`scheduler.py`、`subagents.py`、`api/chat.py`、`api/sessions.py`、`schemas.py`、`static/js/approvals.js`、`sessions.js`）。session engine 不改。
 >
 > 行号指向 `main`（`84fc0682`，v0.9.229）。
 
@@ -106,7 +106,7 @@ result = await Runner.run(agent, [], checkpoint=ckpt)   # 同一个 run_id，接
 - `lovia web`（`default_app`）默认 60 秒。
 - 到点时 `ApprovalRegistry.suspend_pending(sid)` 调用 `ev.suspend()`，run 照 §1 的方式结束。
 - 不区分有没有标签页在看，规则只有一条。用户在场，60 秒内多半已经回答；不在场，就把槽位放出来。
-- **关闭服务时**（`supervisor.py:1571`）：正在等审批的 run 先暂停，再退出，所以重启后卡片还在。其余 run 照旧记为 interrupted。进程崩溃时退回现在的行为。
+- **关闭服务时**（`supervisor.py:1571`）：正在等审批的**顶层对话**先暂停，再退出，所以重启后卡片还在。子任务照旧停止，理由见 §6。其余 run 照旧记为 interrupted。进程崩溃时退回现在的行为。
 - 去掉自动拒绝，见"不做"。
 
 ## 3. web：暂停状态存在哪
@@ -115,14 +115,23 @@ result = await Runner.run(agent, [], checkpoint=ckpt)   # 同一个 run_id，接
 - checkpoint 不变，`active_run_id` 仍然指向它。
 - 卡片要的 reason、scopes、参数都在 frame 里，所以显示卡片不需要续跑，也不需要重新判定。
 - 不写进 checkpoint 的 meta：不把 web 的概念放进 core 的快照。
+- **待读队列**（评审补充）：`waiting_for` 里还有一个 `queued` 列表，续跑时按顺序放回邮箱。里面有两类内容：
+  - 暂停那一刻邮箱里还没读到的内容。现在 run 没有成功结束时，剩下的内容会被直接丢掉（`supervisor.py:1042`），暂停必须例外。否则用户发了消息（§5）却仍然不批准，再次暂停时这条消息就丢了。
+  - 等待期间送来的子任务报告（§5）。
+- **续跑用的 agent**（评审补充）：supervisor 在内存里为每个等待中的对话记下当时用的 agent（`ctrl.source_agent`）。顶层对话丢了这份记录也没关系，可以按注册名重新找到；子任务不行，见 §6。
 
 ## 4. web：回答后继续
 
 `POST /api/chat/approve` 的请求体不变。找不到在线的待批请求时：
 
 1. 读对话当前 run 的记录。如果 `status = 'waiting'`，并且 `call_id` 对得上，就用一条 `UPDATE … WHERE status = 'waiting'` 把它改成 `running`，这一步就是 claim。第二个标签页拿到 404 `approval_not_found`，和现在一样。
-2. 调用 `start_resume(..., answers={call_id: Approval(...)})`。如果勾了"始终允许"，controller 在开始之前写入 grant。
-3. 返回 `{ok, remembered, resumed: true}`，客户端照现有逻辑 reconnect，附着到 run 上。
+2. 调用 `start_resume(..., answers={call_id: Approval(...)}, autostart=True)`。如果勾了"始终允许"，controller 在开始之前写入 grant。
+3. 返回 `{ok, remembered, resumed: true}`。客户端要看进度，就照现有逻辑 reconnect，附着到 run 上。
+
+**评审补充：**
+
+- **批准后要自己开始跑。** 现在 `start_resume()` 只注册 controller，任务在第一次订阅时才启动（`_ensure_begun`，`supervisor.py:404`），而 `attach()` 不会触发它（`supervisor.py:445`）。所以 `start_resume()` 要像 `start()` 一样加上 `autostart`（`supervisor.py:1346`），批准接口返回之前就开始续跑。从托盘、定时任务页、部署方自己的 UI 批准，都不依赖有人重连。
+- **用哪个 agent 续跑。** 先用内存里记下的那个（§3），没有再按注册名找。都找不到时返回 409 `agent_unregistered` 并附上提示，**不删 checkpoint**。现在的续跑路径在这种情况下会删掉它（`api/chat.py:486`）。
 
 supervisor 这边，`RunController` 加一个 `_answers: dict[str, Approval]`。`ApprovalRequired` 分支（`supervisor.py:967`）先查它，命中就 approve/reject，发出 `ApprovalResolved(cause="user")`，用一次就丢。
 
@@ -131,10 +140,13 @@ supervisor 这边，`RunController` 加一个 `_answers: dict[str, Approval]`。
 
 ## 5. web：对话里的其他操作
 
+**一条总规则**（评审补充）：对话里有等待中的 run 时，`supervisor.start()` 一律返回 409 `run_waiting`。新开 run 会把 `active_run_id` 改指向自己（`_checkpoint_for`，`supervisor.py:1235`），暂停的 run 就再也找不回来了。最初的设计只照顾了"用户发消息"和"定时任务"两种启动方，漏了子任务报告（`web/subagents.py:155`）。现在改成 `start()` 本身拒绝，每个启动方都必须明确处理这种情况，以后再加启动方也不会悄悄覆盖暂停的 run。
+
 | 操作 | 行为 |
 | --- | --- |
 | 打开对话或刷新 | 会话视图返回 `waiting`（frame），不返回 `active_run_id`，所以不自动续跑，客户端直接画卡片。`reconnect` 遇到 waiting 返回 409 `run_waiting` 兜底 |
 | 发新消息 | 续跑，并把这条消息注入进去，和在线等待时发消息一样：消息进 mailbox，卡片还在。现在 `api/chat.py:209`、`321` 会删掉被新消息取代的 checkpoint，这一条对 waiting 不适用，暂停的工作不会丢 |
+| 子任务的报告送到（评审补充） | 放进待读队列（§3），**不续跑**。审批只能由用户来答，为了一份报告续跑，60 秒后又会暂停，没有意义。用户批准后，run 在下一轮读到这份报告。走的是 `subagent_deliver` 碰到 `run_waiting` 的分支 |
 | 停止 | 和停止运行中的回复一样：保留已经发生的内容，悬空调用记为已取消，删除 checkpoint，记录为 cancelled。要把 `_write_frozen`（`supervisor.py:697`）抽成可以直接从快照调用的函数 |
 | 切换权限模式 | 存下新模式，然后续跑一次，让 core 重新判定。新模式允许的就直接执行，否则重新出卡片。这和在线 run 的 `recheck_pending` 是同一个语义 |
 | 删除对话 | 现有的删除门已经覆盖 checkpoint，不用改 |
@@ -153,6 +165,15 @@ supervisor 这边，`RunController` 加一个 `_answers: dict[str, Approval]`。
 - supervisor 加一个 `settled(session_id)`，在暂停和续跑之间一直等，直到这个对话的 run 以非 waiting 的状态结束。`run_child` 改为等它。
 - 父对话的托盘（#459）从 `/api/runs` 读取，所以暂停的子任务审批照样显示，见 §7。
 - 进程重启后，父对话内存里的子任务列表本来就会丢，这是现有限制，这次不处理。
+
+**子任务续跑用的 agent**（评审补充）：
+
+- 子 agent 是一个临时克隆，名字是 `{parent}-sub`，`plugins=[]`，没有注册（`plugins/subagents.py:402`）。任务对话存的却是父 agent 的注册名（`web/subagents.py:265`）。所以按注册名找不到它；换成父 agent 来续跑也不行，过不了 `resolve_resume_agent` 的校验（`runtime/resume.py:133`）。
+- 子任务等待期间，`run_child` 一直在等 `settled()`，进程也活着，所以内存里记下的 agent（§3）一定还在。续跑就用它。
+- 也正因为这样，子任务的暂停只在进程活着时有效。关闭服务时子任务照旧停止，不暂停（§2），这和文档里现有的"未完成的任务重启后不会续跑"一致。
+- 如果万一出现一个找不到 agent 的等待中任务，按 §4 返回 409，不删 checkpoint。
+
+**父对话在等审批时，子任务完成了：** 报告进父对话的待读队列（§5），父对话里暂停的 run 和卡片都不受影响。用户批准后，父对话从暂停处继续，并在下一轮读到这份报告。
 
 ## 7. UX
 
@@ -219,6 +240,12 @@ supervisor 这边，`RunController` 加一个 `_answers: dict[str, Approval]`。
   - 切换模式会续跑并重新判定。
   - 定时任务的跳过原因正确。
   - 子任务暂停后，父对话在子任务续跑完成后才拿到结果。
+  - 评审补充：
+    - 没有任何客户端时批准，run 也会续跑并跑完。
+    - 子任务的 agent 没有注册，暂停后批准仍能续跑；找不到 agent 时返回 409，checkpoint 还在。
+    - `supervisor.start()` 遇到等待中的对话返回 `run_waiting`。
+    - 父对话在等审批时子任务完成：`active_run_id` 不变，报告在待读队列里，批准后 run 读到它。
+    - 发了消息但仍不批准、再次暂停：这条消息进了待读队列，续跑后还在。
   - 用 verify skill 和 stub model 在浏览器里走一遍：卡片、侧栏的点、托盘、刷新。
 
 ## 合并顺序

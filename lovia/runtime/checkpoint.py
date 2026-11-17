@@ -20,6 +20,7 @@ from ..exceptions import (
     MaxTurnsExceeded,
     ProviderError,
     RunCancelled,
+    RunSuspended,
 )
 from ..transcript import to_json_safe
 from .run_state import RunState
@@ -128,16 +129,17 @@ class CheckpointWriter:
     def classify(exc: BaseException) -> RunStatus:
         """Decide whether a run that ended with ``exc`` can be resumed.
 
-        Cancellation, run limits (turns/budget), transient transport errors,
-        and retryable provider errors leave the transcript in a consistent
-        state — the run is ``interrupted`` and re-running the same ``run_id``
-        may continue it (with raised limits where applicable). Everything else
-        is ``failed``.
+        Cancellation, a suspension, run limits (turns/budget), transient
+        transport errors, and retryable provider errors leave the transcript
+        in a consistent state — the run is ``interrupted`` and re-running the
+        same ``run_id`` may continue it (with raised limits where applicable).
+        Everything else is ``failed``.
         """
         if isinstance(
             exc,
             (
                 RunCancelled,
+                RunSuspended,
                 asyncio.CancelledError,
                 MaxTurnsExceeded,
                 BudgetExceeded,

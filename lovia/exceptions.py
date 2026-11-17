@@ -10,6 +10,11 @@ digging into the traceback.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # type-only: this module stays stdlib-only (workspace engine)
+    from .messages import ToolCall
+
 
 class LoviaError(Exception):
     """Base class for all lovia errors.
@@ -105,6 +110,24 @@ class BudgetExceeded(LoviaError):
 
 class RunCancelled(LoviaError):
     """Raised when a :class:`~lovia.CancelToken` was tripped during a run."""
+
+
+class RunSuspended(LoviaError):
+    """Raised when a run stops at a tool call to wait for an answer from outside.
+
+    Nothing failed: an approver suspended the call's approval
+    (:meth:`~lovia.events.ApprovalRequired.suspend`) because nobody can answer
+    it now. Calls already running finish and are saved first, as for
+    :class:`BudgetExceeded`. The suspended call keeps no result and the
+    checkpoint stays ``interrupted``, so resuming the same ``run_id`` judges
+    the call again and, if it still asks, asks again: answer it then.
+
+    Fields: ``call`` — the suspended :class:`~lovia.messages.ToolCall`;
+    ``reason`` — the approver's note, possibly empty.
+    """
+
+    call: ToolCall | None = None
+    reason: str = ""
 
 
 class GuardrailTripped(LoviaError):

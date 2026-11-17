@@ -276,7 +276,9 @@ the original conversation.
 
 Give sensitive tools a `permission`; resolve `ask` from your UI, a
 server-side policy, or an out-of-band channel — unresolved approvals deny,
-so runs never hang, and a denial carries its reason back to the model:
+so runs never hang, and a denial carries its reason back to the model. Nobody
+around to answer? `ev.suspend()` stops the run at that call, and resuming its
+checkpoint asks again:
 
 ```python
 from lovia import Runner, events, tool
@@ -290,7 +292,7 @@ async def refund(order_id: str, amount_cents: int) -> str:
 
 async for ev in Runner.stream(agent, "Refund order A123."):
     if isinstance(ev, events.ApprovalRequired):
-        ev.approve()          # or ev.reject("use store credit instead")
+        ev.approve()          # or ev.reject("use store credit instead"), ev.suspend()
 ```
 
 → [Tool approval](https://cymoo.github.io/lovia/tools/#tool-approval)

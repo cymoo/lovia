@@ -48,6 +48,7 @@ from .exceptions import (
     OutputValidationError,
     ProviderError,
     RunCancelled,
+    RunSuspended,
     ToolError,
     UserError,
 )
@@ -136,6 +137,7 @@ __all__ = [
     "RetryPolicy",
     "RunBudget",
     "RunCancelled",
+    "RunSuspended",
     "RunContext",
     "RunHandle",
     "RunHead",
@@ -166,4 +168,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.9.229"
+__version__ = "0.9.230"

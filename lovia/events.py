@@ -206,8 +206,9 @@ class ApprovalRequired(ToolEvent):
 
     A streaming consumer resolves the request by calling :meth:`approve` or
     :meth:`reject` on the event (any time before its loop yields control
-    back to the runner). Out-of-band callers can resolve by ``ToolCall.id``
-    via the :class:`~lovia.approvals.ApprovalChannel` accessible from
+    back to the runner), or puts it off with :meth:`suspend`. Out-of-band
+    callers can resolve by ``ToolCall.id`` via the
+    :class:`~lovia.approvals.ApprovalChannel` accessible from
     :attr:`RunHandle.approvals`. Setting ``Agent.approval_handler`` provides
     a programmatic policy as a third option.
 
@@ -260,6 +261,14 @@ class ApprovalRequired(ToolEvent):
         """Block the tool call. ``reason`` (the user's words, say) is passed to
         the model in the denial, so it can change course instead of retrying."""
         self._require_channel().reject(self.call.id, reason=reason)
+
+    def suspend(self, reason: str = "") -> None:
+        """Answer later: nobody can decide now. The run lets calls already
+        running finish, then stops with :class:`~lovia.exceptions.RunSuspended`,
+        leaving this call without a result. Resuming the run judges the call
+        again and, if it still asks, asks again. Also usable from an
+        ``approval_handler``."""
+        self._require_channel().suspend(self.call.id, reason=reason)
 
     def _require_channel(self) -> "ApprovalChannel":
         if self._channel is None:

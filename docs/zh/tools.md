@@ -219,6 +219,7 @@ result = await handle.result()
 ```python
 handle.approvals.approve(call_id)
 handle.approvals.reject(call_id, reason="今天不行")
+handle.approvals.suspend(call_id)  # 稍后再答（见下文）
 handle.approvals.release(decision=False)  # 拒绝所有仍在等待的调用
 ```
 
@@ -248,6 +249,40 @@ agent = Agent(..., approval_handler=remember)
 权限在预检阶段判定，每次模型请求判一次（重试不重判），并保持请求顺序。谓词或 handler
 抛异常时会拒绝调用。非流式 `Runner.run()` 无法消费事件，必须设置 `approval_handler`，
 否则 `ask` 的调用会被拒绝。审批决定不会持久化，因此恢复未完成的调用时会再次询问。
+
+### 稍后再答
+
+现在没人能回答时（定时运行、等用户回复的机器人），可以把请求暂停，而不是让运行一直挂着：
+`event.suspend(reason)`、`handle.approvals.suspend(call_id)`，或在 `approval_handler` 里调用
+`request.suspend()`。已经在跑的调用会先跑完并存档，然后运行抛出 `RunSuspended`（事件流以
+`RunFailed` 结束，和预算用尽一样）。被暂停的调用不写结果，所以配置了 checkpointer 时运行处于
+`interrupted`，用同一个 `run_id` 续跑会重新判定这个调用；仍然需要审批时，再回答：
+
+```python
+from lovia import Approval, CheckpointOptions, Runner, RunSuspended
+
+answers: dict[str, Approval] = {}  # 你自己的存储
+
+
+def handler(request, ctx):
+    if (answer := answers.pop(request.call.id, None)) is not None:
+        return answer
+    request.suspend("等用户回复")
+
+
+agent = agent.clone(approval_handler=handler)
+checkpoint = CheckpointOptions(checkpointer, run_id)
+try:
+    result = await Runner.run(agent, text, checkpoint=checkpoint)
+except RunSuspended as suspended:
+    await ask_the_user(suspended.call)  # 这次处理到此结束
+
+# 之后用户回答了：
+answers[call_id] = Approval(True)
+result = await Runner.run(agent, text, checkpoint=checkpoint)  # 续跑
+```
+
+续跑时重新判定：期间权限变成 `allow` 的调用直接执行，变成 `deny` 的被拒绝。
 
 ## 工具策略
 

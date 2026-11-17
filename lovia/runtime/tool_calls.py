@@ -31,10 +31,10 @@ from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator
 
 from .. import events
-from ..approvals import Approval, ApprovalChannel
+from ..approvals import Approval, ApprovalChannel, _Suspension
 from ..handoff import _HandoffSignal
 from ..messages import ToolCall
-from ..exceptions import RunCancelled
+from ..exceptions import RunCancelled, RunSuspended
 from ..reliability import CancelToken, RunBudget
 from .run_state import RunState
 from .utils import truncate_repr
@@ -137,8 +137,9 @@ class ToolCallProcessor:
         handoff already pending for this turn rejects later handoffs unrun —
         the first handoff of a turn wins, and the loser's ``on_handoff``
         side effects never fire. May raise :class:`RunCancelled` (cancel
-        check) or :class:`BudgetExceeded` (per-call cap) — the only
-        exceptions that escape rather than becoming rejections.
+        check), :class:`BudgetExceeded` (per-call cap) or
+        :class:`RunSuspended` (a suspended approval) — the only exceptions
+        that escape rather than becoming rejections.
         """
 
         self.cancel_token.check()
@@ -293,6 +294,18 @@ class ToolCallProcessor:
                 self.approvals.reject(call.id, reason="no approver available")
             approval = fut.result()
             self.approvals.discard(call.id)
+            if isinstance(approval, _Suspension):
+                # Answered later: the call stays dangling for a resume to ask
+                # again (``_tool_phase`` lets running calls finish first). A
+                # stop that landed meanwhile still has the last word.
+                self.cancel_token.check()
+                raise RunSuspended(
+                    _with_reason(
+                        f"Tool {call.name} is waiting for approval", approval.reason
+                    ),
+                    call=call,
+                    reason=approval.reason,
+                )
             if not approval.approved:
                 denial = _with_reason(
                     f"Tool {call.name} was not approved", approval.reason

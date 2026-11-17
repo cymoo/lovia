@@ -254,6 +254,7 @@ channel:
 ```python
 handle.approvals.approve(call_id)
 handle.approvals.reject(call_id, reason="not today")
+handle.approvals.suspend(call_id)  # answer later (below)
 handle.approvals.release(decision=False)  # deny everything still pending
 ```
 
@@ -290,6 +291,44 @@ call. Non-streaming `Runner.run()` callers must configure an
 `approval_handler`; otherwise `ask` calls are denied because no consumer can
 answer the event. Decisions are not persisted, so a resumed pending call asks
 again.
+
+### Answering later
+
+When nobody can answer now — a scheduled run, a bot waiting for a reply —
+suspend the request instead of holding the run open: `event.suspend(reason)`,
+`handle.approvals.suspend(call_id)`, or `request.suspend()` inside an
+`approval_handler`. Calls already running finish and are saved, then the run
+raises `RunSuspended` (its stream ends with `RunFailed`, as for a budget stop).
+The suspended call keeps no result, so with a checkpointer the run is
+`interrupted` and resuming the same `run_id` judges the call again. If it still
+asks, answer it then:
+
+```python
+from lovia import Approval, CheckpointOptions, Runner, RunSuspended
+
+answers: dict[str, Approval] = {}  # your store
+
+
+def handler(request, ctx):
+    if (answer := answers.pop(request.call.id, None)) is not None:
+        return answer
+    request.suspend("waiting for the user")
+
+
+agent = agent.clone(approval_handler=handler)
+checkpoint = CheckpointOptions(checkpointer, run_id)
+try:
+    result = await Runner.run(agent, text, checkpoint=checkpoint)
+except RunSuspended as suspended:
+    await ask_the_user(suspended.call)  # and end this turn of work
+
+# later, when the user answers:
+answers[call_id] = Approval(True)
+result = await Runner.run(agent, text, checkpoint=checkpoint)  # resumes
+```
+
+The judgement is fresh on resume: a call whose permission has since become
+`allow` runs without asking, one that became `deny` is refused.
 
 ## Tool policies
 

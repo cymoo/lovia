@@ -58,6 +58,7 @@ from ..exceptions import (
     MaxTurnsExceeded,
     OutputValidationError,
     RunCancelled,
+    RunSuspended,
     UserError,
 )
 from ..guardrails import (
@@ -1053,16 +1054,17 @@ class RunLoop:
         inline and alone, then spawning resumes. A batch of only such tools
         reproduces the serial loop verbatim.
 
-        Aborts: a ``BudgetExceeded`` from preflight stops *spawning* but lets
-        in-flight calls finish and persist (the RunBudget contract) — only
-        unstarted calls are left dangling for a resume to drain. Anything
+        Aborts: a ``BudgetExceeded`` or ``RunSuspended`` from preflight stops
+        *spawning* but lets in-flight calls finish and persist (the RunBudget
+        contract; a suspension must not re-run an allowed sibling on resume) —
+        only unstarted calls are left dangling for a resume to drain. Anything
         else (``RunCancelled``, a checkpoint store failure, an unexpected
         bug, the consumer abandoning the stream) cancels the in-flight tasks
         promptly; their calls dangle and a resume re-executes them, exactly
         as a serial abort left every not-yet-run call.
         """
         batch = _ToolBatch()
-        budget_abort: BudgetExceeded | None = None
+        abort: BudgetExceeded | RunSuspended | None = None
         try:
             for call in calls:
                 # Surface (and persist) finished work before the next gate —
@@ -1078,8 +1080,8 @@ class RunLoop:
                             # Preflight rejections append their error entry
                             # too — keep the per-result save cadence for them.
                             await self.checkpoints.save_running(state)
-                except BudgetExceeded as exc:
-                    budget_abort = exc
+                except (BudgetExceeded, RunSuspended) as exc:
+                    abort = exc
                     break
                 if outcome.ready is None:
                     continue  # rejected: entry + ToolCallCompleted already out
@@ -1110,15 +1112,15 @@ class RunLoop:
 
             async for ev in self._drain_batch(state, batch, wait=True):
                 yield ev
-            if budget_abort is not None:
+            if abort is not None:
                 # Raised only after the drain: in-flight results are saved,
                 # so a resume re-executes nothing that already ran.
-                raise budget_abort
+                raise abort
         finally:
-            # Reached on: a pump failure re-raised by a drain, RunCancelled or
-            # BudgetExceeded from preflight, a save_running store failure,
-            # GeneratorExit (consumer abandoned the stream), or normal
-            # completion (everything below is then a no-op). NO yields here —
+            # Reached on: a pump failure re-raised by a drain, RunCancelled,
+            # BudgetExceeded or RunSuspended from preflight, a save_running
+            # store failure, GeneratorExit (consumer abandoned the stream), or
+            # normal completion (everything below is then a no-op). NO yields here —
             # an async generator must not yield while closing; plain awaits
             # are fine. If the consuming task is itself being canceled the
             # gather may be interrupted after cancel() was already delivered —

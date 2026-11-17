@@ -16,8 +16,16 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from lovia import Agent, CancelToken, Mailbox, RunCancelled, tool  # noqa: E402
+from lovia import (  # noqa: E402
+    Agent,
+    CancelToken,
+    Mailbox,
+    RunCancelled,
+    RunSuspended,
+    tool,
+)
 from lovia.plugins.subagents import ChildSpec  # noqa: E402
+from lovia.tools import HumanChannel, ask_human  # noqa: E402
 from lovia.web import subagent_deliver  # noqa: E402
 from lovia.web.subagents import subagent_runner  # noqa: E402
 from lovia.web.scheduler import Scheduler  # noqa: E402
@@ -70,9 +78,9 @@ async def test_an_unanswered_card_suspends_the_run() -> None:
         evs = await _suspend(ac)
         kinds = [e for e, _ in evs]
         # The card, then word that the run waits on it: no error, no done.
-        assert kinds.index("approval_required") < kinds.index("approval_suspended")
+        assert kinds.index("approval_required") < kinds.index("suspended")
         assert "done" not in kinds and "error" not in kinds
-        assert dict(evs)["approval_suspended"] == {"id": "c1"}
+        assert dict(evs)["suspended"] == {"id": "c1"}
 
         (row,) = (await ac.get("/api/runs")).json()
         assert row["status"] == "waiting" and row["pending_approval"]["id"] == "c1"
@@ -537,3 +545,107 @@ async def test_a_message_sent_to_a_waiting_task_is_read_after_the_resume() -> No
         result = await asyncio.wait_for(run, timeout=5)
     assert result.output == "found it" and runs == ["push"]
     assert "check the tags too" in _texts(provider)
+
+
+# ---- ask_human questions suspend too --------------------------------------
+
+
+def _asking(provider: ScriptedProvider, channel: HumanChannel) -> Agent[Any]:
+    return Agent(name="bot", model=provider, tools=[ask_human(channel)])
+
+
+async def _ask(ac: Any, sid: str = "s1") -> list[tuple[str, Any]]:
+    task, lines = _spawn(
+        ac, "/api/chat/stream", json={"message": "go", "session_id": sid}
+    )
+    await asyncio.wait_for(task, timeout=5)
+    await _wait_run(ac, sid, status="waiting")
+    return _parse_sse("\n".join(lines))
+
+
+@pytest.mark.asyncio
+async def test_an_unanswered_question_suspends_and_its_answer_resumes() -> None:
+    channel = HumanChannel()
+    provider = ScriptedProvider(
+        [call("ask_human", {"question": "Which branch?"}, call_id="q1"), text("ok")]
+    )
+    app = _app(_asking(provider, channel), question_channel=channel, suspend_after=0.2)
+    async with app.router.lifespan_context(app), _client(app) as ac:
+        evs = await _ask(ac)
+        kinds = [e for e, _ in evs]
+        assert dict(evs)["suspended"] == {"id": "q1"}
+        assert "done" not in kinds and "error" not in kinds
+        (row,) = (await ac.get("/api/runs")).json()
+        assert row["status"] == "waiting" and row["pending_approval"] is None
+        waiting = (await ac.get("/api/sessions/s1")).json()["waiting"]
+        assert waiting["kind"] == "question" and waiting["id"] == "q1"
+        assert waiting["question"] == "Which branch?"
+
+        res = await ac.post(
+            "/api/chat/answer", json={"session_id": "s1", "answer": "main"}
+        )
+        assert res.json() == {"ok": True, "resumed": True}
+        await _wait_run(ac, "s1", gone=True)
+        again = await ac.post(
+            "/api/chat/answer", json={"session_id": "s1", "answer": "dev"}
+        )
+        assert again.status_code == 404
+    assert "main" in _texts(provider)  # the question's result the model read
+
+
+@pytest.mark.asyncio
+async def test_shutdown_suspends_a_parked_question() -> None:
+    channel = HumanChannel()
+    provider = ScriptedProvider(
+        [call("ask_human", {"question": "Which branch?"}, call_id="q1"), text("ok")]
+    )
+    store = ChatStore.in_memory()
+    app = _app(_asking(provider, channel), question_channel=channel, store=store)
+    async with _client(app) as ac:
+        async with app.router.lifespan_context(app):
+            task, _ = _spawn(
+                ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+            )
+            for _ in range(250):
+                if app.state.deps.questions.pending("s1") is not None:
+                    break
+                await asyncio.sleep(0.02)
+        await asyncio.wait_for(task, timeout=5)
+        waiting = await store.waiting_run("s1")
+        assert waiting is not None and waiting.waiting_for is not None
+        assert waiting.waiting_for["kind"] == "question"
+
+
+@pytest.mark.asyncio
+async def test_another_tools_wait_resumes_on_a_message_not_an_answer() -> None:
+    ready = {"ci": False}
+
+    @tool
+    async def wait_for_ci(question: str = "") -> str:
+        """Wait for the CI (its argument only looks like a question)."""
+        if not ready["ci"]:
+            raise RunSuspended("the CI is still running")
+        return "green"
+
+    channel = HumanChannel()
+    provider = ScriptedProvider(
+        [call("wait_for_ci", {"question": "ok?"}, call_id="c1"), text("done")]
+    )
+    agent = Agent(name="bot", model=provider, tools=[wait_for_ci, ask_human(channel)])
+    app = _app(agent, question_channel=channel)
+    async with app.router.lifespan_context(app), _client(app) as ac:
+        await _ask(ac)
+        waiting = (await ac.get("/api/sessions/s1")).json()["waiting"]
+        assert waiting["kind"] == "call" and "question" not in waiting
+        # Not a question: the answer endpoint has nothing to answer.
+        res = await ac.post(
+            "/api/chat/answer", json={"session_id": "s1", "answer": "x"}
+        )
+        assert res.status_code == 404
+        ready["ci"] = True
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "check again", "session_id": "s1"}
+        )
+        await asyncio.wait_for(task, timeout=5)
+        await _wait_run(ac, "s1", gone=True)
+        assert (await _record(ac, "s1"))["status"] == "completed"

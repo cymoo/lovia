@@ -42,6 +42,7 @@ from ..exceptions import (
     BudgetExceeded,
     InvalidToolArguments,
     RunCancelled,
+    RunSuspended,
     UserError,
 )
 from ..run_context import RunContext
@@ -294,9 +295,11 @@ async def run_tool(
                     one_attempt(attempt_args, ctx), timeout=timeout
                 )
             return await one_attempt(attempt_args, ctx)
-        except (RunCancelled, BudgetExceeded, InvalidToolArguments):
+        except (RunCancelled, RunSuspended, BudgetExceeded, InvalidToolArguments):
             # Not retried: none of these can clear on its own, so retrying only
-            # burns attempts and backoff sleeps. RunCancelled and BudgetExceeded
+            # burns attempts and backoff sleeps. RunSuspended is the tool
+            # putting its answer off (the runner stops the run at the call).
+            # RunCancelled and BudgetExceeded
             # part ways upstream — the runner re-raises RunCancelled (run-global
             # signal) but turns BudgetExceeded into a tool-error result (budgets
             # are scoped: a sub-run's exhausted budget is a recoverable

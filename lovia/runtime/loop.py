@@ -1071,6 +1071,8 @@ class RunLoop:
                 # latency only; correctness never depends on this sweep.
                 async for ev in self._drain_batch(state, batch, wait=False):
                     yield ev
+                if batch.suspended is not None:
+                    break  # a call already put its answer off: spawn no more
 
                 outcome = PreflightResult()
                 try:
@@ -1093,6 +1095,8 @@ class RunLoop:
                     # cannot race the first-handoff-wins dedup.
                     async for ev in self._drain_batch(state, batch, wait=True):
                         yield ev
+                    if batch.suspended is not None:
+                        break  # left pending with the call that put it off
                     async for ev in processor.execute(
                         call, tool, args, state=state, tracer=tracer
                     ):
@@ -1112,6 +1116,7 @@ class RunLoop:
 
             async for ev in self._drain_batch(state, batch, wait=True):
                 yield ev
+            abort = abort or batch.suspended
             if abort is not None:
                 # Raised only after the drain: in-flight results are saved,
                 # so a resume re-executes nothing that already ran.
@@ -1180,7 +1185,10 @@ class RunLoop:
                     return
             if isinstance(item, _PumpEnded):
                 batch.active -= 1
-                if item.error is not None:
+                if isinstance(item.error, RunSuspended):
+                    # Its siblings finish and persist first (_tool_phase).
+                    batch.suspended = batch.suspended or item.error
+                elif item.error is not None:
                     raise item.error
                 continue
             yield await self._emit(state, item)
@@ -1788,6 +1796,9 @@ class _ToolBatch:
     # spawned execute() stream has ended AND its events are already queued
     # (FIFO: a task's events always precede its own marker).
     active: int = 0
+    # A parallel call that put its answer off (RunSuspended): held while the
+    # rest of the batch finishes, like a preflight suspension, then raised.
+    suspended: RunSuspended | None = None
 
 
 async def _pump(

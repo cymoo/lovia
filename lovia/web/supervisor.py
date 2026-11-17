@@ -64,7 +64,6 @@ from .schemas import MessageOut
 from .sse import (
     ApprovalAsked,
     ApprovalResolved,
-    ApprovalSuspended,
     RunFinishedData,
     RunStartedData,
     RunStatusData,
@@ -73,6 +72,7 @@ from .sse import (
     LegTiming,
     MCPUnavailable,
     SnapshotData,
+    Suspended,
     UserTurnRefs,
     approval_data,
     event_to_sse,
@@ -1025,19 +1025,21 @@ class RunController:
                             self._set_status("running")
                         if resolved is None:
                             self._suspended = asked
-                            self._publish_frame(ApprovalSuspended(ev.call.id))
+                            self._publish_frame(Suspended(ev.call.id))
                         else:
                             self._publish_frame(resolved)
                         continue
                     if isinstance(ev, events.RunFailed):
                         error_seen = True
-                        if (
-                            isinstance(ev.error, RunSuspended)
-                            and self._suspended is not None
-                        ):
-                            # Not a failure: approval_suspended said the run
-                            # waits on its card. The run ends just below.
-                            continue
+                        if isinstance(ev.error, RunSuspended):
+                            if self._suspended is None and ev.error.call is not None:
+                                # A tool put its answer off (an ask_human
+                                # question nobody answered in time).
+                                self._publish_frame(Suspended(ev.error.call.id))
+                            if self._suspended is not None or ev.error.call:
+                                # Not a failure: the run waits on that call.
+                                # It ends just below.
+                                continue
                     if isinstance(ev, events.RunCompleted) and self.run_id:
                         self._publish_refs(ev.result.entries)
                     if isinstance(ev, events.RunCompleted):
@@ -1084,13 +1086,32 @@ class RunController:
             if succeeded and store.checkpointer is not None:
                 await store.clear_active_run_id(sid, expected=self.run_id)
         except RunSuspended as exc:
-            # Suspended on a card nobody answered: the checkpoint and its
-            # pointer stay (core classifies this "interrupted"), and the record
-            # says what the run waits for. A stop that landed with it wins.
-            if self._suspended is not None and not self._user_cancelled:
+            # Suspended on a card nobody answered, or by a tool that put its
+            # answer off: the checkpoint and its pointer stay (core classifies
+            # this "interrupted"), and the record says what the run waits for.
+            # A stop that landed with it wins.
+            if self._user_cancelled:
+                final_error = str(exc) or exc.__class__.__name__
+                self.final_exception = exc
+            elif self._suspended is not None:
                 # The card no longer has a deadline: it waits for its answer.
-                request = {**approval_data(self._suspended), "expires_at": None}
-                waiting_for = {"request": cast(JsonObject, request)}
+                card = {**approval_data(self._suspended), "expires_at": None}
+                waiting_for = {"kind": "approval", "request": cast(JsonObject, card)}
+            elif exc.call is not None:
+                # An ask_human question (the exception carries its text: it is
+                # answered with POST /api/chat/answer), or another tool that
+                # put its answer off (a message resumes it).
+                request: JsonObject = {
+                    "id": exc.call.id,
+                    "name": exc.call.name,
+                    "arguments": exc.call.arguments,
+                }
+                if exc.question is not None:
+                    request["question"] = exc.question
+                waiting_for = {
+                    "kind": "question" if exc.question is not None else "call",
+                    "request": request,
+                }
             else:
                 final_error = str(exc) or exc.__class__.__name__
                 self.final_exception = exc

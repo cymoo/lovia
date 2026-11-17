@@ -117,17 +117,25 @@ class RunSuspended(LoviaError):
 
     Nothing failed: an approver suspended the call's approval
     (:meth:`~lovia.events.ApprovalRequired.suspend`) because nobody can answer
-    it now. Calls already running finish and are saved first, as for
-    :class:`BudgetExceeded`. The suspended call keeps no result and the
-    checkpoint stays ``interrupted``, so resuming the same ``run_id`` judges
-    the call again and, if it still asks, asks again: answer it then.
+    it now, or the tool itself raised it to put its answer off (``ask_human``
+    with :meth:`~lovia.tools.HumanChannel.suspend`). Calls already running
+    finish and are saved first, as for :class:`BudgetExceeded`. The suspended
+    call keeps no result and the checkpoint stays ``interrupted``, so resuming
+    the same ``run_id`` runs the call again — judged again, and asking again
+    if it still has to: answer it then.
+
+    A tool raises it bare (``raise RunSuspended("waiting for the CI")``); the
+    runner fills in ``call``. One raised by a sub-run (agent-as-tool) names
+    that run's own call and stays that tool's error.
 
     Fields: ``call`` — the suspended :class:`~lovia.messages.ToolCall`;
-    ``reason`` — the approver's note, possibly empty.
+    ``reason`` — the approver's note, possibly empty; ``question`` — the
+    ``ask_human`` question the call waits on, when that is what it is.
     """
 
     call: ToolCall | None = None
     reason: str = ""
+    question: str | None = None
 
 
 class GuardrailTripped(LoviaError):

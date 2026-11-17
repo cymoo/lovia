@@ -330,6 +330,12 @@ result = await Runner.run(agent, text, checkpoint=checkpoint)  # resumes
 The judgement is fresh on resume: a call whose permission has since become
 `allow` runs without asking, one that became `deny` is refused.
 
+A tool can put its own answer off the same way: `raise RunSuspended("waiting
+for the CI")` stops the run at its call (not retried, no result written), and
+a resume runs the tool again. `ask_human` does this through
+`HumanChannel.suspend`. A sub-run's suspension (an agent-as-tool's approval)
+stays that tool's error.
+
 ## Tool policies
 
 For cross-cutting behavior around a *single attempt* — caching, redaction,

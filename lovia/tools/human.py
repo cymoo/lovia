@@ -17,7 +17,9 @@ model invokes the tool, the runner emits a future that any external code
 
 Tool calls block until an answer is supplied, the question is cancelled, or
 the channel is closed — cancellation and closure surface as tool-error
-results the model can route around.
+results the model can route around. A consumer that can't answer now may
+:meth:`HumanChannel.suspend` the question instead: the run stops at the call
+(:class:`~lovia.exceptions.RunSuspended`) and asks again when resumed.
 
 A question may carry :attr:`~HumanQuestion.options` — 2–4 choices the model
 offers when the question is a pick-one (or, with ``multi_select``, pick-many).
@@ -37,7 +39,7 @@ from typing import Annotated, Any, AsyncIterator, Sequence
 
 from pydantic import AfterValidator, BaseModel, Field
 
-from ..exceptions import ToolError
+from ..exceptions import RunSuspended, ToolError
 from ..run_context import RunContext
 from .base import Tool, tool
 
@@ -181,6 +183,22 @@ class HumanChannel:
         self._pending.pop(question_id, None)
         if fut is not None and not fut.done():
             fut.set_exception(ToolError(reason, tool_name="ask_human"))
+
+    def suspend(self, question_id: str, reason: str = "") -> None:
+        """Answer later: the asking run stops at its ``ask_human`` call
+        (:class:`~lovia.exceptions.RunSuspended`), which a resume of that run
+        asks again — answer it then. No-op once resolved."""
+        fut = self._futures.pop(question_id, None)
+        q = self._pending.pop(question_id, None)
+        if fut is not None and not fut.done():
+            # ``question`` tells a serving layer what the run waits on, so it
+            # can offer the question and resume the run with its answer.
+            fut.set_exception(
+                RunSuspended(
+                    reason or "waiting for the human's answer",
+                    question=q.question if q is not None else None,
+                )
+            )
 
     def close(self, reason: str = "channel closed") -> None:
         """Cancel every outstanding question and end :meth:`questions`.

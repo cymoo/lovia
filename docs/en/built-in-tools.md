@@ -245,10 +245,14 @@ most one pending question at a time.
 | `pending` | Snapshot of unanswered questions for polling |
 | `answer(id, text)` | Resolve the question; the Tool returns `text` |
 | `cancel(id, reason=...)` | Fail one question with a `ToolError` the model can see |
+| `suspend(id, reason=...)` | Answer later: the run stops at the call with `RunSuspended`, and asks again when resumed |
 | `close(reason=...)` | Cancel outstanding questions, end iteration, and reject future asks |
 
 Cancellation and closure become Tool-error results, so the model can continue
-without the answer. Add a per-tool timeout when operators may be unavailable.
+without the answer. When operators may be unavailable, suspend the question
+instead: with a checkpointer the run is resumable from that call, and its
+resume asks the question again — answer it then (see
+[Answering later](tools.md#answering-later)).
 Calls from another thread must hop to the event-loop thread first, for example
 with `loop.call_soon_threadsafe(channel.answer, qid, text)`.
 

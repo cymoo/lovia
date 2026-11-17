@@ -481,8 +481,12 @@ class SessionDetail(BaseModel):
     updated_at: float
     entries: list[MessageOut] = Field(default_factory=list)
     active_run_id: str | None = None
-    # The approval a suspended run waits on (its approval_required frame), with
-    # ``active_run_id`` null: show the card; answering it resumes the run.
+    # What a suspended run waits on, with ``active_run_id`` null: show it;
+    # answering it resumes the run. ``kind`` "approval": an approval card (its
+    # approval_required frame); "question": an ask_human question, as
+    # ``{id, name, arguments, question}``, answered with POST /api/chat/answer;
+    # "call": another tool that put its answer off, as ``{id, name,
+    # arguments}`` — a message to the chat resumes it.
     waiting: dict[str, Any] | None = None
     pinned: bool = False
     # Put away by the user: left out of GET /api/sessions unless asked for.

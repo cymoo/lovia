@@ -257,8 +257,13 @@ class RouterDeps:
             yield
         finally:
             if self.questions is not None:
-                # Before supervisor shutdown: cancelling parked ask_human
-                # calls lets their runs wind down instead of being killed.
+                # A chat's run parked on a question suspends, so the question
+                # outlives the restart (a task's is cancelled: nothing would
+                # resume it). Before supervisor shutdown: cancelling the rest
+                # lets their runs wind down instead of being killed.
+                for sid, ctrl in self.supervisor:
+                    if not ctrl.is_task:
+                        self.questions.suspend_session(sid)
                 await self.questions.aclose()
             await scheduler.stop()
             await self.supervisor.shutdown()

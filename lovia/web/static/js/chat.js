@@ -902,7 +902,7 @@ function upsertTodoCard(todos) {
 // (`granted: true`): no card, an "auto-approved" badge that opens the grants
 // dialog below.
 
-// Left unanswered past its deadline, a card's run suspends (`approval_suspended`):
+// Left unanswered past its deadline, a card's run suspends (`suspended`):
 // the run stops at the call and frees its slot, the card stays and says so,
 // and answering it resumes the run — the answer's response says `resumed`, and
 // the page attaches to it as to any run it finds going. A chat opened while
@@ -982,20 +982,63 @@ function appendApproval(call, { restored = false } = {}) {
  */
 function suspendApproval(id) {
   const entry = store.approvals.get(id);
-  if (!entry?.card || entry.suspended) return;
+  if (!entry?.card || entry.suspended) return false;
   entry.suspended = true;
   const note = document.createElement('span');
   note.className = 'lv-approval-paused';
   note.textContent = t('approval.paused');
   entry.card.querySelector('.lv-approval-actions')?.prepend(note);
+  return true;
 }
 
 /**
- * Draw the card the chat's suspended run waits on (the session's `waiting`)
- * under the last reply of the history just rendered.
- * @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[] }} call
+ * The run stopped at its ask_human call `id` to wait for the answer: the
+ * question card stays, says so, and answering it resumes the run.
+ * @param {string} id
+ */
+function suspendQuestion(id) {
+  const node = findQuestionNode(id);
+  if (!node || node.classList.contains('lv-resolved')) return false;
+  const head = node.querySelector('.lv-question-head');
+  if (head) head.textContent = t('question.paused');
+  return true;
+}
+
+/**
+ * The run stopped at another tool's call `id`, which put its answer off
+ * (the CI, a review): there is no card to answer, so say what waits and that
+ * a message resumes it.
+ * @param {string} id
+ * @param {string} [name]
+ */
+function noteToolWaiting(id, name) {
+  const row = findToolNode(id);
+  setToolStatus(row, 'awaiting');
+  const bubble = row?.closest('.lv-bubble')
+    ?? [...document.querySelectorAll('#transcript .lv-turn:not(.lv-user) .lv-bubble')].pop();
+  if (!bubble || bubble.querySelector('.lv-run-waiting')) return;
+  const note = document.createElement('div');
+  note.className = 'lv-run-waiting';
+  note.textContent = t('run.toolWaiting', { name: name || row?.dataset.tool || '' });
+  appendBubbleContent(/** @type {HTMLElement} */ (bubble), note);
+}
+
+/**
+ * Show what the chat's suspended run waits on (the session's `waiting`),
+ * under the last reply of the history just rendered: an approval card (drawn
+ * here), an ask_human question (drawn by the history from its pending call,
+ * only marked paused), or another tool's wait (a note).
+ * @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], kind?: string }} call
  */
 export function showWaitingCard(call) {
+  if (call.kind === 'question') {
+    suspendQuestion(call.id);
+    return;
+  }
+  if (call.kind === 'call') {
+    noteToolWaiting(call.id, call.name);
+    return;
+  }
   const bubbles = document.querySelectorAll('#transcript .lv-turn:not(.lv-user) .lv-bubble');
   const bubble = /** @type {HTMLElement | undefined} */ (bubbles[bubbles.length - 1]);
   if (!bubble || store.streaming) return;
@@ -1552,9 +1595,15 @@ function buildQuestionCard(call) {
   const submit = async (answer) => {
     if (node.classList.contains('lv-resolved')) return;
     try {
-      const res = await api.answer({ session_id: store.sessionId, answer });
+      const sessionId = store.sessionId;
+      const res = await api.answer({ session_id: sessionId, answer });
       if (res.ok) {
         settleQuestion(node, answer);
+        // The answer resumed the run suspended on the question: follow it.
+        const body = await res.json().catch(() => null);
+        if (body?.resumed && store.sessionId === sessionId) {
+          store.emit('reconnect', sessionId);
+        }
       } else if (res.status === 404) {
         // Nothing pending anymore (timed out / cancelled / answered from
         // another tab): freeze as expired; the stream's tool result tells
@@ -2893,7 +2942,7 @@ let _lastEventWasError = false;
 // from "cancelled or died", which is what gates the follow-up chips.
 let _sawDone = false;
 
-// True once this stream's run suspended on a card (`approval_suspended`): it
+// True once this stream's run suspended on a card (`suspended`): it
 // ended on purpose, waiting for the card's answer.
 let _sawSuspended = false;
 
@@ -3139,11 +3188,14 @@ async function applyEvent({ event, data }) {
       resolveApproval(data);
       break;
 
-    case 'approval_suspended':
-      // The run stops here and the stream ends with no `done`: neither a
-      // dropped connection to recover nor a reply to follow up on.
+    case 'suspended':
+      // The run stops at this call (a card or a question nobody answered in
+      // time) and the stream ends with no `done`: neither a dropped
+      // connection to recover nor a reply to follow up on.
       _sawSuspended = true;
-      suspendApproval(data.id);
+      if (!suspendApproval(data.id) && !suspendQuestion(data.id)) {
+        noteToolWaiting(data.id);
+      }
       break;
 
     case 'handoff':

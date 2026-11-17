@@ -234,6 +234,14 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 session_id=sid,
                 usage=usage_dict(ctrl.usage, last_input_tokens=ctrl.last_input_tokens),
             )
+        if ctrl.final_status == "waiting":
+            # A tool put its answer off (an ask_human question): the run waits.
+            raise WebError(
+                409,
+                "run_waiting",
+                "the run waits on an answer",
+                hint="answer it in the chat to resume the run",
+            )
         if ctrl.cancel.is_cancelled or ctrl.final_exception is None:
             # A stop: /api/chat/cancel, the chat's deletion, or shutdown.
             raise WebError(409, "run_cancelled", "the run was stopped")
@@ -421,7 +429,11 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         pending = deps.approvals.pending(sid, cid)
         if pending is None:
             waiting = await find_waiting(deps, sid)
-            if waiting is not None and waiting.call_id == cid:
+            if (
+                waiting is not None
+                and waiting.kind == "approval"
+                and waiting.call_id == cid
+            ):
                 return await _answer_waiting(waiting, req, request)
         _check_scopes(req.scopes, pending.scopes if pending is not None else None)
         if not deps.approvals.claim(sid, cid):
@@ -492,18 +504,28 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         return True
 
     @router.post("/api/chat/answer")
-    async def answer_question(req: AnswerRequest) -> dict[str, bool]:
+    async def answer_question(req: AnswerRequest, request: Request) -> dict[str, bool]:
         """Answer the session's pending ``ask_human`` question.
 
+        A question whose run was suspended waiting for it resumes that run
+        with the answer (``resumed``): a page follows it with reconnect.
+
         404 when no question channel is configured, or when the question has
-        already been answered/cancelled (e.g. it timed out) — the client shows
-        the card as expired and the tool-error result follows in the stream.
+        already been answered/cancelled — the client shows the card as
+        expired and the tool-error result follows in the stream.
         """
         if deps.questions is None:
             raise WebError(404, "feature_unavailable", "no question channel")
-        if not deps.questions.resolve(req.session_id, req.answer):
-            raise WebError(404, "question_not_found", "no pending question matches")
-        return {"ok": True}
+        if deps.questions.resolve(req.session_id, req.answer):
+            return {"ok": True, "resumed": False}
+        waiting = await find_waiting(deps, req.session_id)
+        if waiting is not None and waiting.question is not None:
+            resumed = await resume_waiting(
+                deps, waiting, reply=req.answer, request=request
+            )
+            if resumed is not None:
+                return {"ok": True, "resumed": True}
+        raise WebError(404, "question_not_found", "no pending question matches")
 
     @router.post("/api/chat/cancel")
     async def cancel_stream(session_id: str = Query(...)) -> dict[str, bool]:

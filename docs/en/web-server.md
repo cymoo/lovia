@@ -92,13 +92,18 @@ run the app under another ASGI server, skip `serve()`.
 | `titles` / `title_model` | `True` / Agent model | Generate conversation titles in the background |
 | `followups` / `followup_model` | `False` / Agent model | Suggest follow-up questions after a reply (see below) |
 | `suspend_after` | `None` | Suspend a run whose approval card is unanswered after N seconds: it keeps its checkpoint and frees its slot, and answering the card resumes it |
+| `question_channel` | `None` | The `HumanChannel` your `ask_human` tool was built with; its questions render as cards in the chat (see [Questions from the Agent](web-ui.md#questions-from-the-agent)) |
 | `max_background_runs` | `8` | Concurrent supervised Runs; excess starts return 429 |
+| `scheduler_poll` | `1.0` | Seconds between checks for due [schedules](#scheduling) |
+| `wire_subagents` | `True` | Run the tasks of a `Subagents` Plugin left on its default execution mode under the server's supervision (see [Background subagents](web-ui.md#background-subagents)); `False` leaves every Plugin as configured |
+| `workspaces` | `None` | A `WorkspaceSwitch`: each chat picks its own directory and permission mode (see [below](#per-chat-directories-and-permission-modes)) |
 | `ui` | `True` | `False` serves the API only; a `ChatUI` customizes the bundled page (below) |
 | `cors_origins` | `None` | Allowed browser origins; unset sends no CORS headers |
 | `token` / `auth` | `None` | Bearer-token guard for business API routes, or your own FastAPI dependency (see below) |
 | `lifespan` | `None` | Your own resources' lifespan, as for `FastAPI(lifespan=...)` (see below) |
 | `run_deps` | `None` | Builds each run's `RunContext.deps` from the page's context and the request's identity (see [Run deps](#run-deps)) |
 | `title` | `"lovia"` | Page title and the API's reported title |
+| `config_runtime` | `None` | Internal: the Settings page's configuration API, which `default_app()` passes. Leave it unset; call [`default_app()`](#two-ways-in) for an app that Settings configures |
 
 `create_app` sets the app's FastAPI `lifespan` itself, to start and stop its
 scheduler and wind down live runs. Pass your own as `lifespan=` to open

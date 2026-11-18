@@ -498,6 +498,8 @@ Agent 会按同样的规则读取主机上这个目录的 [`AGENTS.md`](#项目�
 | `--db` | `LOVIA_DB` | `<home>/lovia.db` |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent（或使用自己的 Agent、映射或应用） |
 | `--title` | `LOVIA_TITLE` | `lovia` |
+| `--provider-timeout SECS` | `LOVIA_PROVIDER_TIMEOUT` | `300`；一次模型请求最长可用的时间 |
+| `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | 关闭。开启后，模型请求遵循 `HTTP(S)_PROXY` / `NO_PROXY`（[详情](providers.md#网络超时代理tls)） |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--check` | — | 检查模型配置并退出 |
 

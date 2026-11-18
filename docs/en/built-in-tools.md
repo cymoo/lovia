@@ -50,6 +50,11 @@ tool = web_fetch(                       # or just web_fetch() for the defaults
 )
 ```
 
+`HttpReader` also takes `cache_size` (responses kept for `cache_ttl`
+seconds, default `32`) and `user_agent`. The default User-Agent names lovia, since many sites refuse
+a client that doesn't identify itself; pass your own to identify your
+deployment.
+
 There are no `method`, `headers` or `body` arguments. To let the model call a
 specific API, wrap that API in a [`@tool`](tools.md) — `get_order(order_id)`
 rather than a free-form HTTP client the model fills in.

@@ -82,13 +82,18 @@ customize=None, ...)`：前五个就是命令行的开关（`--home`、`DIR`（`
 | `titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
 | `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后生成追问建议（见下文） |
 | `suspend_after` | `None` | 审批卡片超过指定秒数无人回答时暂停运行：保留 checkpoint、释放槽位，回答卡片后续跑 |
+| `question_channel` | `None` | 构造 `ask_human` 工具时用的那个 `HumanChannel`；它的提问会以卡片形式出现在对话里（见[来自 Agent 的提问](web-ui.md#来自-agent-的提问)） |
 | `max_background_runs` | `8` | 并发托管 Run；达到上限后，新请求返回 429 |
+| `scheduler_poll` | `1.0` | 检查到期[定时任务](#定时任务)的间隔秒数 |
+| `wire_subagents` | `True` | 让保持默认执行模式的 `Subagents` Plugin 的任务由服务端托管（见[后台子 Agent](web-ui.md#后台子-agent)）；`False` 时所有 Plugin 保持原样 |
+| `workspaces` | `None` | 一个 `WorkspaceSwitch`：每个对话自选目录和权限模式（见[下文](#每个对话的目录和权限模式)） |
 | `ui` | `True` | 设为 `False` 时只提供 API；传入 `ChatUI` 可定制内置页面（见下文） |
 | `cors_origins` | `None` | 允许跨域访问的浏览器 Origin；不设置时不发送 CORS 响应头 |
 | `token` / `auth` | `None` | 使用 Bearer token 保护业务 API，或传入自定义 FastAPI 依赖（见下文） |
 | `lifespan` | `None` | 你自己资源的生命周期，写法同 `FastAPI(lifespan=...)`（见下文） |
 | `run_deps` | `None` | 用页面上下文和请求中的身份，为每次运行构造 `RunContext.deps`（见[运行依赖](#运行依赖)） |
 | `title` | `"lovia"` | 页面标题，也是 API 报告的标题 |
+| `config_runtime` | `None` | 内部参数：“设置”页的配置接口，由 `default_app()` 传入。不要设置它；需要由“设置”页配置的应用，调用 [`default_app()`](#两个入口) |
 
 `create_app` 自己占用了应用的 FastAPI `lifespan`，用来启停调度器、收尾仍在运行的 Run。
 工具要用的资源（数据库连接池、HTTP 客户端）想随应用一起打开和关闭，就把你自己的

@@ -43,7 +43,8 @@ agent = Agent(
 
 `OpenAIChatProvider(model, *, api_key=None, base_url=None, client=None,
 timeout=None, default_headers=None, supports_json_schema=None,
-trust_env=None, replay_reasoning=None, official_dialect=None)`
+trust_env=None, replay_reasoning=None, official_dialect=None,
+supports_vision=None, extra_body=None)`
 
 未显式传入时，凭证和端点来自环境变量：`OPENAI_API_KEY`、`OPENAI_BASE_URL`
 （默认 `https://api.openai.com/v1`）。
@@ -63,16 +64,23 @@ trust_env=None, replay_reasoning=None, official_dialect=None)`
 拒绝这个字段。所以回放默认按端点决定：`api.deepseek.com` 开启，官方 API 关闭，其他兼容端点开启。
 `replay_reasoning=` 可以强制指定行为。只会回放由这个 provider 产出的 entry。
 
+**图片**：`supports_vision=` 声明模型是否接受图片输入。默认（`None`）只在官方 API 上认为支持，
+因为兼容端点背后的模型无法从名字判断。`OPENAI_BASE_URL` 后面是视觉模型时，传 `True`。
+lovia 通过 `lovia.providers.supports_vision(provider)` 读取这个标志（没有这个标志的 provider
+视为不支持）：Web UI 只在它为真时把附件图片直接发给模型，否则只给模型文件路径。
+
 ## Anthropic Provider
 
 `AnthropicProvider(model, *, api_key=None, base_url=None, client=None,
 timeout=None, anthropic_version="2023-06-01", default_max_tokens=16_384,
-default_headers=None, trust_env=None, official_dialect=None)`
+default_headers=None, trust_env=None, official_dialect=None,
+supports_vision=None, extra_body=None)`
 
 未显式传入时，凭证和端点来自环境变量：`ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`
 （默认 `https://api.anthropic.com/v1`）。Messages API 每次请求都需要 `max_tokens`，
 所以当 `settings.max_tokens` 未设置时，适配器会发送 `default_max_tokens`
-（16,384，对齐默认上下文策略的输出预留）。
+（16,384，对齐默认上下文策略的输出预留）。`supports_vision=` 的用法同[上文](#openai-provider)：
+官方端点上默认为真，`ANTHROPIC_BASE_URL` 后面默认为假。
 
 **Extended thinking**：按 Anthropic API 的方式通过 provider options 开启：
 
@@ -140,7 +148,7 @@ provider = OpenAIChatProvider(
 )
 ```
 
-`extra_body`（`provider_from_string` 也接受这个关键字）放的是*端点*永远需要的东西——vLLM
+`extra_body`（`provider_from_string` 也接受这个关键字，`supports_vision` 同样）放的是*端点*永远需要的东西——vLLM
 部署的模板开关、推理强度、网关的 `service_tier`——并且会到达经过这个 provider 的每一次调用：
 共用它的每个 agent，以及自建 settings 的上下文压缩摘要器。`provider_options` 仍是按 agent
 的旋钮。两者语义相同，一个请求按固定顺序渲染：

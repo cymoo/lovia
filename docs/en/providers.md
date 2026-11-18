@@ -47,7 +47,8 @@ To avoid hard-coding models in scripts, `model_from_env()` reads `LOVIA_MODEL`
 
 `OpenAIChatProvider(model, *, api_key=None, base_url=None, client=None,
 timeout=None, default_headers=None, supports_json_schema=None,
-trust_env=None, replay_reasoning=None, official_dialect=None)`
+trust_env=None, replay_reasoning=None, official_dialect=None,
+supports_vision=None, extra_body=None)`
 
 Credentials and endpoint resolve from the environment when not passed:
 `OPENAI_API_KEY`, `OPENAI_BASE_URL` (default
@@ -75,18 +76,28 @@ official API rejects the field — so replay defaults per host:
 on. `replay_reasoning=` forces either way. Only entries produced by this
 provider are replayed.
 
+**Images**: `supports_vision=` declares whether the model accepts image
+inputs. The default (`None`) assumes it only on the official API, since a
+compatible endpoint's model can't be judged from its name. Pass `True` for a
+vision model behind `OPENAI_BASE_URL`. lovia reads the flag through
+`lovia.providers.supports_vision(provider)` (false for a provider without
+one): the web UI sends an attached image inline only when it is true, and
+otherwise gives the model the file's path.
+
 ## The Anthropic provider
 
 `AnthropicProvider(model, *, api_key=None, base_url=None, client=None,
 timeout=None, anthropic_version="2023-06-01", default_max_tokens=16_384,
-default_headers=None, trust_env=None, official_dialect=None)`
+default_headers=None, trust_env=None, official_dialect=None,
+supports_vision=None, extra_body=None)`
 
 Credentials and endpoint resolve from the environment when not passed:
 `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` (default
 `https://api.anthropic.com/v1`). The Messages API requires `max_tokens` on
 every request, so when `settings.max_tokens` is unset the adapter sends
 `default_max_tokens` (16,384 — matching the default context policy's output
-reservation).
+reservation). `supports_vision=` works as [above](#the-openai-provider): it
+defaults to true on the official host and false behind `ANTHROPIC_BASE_URL`.
 
 **Extended thinking**: enable it per Anthropic's API via provider options —
 
@@ -162,7 +173,7 @@ provider = OpenAIChatProvider(
 )
 ```
 
-`extra_body` (also a `provider_from_string` keyword) is for what the
+`extra_body` (also a `provider_from_string` keyword, as is `supports_vision`) is for what the
 *endpoint* always needs — a vLLM deployment's template switches, a reasoning
 effort, a gateway's `service_tier` — and it reaches every call that goes
 through the provider: each agent sharing it, and the compaction summarizer,

@@ -313,7 +313,7 @@ internal; select regions by `data-part`.
 | Sidebar | `sidebar`, `sidebar-header`, `sidebar-toggle`, `sidebar-nav`, `new-chat`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
 | Top bar | `topbar`, `chat-title`, `topbar-actions`, `tasks`, `chat-menu` (the open chat's pin / rename / branch / export / delete), `files-toggle` |
 | Views | `view` (the container an open [view](#views) draws in) |
-| Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"` and `data-status`: `running`, `awaiting` the user — a question — then `done` or `error`), `activity` (two or more consecutive reasoning / tool steps folded under one summary line; it closes once the reply's text starts), `message-actions` (a message's [actions](#message-actions); each button has `data-action="<id>"`) |
+| Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"` and `data-status`: `running`, `awaiting` the user — a question — then `done` or `error`), `activity` (a run of consecutive reasoning / tool steps folded under one summary line, which names the latest step while the run works; it stays folded unless the user opens it), `message-actions` (a message's [actions](#message-actions); each button has `data-action="<id>"`) |
 | Composer | `composer`, `attach`, `agent-chip` (which agent a new chat uses; shown with more than one), `context-ring` |
 | Elsewhere | `files-panel`; in Settings, `language` (the language row) |
 

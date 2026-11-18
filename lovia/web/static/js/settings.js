@@ -19,7 +19,18 @@ const NOTIF_KEY = 'lovia-notify';
 const SOUND_KEY = 'lovia-sound';
 const ENTER_KEY = 'lovia-enter-send';
 const TEXT_SIZE_KEY = 'lovia-text-size';
-const FOLLOWUPS_KEY = 'lovia-followups';
+const FOLLOWUPS_KEY = 'lovia-followups-on';
+
+// Until v0.9.236 this preference shared 'lovia-followups' with the chip cache
+// (followup-cache.js), which owns that key now. Carry a saved "off" over once.
+try {
+  if (localStorage.getItem('lovia-followups') === '0' && localStorage.getItem(FOLLOWUPS_KEY) === null) {
+    localStorage.setItem(FOLLOWUPS_KEY, '0');
+    localStorage.removeItem('lovia-followups');
+  }
+} catch {
+  /* storage disabled — nothing to carry over */
+}
 
 // ---- Message text size ----------------------------------------------------
 // Scales the transcript's prose via the --lv-chat-font-scale CSS var (styles.css

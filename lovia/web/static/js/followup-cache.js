@@ -8,6 +8,8 @@
 // we were away — is silently ignored rather than shown against the wrong reply.
 // A mismatch is always fail-safe: no chips, never the wrong chips.
 
+// The on/off preference is settings.js's 'lovia-followups-on', never this key:
+// writing the cache back would overwrite it.
 const KEY = 'lovia-followups';
 // Entries are tiny (three short strings); the cap only bounds growth across a
 // long history of sessions. The least-recently-generated fall off first.

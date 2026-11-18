@@ -706,6 +706,8 @@ Each resolves as flag, environment variable, then default.
 | `--db` | `LOVIA_DB` | `<home>/lovia.db` |
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent (or: an Agent, mapping, or app of your own) |
 | `--title` | `LOVIA_TITLE` | `lovia` |
+| `--provider-timeout SECS` | `LOVIA_PROVIDER_TIMEOUT` | `300`; how long one model request may take |
+| `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | Off. On, model requests honor `HTTP(S)_PROXY` / `NO_PROXY` ([details](providers.md#networking-timeouts-proxies-tls)) |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--check` | — | Check model configuration and exit |
 

@@ -187,6 +187,27 @@ results only — the runner's `"Tool error: ..."` strings bypass them. The
 raw, un-rendered value still reaches observers via
 `ToolCallCompleted.result`.
 
+### Returning images
+
+A tool that returns content parts — one `ImagePart`, or a list mixing strings
+and parts — hands them to the model as they are, with no renderer. Mark such
+a tool `@tool(returns_images=True)`:
+
+```python
+from lovia import ImagePart, tool
+
+@tool(returns_images=True)
+async def screenshot(url: str) -> list:
+    """Capture a page."""
+    return ["The page as rendered:", ImagePart.from_path(await capture(url))]
+```
+
+The flag only matters for tools a workspace or Plugin contributes: they are
+not offered to a model whose provider can't see images
+([`supports_vision`](providers.md#the-openai-provider)). Tools in
+`Agent(tools=...)` are always offered; a text-only model gets a short marker
+in place of each image.
+
 ## Tool approval
 
 Every Tool carries a `permission`: `"allow"` (the default) runs the call,

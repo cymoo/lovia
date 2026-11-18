@@ -111,7 +111,9 @@ are globs with three addressing forms — absolute/`~` (including `C:/data` or
 root, the root itself included), or bare
 (`.env*`: gitignore-style, matches a basename or any ancestor segment,
 inside or outside the root). Precedence: `denied_paths` first, then the
-first matching path rule, then the mode defaults.
+first matching path rule, then the mode defaults: inside the root reads are
+allowed and writes follow `WorkspacePolicy.write`; outside it,
+`read_outside` and `write_outside` decide (`coding`: allow and deny).
 
 **Command rules.** `CommandRule(pattern, action)` matches on
 **word-boundary prefix**: `"git push"` matches `git push origin`, never
@@ -230,15 +232,24 @@ remote workspaces get it too. It covers what one session saw — it detects
 earlier changes, it does not lock a file against other chats.
 
 Outputs are bounded at the tool layer by `WorkspaceLimits` (pass
-`limits=WorkspaceLimits(...)`): `max_file_read_chars=50_000` per read (page
-with `start`/`end`), `max_shell_output_chars=30_000` (head + tail kept),
-plus byte caps for reads and grep, and result caps for list/grep. All
-truncation is announced in the output.
+`limits=WorkspaceLimits(...)`). All truncation is announced in the output.
+
+| Field | Default | Caps |
+| --- | --- | --- |
+| `max_file_read_chars` | `50_000` | Characters one read returns (page with `start`/`end`) |
+| `max_file_read_bytes` | `10_000_000` | Bytes loaded from one file; a bigger one is read only up to this prefix |
+| `max_shell_output_chars` | `30_000` | Characters kept from each of a command's stdout and stderr (head + tail); also a background process's buffer between reads |
+| `max_grep_file_bytes` | `5_000_000` | Files bigger than this are skipped by grep |
+| `max_grep_line_chars` | `400` | Characters of each matched line |
+| `max_grep_matches` | `100` | Matches one grep returns |
+| `max_list_results` | `500` | Entries one listing returns |
 
 Shell execution details worth knowing: commands run via the system shell
 with a **minimal environment** by default (`PATH`, `HOME`, locale — secrets
 are not passed through; `inherit_env=True` opts into the full environment,
-`env=` adds specific variables). A timeout reports `timed_out=True` and kills
+`env=` adds specific variables). A command may run for `shell_timeout`
+seconds (`Workspace.local(shell_timeout=300)`; `None` sets no limit), unless
+the call passes its own `timeout`. A timeout reports `timed_out=True` and kills
 the command with its descendants: the fresh process group on POSIX, the
 process tree (`taskkill /T`) on Windows. A foreground command also ends
 when its shell exits: if something it started (`server &`, a daemon) still

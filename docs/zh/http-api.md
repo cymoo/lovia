@@ -184,6 +184,8 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/workspace/changes` | `{paths}`（最多 500 个，按对话里工具调用的写法）→ `{git, truncated, files: [{path, is_dir, touched, status, old_path, added, removed, size, mtime}]}`：仍然存在的路径按修改时间倒序（`touched: true`）；目录在 git 仓库里时，后面是 `git status` 在该目录下看到的其余未提交改动，最多 200 项（`truncated` 表示还有更多）。`status` 取 `modified`、`added`、`untracked`、`deleted`、`renamed` 或 `null`；`added` / `removed` 是相对 `HEAD` 的行数。`?session=` / `?root=` 同文件面板 |
 | `GET /api/workspace/diff?path=&old=` | `{path, diff, binary, truncated}`：该文件相对 `HEAD` 的 unified diff（`old` 是重命名前的路径，这样移动按一次改名比较），按工作区的 shell 输出上限截断。不在 git 仓库里或仓库还没有提交时返回 404 `feature_unavailable` |
 | `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束；`?session=` / `?root=` 同文件面板 |
+| `GET /api/sessions/{id}/processes` | 对话的[后台进程](workspace.md#后台进程) → `[{process_id, command, status, exit_code}]`，`status` 为 `running` / `exited` / `killed`。列出时不读取输出，不影响模型自己的读取。对话没有活动的工作区会话时返回 `[]`（还没运行过，或服务器重启过：后台进程不会跨重启保留） |
+| `POST /api/sessions/{id}/processes/{process_id}/kill` | 结束一个后台进程 → 刷新后的列表；模型下一次的状态提醒会显示它已被结束。进程不存在或没有活动会话时返回 404 `process_not_found` |
 | `GET /api/workspaces` | 启用 `create_app(workspaces=)` 时：新对话可选的目录，`{workspaces: [{id, root, name, kind, last_used_at}], default, can_add, roots}`。`kind` 为 `"default"`（Agent 自己的目录，新标签页从这里开始）、`"general"`（通用工作区）或 `"added"`；前两种没有 `id`，始终在列表里。`can_add` 表示能否添加其他目录；只允许部分目录时，`roots` 列出允许的目录树 |
 | `POST /api/workspaces` · `DELETE /api/workspaces/{id}` | `{path}` → 该项：添加一个存在且允许的目录（解析符号链接）· 从列表移除一项（文件和对话都保留；之后在那里新建对话会重新加入列表） |
 | `PATCH /api/workspaces` | `{root, name}` → 该项：给列表里的目录起一个显示名（不动目录本身；`""` 恢复目录自己的名字）。通用目录的名字由页面决定，不能改 |

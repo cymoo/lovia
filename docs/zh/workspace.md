@@ -81,7 +81,8 @@ ACL 有三个决策值，分别作用于两个执行环节：
 绝对路径/`~`（含 Windows 的 `C:/data`、`C:\data`；匹配解析后路径及其子树）、包含 `/`（工作区相对路径；
 `**/.env*` 表示根目录内任意深度的该文件，根层也算），或纯文件名
 （`.env*`：gitignore 风格，匹配 basename 或任意祖先片段，根内外都适用）。优先级：
-`denied_paths` 最先，然后第一条匹配的 path rule，最后是 mode 默认。
+`denied_paths` 最先，然后第一条匹配的 path rule，最后是 mode 默认：根目录内读取总是允许，写入按
+`WorkspacePolicy.write`；根目录外由 `read_outside` 和 `write_outside` 决定（`coding`：允许和拒绝）。
 
 **命令规则。** `CommandRule(pattern, action)` 按**词边界前缀**匹配：`"git push"` 会匹配
 `git push origin`，不会匹配 `git pushx`。`flags=` 列出的词必须*另外*出现在该段的任意位置——
@@ -160,13 +161,21 @@ policy = replace(WorkspacePolicy.coding(), read_outside="deny", allow_shell=Fals
 检查只比对修改时间和大小，属于尽力检测；它放在会话里（`write_text` / `write_bytes` / `edit_text`），
 自定义工具和远程工作区同样生效。它只覆盖一个会话看到的内容：能发现此前的变化，不对其他聊天加锁。
 
-输出在工具层由 `WorkspaceLimits` 限制（传 `limits=WorkspaceLimits(...)`）：每次读取
-`max_file_read_chars=50_000`（用 `start`/`end` 分页），shell 输出
-`max_shell_output_chars=30_000`（保留头尾），另有读取/grep 字节上限，以及 list/grep 结果上限。
-所有截断都会在输出中说明。
+输出在工具层由 `WorkspaceLimits` 限制（传 `limits=WorkspaceLimits(...)`）。所有截断都会在输出中说明。
+
+| 字段 | 默认值 | 限制的是 |
+| --- | --- | --- |
+| `max_file_read_chars` | `50_000` | 一次读取返回的字符数（用 `start`/`end` 分页） |
+| `max_file_read_bytes` | `10_000_000` | 从一个文件读入的字节数；更大的文件只读这么长的开头 |
+| `max_shell_output_chars` | `30_000` | 命令 stdout 和 stderr 各自保留的字符数（保留头尾）；也是后台进程两次读取之间的缓冲上限 |
+| `max_grep_file_bytes` | `5_000_000` | 超过这个大小的文件，grep 直接跳过 |
+| `max_grep_line_chars` | `400` | 每条匹配行保留的字符数 |
+| `max_grep_matches` | `100` | 一次 grep 返回的匹配数 |
+| `max_list_results` | `500` | 一次列目录返回的条目数 |
 
 shell 执行细节：命令通过系统 shell 运行，默认使用**最小环境**（`PATH`、`HOME`、locale，不传 secrets；
-`inherit_env=True` 才继承完整环境，`env=` 可加特定变量）。超时报告 `timed_out=True`，
+`inherit_env=True` 才继承完整环境，`env=` 可加特定变量）。一条命令最多运行 `shell_timeout` 秒
+（`Workspace.local(shell_timeout=300)`；`None` 表示不限），调用时自带 `timeout` 的除外。超时报告 `timed_out=True`，
 并连同后代进程一起终止：POSIX 下终止新建的整个 process group，Windows 下终止整棵进程树
 （`taskkill /T`）。前台命令在 shell 退出时也随之结束：如果它启动的进程（`server &`、守护进程）
 两秒后仍占着输出，调用会停止读取、终止命令剩下的进程，并在 `stderr` 中注明；长期运行的进程请用

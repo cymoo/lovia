@@ -48,6 +48,9 @@ tool = web_fetch(                       # 或直接用默认配置的 web_fetch(
 )
 ```
 
+`HttpReader` 还接受 `cache_size`（在 `cache_ttl` 秒内缓存的响应数，默认 `32`）和 `user_agent`。
+默认的 User-Agent 会写明 lovia，因为很多网站会拒绝不表明身份的客户端；想标明自己的部署，传你自己的值。
+
 它没有 `method`、`headers`、`body` 参数。要让模型调用某个具体的 API，把这个 API 包装成
 [`@tool`](tools.md)，比如 `get_order(order_id)`，而不是交给模型一个可以随意填写的 HTTP 客户端。
 

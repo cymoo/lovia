@@ -461,6 +461,8 @@ def tool(
         # Built once here: per-call validation must not pay for
         # get_type_hints + create_model on every invocation.
         validate = build_args_validator(func)
+        properties = parameters.get("properties")
+        arg_names = [str(k) for k in properties] if isinstance(properties, dict) else []
 
         context_param = _find_context_param(func)
         is_async = inspect.iscoroutinefunction(func)
@@ -478,6 +480,15 @@ def tool(
                     f"{err['msg']}"
                     for err in exc.errors(include_url=False)
                 )
+                # Validation drops unknown keys silently, so a misnamed
+                # argument (old_text for old) reads as merely "missing" and
+                # the model resends the same call. Name the strays.
+                unexpected = [k for k in args if k not in arg_names]
+                if unexpected:
+                    details += (
+                        f"; unexpected arguments: {', '.join(unexpected)} "
+                        f"(parameters: {', '.join(arg_names)})"
+                    )
                 raise InvalidToolArguments(
                     f"Invalid arguments for tool {tool_name!r}: {details}"
                 ) from exc

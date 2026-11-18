@@ -58,7 +58,8 @@ The model sees `name`, `description`, and a JSON Schema for the parameters:
 
 Arguments are validated (and coerced) against the signature before your
 function runs. Invalid arguments never reach your code: they become an
-`InvalidToolArguments` error result carrying a compact validation message,
+`InvalidToolArguments` error result carrying a compact validation message
+(naming any argument the signature lacks, next to the real parameter names),
 which the model uses to correct the call — deterministic failures are not
 retried.
 

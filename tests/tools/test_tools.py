@@ -156,6 +156,26 @@ async def test_invalid_arguments_message_reaches_model() -> None:
 
 
 @pytest.mark.asyncio
+async def test_invalid_arguments_name_misnamed_keys() -> None:
+    # A misnamed argument must not read as merely "missing", or the model
+    # resends the same call: the error names the stray keys and the real ones.
+    from lovia.exceptions import InvalidToolArguments
+
+    @tool
+    async def edit(path: str, old: str, new: str) -> str:
+        return path
+
+    ctx = RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
+    with pytest.raises(InvalidToolArguments) as info:
+        await edit.invoke({"path": "a", "old_text": "x", "new_text": "y"}, ctx)
+    assert str(info.value) == (
+        "Invalid arguments for tool 'edit': old: Field required; "
+        "new: Field required; unexpected arguments: old_text, new_text "
+        "(parameters: path, old, new)"
+    )
+
+
+@pytest.mark.asyncio
 async def test_retries_exhausted_surfaces_as_tool_error() -> None:
     @tool(retries=1)
     async def always_fail() -> str:

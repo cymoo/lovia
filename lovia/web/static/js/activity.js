@@ -102,6 +102,16 @@ function relabel(group) {
   if (now && kids.length) now.textContent = stepLine(kids[kids.length - 1]);
 }
 
+/**
+ * Refresh the line of the group holding `node`: the step's own line changed
+ * (a tool view's summary follows the call's status and result).
+ * @param {Element} node
+ */
+export function relabelStep(node) {
+  const group = groupOf(node);
+  if (group) relabel(group);
+}
+
 // Relabel a group, or remove it once its last step is gone.
 /** @param {HTMLElement} group */
 function normalize(group) {

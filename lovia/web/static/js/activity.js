@@ -3,12 +3,14 @@
 //
 // Grouping happens where content enters a bubble (chat.js
 // appendBubbleContent), which both the live stream and history replay go
-// through, so a reopened chat folds exactly as the live run did. A lone step
-// stays as it is; a second consecutive one wraps both. Anything else — the
-// reply's text, an approval or question card, an error — ends the run of steps
-// and is never folded. A group stays open while its steps happen and closes
-// once the reply's text starts (or the reply ends), unless the user toggled it
-// or a step still waits on them.
+// through, so a reopened chat folds exactly as the live run did. Every step
+// lands in a group, a lone one included, so a step looks the same however many
+// follow it. Anything else — the reply's text, an approval or question card,
+// an error — ends the run of steps and is never folded.
+//
+// A group is never opened or closed for the user: while its run works, the
+// folded line names the latest step (styles.css swaps it for the digest), so
+// progress shows without the layout jumping.
 
 import { t } from './i18n.js';
 import { icon } from './icons.js';
@@ -56,8 +58,8 @@ function groupOf(node) {
   return group?.classList.contains('lv-activity') ? /** @type {HTMLDetailsElement} */ (group) : null;
 }
 
-/** @param {boolean} open */
-function makeGroup(open) {
+/** @param {boolean} [open] */
+function makeGroup(open = false) {
   const group = document.createElement('details');
   group.className = 'lv-activity';
   group.dataset.part = 'activity';
@@ -66,69 +68,73 @@ function makeGroup(open) {
   summary.innerHTML =
     // Shown only when a step failed (styles.css); otherwise the line is text.
     `<span class="lv-activity-icon">${icon('triangle-alert', { size: 14 })}</span>` +
-    '<span class="lv-activity-label"></span>';
-  // A click or keypress on the summary is the user's say; programmatic
-  // open/close (sealActivity) must not override it.
-  summary.addEventListener('click', () => {
-    group.dataset.userToggled = '';
-  });
+    '<span class="lv-activity-label"></span>' +
+    // The latest step, shown in the label's place while the run works.
+    '<span class="lv-activity-now"></span>';
   const steps = document.createElement('div');
   steps.className = 'lv-activity-steps';
   group.append(summary, steps);
   return group;
 }
 
+/**
+ * A step's own line: a tool card's summary (its view's, else its label), or
+ * "Thinking…".
+ * @param {Element} node
+ */
+function stepLine(node) {
+  const tool = /** @type {HTMLElement} */ (node).dataset.tool;
+  if (!tool) return t('chat.thinking');
+  return node.querySelector(':scope > summary > .lv-tool-summary')?.textContent || toolLabel(tool);
+}
+
 /** @param {HTMLElement} group */
 function relabel(group) {
-  const steps = [...stepsOf(group).children].map((n) => {
+  const kids = [...stepsOf(group).children];
+  const steps = kids.map((n) => {
     const tool = /** @type {HTMLElement} */ (n).dataset.tool;
     return { reasoning: n.classList.contains('lv-reasoning'), tool: tool && toolLabel(tool) };
   });
   const label = group.querySelector('.lv-activity-label');
-  if (label) label.textContent = summarize(steps).join(' · ');
+  // One tool call reads as itself, not as a digest of one.
+  if (label) label.textContent = steps.length === 1 && steps[0].tool ? stepLine(kids[0]) : summarize(steps).join(' · ');
+  const now = group.querySelector('.lv-activity-now');
+  if (now && kids.length) now.textContent = stepLine(kids[kids.length - 1]);
 }
 
-// Unwrap a group left with a single step (or remove an empty one).
+/**
+ * Refresh the line of the group holding `node`: the step's own line changed
+ * (a tool view's summary follows the call's status and result).
+ * @param {Element} node
+ */
+export function relabelStep(node) {
+  const group = groupOf(node);
+  if (group) relabel(group);
+}
+
+// Relabel a group, or remove it once its last step is gone.
 /** @param {HTMLElement} group */
 function normalize(group) {
-  const kids = [...stepsOf(group).children];
-  if (kids.length > 1) relabel(group);
-  else group.replaceWith(...kids);
+  if (stepsOf(group).children.length) relabel(group);
+  else group.remove();
 }
 
 /**
  * Put a step into `bubble` before `before` (its footer, or null for the end),
- * folding it into the step run that ends there.
+ * folding it into the step run that ends there, or starting one.
  * @param {HTMLElement} bubble
  * @param {HTMLElement} node
  * @param {Element | null} before
  */
 export function placeStep(bubble, node, before) {
   const prev = before ? before.previousElementSibling : bubble.lastElementChild;
-  if (prev?.classList.contains('lv-activity')) {
-    stepsOf(/** @type {HTMLElement} */ (prev)).append(node);
-    relabel(/** @type {HTMLElement} */ (prev));
-  } else if (prev && isStep(prev)) {
-    const group = makeGroup(true);
+  let group = /** @type {HTMLElement | null} */ (prev?.classList.contains('lv-activity') ? prev : null);
+  if (!group) {
+    group = makeGroup();
     bubble.insertBefore(group, before);
-    stepsOf(group).append(prev, node);
-    relabel(group);
-  } else {
-    bubble.insertBefore(node, before);
   }
-}
-
-/**
- * Close the bubble's open groups: its reply has moved on. A group the user
- * toggled, or one whose step waits on them, keeps its state.
- * @param {HTMLElement | null} bubble
- */
-export function sealActivity(bubble) {
-  for (const group of bubble?.querySelectorAll(':scope > .lv-activity[open]') ?? []) {
-    const g = /** @type {HTMLDetailsElement} */ (group);
-    if ('userToggled' in g.dataset || g.querySelector('[data-status="awaiting"]')) continue;
-    g.open = false;
-  }
+  stepsOf(group).append(node);
+  relabel(group);
 }
 
 /**
@@ -143,19 +149,17 @@ export function liftStep(node) {
   const rest = [];
   for (let n = node.nextElementSibling; n; n = n.nextElementSibling) rest.push(n);
   group.after(node);
-  if (rest.length > 1) {
+  if (rest.length) {
     const tail = makeGroup(group.open);
     stepsOf(tail).append(...rest);
     node.after(tail);
     relabel(tail);
-  } else if (rest.length) {
-    node.after(rest[0]);
   }
   normalize(group);
 }
 
 /**
- * Remove a step, unwrapping its group if one step is left.
+ * Remove a step, and its group with it when it was the last.
  * @param {HTMLElement | null} node
  */
 export function removeStep(node) {

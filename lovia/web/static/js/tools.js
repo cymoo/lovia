@@ -6,7 +6,7 @@
 // exactly what the live run did. Each card carries a ToolState, mirrored onto
 // it as `data-status` — public, like `data-tool`, for deployer CSS.
 
-import { liftStep } from './activity.js';
+import { liftStep, relabelStep } from './activity.js';
 import { commandLine } from './builtin-views.js';
 import { api } from './api.js';
 import {
@@ -304,6 +304,7 @@ export function setToolStatus(node, status) {
  */
 export function refreshTool(node, live = false) {
   applySummary(node);
+  relabelStep(node);
   syncToolUi(node, live);
 }
 
@@ -351,6 +352,7 @@ watchToolViews((name) => {
     const card = /** @type {HTMLElement} */ (node);
     if (name !== '*' && card.dataset.tool !== name) continue;
     applySummary(card);
+    relabelStep(card);
     if (card.dataset.ui !== 'envelope') syncToolUi(card, false);
   }
 });

@@ -59,7 +59,7 @@ import { createSendQueue } from './send-queue.js';
 import { initSkillMenu } from './skill-menu.js';
 import { findCommand, runCommand } from './commands.js';
 import { initFileMenu } from './file-menu.js';
-import { isStep, placeStep, removeStep, sealActivity } from './activity.js';
+import { isStep, placeStep, removeStep } from './activity.js';
 import { collectContext } from './lovia.js';
 import { messageActionButtons, watchMessageActions } from './message-actions.js';
 import {
@@ -291,8 +291,6 @@ function appendBubbleContent(bubble, node) {
     placeStep(bubble, node, tail);
     return;
   }
-  // The reply's text has started: the steps before it fold away.
-  if (node.classList.contains('lv-body')) sealActivity(bubble);
   bubble.insertBefore(node, tail);
 }
 
@@ -2383,7 +2381,6 @@ function finalizeCurrentAssistantTurn() {
       node.classList.remove('lv-streaming');
       // The server's finish (the `timing` frame) outranks the teardown's clock.
       if (!node.dataset.finished) setTurnTimestamp(node);
-      sealActivity(store.bubble);
       addMessageActions(store.bubble);
     }
   }

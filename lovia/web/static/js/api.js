@@ -441,11 +441,11 @@ export const api = {
   // Upload a file into a chat's attachment folder → { name, mime, kind, size }.
   // `sessionId` may be a draft's, not created yet: the send that names it
   // creates the chat. Multipart; the browser sets the boundary, so no headers.
-  /** @param {string} sessionId @param {File} file @param {{ signal?: AbortSignal }} [opts] */
-  uploadAttachment: (sessionId, file, { signal } = {}) => {
+  /** @param {string} sessionId @param {File} file @param {{ agent?: string, signal?: AbortSignal }} [opts] */
+  uploadAttachment: (sessionId, file, { agent, signal } = {}) => {
     const form = new FormData();
     form.append('file', file);
-    return request(`/api/sessions/${encodeURIComponent(sessionId)}/attachments`, {
+    return request(`/api/sessions/${encodeURIComponent(sessionId)}/attachments${qs({ agent })}`, {
       method: 'POST',
       body: form,
       signal,

@@ -21,6 +21,7 @@ ephemeral across restarts; the web layer just holds sessions longer.
 from __future__ import annotations
 
 import asyncio
+import glob
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
@@ -29,6 +30,7 @@ from typing import Any, Literal, cast, get_args
 
 from ..agent import Agent
 from ..exceptions import UserError
+from ..handoff import Handoff
 from ..workspace import (
     CommandRule,
     LocalWorkspace,
@@ -82,7 +84,9 @@ def attachment_policy(policy: WorkspacePolicy, folder: Path) -> WorkspacePolicy:
     baseline rule that matches counts, so no preset or ``path_rules`` entry
     can undo it. ``denied_paths`` still come first. Idempotent.
     """
-    where = folder.resolve().as_posix()
+    # Patterns are globs: a ``[``, ``*`` or ``?`` in the data directory's
+    # path (``Work [2026]``) must match itself, or neither rule matches.
+    where = glob.escape(folder.resolve().as_posix())
     read = PathRule(where, "allow", ops=frozenset({"read"}))
     if read in policy.path_rules:
         return policy
@@ -97,6 +101,39 @@ def attachment_policy(policy: WorkspacePolicy, folder: Path) -> WorkspacePolicy:
         path_rules=(read, *policy.path_rules),
         baseline=(*(policy.baseline or ()), write),
     )
+
+
+def with_attachments(
+    agent: Agent[Any], folder: Path, done: dict[int, Agent[Any]] | None = None
+) -> Agent[Any]:
+    """``agent`` and every handoff target it reaches, each local workspace's
+    policy reading ``folder`` and never writing it (:func:`attachment_policy`).
+    The original is never touched; an agent with nothing to change comes back
+    as is."""
+    done = {} if done is None else done
+    if id(agent) in done:  # handoffs may form a cycle
+        return done[id(agent)]
+    ws = agent.workspace
+    guarded = (
+        replace(ws, policy=attachment_policy(ws.policy, folder))
+        if isinstance(ws, LocalWorkspace)
+        else ws
+    )
+    if guarded is ws and not agent.handoffs:
+        done[id(agent)] = agent
+        return agent
+    # A fresh handoffs list, filled after registering the copy so a cycle
+    # resolves to it.
+    copy = agent.clone(workspace=guarded, handoffs=[])
+    done[id(agent)] = copy
+    for h in agent.handoffs:
+        if isinstance(h, Handoff):
+            copy.handoffs.append(
+                replace(h, target=with_attachments(h.target, folder, done))
+            )
+        else:
+            copy.handoffs.append(with_attachments(h, folder, done))
+    return copy
 
 
 # The git reads behind the Files panel's change list and diff. The page
@@ -491,11 +528,15 @@ class WorkspaceSessions:
         that lifetime is not this registry's to manage.
 
         ``attachments`` is the chat's attachment folder: a local workspace's
-        policy reads it and never writes it. A remote one's files are on
-        another machine, and a custom backend has no policy to extend.
+        policy reads it and never writes it — the handoff targets' too, which
+        open sessions of their own past this registry. A remote one's files
+        are on another machine, and a custom backend has no policy to extend.
         """
         if attachments is not None:
             self._folders[session_id] = attachments
+        folder = self._folders.get(session_id)
+        if folder is not None:
+            agent = with_attachments(agent, folder)
         cfg = agent.workspace
         if cfg is None or not cfg.close_after_run:
             return agent

@@ -4455,7 +4455,7 @@ async function uploadFiles(files) {
     renderAttachTray();
     updateSendEnabled(); // Send waits for it
     try {
-      Object.assign(chip, await api.uploadAttachment(chip.owner, file), {
+      Object.assign(chip, await api.uploadAttachment(chip.owner, file, { agent: store.agent }), {
         uploading: false,
       });
     } catch (err) {

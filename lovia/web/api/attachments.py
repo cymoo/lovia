@@ -2,9 +2,9 @@
 
 An upload goes to the chat's attachment folder in the store
 (:meth:`~lovia.web.store.ChatStore.attachment_folder`), never into a
-workspace — so it needs neither a workspace nor the chat to exist yet: a
-draft uploads under the id it will send with, and the chat that send creates
-already owns the folder. The page only ever sees file names.
+workspace — so the chat needn't exist yet: a draft uploads under the id it
+will send with, and the chat that send creates already owns the folder. The
+page only ever sees file names.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from ..attachments import (
 from ..errors import WebError
 from ..media import is_preview_image, preview_image_mime
 from ..schemas import UploadedFile
+from ..workspaces import files_config
 from .deps import RouterDeps
 from .workspace import serve_local
 
@@ -54,18 +55,30 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
 
     @router.post("/api/sessions/{session_id}/attachments", response_model=UploadedFile)
     async def upload_attachment(
-        session_id: str, file: UploadFile = File(...)
+        session_id: str,
+        file: UploadFile = File(...),
+        agent: str | None = Query(None),
     ) -> UploadedFile:
         """Save one file into the chat's attachment folder.
 
         ``session_id`` may name a chat that doesn't exist yet: a draft
-        uploads under the id it then sends with. The extension is checked
+        uploads under the id it then sends with, naming its ``agent``. That
+        agent must have a workspace — a message drops attachments otherwise,
+        so the upload is refused up front. The extension is checked
         against an allowlist (``LOVIA_UPLOAD_ALLOWED_EXT``) and the size
         against a cap (``LOVIA_MAX_UPLOAD_MB``) enforced while reading, so a
         disallowed or huge upload is rejected without exhausting memory. The
         bytes are written at a collision-free name, returned for the message
         to name.
         """
+        meta = await deps.store.get(session_id)
+        if files_config(deps.pick(deps.agent_of(meta) if meta else agent)) is None:
+            raise WebError(
+                404,
+                "feature_unavailable",
+                "this agent has no workspace to take attachments",
+                hint="attachments go to an agent with a workspace",
+            )
         folder = await folder_of(session_id)
         name = safe_upload_name(file.filename or "upload")
         allowed = allowed_upload_ext()

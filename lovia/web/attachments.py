@@ -26,9 +26,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import itertools
 import logging
 import os
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +124,15 @@ def is_attachment_name(name: str) -> bool:
     return bool(name) and safe_upload_name(name) == name
 
 
+def _candidates(name: str) -> Iterator[str]:
+    """``name``, then ``stem-1.ext``, ``stem-2.ext``, … — tried in order until
+    one is free (each is created exclusively by its caller)."""
+    yield name
+    stem, suffix = Path(name).stem, Path(name).suffix
+    for i in itertools.count(1):
+        yield f"{stem}-{i}{suffix}"
+
+
 def save_attachment(folder: Path, name: str, data: bytes) -> str:
     """Write ``data`` into ``folder`` at a collision-free name; return it.
 
@@ -131,12 +142,8 @@ def save_attachment(folder: Path, name: str, data: bytes) -> str:
     place the same way.
     """
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-    stem, suffix = Path(name).stem, Path(name).suffix
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
-    i = 0
-    while True:
-        candidate = name if i == 0 else f"{stem}-{i}{suffix}"
-        i += 1
+    for candidate in _candidates(name):
         try:
             fd = os.open(folder / candidate, flags, 0o600)
         except FileExistsError:
@@ -144,6 +151,7 @@ def save_attachment(folder: Path, name: str, data: bytes) -> str:
         with os.fdopen(fd, "wb") as out:
             out.write(data)
         return candidate
+    raise AssertionError("unreachable: the candidates never run out")
 
 
 async def user_content(
@@ -188,7 +196,12 @@ async def user_content(
             raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
     try:
         for att in attachments:
-            if att.path is None:
+            if att.path is None and remote and session is None:
+                # Its copy goes on the host, which has no root left to take
+                # it — a path on this machine would mean nothing there.
+                log.warning("dropping attachment %r: the chat's root is gone", att.name)
+                found = None
+            elif att.path is None:
                 found = await _stored(att, folder, session if remote else None)
             elif session is not None:
                 found = await _linked(att, session, cfg.limits.max_file_read_bytes)
@@ -310,18 +323,15 @@ async def _copy_to_host(session: WorkspaceSession, name: str, data: bytes) -> st
     exclusively, so two concurrent copies that settle on one name can't
     clobber each other — the loser moves on to the next suffix.
     """
-    stem, suffix = Path(name).stem, Path(name).suffix
-    i = 0
-    while True:
-        candidate = name if i == 0 else f"{stem}-{i}{suffix}"
+    for candidate in _candidates(name):
         rel = f"{_REMOTE_UPLOADS}/{candidate}"
-        i += 1
         try:
             await session.stat(rel)
         except FileNotFoundError:
             written = await session.write_bytes(rel, data, create_only=True)
             if written.ok:
                 return rel
+    raise AssertionError("unreachable: the candidates never run out")
 
 
 async def build_user_input(

@@ -442,6 +442,29 @@ async def test_every_way_in_reads_attachments_where_the_chat_works(places) -> No
         await far.aclose()
 
 
+async def test_an_upload_for_a_remote_chat_whose_root_is_gone_is_dropped(
+    places,
+) -> None:
+    # Its copy would go on the host: a path on this machine means nothing there.
+    from lovia.web.attachments import user_content
+    from lovia.web.schemas import Attachment
+
+    here, there = places
+    folder = here / "attachments" / ("ab" * 16)
+    folder.mkdir(parents=True)
+    (folder / "a.txt").write_text("a")
+    shutil.rmtree(there)
+    far = _far()
+    try:
+        agent = Agent(
+            name="bot", model=None, workspace=Workspace.remote(far, str(there))
+        )
+        attachment = Attachment(name="a.txt", mime="text/plain", kind="file")
+        assert await user_content("see", [attachment], agent, folder) == "see"
+    finally:
+        await far.aclose()
+
+
 def test_a_host_that_cannot_be_reached_is_said_so_not_dropped(places) -> None:
     here, there = places
     gone = RemoteHost("gone", command=(), python="/nonexistent/python3")

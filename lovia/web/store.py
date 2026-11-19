@@ -22,6 +22,7 @@ import sqlite3
 import tempfile
 import time
 import uuid
+import weakref
 import zlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -736,6 +737,8 @@ class ChatStore:
         first upload, not here)."""
         if self._attachments is None:
             self._attachments = Path(tempfile.mkdtemp(prefix="lovia-attachments-"))
+            # Volatile like the rest of the store: gone with it.
+            weakref.finalize(self, shutil.rmtree, self._attachments, True)
         return self._attachments
 
     async def attachment_folder(self, session_id: str) -> Path | None:

@@ -62,6 +62,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# How often a running server sweeps attachment folders no chat claims.
+_SWEEP_EVERY = 3600.0
+
 
 @dataclass
 class RouterDeps:
@@ -256,6 +259,7 @@ class RouterDeps:
 
         await self.store.sweep_stale_runs()
         await self.store.sweep_attachments()
+        sweeper = asyncio.create_task(self._sweep_attachments())
         scheduler = Scheduler(self, poll_interval=self.scheduler_poll)
         scheduler.start()
         if self.questions is not None:
@@ -264,6 +268,9 @@ class RouterDeps:
         try:
             yield
         finally:
+            sweeper.cancel()
+            with suppress(asyncio.CancelledError):
+                await sweeper
             if self.questions is not None:
                 # A chat's run parked on a question suspends, so the question
                 # outlives the restart (a task's is cancelled: nothing would
@@ -290,6 +297,17 @@ class RouterDeps:
             for plugin in plugins.values():
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(plugin.drain(), timeout=15.0)
+
+    async def _sweep_attachments(self) -> None:
+        """Sweep unclaimed attachment folders every hour (the lifespan swept
+        once before serving): a server that never restarts still lets go of
+        drafts never sent, and of folders a held file kept from a delete."""
+        while True:
+            await asyncio.sleep(_SWEEP_EVERY)
+            try:
+                await self.store.sweep_attachments()
+            except Exception as exc:  # noqa: BLE001 — the next hour tries again
+                log.warning("sweeping attachment folders failed: %s", exc)
 
     def fresh_budget(self) -> RunBudget | None:
         """A per-run copy of ``budget`` (``None`` when unset), so a ``RunBudget``'s

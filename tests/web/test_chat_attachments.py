@@ -226,10 +226,26 @@ def test_a_fork_shows_its_sources_attachments_after_the_source_goes(
     assert not (tmp_path / "data" / "attachments" / sid).exists()
 
 
-def test_an_upload_needs_no_workspace(tmp_path: Path) -> None:
+def test_an_agent_without_a_workspace_takes_no_upload(tmp_path: Path) -> None:
+    # Its messages would drop the file: refused up front, not lost on send.
     plain = Agent(name="bot", model=ScriptedProvider([text("ok")]))
     with _client(tmp_path, plain) as c:
-        assert _upload(c, _sid(), "a.txt").status_code == 200
+        r = _upload(c, _sid(), "a.txt")
+        assert (r.status_code, r.json()["detail"]["code"]) == (
+            404,
+            "feature_unavailable",
+        )
+
+
+async def test_an_in_memory_stores_folder_goes_with_it() -> None:
+    import gc
+
+    store = ChatStore.in_memory()
+    root = store.attachments_dir
+    _put(root / _sid())
+    del store
+    gc.collect()
+    assert not root.exists()
 
 
 @pytest.mark.parametrize("sid", ["s1", "ABCDEF0123456789ABCDEF0123456789"])
@@ -341,6 +357,40 @@ def test_a_run_reads_the_folder_and_never_writes_it(
         if policy.write_outside == "allow":  # only the folder's rule says no
             assert "read-only" in write.reason
         assert attachment_policy(guarded, folder) == guarded  # idempotent
+
+
+def test_glob_characters_in_the_data_directory_match_themselves(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "Work [2026] *" / "attachments" / _sid()
+    folder.mkdir(parents=True)
+    guarded = attachment_policy(WorkspacePolicy.trusted(), folder)
+    target = (folder / "cat.png").resolve().as_posix()
+    assert guarded.decide_path(rel=None, abs_posix=target, op="write").action == "deny"
+    # And they stay literal: a sibling the brackets would match as a class.
+    other = (tmp_path / "Work 2" / "attachments" / folder.name / "x").as_posix()
+    assert guarded.decide_path(rel=None, abs_posix=other, op="write").action == "allow"
+
+
+def test_handoff_targets_read_the_folder_and_never_write_it(tmp_path: Path) -> None:
+    from lovia.handoff import Handoff
+    from lovia.web.workspaces import with_attachments
+
+    folder = tmp_path / "attachments" / _sid()
+    ws = Workspace.local(str(tmp_path / "ws"), mode="trusted")
+    helper = Agent(name="helper", model=None, workspace=ws)
+    writer = Agent(name="writer", model=None, workspace=ws, handoffs=[helper])
+    helper.handoffs.append(Handoff(target=writer))  # a cycle
+    guarded = with_attachments(writer, folder)
+    target = (folder / "a.txt").resolve().as_posix()
+    reached = guarded.handoffs[0]
+    for agent in (guarded, reached, reached.handoffs[0].target):
+        policy = agent.workspace.policy  # type: ignore[union-attr]
+        assert policy.decide_path(rel=None, abs_posix=target, op="write").action == (
+            "deny"
+        )
+    assert reached.handoffs[0].target is guarded  # the cycle resolves to the copy
+    assert writer.workspace is ws  # the original is untouched
 
 
 def test_denied_paths_still_win_over_the_read(tmp_path: Path) -> None:

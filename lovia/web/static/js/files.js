@@ -1474,7 +1474,16 @@ async function previewUpload({ name, url, download }) {
   }
   if (MD_EXT.has(e)) {
     const { turn, body: md } = bodyWrapper();
-    renderMarkdownInto(md, text);
+    // A relative ref names another upload: they sit side by side, one folder,
+    // no subfolders — so `diagram.png` is this URL's sibling, never a
+    // workspace file of that name.
+    const folder = url.slice(0, url.lastIndexOf('/') + 1);
+    const refUrl = (/** @type {string} */ ref, /** @type {boolean} */ dl) => {
+      const sibling = normalizeRel(ref);
+      if (!sibling || sibling.includes('/') || ref.startsWith('/')) return null;
+      return `${folder}${encodeURIComponent(sibling)}${dl ? '?download=1' : ''}`;
+    };
+    renderMarkdownInto(md, text, { refUrl });
     highlightIn(md);
     addCodeBlockControls(md);
     body.replaceChildren(turn);

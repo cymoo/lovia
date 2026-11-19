@@ -12,8 +12,8 @@ attachments into a run's input or a steer:
 * Every attachment is named in a note the agent can act on — the file's
   absolute path, which the chat's runs may read and never write
   (:func:`~lovia.web.workspaces.attachment_policy`). A chat on a remote host
-  gets a copy in that workspace's ``uploads/`` instead, and the note names
-  the copy.
+  works with a copy the host keeps in a temp folder of its account's own,
+  outside the workspace too (:func:`stage_on_host`), and the note names that.
 * Images also go **inline** as :class:`~lovia.ImagePart` when the model can
   see them (:func:`~lovia.providers.supports_vision`).
 * A workspace file attached from the Files panel (by ``path``) is referenced
@@ -31,9 +31,10 @@ import itertools
 import logging
 import os
 import re
+import unicodedata
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..agent import Agent
 from ..exceptions import UserError
@@ -41,7 +42,6 @@ from ..messages import Message, user
 from ..parts import ContentPart, ImagePart, TextPart
 from ..providers import supports_vision
 from ..workspace import (
-    PermissionDeniedError,
     RemoteWorkspace,
     WorkspaceDisconnectedError,
     WorkspaceError,
@@ -50,7 +50,10 @@ from ..workspace.protocol import WorkspaceSession
 from .errors import WebError
 from .media import model_image_mime
 from .schemas import Attachment, ChatRequest
-from .workspaces import files_config, open_view
+from .workspaces import AttachmentFolder, HostFolder, files_config, open_view
+
+if TYPE_CHECKING:
+    from .store import ChatStore
 
 log = logging.getLogger(__name__)
 
@@ -76,9 +79,6 @@ _WINDOWS_DEVICES = frozenset(
     ["con", "prn", "aux", "nul"]
     + [f"{d}{i}" for d in ("com", "lpt") for i in range(1, 10)]
 )
-# Where a remote chat's attachments are copied on its host, until the host
-# keeps them outside the workspace (step 2 of the design).
-_REMOTE_UPLOADS = "uploads"
 
 
 def max_upload_bytes() -> int:
@@ -159,14 +159,19 @@ def _candidates(name: str) -> Iterator[str]:
 def save_attachment(folder: Path, name: str, data: bytes) -> str:
     """Write ``data`` into ``folder`` at a collision-free name; return it.
 
-    Each candidate is created exclusively, so two concurrent uploads that
-    settle on one name can't clobber each other — the loser moves on to the
-    next suffix. On a case-insensitive filesystem ``A.png`` takes ``a.png``'s
-    place the same way.
+    Collision-free on any filesystem the folder is copied to, not just this
+    one: a name is taken when one already there differs only in case or
+    Unicode form — ``A.png`` and ``a.png`` are one file on a default macOS
+    or Windows host, whatever this one says. Each candidate is created
+    exclusively, so two concurrent uploads of one name can't clobber each
+    other — the loser moves on to the next suffix.
     """
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    taken = {_fold(p.name) for p in folder.iterdir()}
     for candidate in _candidates(name):
+        if _fold(candidate) in taken:
+            continue
         try:
             fd = os.open(folder / candidate, flags, 0o600)
         except FileExistsError:
@@ -175,6 +180,11 @@ def save_attachment(folder: Path, name: str, data: bytes) -> str:
             out.write(data)
         return candidate
     raise AssertionError("unreachable: the candidates never run out")
+
+
+def _fold(name: str) -> str:
+    """``name`` as a case-insensitive, normalizing filesystem compares it."""
+    return unicodedata.normalize("NFC", name).casefold()
 
 
 async def user_content(
@@ -200,7 +210,6 @@ async def user_content(
         return message
 
     can_see = supports_vision(getattr(agent, "model", None))
-    remote = isinstance(cfg, RemoteWorkspace)
     parts: list[ContentPart] = []
     if message.strip():
         parts.append(TextPart(message))
@@ -208,47 +217,52 @@ async def user_content(
 
     stored = any(att.path is None for att in attachments)
     linked = any(att.path is not None for att in attachments)
+    host_folder: str | None = None
+    uncopied: set[str] = set()
     if stored and folder is not None:
         # In use now: a draft idle past the sweep's age is about to become a
         # chat, and the sweep re-reads the mtime before it removes anything.
         await asyncio.to_thread(_touch, folder)
+        if isinstance(cfg, RemoteWorkspace):
+            host_folder, uncopied = await _staged(cfg, folder)
     session: WorkspaceSession | None = None
-    if linked or (remote and stored):
+    if linked:
         try:
-            # Writes only to copy a remote chat's attachments onto its host.
-            session = await open_view(cfg, write=remote and stored)
+            session = await open_view(cfg)
         except UserError:  # the root is gone: what lives in it can't be had
             session = None
         except WorkspaceError as exc:
             raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
+    max_bytes = cfg.limits.max_file_read_bytes
     try:
         for att in attachments:
-            if att.path is None and remote and session is None:
-                # Its copy goes on the host, which has no root left to take
-                # it — a path on this machine would mean nothing there.
-                log.warning("dropping attachment %r: the chat's root is gone", att.name)
-                found = None
-            elif att.path is None:
-                found = await _stored(att, folder, session if remote else None)
+            image: bytes | None = None
+            if att.path is None:
+                file = await _stored(att, folder)
+                if file is None:
+                    continue
+                if file.name in uncopied:
+                    # Its host copy is missing or stale: naming it would
+                    # point the agent at what the user did not send.
+                    log.warning("dropping attachment %r: not on the host", file.name)
+                    continue
+                # A remote chat's tools find the host's copy.
+                where = (
+                    str(file) if host_folder is None else f"{host_folder}/{file.name}"
+                )
+                if can_see and model_image_mime(file.name):
+                    image = await _read_local(file, max_bytes)
             elif session is not None:
-                found = await _linked(att, session, cfg.limits.max_file_read_bytes)
+                found = await _linked(att, session, max_bytes)
+                if found is None:
+                    continue
+                where, image = found
             else:
-                found = None
-            if found is None:
                 continue
-            where, image = found
             named.append(where)
             mime = model_image_mime(where) if can_see else None
-            if mime is None:
-                continue
-            if image is None and att.path is None and folder is not None:
-                image = await _read_local(
-                    folder / (att.name or ""), cfg.limits.max_file_read_bytes
-                )
-            if image is None or len(image) > cfg.limits.max_file_read_bytes:
-                # Still attached by path: the note names it. (A remote copy's
-                # bytes come back whole — the read limit applies here too.)
-                continue
+            if mime is None or image is None or len(image) > max_bytes:
+                continue  # still attached by path: the note names it
             parts.append(
                 ImagePart(data=base64.b64encode(image).decode("ascii"), mime_type=mime)
             )
@@ -269,12 +283,9 @@ async def user_content(
     return parts
 
 
-async def _stored(
-    att: Attachment, folder: Path | None, host: WorkspaceSession | None
-) -> tuple[str, bytes | None] | None:
-    """Where the agent finds a stored attachment — its absolute path, or with
-    ``host`` the copy written there — and its bytes if they were read on the
-    way; None to drop it."""
+async def _stored(att: Attachment, folder: Path | None) -> Path | None:
+    """A stored attachment's file in the chat's folder, absolute; None to
+    drop it."""
     name = att.name or ""
     if folder is None or not is_attachment_name(name):
         log.warning("dropping attachment %r: not a stored attachment", name)
@@ -283,17 +294,105 @@ async def _stored(
     if not await asyncio.to_thread(file.is_file):
         log.warning("dropping attachment %r: not in the chat's folder", name)
         return None
-    if host is None:
-        return str(file), None
-    data = await asyncio.to_thread(file.read_bytes)
+    return file
+
+
+async def stage_on_host(cfg: RemoteWorkspace, folder: Path) -> tuple[str, set[str]]:
+    """Put the chat's attachments on ``cfg``'s host — each one missing there,
+    or whose size or mtime differ from the original's (a copy something
+    changed: a put stamps the original's mtime) — and return the folder the
+    host keeps them in, and the names whose copy couldn't be put (their
+    original unreadable here): there is no good copy of those to name.
+
+    The host's copies are a cache of ``folder``: a host that lost them (a
+    container rebuilt, its temp dir cleaned) gets them back here, before a
+    run and on every send. A host that won't keep copies (its folder isn't
+    private to its account) is a :class:`PermissionError` saying why.
+    """
+    there, copies, refused = await cfg.host.attachments_list(folder.name)
+    if refused is not None:
+        raise PermissionError(refused)  # the host's own words, errno and path
+    return there, await _put_stale(cfg, folder, copies)
+
+
+async def _put_stale(
+    cfg: RemoteWorkspace, folder: Path, copies: dict[str, tuple[int, int]]
+) -> set[str]:
+    """Put each original in ``folder`` whose host copy is missing or differs;
+    return the names left without a good copy. Only the host's errors come
+    out of here: an original that can't be read on this side is left
+    behind, named in what comes back."""
+    uncopied: set[str] = set()
+    local = await asyncio.to_thread(_stats, folder)
+    for name, (size, mtime) in local.items():
+        if copies.get(name) == (size, int(mtime)):
+            continue
+        try:
+            data = await asyncio.to_thread((folder / name).read_bytes)
+        except OSError as exc:
+            log.warning("not copying attachment %r to %s: %s", name, cfg.host.name, exc)
+            uncopied.add(name)
+            continue
+        await cfg.host.attachments_put(folder.name, name, data, mtime)
+    return uncopied
+
+
+async def _staged(cfg: RemoteWorkspace, folder: Path) -> tuple[str, set[str]]:
+    """:func:`stage_on_host` for a message: what goes wrong is its answer —
+    the host's own "no" with what it said, a host out of reach a 502."""
     try:
-        return await _copy_to_host(host, name, data), data
-    except PermissionDeniedError as exc:  # an ``uploads`` linking out of the root
-        raise WebError.from_exc(403, "path_denied", exc) from exc
-    except PermissionError as exc:  # the host's own "no", with what it said
+        return await stage_on_host(cfg, folder)
+    except PermissionError as exc:
         raise WebError.from_exc(403, "path_denied", exc) from exc
     except OSError as exc:  # a full disk there
         raise WebError.from_exc(500, "workspace_io_error", exc) from exc
+    except WorkspaceError as exc:
+        raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
+
+
+async def attachments_for_run(
+    store: ChatStore, session_id: str, agent: Agent[Any]
+) -> AttachmentFolder | None:
+    """The attachment folder a run of ``session_id`` reads (and never
+    writes): the chat's own, or for a remote chat the host's copy — put
+    there first, whatever the host lost. None for an id that names no folder.
+
+    A remote run always gets its folder, guarded: a host that won't keep
+    copies, or a put that fails, leaves the copies short (logged, tried
+    again next run) — never what is already there writable. A host out of
+    reach fails the run here, as opening its session would next.
+    """
+    folder = await store.attachment_folder(session_id)
+    cfg = files_config(agent)
+    if folder is None or not isinstance(cfg, RemoteWorkspace):
+        return folder
+    there, copies, refused = await cfg.host.attachments_list(folder.name)
+    if refused is not None:
+        log.warning("attachments not copied to %s: %s", cfg.host.name, refused)
+    else:
+        try:
+            await _put_stale(cfg, folder, copies)
+        except (OSError, WorkspaceError) as exc:
+            log.warning("attachments not copied to %s: %s", cfg.host.name, exc)
+    return HostFolder(there)
+
+
+def _stats(folder: Path) -> dict[str, tuple[int, float]]:
+    """Each attachment in ``folder`` by name, with its size and mtime; none
+    for a folder not made yet."""
+    try:
+        entries = list(os.scandir(folder))
+    except OSError:
+        return {}
+    stats: dict[str, tuple[int, float]] = {}
+    for e in entries:
+        try:
+            if e.is_file(follow_symlinks=False):
+                st = e.stat(follow_symlinks=False)
+                stats[e.name] = (st.st_size, st.st_mtime)
+        except OSError:  # gone meanwhile
+            continue
+    return stats
 
 
 async def _linked(
@@ -346,26 +445,6 @@ async def _read_local(file: Path, max_bytes: int) -> bytes | None:
     except OSError as exc:
         log.warning("could not inline image %s: %s", file, exc)
         return None
-
-
-async def _copy_to_host(session: WorkspaceSession, name: str, data: bytes) -> str:
-    """Write ``data`` under the host workspace's ``uploads/`` at a
-    collision-free name; return the path written.
-
-    A name is probed before it is written to: over a remote connection each
-    write attempt carries the whole file. The write itself still creates
-    exclusively, so two concurrent copies that settle on one name can't
-    clobber each other — the loser moves on to the next suffix.
-    """
-    for candidate in _candidates(name):
-        rel = f"{_REMOTE_UPLOADS}/{candidate}"
-        try:
-            await session.stat(rel)
-        except FileNotFoundError:
-            written = await session.write_bytes(rel, data, create_only=True)
-            if written.ok:
-                return rel
-    raise AssertionError("unreachable: the candidates never run out")
 
 
 async def build_user_input(

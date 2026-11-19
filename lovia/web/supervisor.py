@@ -49,6 +49,7 @@ from ..transcript import (
     entry_to_dict,
     input_to_entries,
 )
+from .attachments import attachments_for_run
 from .api.serialization import (
     Run,
     Runs,
@@ -1473,8 +1474,9 @@ class RunSupervisor:
             # Every run of one web session shares that session's workspace session
             # (lazily opened here), so background processes survive across runs —
             # they die with the *chat* (deletion/shutdown), not with the turn.
-            # Its policy reads the chat's attachment folder, never writes it.
-            folder = await self.deps.store.attachment_folder(session_id)
+            # Its policy reads the chat's attachment folder, never writes it
+            # (a remote chat's: the host's copy, put there now).
+            folder = await attachments_for_run(self.deps.store, session_id, agent)
             agent = await self.deps.workspaces.bind(session_id, agent, folder)
             # That await may have let a concurrent start for this chat in. (Its
             # workspace is this chat's too: nothing to undo.)
@@ -1574,7 +1576,7 @@ class RunSupervisor:
             # Same chat-scoped workspace binding as start(): the resumed leg's
             # background processes are gone (they never survive a restart), but
             # its shell/file tools must land on the chat's one live session.
-            folder = await self.deps.store.attachment_folder(session_id)
+            folder = await attachments_for_run(self.deps.store, session_id, agent)
             agent = await self.deps.workspaces.bind(session_id, agent, folder)
             self._check_slot(session_id, cap=False)  # as in start()
             client = dict(client or {})

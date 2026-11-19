@@ -462,9 +462,11 @@ the result when `inspect.isawaitable` says so.
 
 `lovia web` keeps a remote workspace's session for the whole chat, like a
 local one, and lists its background processes. The Files panel and
-attachments work there too: the page reads the host's files — and copies a
-sent attachment into the root's `uploads/` — through a read-only session of
-its own on the same connection.
+attachments work there too: the page reads the host's files through a
+read-only session of its own on the same connection, and copies a chat's
+attachments to the host — outside the root, into a temp folder only the
+host's account may enter — with `RemoteHost.attachments_list` /
+`attachments_put`.
 
 ## Sharp edges
 

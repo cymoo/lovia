@@ -929,9 +929,10 @@ host's `AGENTS.md` files in their place: the hook itself reads nothing — it
 sets `instructions` to an async function, which has `ctx.workspace` find and
 read them on the host ([the same files](web-ui.md#project-instructions) a
 local chat there would load) the first time the run renders its prompt. The Files
-panel and attachments read and write the host's files too, through a
-read-only session of the page's own on the same connection (a sent
-attachment is copied into the root's `uploads/`, nowhere else); when the host can't be reached they
+panel reads the host's files too, through a read-only session of the page's
+own on the same connection, and a chat's attachments are copied to the host —
+outside the root, into a temp folder only its account may enter — before
+each run and with each message; when the host can't be reached they
 answer 502 `workspace_unreachable`, and a message is never sent without the
 attachments it came with. An agent whose workspace
 has a shell `executor` cannot open one at all (409 `workspace_not_allowed`):

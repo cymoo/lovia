@@ -15,10 +15,16 @@ Part of the stdlib-only engine: this runs where lovia is not installed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import errno
 import json
 import os
 import platform
+import re
+import stat
 import sys
+import tempfile
+import time
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -176,6 +182,16 @@ class _Server:
             return _resolve_root(params["path"])
         if method == "complete_dirs":
             return await asyncio.to_thread(complete_dirs, params["path"])
+        if method == "attachments_list":
+            return await asyncio.to_thread(attachments_list, params["id"])
+        if method == "attachments_put":
+            return await asyncio.to_thread(
+                attachments_put,
+                params["id"],
+                params["name"],
+                params["data"],
+                params["mtime"],
+            )
         if method == "open":
             opened = LocalWorkspaceSession(**params)
             self._sessions[opened.id] = opened
@@ -211,6 +227,129 @@ def _resolve_root(path: str) -> str:
     if not resolved.is_dir():
         raise UserError(f"No such directory: {resolved}")
     return resolved.as_posix()
+
+
+# A chat's attachment folder: the hex id the near side names it by.
+_ATTACHMENTS_ID = re.compile(r"[0-9a-f]{32}")
+
+
+def _attachments_base() -> Path:
+    """The account's own folder under this host's temp directory — named
+    only: :func:`_attachments_root` makes it and vouches for it."""
+    tmp = Path(tempfile.gettempdir()).resolve()
+    return tmp / ("lovia" if os.name != "posix" else f"lovia-{os.getuid()}")
+
+
+def _attachments_root() -> Path:
+    """Where this host keeps copies of chats' attachments: under its temp
+    directory, in a folder this account alone owns. The copies are a cache —
+    the near side holds the originals and puts back what is missing — so the
+    system's temp cleaning is all the deleting they get.
+
+    POSIX ``/tmp`` is shared: the account's folder is made ``0700`` and, if
+    it was already there, must be a real directory this account owns and no
+    one else may enter — or another account that made it first (or planted a
+    link) would be handed the files. Windows' ``%TEMP%`` is the account's own.
+    """
+    base = _attachments_base()
+    if os.name != "posix":
+        base.mkdir(exist_ok=True)
+    else:
+        try:
+            base.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        st = os.lstat(base)
+        if (
+            not stat.S_ISDIR(st.st_mode)
+            or st.st_uid != os.getuid()
+            or st.st_mode & 0o077
+        ):
+            raise PermissionError(
+                errno.EACCES,
+                "not a private directory of this account; attachments are "
+                "not copied into it",
+                str(base),
+            )
+    root = base / "attachments"
+    root.mkdir(mode=0o700, exist_ok=True)
+    return root
+
+
+def _attachments_folder(chat: str) -> Path:
+    if not _ATTACHMENTS_ID.fullmatch(chat):
+        raise ValueError(f"not an attachment folder id: {chat!r}")
+    return _attachments_root() / chat
+
+
+# A put in progress writes here first. No attachment name starts with a dot.
+_PUTTING = ".put-"
+# A put's temp file older than this was left by one that never finished.
+_ABANDONED = 3600.0
+
+
+def attachments_list(chat: str) -> dict[str, Any]:
+    """The folder ``chat``'s attachments are copied to here, as a POSIX path
+    (Windows takes ``/`` too), and each copy already in it by name, with its
+    size and whole-second mtime — a put stamps the original's, so a copy
+    changed here no longer matches. A put's temp file is no copy: skipped,
+    and removed once it is old enough to be one a dropped host left.
+
+    A folder this host won't vouch for (:func:`_attachments_root`) is still
+    named, with why as ``refused``: whatever copies sit there must stay
+    read-only to the chat's runs, and the near side needs the path for that.
+    """
+    if not _ATTACHMENTS_ID.fullmatch(chat):
+        raise ValueError(f"not an attachment folder id: {chat!r}")
+    named = _attachments_base() / "attachments" / chat
+    try:
+        folder = _attachments_root() / chat
+    except PermissionError as exc:
+        return {"folder": _real(named), "files": {}, "refused": str(exc)}
+    files: dict[str, list[int]] = {}
+    if folder.is_dir():
+        now = time.time()
+        for entry in os.scandir(folder):
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                st = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:  # a put renamed it into place meanwhile
+                continue
+            if not entry.name.startswith(_PUTTING):
+                files[entry.name] = [st.st_size, int(st.st_mtime)]
+            elif now - st.st_mtime > _ABANDONED:
+                with contextlib.suppress(OSError):
+                    os.unlink(entry.path)
+    return {"folder": _real(folder), "files": files, "refused": None}
+
+
+def _real(folder: Path) -> str:
+    """``folder`` as policy sees it: links resolved, since a path is judged
+    by where it really leads — a rule naming the link would miss."""
+    return folder.resolve().as_posix()
+
+
+def attachments_put(chat: str, name: str, data: bytes, mtime: float) -> None:
+    """Write one copy into ``chat``'s folder here, replacing a stale one
+    whole (a temp file renamed over it — a reader never sees half), stamped
+    with the original's ``mtime``."""
+    if name in ("", ".", "..") or "/" in name or "\\" in name or "\0" in name:
+        raise ValueError(f"not a file name: {name!r}")
+    folder = _attachments_folder(chat)
+    folder.mkdir(mode=0o700, exist_ok=True)
+    fd, temp = tempfile.mkstemp(dir=folder, prefix=_PUTTING)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(data)
+        os.replace(temp, folder / name)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temp)
+        raise
+    # Stamped once in place: a temp file dated back to the original's mtime
+    # would look abandoned to a listing that runs meanwhile, which removes it.
+    os.utime(folder / name, (mtime, mtime))
 
 
 def main() -> None:

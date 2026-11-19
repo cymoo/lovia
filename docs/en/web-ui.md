@@ -431,8 +431,13 @@ copies one into the Workspace when you ask it to. Writing there is denied in
 every permission mode — to the file tools and to a shell redirection (`>`).
 Like every path rule it is a guard, not a sandbox: a shell command that
 rewrites a file itself (`sed -i`, `rm`) is judged by its words, which read as
-reads; only a sandboxed executor makes the folder truly read-only. A chat working on a remote host gets a copy in that
-directory's `uploads/` instead (until hosts keep attachments apart too).
+reads; only a sandboxed executor makes the folder truly read-only. A chat
+working on a remote host reads a copy the host keeps outside the workspace
+too — under its temp directory, in a folder only that account may enter
+(`/tmp/lovia-<uid>/attachments/` on Linux) — with the same rules. The copies
+are a cache: each run and each message puts back whatever the host lost, and
+the system's temp cleaning removes them; deleting the chat removes only the
+original here.
 `--no-workspace` disables attachments as well.
 
 Forks and a chat's tasks share its folder, so a fork still shows the
@@ -663,7 +668,8 @@ shell tools work on the host, under the chat's permission mode, and the
 sidebar marks the folder with a server icon. The host needs `python3` 3.10
 or newer and nothing installed, and SSH must work without a password prompt
 (keys or an agent). The Files panel shows the host's folder, and a sent
-attachment is copied there, under the folder's `uploads/`; a large file takes
+attachment is copied to the host, outside that folder
+([Images and files](#images-and-files)); a large file takes
 as long as the link to the host does. The agent reads the
 folder's [`AGENTS.md` files](#project-instructions) on the host, by the same
 rules, once per run. The folder's own skills are

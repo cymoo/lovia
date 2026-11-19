@@ -4401,8 +4401,8 @@ function renderAttachTray() {
 
 /**
  * Open an attachment where it reads best: an image in the lightbox, a
- * workspace file in the Files panel, any other upload in a tab of its own (a
- * PDF shown, the rest downloaded).
+ * workspace file in the Files panel's viewer, an upload — the chat's, not the
+ * workspace's — in a preview over the chat.
  * @param {{ path?: string, name?: string, owner?: string }} att
  * @param {boolean} image
  */
@@ -4414,8 +4414,11 @@ function previewAttachment(att, image) {
   } else if (att.path) {
     store.emit('open-workspace-file', { path: att.path });
   } else {
-    const pdf = /\.pdf$/i.test(att.name || '');
-    window.open(pdf ? href : attachmentHref(att, true), '_blank', 'noopener');
+    store.emit('preview-upload', {
+      name: att.name || '',
+      url: href,
+      download: attachmentHref(att, true),
+    });
   }
 }
 
@@ -4567,26 +4570,22 @@ function makeAttachmentView(att) {
     a.appendChild(img);
     return a;
   }
-  // A workspace file opens in the Files panel (rendered in-app: text, md, csv,
-  // code, or a download for binaries) instead of forcing a browser download;
-  // an upload, which lives with the chat, opens in a tab (a PDF) or downloads.
+  // A file opens in-app (text, md, csv, code, PDF; a download for binaries)
+  // instead of forcing a browser download — a workspace file in the Files
+  // panel, an upload in a preview over the chat. The href (a download) is what
+  // a modified click or no JS gets.
   const a = document.createElement('a');
   a.className = 'lv-msg-attach-file';
-  if (att.path) {
-    a.href = api.workspaceRawUrl({ agent: store.agent, path: att.path, download: true });
+  const href = att.path
+    ? api.workspaceRawUrl({ agent: store.agent, path: att.path, download: true })
+    : attachmentHref(att, true);
+  if (href) {
+    a.href = href;
     a.addEventListener('click', (e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
       e.preventDefault();
-      store.emit('open-workspace-file', { path: att.path });
+      previewAttachment(att, false);
     });
-  } else {
-    const pdf = /\.pdf$/i.test(att.name || '');
-    const href = attachmentHref(att, !pdf);
-    if (href) {
-      a.href = href;
-      a.target = '_blank';
-      a.rel = 'noopener';
-    }
   }
   a.title = att.name || att.path || '';
   a.append(...fileCardParts(att));

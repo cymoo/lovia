@@ -94,6 +94,8 @@ function workspaceCandidates(path, base) {
  * @param {string} ref
  * @returns {string}
  */
+/** @typedef {(path: string, download: boolean) => string | null} RefUrl */
+
 function refPath(ref) {
   const path = ref.split('#')[0].split('?')[0];
   try {
@@ -136,14 +138,23 @@ function isSvgPath(path) {
 
 /**
  * Point workspace-relative refs — `<img>` sources and `<a>` targets — at the
- * raw-bytes endpoint.
+ * raw-bytes endpoint. Markdown that is not the workspace's (a chat's upload)
+ * passes `refUrl` instead: a relative ref's URL, `download` for one served
+ * only as a download, or null for one that names nothing.
  * @param {ParentNode} root Container of freshly rendered markdown.
- * @param {{ agent?: string, base?: string }} [opts]
+ * @param {{ agent?: string, base?: string, refUrl?: RefUrl }} [opts]
  */
-function resolveWorkspaceRefs(root, { agent, base = '' } = {}) {
+function resolveWorkspaceRefs(root, { agent, base = '', refUrl = undefined } = {}) {
   root.querySelectorAll('img[src]').forEach((/** @type {HTMLImageElement} */ img) => {
     const src = img.getAttribute('src') || '';
     if (!src || EXTERNAL_REF.test(src)) return;
+    if (refUrl) {
+      const path = refPath(src);
+      const url = refUrl(path, isSvgPath(path));
+      if (url) img.src = url;
+      else img.removeAttribute('src');
+      return;
+    }
     const candidates = workspaceCandidates(refPath(src), base);
     if (!candidates.length) return;
     let i = 0;
@@ -171,6 +182,23 @@ function resolveWorkspaceRefs(root, { agent, base = '' } = {}) {
       return;
     }
     if (EXTERNAL_REF.test(href)) return; // mailto:, tel:, the app's own URLs
+    if (refUrl) {
+      const path = refPath(href);
+      const inline = servesInline(path);
+      const url = refUrl(path, !inline);
+      if (!url) {
+        a.removeAttribute('href');
+        return;
+      }
+      a.href = url;
+      if (inline) {
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+      } else {
+        a.setAttribute('download', '');
+      }
+      return;
+    }
     // A link gets one shot: there is no error event to retry on the way an
     // <img> can. So a leading "/" takes the workspace-root reading — the one
     // followViewerLink has always used for a markdown link — rather than the
@@ -202,8 +230,10 @@ function resolveWorkspaceRefs(root, { agent, base = '' } = {}) {
  * only fetch the browser makes.
  * @param {Element} el Target; its children are replaced.
  * @param {string} text Markdown source.
- * @param {{ agent?: string, base?: string }} [opts] `base` is the directory
- *   the markdown lives in — '' (the workspace root) for chat replies.
+ * @param {{ agent?: string, base?: string, refUrl?: RefUrl }} [opts] `base` is
+ *   the directory the markdown lives in — '' (the workspace root) for chat
+ *   replies; `refUrl` resolves refs for markdown not in the workspace (see
+ *   resolveWorkspaceRefs).
  */
 export function renderMarkdownInto(el, text, opts = {}) {
   el.replaceChildren(fragmentFromHtml(renderMarkdown(text), opts));

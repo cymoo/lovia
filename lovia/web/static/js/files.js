@@ -1392,6 +1392,112 @@ function renderText(content, path) {
   return pre;
 }
 
+// ---- Upload preview -------------------------------------------------------------
+// A chat's upload, previewed over the chat the way an image opens in the
+// lightbox — not in the panel, which is the workspace, and an upload is not in
+// it. A dialog of its own, in the reader's look: the reader proper mirrors the
+// panel's viewer. Read whole (a chat's folder has no paged read); past
+// PREVIEW_MAX_BYTES, or not text (a NUL early on), it is a download.
+const PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+
+/** @param {{ name: string, url: string, download: string }} file */
+async function previewUpload({ name, url, download }) {
+  const button = (/** @type {string} */ tag, label, glyph) => {
+    const b = document.createElement(tag);
+    b.className = 'lv-btn-icon';
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.innerHTML = icon(glyph, { size: 16 });
+    return b;
+  };
+  const dialog = document.createElement('dialog');
+  dialog.className = 'lv-file-modal';
+  dialog.setAttribute('aria-label', name);
+  const head = document.createElement('div');
+  head.className = 'lv-file-modal-head';
+  const title = document.createElement('span');
+  title.className = 'lv-file-modal-name';
+  title.textContent = name;
+  title.title = name;
+  const dl = /** @type {HTMLAnchorElement} */ (button('a', t('files.download'), 'download'));
+  dl.href = download;
+  dl.setAttribute('download', '');
+  const close = button('button', t('lightbox.close'), 'x');
+  close.setAttribute('type', 'button');
+  close.addEventListener('click', () => dialog.close());
+  head.append(title, dl, close);
+  const frame = document.createElement('div');
+  frame.className = 'lv-file-modal-body';
+  const body = document.createElement('div');
+  body.className = 'lv-files-viewer-body';
+  frame.appendChild(body);
+  dialog.append(head, frame);
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close(); // backdrop click
+  });
+  dialog.addEventListener('close', () => dialog.remove());
+  document.body.appendChild(dialog);
+  dialog.showModal();
+
+  const e = ext(name);
+  if (e === 'pdf') {
+    // The browser's own viewer, sandboxed from the page (as in the panel).
+    const embed = document.createElement('embed');
+    embed.className = 'lv-files-frame';
+    embed.type = 'application/pdf';
+    embed.src = url;
+    body.replaceChildren(embed);
+    return;
+  }
+  let text = null;
+  try {
+    const res = await fetch(download);
+    if (!res.ok) throw await apiError(res);
+    if (Number(res.headers.get('content-length')) > PREVIEW_MAX_BYTES) {
+      void res.body?.cancel();
+    } else {
+      text = await res.text();
+      if (text.length > PREVIEW_MAX_BYTES || text.slice(0, 1024).includes('\0')) text = null;
+    }
+  } catch (err) {
+    body.replaceChildren(viewerNote(err?.message || t('files.readFailed')));
+    return;
+  }
+  if (text === null) {
+    const get = document.createElement('a');
+    get.className = 'lv-btn lv-btn-ghost lv-btn-sm';
+    get.textContent = t('files.download');
+    get.href = download;
+    get.setAttribute('download', '');
+    body.replaceChildren(viewerNote(t('files.binary'), get));
+    return;
+  }
+  if (MD_EXT.has(e)) {
+    const { turn, body: md } = bodyWrapper();
+    // A relative ref names another upload: they sit side by side, one folder,
+    // no subfolders — so `diagram.png` is this URL's sibling, never a
+    // workspace file of that name.
+    const folder = url.slice(0, url.lastIndexOf('/') + 1);
+    const refUrl = (/** @type {string} */ ref, /** @type {boolean} */ dl) => {
+      const sibling = normalizeRel(ref);
+      if (!sibling || sibling.includes('/') || ref.startsWith('/')) return null;
+      return `${folder}${encodeURIComponent(sibling)}${dl ? '?download=1' : ''}`;
+    };
+    renderMarkdownInto(md, text, { refUrl });
+    highlightIn(md);
+    addCodeBlockControls(md);
+    body.replaceChildren(turn);
+    renderMermaid(md);
+  } else if (HTML_EXT.has(e)) {
+    body.replaceChildren(
+      sandboxFrame(text, { title: name, className: 'lv-files-frame lv-files-frame--html' }),
+    );
+  } else {
+    const table = CSV_EXT.has(e) ? renderCsv(text, e === 'tsv' ? '\t' : ',') : null;
+    body.replaceChildren(table || renderText(text, name));
+  }
+}
+
 // ---- Diff ---------------------------------------------------------------------
 // A tracked file git sees changed has a second view: its diff against HEAD,
 // unified, with old/new line numbers. A new file has none — all green says
@@ -2127,6 +2233,8 @@ export function initFiles() {
   });
   // A tool card's "open in Files panel" action (chat.js) — open the panel and
   // jump straight to the file the tool touched.
+  // A message's uploaded file (chat.js): a preview over the chat.
+  store.on('preview-upload', (file) => void previewUpload(file));
   store.on('open-workspace-file', async ({ path }) => {
     if (!state.available) {
       toast(t('files.noWorkspace'));

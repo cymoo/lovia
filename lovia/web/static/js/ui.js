@@ -616,7 +616,8 @@ export function addCodeBlockControls(container) {
     if (pre.querySelector('code.language-mermaid')) return;
     if (pre.querySelector('.lv-btn-copy-code')) return; // already added
     const lang = /(?:^|\s)language-(\S+)/.exec(pre.querySelector('code')?.className || '')?.[1];
-    if (lang) {
+    // highlight.js marks a block it couldn't place `language-undefined`.
+    if (lang && lang !== 'undefined') {
       const label = document.createElement('span');
       label.className = 'lv-code-lang';
       label.textContent = lang;

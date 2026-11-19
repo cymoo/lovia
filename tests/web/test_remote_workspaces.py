@@ -329,10 +329,6 @@ def test_raw_refuses_a_remote_file_over_the_read_limit(places) -> None:
             c.portal.call(far.aclose)
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
-    reason="needs a directory the account cannot write to",
-)
 def _send_upload(c: TestClient, sid: str, name: str, data: bytes):
     """Upload ``name`` into the chat's folder, then send it."""
     up = c.post(f"/api/sessions/{sid}/attachments", files={"file": (name, data)})
@@ -350,6 +346,10 @@ def _send_upload(c: TestClient, sid: str, name: str, data: bytes):
     )
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+    reason="needs a directory the account cannot write to",
+)
 def test_a_write_the_host_refuses_is_not_a_missing_file(remote_chat) -> None:
     # The host's own "no" (here: no permission on uploads/) comes back as
     # what it is, with what the system said — not as 404 file_not_found.

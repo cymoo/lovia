@@ -30,6 +30,7 @@ from ..attachments import (
 )
 from ..errors import WebError
 from ..media import is_preview_image, preview_image_mime
+from ...workspace.workspace import WorkspaceSessionBinding
 from ..schemas import UploadedFile
 from ..workspaces import files_config
 from .deps import RouterDeps
@@ -72,12 +73,25 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
         to name.
         """
         meta = await deps.store.get(session_id)
-        if files_config(deps.pick(deps.agent_of(meta) if meta else agent)) is None:
+        picked = deps.pick(deps.agent_of(meta) if meta else agent)
+        if files_config(picked) is None:
             raise WebError(
                 404,
                 "feature_unavailable",
                 "this agent has no workspace to take attachments",
                 hint="attachments go to an agent with a workspace",
+            )
+        if isinstance(picked.workspace, WorkspaceSessionBinding):
+            # One session the caller opened serves every chat of the agent:
+            # a chat's folder can't be made readable (and never writable)
+            # there without opening it to every other chat as well.
+            raise WebError(
+                404,
+                "feature_unavailable",
+                "this agent's workspace session is the caller's own, shared by "
+                "every chat: it can't keep a chat's attachments read-only",
+                hint="give the agent its workspace config (a LocalWorkspace), "
+                "not a bound session: lovia web binds one session per chat",
             )
         folder = await folder_of(session_id)
         name = safe_upload_name(file.filename or "upload")

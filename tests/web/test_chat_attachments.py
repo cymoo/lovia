@@ -275,6 +275,50 @@ def test_upload_sanitizes_and_dedupes_names(tmp_path: Path) -> None:
     assert sorted(p.name for p in folder.iterdir()) == ["evil-1.txt", "evil.txt"]
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "x" * 119 + ".txt",  # the cut lands on the extension's dot
+        "x" * 118 + " .txt",  # ... or on a space
+        "x" * 200 + ".pdf",
+        "y" * 117 + ". .png",
+        "." * 130,
+        "con" + "z" * 200 + ".txt",
+        "a." + "b" * 150,  # an "extension" longer than half the cap
+        "报告" * 80 + ".xlsx",
+    ],
+)
+def test_every_saved_name_reads_back_as_itself(raw: str) -> None:
+    from lovia.web.attachments import _candidates, is_attachment_name
+
+    name = safe_upload_name(raw)
+    assert len(name) <= 120 and is_attachment_name(name), name
+    candidates = _candidates(name)
+    for candidate in [next(candidates) for _ in range(12)]:
+        assert len(candidate) <= 120 and is_attachment_name(candidate), candidate
+
+
+def test_a_long_name_keeps_its_extension() -> None:
+    name = safe_upload_name("x" * 200 + ".pdf")
+    assert name == "x" * 116 + ".pdf"
+
+
+def test_a_caller_owned_session_takes_no_upload(tmp_path: Path) -> None:
+    # One session the caller bound serves every chat of the agent: a chat's
+    # folder can't be made read-only there for that chat alone.
+    from lovia.workspace.workspace import WorkspaceSessionBinding
+
+    cfg = Workspace.local(str(tmp_path / "ws"))
+    (tmp_path / "ws").mkdir()
+    bound = WorkspaceSessionBinding(cfg, None)  # type: ignore[arg-type]
+    agent = Agent(name="bot", model=ScriptedProvider([text("ok")]), workspace=bound)
+    with _client(tmp_path, agent) as c:
+        r = _upload(c, _sid(), "a.txt")
+    detail = r.json()["detail"]
+    assert (r.status_code, detail["code"]) == (404, "feature_unavailable")
+    assert "bound session" in detail["hint"]
+
+
 def test_a_deduped_long_name_is_still_served_and_sent(tmp_path: Path) -> None:
     # The suffix must not push a 120-character name past the cap: such a
     # name would be saved, then refused by every read.

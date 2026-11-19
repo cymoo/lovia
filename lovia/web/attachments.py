@@ -113,11 +113,27 @@ def safe_upload_name(raw: str) -> str:
     is checked by :func:`is_attachment_name`.
     """
     base = Path(raw).name.strip()
-    base = re.sub(r"[^\w.\- ]+", "_", base).strip(". ")
-    base = (base or "upload")[:_MAX_NAME]
+    base = re.sub(r"[^\w.\- ]+", "_", base).strip(". ") or "upload"
     if base.split(".", 1)[0].rstrip().lower() in _WINDOWS_DEVICES:
-        base = f"_{base}"[:_MAX_NAME]
-    return base
+        base = f"_{base}"
+    return _fit(base)
+
+
+def _fit(name: str) -> str:
+    """``name`` cut to the cap: the stem gives way, the extension stays (a
+    "report.pdf" is still a PDF), and the cut never leaves an end the
+    cleaning above strips — or the name would not read back as itself."""
+    if len(name) <= _MAX_NAME:
+        return name
+    stem, suffix = _split(name)
+    return (stem[: _MAX_NAME - len(suffix)].rstrip(". ") or "upload") + suffix
+
+
+def _split(name: str) -> tuple[str, str]:
+    """``name``'s stem and extension, as a cut or a dedup suffix sees them:
+    an "extension" longer than half the cap is part of the name."""
+    stem, suffix = os.path.splitext(name)
+    return (name, "") if len(suffix) > _MAX_NAME // 2 else (stem, suffix)
 
 
 def is_attachment_name(name: str) -> bool:
@@ -133,7 +149,7 @@ def _candidates(name: str) -> Iterator[str]:
     :func:`is_attachment_name` accepts: one past the cap could be saved but
     never served or sent."""
     yield name
-    stem, suffix = Path(name).stem, Path(name).suffix
+    stem, suffix = _split(name)
     for i in itertools.count(1):
         tail = f"-{i}{suffix}"
         yield f"{stem[: max(0, _MAX_NAME - len(tail))]}{tail}"

@@ -25,6 +25,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ..schemas import ServerInfo, WorkspaceModesInfo
 from .agents import build_agents_router
+from .attachments import build_attachments_router
 from .chat import build_chat_router
 from .deps import RouterDeps
 from .events import build_events_router
@@ -117,6 +118,7 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
     router.include_router(build_chat_router(deps))
     router.include_router(build_events_router(deps))
     router.include_router(build_sessions_router(deps))
+    router.include_router(build_attachments_router(deps))
     router.include_router(build_schedules_router(deps))
     router.include_router(build_workspace_router(deps))
     router.include_router(build_workspaces_router(deps))

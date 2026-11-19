@@ -16,6 +16,7 @@ import {
   updateSessionTitle,
 } from './sessions.js';
 import { parseReport } from './subagent-report.js';
+import { splitAttachmentNote } from './attachment-note.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
 import { enterToSend, followupsEnabled, openSettings } from './settings.js';
@@ -3012,6 +3013,10 @@ async function applyEvent({ event, data }) {
     case 'session': {
       const known = store.sessions.some((s) => s.id === data.session_id);
       store.sessionId = data.session_id;
+      // The new chat took the draft's id (and its uploads): the tray on
+      // screen is this chat's now, and the next new chat mints its own.
+      if (data.session_id === _draftId) _draftId = null;
+      _trayKey = data.session_id;
       if (_shownRun) _shownRun.sessionId = data.session_id;
       store.syncURL(data.session_id);
       // A brand-new session gets a server-generated title shortly after the
@@ -3737,7 +3742,8 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
       {
         message,
         agent: store.agent,
-        session_id: store.sessionId,
+        // A new chat sends the id its uploads went under: the chat is made with it.
+        session_id: store.sessionId || _draftId,
         attachments: attachments?.length ? attachments : undefined,
         context: collectContext(),
         busy,
@@ -4154,25 +4160,85 @@ function pruneDrafts() {
 store.on('session-switched', () => {
   flushDraft();
   restoreDraft();
+  swapTray();
 });
 store.on('reset-chat-view', () => {
   flushDraft();
   restoreDraft();
+  swapTray();
 });
 store.on('session-deleted', (id) => {
   try {
     localStorage.removeItem(DRAFT_PREFIX + id);
   } catch { /* ignore */ }
   dropFollowups(id);
+  _trays.delete(id); // its uploads went with it
 });
 
 // ---- Attachments -------------------------------------------------------
-// The "+" button, paste, and drag-drop upload images/files to the agent's
-// workspace (POST /api/workspace/upload); they ride the next send as
-// ChatRequest.attachments. Gated on the agent having a workspace — the same
-// switch as the Files panel. Mid-run they ride a queued message (a run of its
-// own) or a steer (InjectRequest.attachments).
-let _pendingAttachments = []; // uploaded { path, name, mime, kind, size } (+ uploading?)
+// The "+" button, paste, and drag-drop upload images/files into the chat's
+// attachment folder (POST /api/sessions/{id}/attachments); they ride the next
+// send as ChatRequest.attachments, by name. A new chat uploads under an id
+// minted here, which its first send then creates the chat with. The Files
+// panel's "attach" adds a workspace file by path instead. Gated on the agent
+// having a workspace — the same switch as the Files panel. Mid-run they ride
+// a queued message (a run of its own) or a steer (InjectRequest.attachments).
+// Uploads { name, mime, kind, size, owner }, workspace files { path, root, … }
+// (+ uploading?).
+let _pendingAttachments = [];
+// The trays of the chats left with something in them, by chat id ('new' for
+// the new-chat draft): an upload can only go with its own chat's messages.
+const _trays = new Map();
+let _trayKey = 'new';
+// The id the new chat's uploads go under — the one its first send names.
+/** @type {string | null} */
+let _draftId = null;
+
+function mintChatId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16)); // randomUUID needs https
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** The chat an upload made now belongs to. */
+function attachOwner() {
+  if (store.sessionId) return store.sessionId;
+  _draftId ??= mintChatId();
+  return _draftId;
+}
+
+/**
+ * Where an attachment's bytes are served: an upload's from its chat's folder
+ * (a reloaded turn's: the chat on screen, whose forks share the folder), a
+ * workspace file's from the workspace.
+ * @param {{ path?: string, name?: string, owner?: string }} att
+ * @returns {string | null}
+ */
+function attachmentHref(att, download = false) {
+  if (att.path) return api.workspaceRawUrl({ agent: store.agent, path: att.path, download });
+  const owner = att.owner || store.sessionId;
+  return owner && att.name ? api.attachmentUrl(owner, att.name, { download }) : null;
+}
+
+/** The chat on screen changed: put its tray in the composer, keep the last one's. */
+function swapTray() {
+  const key = store.sessionId || 'new';
+  if (key === _trayKey) return;
+  if (_pendingAttachments.length) _trays.set(_trayKey, _pendingAttachments);
+  else _trays.delete(_trayKey);
+  _pendingAttachments = _trays.get(key) || [];
+  _trays.delete(key);
+  _trayKey = key;
+  renderAttachTray();
+  updateSendEnabled();
+}
+
+/** Take `chip` out of whichever tray holds it (an upload may end after a switch). */
+function forgetChip(chip) {
+  for (const tray of [_pendingAttachments, ..._trays.values()]) {
+    const i = tray.indexOf(chip);
+    if (i >= 0) tray.splice(i, 1);
+  }
+}
 
 function attachEnabled() {
   return !!store.agents.find((a) => a.name === store.agent)?.workspace;
@@ -4192,12 +4258,16 @@ function pastedTextFile(text) {
 }
 
 function pendingReady() {
-  return _pendingAttachments.filter((a) => !a.uploading && a.path);
+  return _pendingAttachments.filter((a) => !a.uploading && (a.path || a.owner));
 }
 
-/** What ChatRequest.attachments carries for the tray's chips. */
+/** What ChatRequest.attachments carries for the tray's chips: an upload by name. */
 function attachmentPayload(/** @type {any[]} */ attachments) {
-  return attachments.map((a) => ({ path: a.path, mime: a.mime, kind: a.kind, name: a.name }));
+  return attachments.map((a) =>
+    a.path
+      ? { path: a.path, mime: a.mime, kind: a.kind, name: a.name }
+      : { name: a.name, mime: a.mime, kind: a.kind },
+  );
 }
 
 // An upload still in flight holds Send: sending without it would drop it.
@@ -4263,8 +4333,9 @@ function syncAttachButton() {
 }
 
 function renderAttachTray() {
-  // A draft's files live in its directory: the workspace chip locks on them.
-  store.emit('draft-attachments', _pendingAttachments.length);
+  // A workspace file attached from the panel lives in the draft's directory:
+  // the workspace chip locks on it. Uploads live with the chat, anywhere.
+  store.emit('draft-attachments', _pendingAttachments.filter((a) => a.path).length);
   const tray = document.getElementById('attach-tray');
   if (!tray) return;
   tray.replaceChildren();
@@ -4285,18 +4356,23 @@ function renderAttachTray() {
 }
 
 /**
- * Open an uploaded attachment where it reads best: an image in the lightbox,
- * any other file in the Files panel.
- * @param {{ path?: string, name?: string }} att
+ * Open an attachment where it reads best: an image in the lightbox, a
+ * workspace file in the Files panel, any other upload in a tab of its own (a
+ * PDF shown, the rest downloaded).
+ * @param {{ path?: string, name?: string, owner?: string }} att
  * @param {boolean} image
  */
 function previewAttachment(att, image) {
-  if (!att.path) return;
-  if (!image) return store.emit('open-workspace-file', { path: att.path });
-  openImageLightbox(api.workspaceRawUrl({ agent: store.agent, path: att.path }), {
-    alt: att.name || '',
-    downloadHref: api.workspaceRawUrl({ agent: store.agent, path: att.path, download: true }),
-  });
+  const href = attachmentHref(att);
+  if (!href) return;
+  if (image) {
+    openImageLightbox(href, { alt: att.name || '', downloadHref: attachmentHref(att, true) });
+  } else if (att.path) {
+    store.emit('open-workspace-file', { path: att.path });
+  } else {
+    const pdf = /\.pdf$/i.test(att.name || '');
+    window.open(pdf ? href : attachmentHref(att, true), '_blank', 'noopener');
+  }
 }
 
 // A file card's insides — icon, name, "EXT · size" — shared by the composer
@@ -4324,7 +4400,8 @@ function fileCardParts(att) {
 // targets as the sent message's attachments. Remove floats on the corner.
 function makeAttachChip(att, onRemove) {
   const label = att.name || att.path || '';
-  let image = att.kind === 'image' && !!att.path;
+  const href = att.uploading ? null : attachmentHref(att);
+  let image = att.kind === 'image' && !!href;
   const chip = document.createElement('div');
   chip.className =
     'lv-attach-chip' + (image ? ' lv-attach-image' : '') + (att.uploading ? ' lv-uploading' : '');
@@ -4332,12 +4409,12 @@ function makeAttachChip(att, onRemove) {
   const open = document.createElement('button');
   open.type = 'button';
   open.className = 'lv-attach-open';
-  open.disabled = !att.path;
+  open.disabled = !href;
   open.setAttribute('aria-label', t('composer.openAttachment', { name: label }));
-  if (image) {
+  if (image && href) {
     const img = document.createElement('img');
     img.className = 'lv-attach-thumb';
-    img.src = api.workspaceRawUrl({ agent: store.agent, path: att.path });
+    img.src = href;
     img.alt = '';
     // A format the browser can't draw (HEIC, …) falls back to the file card.
     img.addEventListener('error', () => {
@@ -4371,19 +4448,18 @@ async function uploadFiles(files) {
       uploading: true,
       name: file.name,
       kind: file.type?.startsWith('image/') ? 'image' : 'file',
-      // The folder it is saved in: it can only go with a message there.
-      root: scopeRoot(),
+      // The chat it is saved with: it can only go with a message there.
+      owner: attachOwner(),
     };
     _pendingAttachments.push(chip);
     renderAttachTray();
     updateSendEnabled(); // Send waits for it
     try {
-      Object.assign(chip, await api.uploadFile(file, { agent: store.agent }), {
+      Object.assign(chip, await api.uploadAttachment(chip.owner, file), {
         uploading: false,
       });
     } catch (err) {
-      const i = _pendingAttachments.indexOf(chip);
-      if (i >= 0) _pendingAttachments.splice(i, 1);
+      forgetChip(chip);
       toast(uploadFailedText(file.name, err), { type: 'error' });
     }
     renderAttachTray();
@@ -4409,9 +4485,7 @@ function makeAttachmentsBlock(attachments) {
 }
 
 function makeAttachmentView(att) {
-  const url = att.path
-    ? api.workspaceRawUrl({ agent: store.agent, path: att.path })
-    : att.src || null;
+  const url = attachmentHref(att) || att.src || null;
   if (att.kind === 'image' && url) {
     // Click opens the image in an in-app lightbox rather than a new tab. The
     // href stays set so cmd/ctrl-click can still open the raw image, and so it
@@ -4424,9 +4498,7 @@ function makeAttachmentView(att) {
     a.addEventListener('click', (e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
       e.preventDefault();
-      const downloadHref = att.path
-        ? api.workspaceRawUrl({ agent: store.agent, path: att.path, download: true })
-        : url;
+      const downloadHref = attachmentHref(att, true) || url;
       openImageLightbox(url, { alt: att.name || '', downloadHref });
     });
     const img = document.createElement('img');
@@ -4437,7 +4509,8 @@ function makeAttachmentView(att) {
     return a;
   }
   // A workspace file opens in the Files panel (rendered in-app: text, md, csv,
-  // code, or a download for binaries) instead of forcing a browser download.
+  // code, or a download for binaries) instead of forcing a browser download;
+  // an upload, which lives with the chat, opens in a tab (a PDF) or downloads.
   const a = document.createElement('a');
   a.className = 'lv-msg-attach-file';
   if (att.path) {
@@ -4447,41 +4520,18 @@ function makeAttachmentView(att) {
       e.preventDefault();
       store.emit('open-workspace-file', { path: att.path });
     });
+  } else {
+    const pdf = /\.pdf$/i.test(att.name || '');
+    const href = attachmentHref(att, !pdf);
+    if (href) {
+      a.href = href;
+      a.target = '_blank';
+      a.rel = 'noopener';
+    }
   }
   a.title = att.name || att.path || '';
   a.append(...fileCardParts(att));
   return a;
-}
-
-// A turn's attachments survive in stored history only as the note the server
-// appends to the user text (mirrors `_attachment_note` in
-// lovia/web/attachments.py — keep in sync). Split that text back into the
-// visible message and renderable attachment views (image vs file inferred from
-// the extension, like the Files panel), so a reloaded turn shows previews
-// instead of the raw "[Attached in the workspace: …]" line. Works whether the
-// image round-tripped inline (vision) or the turn flattened to text.
-const ATTACHMENT_NOTE_RE =
-  /\n*\[Attached in the workspace: (.+?)\. Read with your file tools when relevant\.\]\s*$/;
-
-function splitAttachmentNote(text) {
-  if (typeof text !== 'string') return { text: '', attachments: [] };
-  // A task's report carries no uploads; a note-shaped tail is its own text.
-  if (parseReport(text)) return { text, attachments: [] };
-  const m = text.match(ATTACHMENT_NOTE_RE);
-  if (!m) return { text, attachments: [] };
-  // ", " is an unambiguous separator here: composer uploads are sanitized
-  // server-side (_safe_upload_name replaces commas with "_"), so a stored name
-  // can hold a space but never a comma.
-  const attachments = m[1]
-    .split(', ')
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((path) => ({
-      path,
-      kind: isImagePath(path) ? 'image' : 'file',
-      name: path.split('/').pop() || path,
-    }));
-  return { text: text.slice(0, m.index).trimEnd(), attachments };
 }
 
 /** Wire up the composer: submit, Enter-to-send behavior, attachments, and drag-and-drop. */

@@ -421,12 +421,23 @@ assistant = Agent(
 
 ## Images and files
 
-Attachments are stored under the Workspace's `uploads/` directory, while the
-message records a relative path. The Agent can therefore open a file through
-Workspace Tools even when the model cannot consume it directly.
-`--no-workspace` disables this path as well.
+An attachment belongs to its chat, not to the project: it is saved in the
+chat's own folder beside the chat history — `attachments/<id>/` next to the
+database, so `~/.lovia/attachments/` for `lovia web` — and never in the
+Workspace, so a Git repository stays clean. The message names each file by its
+absolute path, which the chat's runs may read but never write, in any
+permission mode; the Agent therefore opens a file with Workspace Tools even
+when the model cannot consume it directly, and copies one into the Workspace
+when you ask it to. A chat working on a remote host gets a copy in that
+directory's `uploads/` instead (until hosts keep attachments apart too).
+`--no-workspace` disables attachments as well.
 
-A Markdown image whose path is workspace-relative — `![chart](uploads/chart.png)`
+Forks and a chat's tasks share its folder, so a fork still shows the
+attachments its history mentions after the source is deleted. The folder goes
+when the last chat using it is deleted; a draft's uploads that were never sent
+are removed after a day.
+
+A Markdown image whose path is workspace-relative — `![chart](charts/q3.png)`
 — displays the Workspace file itself, in a reply and in the Files panel's
 Markdown preview alike. Paths resolve against the document's own directory and
 then the Workspace root, and are served read-only through the same endpoint as
@@ -475,7 +486,7 @@ must match the built-in allowlist; override it with
 `LOVIA_UPLOAD_ALLOWED_EXT`, separated by commas or spaces, or use `*` for any.
 
 The Files panel opens on **Changes**: the files this chat wrote, plus the
-ones attached to its messages or uploaded from the panel, newest first. In a
+Workspace files attached to its messages, newest first. In a
 git work tree a folded second group lists the other uncommitted changes
 `git status` sees under the folder, and each row carries its line counts
 (`+12 −3`) or a *new* mark. A changed tracked file opens on its diff against
@@ -491,13 +502,15 @@ move through it. An open file's "⋯" menu shows it in the tree. A folder too
 large for the workspace's listing cap (`max_list_results`) lists that many
 entries and says so.
 
-A file uploaded from the Files panel is not automatically attached to the next
-message. The change list leaves out the agent's scratch dir `tmp/`, and the
-"new files" badge counts only writes the list would show; that is
-presentation only — browsing shows every directory, and any path the agent
-references (an inline image under `tmp/`, a tool card's *open in Files*)
-opens as long as the agent itself could read it. Deleting a chat does not
-remove files under `uploads/`; the application or user must clean them up.
+The panel is read-only: it has no upload. To put a file in the project, copy it
+into the folder yourself, or attach it and ask the Agent to save it. The change
+list leaves out the agent's scratch dir `tmp/`, and the "new files" badge
+counts only writes the list would show; that is presentation only — browsing
+shows every directory, and any path the agent references (an inline image
+under `tmp/`, a tool card's *open in Files*) opens as long as the agent itself
+could read it. Chats from before 0.9.239 kept their attachments in the
+Workspace's `uploads/`; those messages still show them, and nothing moves or
+deletes that directory.
 
 Background processes belong to the chat rather than one Run. Finishing a Run
 does not stop them; deleting the chat or stopping the Web server reaps them,
@@ -646,9 +659,9 @@ shows *its* folders. Chats in that folder run there: the agent's file and
 shell tools work on the host, under the chat's permission mode, and the
 sidebar marks the folder with a server icon. The host needs `python3` 3.10
 or newer and nothing installed, and SSH must work without a password prompt
-(keys or an agent). The Files panel shows the host's folder, and uploads
-and attachments are saved there (under `uploads/`, as in a local one); a
-large file takes as long as the link to the host does. The agent reads the
+(keys or an agent). The Files panel shows the host's folder, and a sent
+attachment is copied there, under the folder's `uploads/`; a large file takes
+as long as the link to the host does. The agent reads the
 folder's [`AGENTS.md` files](#project-instructions) on the host, by the same
 rules, once per run. The folder's own skills are
 not loaded yet: only the global skill directories apply. If the

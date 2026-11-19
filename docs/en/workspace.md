@@ -461,9 +461,10 @@ and the policy is judged on the host: a `command_decider` (use
 the result when `inspect.isawaitable` says so.
 
 `lovia web` keeps a remote workspace's session for the whole chat, like a
-local one, and lists its background processes. The Files panel, uploads and
-attachments work there too: the page reads and writes the host's files
-through a read-only session of its own on the same connection.
+local one, and lists its background processes. The Files panel and
+attachments work there too: the page reads the host's files — and copies a
+sent attachment into the root's `uploads/` — through a read-only session of
+its own on the same connection.
 
 ## Sharp edges
 

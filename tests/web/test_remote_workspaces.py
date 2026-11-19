@@ -333,6 +333,23 @@ def test_raw_refuses_a_remote_file_over_the_read_limit(places) -> None:
     sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
     reason="needs a directory the account cannot write to",
 )
+def _send_upload(c: TestClient, sid: str, name: str, data: bytes):
+    """Upload ``name`` into the chat's folder, then send it."""
+    up = c.post(f"/api/sessions/{sid}/attachments", files={"file": (name, data)})
+    assert up.status_code == 200, up.text
+    att = up.json()
+    return c.post(
+        "/api/chat",
+        json={
+            "message": "look",
+            "session_id": sid,
+            "attachments": [
+                {"name": att["name"], "mime": att["mime"], "kind": att["kind"]}
+            ],
+        },
+    )
+
+
 def test_a_write_the_host_refuses_is_not_a_missing_file(remote_chat) -> None:
     # The host's own "no" (here: no permission on uploads/) comes back as
     # what it is, with what the system said — not as 404 file_not_found.
@@ -340,11 +357,7 @@ def test_a_write_the_host_refuses_is_not_a_missing_file(remote_chat) -> None:
     (there / "uploads").mkdir()
     (there / "uploads").chmod(0o555)
     try:
-        res = c.post(
-            "/api/workspace/upload",
-            params={"session": sid},
-            files={"file": ("a.txt", b"data")},
-        )
+        res = _send_upload(c, sid, "a.txt", b"data")
     finally:
         (there / "uploads").chmod(0o755)
     detail = res.json()["detail"]
@@ -352,34 +365,24 @@ def test_a_write_the_host_refuses_is_not_a_missing_file(remote_chat) -> None:
     assert "Permission denied" in detail["message"]
 
 
-def test_an_upload_lands_in_the_remote_chats_directory(remote_chat) -> None:
+def test_a_remote_chats_attachments_are_copied_onto_its_host(remote_chat) -> None:
+    # Until hosts keep attachments outside the workspace (step 2), a sent
+    # upload is copied into the chat directory's uploads/ there.
     c, sid, there = remote_chat
-    # The chat is read-only; an upload is the user's own act and still lands.
+    # The chat is read-only; an attachment is the user's own act and lands.
     assert c.patch(
         f"/api/sessions/{sid}", json={"workspace_mode": "readonly"}
     ).is_success
-    at = {"session": sid}
-
-    def upload(name: str, data: bytes):
-        return c.post("/api/workspace/upload", params=at, files={"file": (name, data)})
-
-    first = upload("cat.png", _PNG)
-    assert first.status_code == 200, first.text
-    assert first.json() == {
-        "path": "uploads/cat.png",
-        "name": "cat.png",
-        "mime": "image/png",
-        "kind": "image",
-        "size": len(_PNG),
-    }
+    assert _send_upload(c, sid, "cat.png", _PNG).status_code == 200
     assert (there / "uploads" / "cat.png").read_bytes() == _PNG
+    note = c.app.state.deps.agents["bot"].model.calls[-1][-1].content[-1].text
+    assert note.endswith(
+        "[Attached:\nuploads/cat.png\nRead with your file tools when relevant.]"
+    )
     # A second one of the same name is kept beside it, not over it.
-    assert upload("cat.png", b"other").json()["path"] == "uploads/cat-1.png"
+    assert _send_upload(c, sid, "cat.png", b"other").status_code == 200
     assert (there / "uploads" / "cat.png").read_bytes() == _PNG
     assert (there / "uploads" / "cat-1.png").read_bytes() == b"other"
-    # It is there for the panel at once.
-    shown = c.get("/api/workspace/raw", params={**at, "path": "uploads/cat.png"})
-    assert shown.content == _PNG
 
 
 def test_attachments_reach_a_remote_chat(remote_chat) -> None:
@@ -408,7 +411,7 @@ def test_attachments_reach_a_remote_chat(remote_chat) -> None:
     note = sent.content[-1].text
     # What is there is named; what is missing or outside the root is dropped.
     assert note.endswith(
-        "[Attached in the workspace: uploads/cat.png, uploads/notes.txt. "
+        "[Attached:\nuploads/cat.png\nuploads/notes.txt\n"
         "Read with your file tools when relevant.]"
     )
 
@@ -429,13 +432,12 @@ async def test_every_way_in_reads_attachments_where_the_chat_works(places) -> No
     try:
         for workspace in (remote, WorkspaceSessionBinding(remote, None)):  # type: ignore[arg-type]
             agent = Agent(name="bot", model=None, workspace=workspace)
-            content = await user_content("see", [attachment], agent)
+            content = await user_content("see", [attachment], agent, None)
             assert [p.text for p in content] == [  # type: ignore[union-attr]
                 "see",
-                "\n\n[Attached in the workspace: a.txt. "
-                "Read with your file tools when relevant.]",
+                "\n\n[Attached:\na.txt\nRead with your file tools when relevant.]",
             ]
-            assert await user_content("just text", None, agent) == "just text"
+            assert await user_content("just text", None, agent, None) == "just text"
     finally:
         await far.aclose()
 
@@ -452,27 +454,30 @@ def test_a_host_that_cannot_be_reached_is_said_so_not_dropped(places) -> None:
             502,
             "workspace_unreachable",
         )
+        # An upload waits with the chat, here: the host is not asked yet.
+        draft = "ab" * 16
         up = c.post(
-            "/api/workspace/upload",
-            params={"root": key},
-            files={"file": ("a.txt", b"a")},
+            f"/api/sessions/{draft}/attachments", files={"file": ("a.txt", b"a")}
         )
-        assert up.status_code == 502
+        assert up.status_code == 200, up.text
         # A message is not sent without what it was shown.
-        sent = c.post(
-            "/api/chat",
-            json={
-                "message": "look",
-                "workspace": key,
-                "attachments": [
-                    {"path": "a.png", "mime": "image/png", "kind": "image"}
-                ],
-            },
-        )
-        assert (sent.status_code, sent.json()["detail"]["code"]) == (
-            502,
-            "workspace_unreachable",
-        )
+        for att in (
+            {"path": "a.png", "mime": "image/png", "kind": "image"},
+            {"name": "a.txt", "mime": "text/plain", "kind": "file"},
+        ):
+            sent = c.post(
+                "/api/chat",
+                json={
+                    "message": "look",
+                    "session_id": draft,
+                    "workspace": key,
+                    "attachments": [att],
+                },
+            )
+            assert (sent.status_code, sent.json()["detail"]["code"]) == (
+                502,
+                "workspace_unreachable",
+            )
         assert c.get("/api/sessions").json() == []
 
 
@@ -491,9 +496,13 @@ def test_an_agent_whose_own_workspace_is_remote_has_a_files_panel(places) -> Non
             assert c.get("/api/agents").json()[0]["workspace"] is True
             listed = c.get("/api/workspace/files").json()["files"]
             assert [e["path"] for e in listed] == ["a.txt"]
-            up = c.post("/api/workspace/upload", files={"file": ("b.txt", b"b")})
-            assert up.json()["path"] == "uploads/b.txt"
-            assert (there / "uploads" / "b.txt").read_bytes() == b"b"
+            # An upload is the chat's: it waits on this side, not the host's.
+            draft = "cd" * 16
+            up = c.post(
+                f"/api/sessions/{draft}/attachments", files={"file": ("b.txt", b"b")}
+            )
+            assert up.json()["name"] == "b.txt"
+            assert not (there / "uploads").exists()
         finally:
             c.portal.call(far.aclose)
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -209,31 +210,36 @@ def test_the_general_directory_is_created_on_first_use(
 
 
 def test_attachments_resolve_in_the_draft_directory(dirs: tuple[Path, Path]) -> None:
+    # A workspace file attached from the Files panel is looked up in the
+    # directory the draft picked; an upload lands in neither directory.
     launch, other = dirs
+    (other / "notes.txt").write_text("hello")
     provider = ScriptedProvider([text("seen")])
     agent = Agent(name="bot", model=provider, workspace=Workspace.local(str(launch)))
+    sid = uuid.uuid4().hex
     with _client(agent, WorkspaceSwitch()) as c:
         up = c.post(
-            "/api/workspace/upload",
-            params={"root": str(other)},
-            files={"file": ("notes.txt", b"hello", "text/plain")},
+            f"/api/sessions/{sid}/attachments",
+            files={"file": ("pasted.txt", b"hi", "text/plain")},
         )
         assert up.status_code == 200, up.text
-        att = up.json()
-        assert (other / att["path"]).is_file()
         res = c.post(
             "/api/chat",
             json={
                 "message": "read it",
+                "session_id": sid,
                 "workspace": str(other),
                 "attachments": [
-                    {"path": att["path"], "mime": att["mime"], "kind": att["kind"]}
+                    {"path": "notes.txt", "mime": "text/plain", "kind": "file"},
+                    {"name": "pasted.txt", "mime": "text/plain", "kind": "file"},
                 ],
             },
         )
         assert res.status_code == 200, res.text
-    sent = str(provider.calls[0][-1].content)
-    assert att["path"] in sent  # kept: it exists in the chat's directory
+    sent = provider.calls[0][-1].content[-1].text
+    assert "\nnotes.txt\n" in sent  # kept: it exists in the chat's directory
+    assert f"{sid}/pasted.txt" in sent.replace("\\", "/")
+    assert not (other / "uploads").exists() and not (launch / "uploads").exists()
 
 
 def test_files_panel_reads_the_chat_directory(dirs: tuple[Path, Path]) -> None:

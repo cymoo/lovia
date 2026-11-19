@@ -643,10 +643,10 @@ async def test_start_session_cancelled_mid_start_leaves_no_chat() -> None:
     workspaces = app.state.deps.workspaces
     bind, closed = workspaces.bind, []
 
-    async def slow_bind(sid, agent):
+    async def slow_bind(sid, agent, attachments=None):
         if sid != "s1":  # the new chat's start hangs past the timeout
             await asyncio.sleep(10)
-        return await bind(sid, agent)
+        return await bind(sid, agent, attachments)
 
     async def close(sid):
         closed.append(sid)

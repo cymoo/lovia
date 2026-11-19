@@ -32,6 +32,7 @@ from ..exceptions import UserError
 from ..workspace import (
     CommandRule,
     LocalWorkspace,
+    PathRule,
     RemoteHost,
     RemoteWorkspace,
     Workspace,
@@ -71,6 +72,33 @@ def files_config(agent: Agent[Any]) -> LocalWorkspace | RemoteWorkspace | None:
     return cfg if isinstance(cfg, (LocalWorkspace, RemoteWorkspace)) else None
 
 
+def attachment_policy(policy: WorkspacePolicy, folder: Path) -> WorkspacePolicy:
+    """``policy`` with the chat's attachment ``folder`` readable, never
+    writable.
+
+    The read allow goes first in ``path_rules`` (first match wins there). The
+    write deny goes in the baseline: a read allow alone leaves writes to the
+    defaults — ``write_outside``, which ``trusted`` allows — while every
+    baseline rule that matches counts, so no preset or ``path_rules`` entry
+    can undo it. ``denied_paths`` still come first. Idempotent.
+    """
+    where = folder.resolve().as_posix()
+    read = PathRule(where, "allow", ops=frozenset({"read"}))
+    if read in policy.path_rules:
+        return policy
+    write = PathRule(
+        where,
+        "deny",
+        ops=frozenset({"write"}),
+        reason="Attachments are read-only; copy one into the workspace to change it.",
+    )
+    return replace(
+        policy,
+        path_rules=(read, *policy.path_rules),
+        baseline=(*(policy.baseline or ()), write),
+    )
+
+
 # The git reads behind the Files panel's change list and diff. The page
 # never sends a command — the server builds each one — so these prefixes
 # only bound what that code can run on an otherwise shell-less view.
@@ -95,8 +123,9 @@ async def open_view(
     and under this preset everything outside the root — and everything the
     agent's ``denied_paths`` hide — is a plain ``deny``. Only ``denied_paths``
     carry over from the agent's policy, never its ``path_rules``, which
-    could *widen* access. ``write`` lets it write inside the root, for an
-    upload: the user's own act, so it does not wait on the chat's mode.
+    could *widen* access. ``write`` lets it write inside the root, to copy
+    a remote chat's attachments onto its host: the user's own act, so it
+    does not wait on the chat's mode.
     ``git`` lets it run ``git rev-parse`` / ``status`` / ``diff`` and
     nothing else, with the path guard still judging every argument.
 
@@ -443,11 +472,16 @@ class WorkspaceSessions:
     _live: dict[str, tuple[WorkspaceLike, WorkspaceSession]] = field(
         default_factory=dict
     )
+    # Each chat's attachment folder, which every config of its session is
+    # judged with (:func:`attachment_policy`) — a mode switch's too.
+    _folders: dict[str, Path] = field(default_factory=dict)
     # Serializes opens so two concurrent runs of one chat share a session
     # instead of racing two into existence (the loser would leak unclosed).
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    async def bind(self, session_id: str, agent: Agent[Any]) -> Agent[Any]:
+    async def bind(
+        self, session_id: str, agent: Agent[Any], attachments: Path | None = None
+    ) -> Agent[Any]:
         """Return ``agent`` with its workspace bound to the chat's session.
 
         Any backend whose sessions the runner would open and close per run
@@ -455,10 +489,17 @@ class WorkspaceSessions:
         ``WorkspaceLike`` alike. No workspace passes through untouched, and
         so does an agent the caller already bound to a session of its own:
         that lifetime is not this registry's to manage.
+
+        ``attachments`` is the chat's attachment folder: a local workspace's
+        policy reads it and never writes it. A remote one's files are on
+        another machine, and a custom backend has no policy to extend.
         """
+        if attachments is not None:
+            self._folders[session_id] = attachments
         cfg = agent.workspace
         if cfg is None or not cfg.close_after_run:
             return agent
+        cfg = self._guarded(session_id, cfg)
         async with self._lock:
             held = self._live.get(session_id)
             if held is not None and getattr(held[1], "closed", False):
@@ -483,7 +524,16 @@ class WorkspaceSessions:
         holds ``cfg``; False (nothing changed) when there is no session or
         ``cfg`` differs in more than its policy. Never closes the session:
         a run is using it."""
-        return session_id in self._live and self._retune(session_id, cfg)
+        return session_id in self._live and self._retune(
+            session_id, self._guarded(session_id, cfg)
+        )
+
+    def _guarded(self, session_id: str, cfg: WorkspaceLike) -> WorkspaceLike:
+        """``cfg`` with the chat's attachment folder in its policy."""
+        folder = self._folders.get(session_id)
+        if folder is None or not isinstance(cfg, LocalWorkspace):
+            return cfg
+        return replace(cfg, policy=attachment_policy(cfg.policy, folder))
 
     def _retune(self, session_id: str, cfg: WorkspaceLike) -> bool:
         session_cfg, session = self._live[session_id]
@@ -510,6 +560,7 @@ class WorkspaceSessions:
         """
         async with self._lock:
             held = self._live.pop(session_id, None)
+            self._folders.pop(session_id, None)
         if held is not None:
             await _close_quietly(session_id, held[1])
 

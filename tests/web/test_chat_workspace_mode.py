@@ -500,11 +500,11 @@ async def test_a_start_that_loses_a_race_never_touches_the_winners_policy(
             session_id="s", agent=agent, input="go", is_new=False, title_message=None
         )
 
-    async def bind(session_id: str, agent_: Agent) -> Agent:
+    async def bind(session_id: str, agent_: Agent, attachments=None) -> Agent:
         nonlocal calls, second
         calls += 1
         mine = calls
-        bound = await real_bind(session_id, agent_)
+        bound = await real_bind(session_id, agent_, attachments)
         if mine == 1:
             await store.set_workspace_mode("s", "readonly")
             second = asyncio.create_task(start())

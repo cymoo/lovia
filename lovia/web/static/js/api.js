@@ -438,18 +438,27 @@ export const api = {
       { method: 'POST' },
     ).then(_json),
 
-  // Upload a file into the workspace `uploads/` dir → { path, name, mime, kind,
-  // size }. Multipart; the browser sets the boundary, so we send no headers.
-  /** @param {File} file @param {{ agent?: string, signal?: AbortSignal }} [opts] */
-  uploadFile: (file, { agent, signal } = {}) => {
+  // Upload a file into a chat's attachment folder → { name, mime, kind, size }.
+  // `sessionId` may be a draft's, not created yet: the send that names it
+  // creates the chat. Multipart; the browser sets the boundary, so no headers.
+  /** @param {string} sessionId @param {File} file @param {{ signal?: AbortSignal }} [opts] */
+  uploadAttachment: (sessionId, file, { signal } = {}) => {
     const form = new FormData();
     form.append('file', file);
-    return request(`/api/workspace/upload${qs({ agent, ..._scope() })}`, {
+    return request(`/api/sessions/${encodeURIComponent(sessionId)}/attachments`, {
       method: 'POST',
       body: form,
       signal,
     }).then(_json);
   },
+  // One attachment's bytes, by the name its upload returned (a fork's reach
+  // its source's: they share the folder).
+  /** @param {string} sessionId @param {string} name @param {{ download?: boolean }} [opts] */
+  attachmentUrl: (sessionId, name, { download = false } = {}) =>
+    url(
+      `/api/sessions/${encodeURIComponent(sessionId)}/attachments/` +
+        `${encodeURIComponent(name)}${qs({ download: download ? 1 : '' })}`,
+    ),
 
   // ---- configuration (Settings → Models/Web search/Skills/Agents; the CLI's) ----
   // Only served when /api/info reports features.settings. API keys never

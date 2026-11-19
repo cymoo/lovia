@@ -145,6 +145,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `workspace_not_found` | 404 | 工作区列表里没有这一项（固定的几项不能移除） |
 | `workspace_unreachable` | 502 | 连不上远程位置所在的主机，无法确认目录或读写其中的文件（`hint` 里是它的报错） |
 | `workspace_io_error` | 500 | 工作区所在的系统没能完成读写，比如磁盘已满；`message` 是系统的报错。操作系统权限不足则是 403 `path_denied` |
+| `attachment_io_error` | 500 | 上传的文件没能存进对话的附件目录，比如磁盘已满；`message` 是系统的报错 |
 | `file_too_large` | 413 | 超过工作区读取或上传上限 |
 | `unsupported_file_type` | 415 | 不支持内联预览，或扩展名不允许上传 |
 | `too_many_runs` | 429 | 已达到并发 Run 上限 |
@@ -183,7 +184,8 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/workspace/paths` | 目录下的所有文件 → `{paths, truncated}`：相对根目录、已排序，就是输入框 `@` 菜单的列表。经文件面板的只读视图调用 Agent 自己的 `list_files('.', pattern='**/*')`——在 Git 工作区里遵守忽略规则，不含点开头的文件、`denied_paths` 屏蔽的文件和目录；远程对话在远端主机上执行。上限 20000 条（目录也计入），被截掉时 `truncated` 为真。`?session=` / `?root=` 同文件面板 |
 | `POST /api/workspace/changes` | `{paths}`（最多 500 个，按对话里工具调用的写法）→ `{git, truncated, files: [{path, is_dir, touched, status, old_path, added, removed, size, mtime}]}`：仍然存在的路径按修改时间倒序（`touched: true`）；目录在 git 仓库里时，后面是 `git status` 在该目录下看到的其余未提交改动，最多 200 项（`truncated` 表示还有更多）。`status` 取 `modified`、`added`、`untracked`、`deleted`、`renamed` 或 `null`；`added` / `removed` 是相对 `HEAD` 的行数。`?session=` / `?root=` 同文件面板 |
 | `GET /api/workspace/diff?path=&old=` | `{path, diff, binary, truncated}`：该文件相对 `HEAD` 的 unified diff（`old` 是重命名前的路径，这样移动按一次改名比较），按工作区的 shell 输出上限截断。不在 git 仓库里或仓库还没有提交时返回 404 `feature_unavailable` |
-| `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束；`?session=` / `?root=` 同文件面板 |
+| `POST /api/sessions/{id}/attachments` | multipart 的 `file` → `{name, mime, kind, size}`：把一个附件存进对话的附件目录（和聊天记录放在一起，不在工作区里）；受扩展名白名单和大小上限约束，重名时换一个 `name`，消息再以 `attachments: [{name, mime, kind}]` 引用它。`{id}` 可以是还不存在的对话——草稿的 id，第一次发送时用它新建对话——必须是 32 位小写十六进制（否则 422）。不需要工作区 |
+| `GET /api/sessions/{id}/attachments/{name}?download=` | 按 `name` 取一个附件：图片和 PDF 内联显示，`download=1` 时任何文件都作为下载（同 `/api/workspace/raw`）。fork 和子任务读的是源对话的（共用同一个目录）；对话删除后返回 404 |
 | `GET /api/sessions/{id}/processes` | 对话的[后台进程](workspace.md#后台进程) → `[{process_id, command, status, exit_code}]`，`status` 为 `running` / `exited` / `killed`。列出时不读取输出，不影响模型自己的读取。对话没有活动的工作区会话时返回 `[]`（还没运行过，或服务器重启过：后台进程不会跨重启保留） |
 | `POST /api/sessions/{id}/processes/{process_id}/kill` | 结束一个后台进程 → 刷新后的列表；模型下一次的状态提醒会显示它已被结束。进程不存在或没有活动会话时返回 404 `process_not_found` |
 | `GET /api/workspaces` | 启用 `create_app(workspaces=)` 时：新对话可选的目录，`{workspaces: [{id, root, name, kind, last_used_at}], default, can_add, roots}`。`kind` 为 `"default"`（Agent 自己的目录，新标签页从这里开始）、`"general"`（通用工作区）或 `"added"`；前两种没有 `id`，始终在列表里。`can_add` 表示能否添加其他目录；只允许部分目录时，`roots` 列出允许的目录树 |
@@ -244,8 +246,7 @@ API 路由抛出的错误都使用同一种响应体：
 - 同一 Session 中已有 Run 正在执行时，再次发起聊天流会连接到现有 Run，而不是另起 Run
   或报错。
 - Workspace 的浏览和读取路由始终以只读方式访问工作区，不受 Agent 自身模式影响，并沿用
-  Agent 的 `denied_paths`。`POST /api/workspace/upload` 是唯一的写入例外，只能在
-  `uploads/` 目录中新建文件，并会检查扩展名和大小。文件列表会过滤 `__pycache__`、
+  Agent 的 `denied_paths`；附件上传写入的是对话自己的附件目录，不是工作区。文件列表会过滤 `__pycache__`、
   `*.pyc`、`venv`、`node_modules` 等可重新生成的内容，也不会显示隐藏文件。
 
 ### 阻塞式 Turn

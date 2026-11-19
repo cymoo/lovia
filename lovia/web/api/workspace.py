@@ -30,7 +30,6 @@ import hashlib
 import inspect
 import mimetypes
 import os
-import re
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
@@ -39,7 +38,7 @@ from typing import Any
 from urllib.parse import quote
 
 try:
-    from fastapi import APIRouter, File, Query, Request, UploadFile
+    from fastapi import APIRouter, Query, Request
     from fastapi.responses import FileResponse, Response, StreamingResponse
     from starlette.background import BackgroundTask
 except ImportError as exc:  # pragma: no cover - depends on optional env
@@ -65,7 +64,6 @@ from ..media import is_preview_image, preview_image_mime
 from ..schemas import (
     ChangesRequest,
     ProcessInfo,
-    UploadedFile,
     WorkspaceChanges,
     WorkspaceDiff,
     WorkspaceEntry,
@@ -91,15 +89,14 @@ def _io_error(exc: OSError) -> WebError:
 
 @asynccontextmanager
 async def _view(
-    cfg: FilesConfig, *, write: bool = False, git: bool = False
+    cfg: FilesConfig, *, git: bool = False
 ) -> AsyncIterator[WorkspaceSession]:
     """A per-request :func:`~lovia.web.workspaces.open_view` session, with
-    what goes wrong in it said as an HTTP error.
-
-    Only an upload passes ``write``; only the change list and diff ``git``.
+    what goes wrong in it said as an HTTP error. Only the change list and
+    diff pass ``git``.
     """
     try:
-        session = await open_view(cfg, write=write, git=git)
+        session = await open_view(cfg, git=git)
     except UserError as exc:  # the root is gone (moved, deleted)
         raise WebError.from_exc(404, "file_not_found", exc) from exc
     except WorkspaceError as exc:  # no way through to the host
@@ -196,85 +193,71 @@ def _attachment(name: str) -> str:
     return f"attachment; filename*=utf-8''{quoted}"
 
 
-# Composer/Files-panel uploads land here, under the workspace root, so they
-# are immediately servable via /api/workspace/raw and visible in the panel.
-_UPLOADS_SUBDIR = "uploads"
-_DEFAULT_MAX_UPLOAD_MB = 25
-# Extensions accepted by default — images, documents, data, and text/code a
-# personal assistant routinely handles. Override with LOVIA_UPLOAD_ALLOWED_EXT
-# (comma/space separated, no dots); "*" accepts any type. Files with no
-# extension (READMEs, Makefiles, ...) are always allowed.
-_DEFAULT_ALLOWED_UPLOAD_EXT = frozenset(
-    "jpg jpeg png gif webp avif bmp ico svg heic heif tiff "
-    "pdf txt md markdown rst rtf csv tsv json jsonl ndjson yaml yml xml "
-    "toml ini cfg conf log "
-    "doc docx xls xlsx ppt pptx odt ods odp "
-    "py pyi js mjs cjs ts tsx jsx html htm css scss sass "
-    "sh bash zsh fish sql c h cpp hpp cc cxx java kt go rs rb php swift "
-    "lua r m scala clj ex exs vue svelte "
-    "zip tar gz tgz bz2 xz 7z parquet ipynb".split()
-)
+def raw_head(
+    name: str, size: int, max_bytes: int, download: bool
+) -> tuple[str, dict[str, str]]:
+    """The media type and headers raw bytes answer with for a file called
+    ``name`` — once it is one served at all. Shared by the workspace's
+    ``raw`` and a chat's attachments (``api/attachments.py``)."""
+    if size > max_bytes:
+        raise WebError(413, "file_too_large", "file too large")
+    # Prefer the explicit preview map so a nosniff'd inline image carries a
+    # correct, OS-stable Content-Type; fall back to mimetypes for non-images
+    # (only served via download=1 anyway).
+    is_pdf = name.lower().endswith(".pdf")
+    media_type = (
+        "application/pdf"
+        if is_pdf
+        else preview_image_mime(name) or mimetypes.guess_type(name)[0]
+    )
+    # Inline only browser-renderable images (by extension) plus PDF, whose
+    # in-browser viewer is sandboxed away from the page's origin (no DOM or
+    # cookie access — the Files panel embeds it for preview). SVG is excluded
+    # (it can carry scripts — a crafted upload would be a stored-XSS vector);
+    # it stays reachable via download=1. See lovia/web/media.py.
+    inline_ok = is_preview_image(name) or is_pdf
+    if not download and not inline_ok:
+        raise WebError(
+            415, "unsupported_file_type", "inline preview is images and PDFs only"
+        )
+    # `no-cache` = cache but revalidate: the viewer re-opens the same URL
+    # constantly (and re-renders after every agent edit), so unchanged
+    # files answer 304 from the ETag instead of re-sending bytes — and
+    # changed files show fresh without any query-string busting.
+    # `nosniff` stops a browser from MIME-sniffing a mislabeled file (e.g. a
+    # non-image named .png) and rendering it as HTML — defense in depth for
+    # serving user-uploaded bytes inline, on top of the images-only gate.
+    return media_type or "application/octet-stream", {
+        "cache-control": "no-cache",
+        "x-content-type-options": "nosniff",
+    }
 
 
-def _max_upload_bytes() -> int:
-    """Upload size cap in bytes (env ``LOVIA_MAX_UPLOAD_MB``, default 25)."""
-    raw = os.environ.get("LOVIA_MAX_UPLOAD_MB")
-    mb = _DEFAULT_MAX_UPLOAD_MB
-    if raw:
-        try:
-            mb = max(1, int(raw))
-        except ValueError:
-            pass
-    return mb * 1024 * 1024
-
-
-def _allowed_upload_ext() -> frozenset[str] | None:
-    """Allowed upload extensions (env ``LOVIA_UPLOAD_ALLOWED_EXT``); ``None``
-    means "any" (the var set to ``*`` or empty)."""
-    raw = os.environ.get("LOVIA_UPLOAD_ALLOWED_EXT")
-    if raw is None:
-        return _DEFAULT_ALLOWED_UPLOAD_EXT
-    raw = raw.strip()
-    if not raw or raw == "*":
-        return None
-    return frozenset(e.lower().lstrip(".") for e in re.split(r"[,\s]+", raw) if e)
-
-
-def _safe_upload_name(raw: str) -> str:
-    """A filesystem-safe basename: strip any directory, keep readable chars.
-
-    ``\\w`` is Unicode-aware, so CJK filenames survive; separators and control
-    characters collapse to ``_``. The result is always a plain basename, which
-    (together with writing only under ``uploads/``) prevents path traversal.
-    """
-    base = Path(raw).name.strip()
-    base = re.sub(r"[^\w.\- ]+", "_", base).strip(". ")
-    return (base or "upload")[:120]
-
-
-async def _write_upload(
-    session: WorkspaceSession, name: str, data: bytes
-) -> tuple[str, str]:
-    """Write ``data`` under ``uploads/`` at a collision-free name; returns
-    the path written and its basename.
-
-    A name is probed before it is written to: over a remote connection each
-    write attempt carries the whole file. The write itself still creates
-    exclusively, so two concurrent uploads that settle on one name can't
-    clobber each other — the loser moves on to the next suffix.
-    """
-    stem, suffix = Path(name).stem, Path(name).suffix
-    i = 0
-    while True:
-        candidate = name if i == 0 else f"{stem}-{i}{suffix}"
-        rel = f"{_UPLOADS_SUBDIR}/{candidate}"
-        i += 1
-        try:
-            await session.stat(rel)
-        except FileNotFoundError:
-            written = await session.write_bytes(rel, data, create_only=True)
-            if written.ok:
-                return rel, candidate
+def serve_local(
+    target: Path, request: Request, download: bool, max_bytes: int
+) -> Response:
+    """Raw bytes of a file on this machine, straight off the disk."""
+    if not target.is_file():
+        raise WebError(404, "file_not_found", "no such file")
+    try:
+        stat_result = target.stat()
+    except OSError as exc:  # vanished between the is_file check and here
+        raise WebError(404, "file_not_found", "no such file") from exc
+    media_type, headers = raw_head(
+        target.name, stat_result.st_size, max_bytes, download
+    )
+    response = FileResponse(
+        target,
+        media_type=media_type,
+        stat_result=stat_result,
+        filename=target.name if download else None,
+        content_disposition_type="attachment" if download else "inline",
+        headers=headers,
+    )
+    etag = response.headers.get("etag")
+    if etag and _not_modified(request, etag):
+        return Response(status_code=304, headers={"etag": etag, **headers})
+    return response
 
 
 def build_workspace_router(deps: RouterDeps) -> APIRouter:
@@ -456,13 +439,17 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         async with AsyncExitStack() as stack:
             session = await stack.enter_async_context(_view(cfg))
             await _must_read(session, path)
+            max_bytes = cfg.limits.max_file_read_bytes
             if isinstance(cfg, LocalWorkspace):
-                return _raw_local(cfg, path, request, download)
+                # Same normalization LocalWorkspaceSession applies to its root.
+                root_path = Path(cfg.root).expanduser().resolve()
+                target = resolve_path(root_path, path).abs
+                return serve_local(target, request, download, max_bytes)
             entry = await session.stat(path)
             if entry.is_dir or entry.size is None:
                 raise WebError(404, "file_not_found", "no such file")
             name, size = PurePosixPath(entry.path).name, entry.size
-            media_type, headers = _raw_head(cfg, name, size, download)
+            media_type, headers = raw_head(name, size, max_bytes, download)
             headers["etag"] = _etag(size, entry.mtime)
             if _not_modified(request, headers["etag"]):
                 return Response(status_code=304, headers=headers)
@@ -492,70 +479,6 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             # For a body that is never started (the client already gone).
             background=BackgroundTask(held.aclose),
         )
-
-    def _raw_head(
-        cfg: FilesConfig, name: str, size: int, download: bool
-    ) -> tuple[str, dict[str, str]]:
-        """The media type and headers ``raw`` answers with for a file called
-        ``name`` — once it is one ``raw`` serves at all."""
-        if size > cfg.limits.max_file_read_bytes:
-            raise WebError(413, "file_too_large", "file too large")
-        # Prefer the explicit preview map so a nosniff'd inline image carries a
-        # correct, OS-stable Content-Type; fall back to mimetypes for non-images
-        # (only served via download=1 anyway).
-        is_pdf = name.lower().endswith(".pdf")
-        media_type = (
-            "application/pdf"
-            if is_pdf
-            else preview_image_mime(name) or mimetypes.guess_type(name)[0]
-        )
-        # Inline only browser-renderable images (by extension) plus PDF, whose
-        # in-browser viewer is sandboxed away from the page's origin (no DOM or
-        # cookie access — the Files panel embeds it for preview). SVG is excluded
-        # (it can carry scripts — a crafted upload would be a stored-XSS vector);
-        # it stays reachable via download=1. See lovia/web/media.py.
-        inline_ok = is_preview_image(name) or is_pdf
-        if not download and not inline_ok:
-            raise WebError(
-                415, "unsupported_file_type", "inline preview is images and PDFs only"
-            )
-        # `no-cache` = cache but revalidate: the viewer re-opens the same URL
-        # constantly (and re-renders after every agent edit), so unchanged
-        # files answer 304 from the ETag instead of re-sending bytes — and
-        # changed files show fresh without any query-string busting.
-        # `nosniff` stops a browser from MIME-sniffing a mislabeled file (e.g. a
-        # non-image named .png) and rendering it as HTML — defense in depth for
-        # serving user-uploaded bytes inline, on top of the images-only gate.
-        return media_type or "application/octet-stream", {
-            "cache-control": "no-cache",
-            "x-content-type-options": "nosniff",
-        }
-
-    def _raw_local(
-        cfg: LocalWorkspace, path: str, request: Request, download: bool
-    ) -> Response:
-        """``raw`` for a file on this machine: straight off the disk."""
-        # Same normalization LocalWorkspaceSession applies to its root.
-        target = resolve_path(Path(cfg.root).expanduser().resolve(), path).abs
-        if not target.is_file():
-            raise WebError(404, "file_not_found", "no such file")
-        try:
-            stat_result = target.stat()
-        except OSError as exc:  # vanished between the is_file check and here
-            raise WebError(404, "file_not_found", "no such file") from exc
-        media_type, headers = _raw_head(cfg, target.name, stat_result.st_size, download)
-        response = FileResponse(
-            target,
-            media_type=media_type,
-            stat_result=stat_result,
-            filename=target.name if download else None,
-            content_disposition_type="attachment" if download else "inline",
-            headers=headers,
-        )
-        etag = response.headers.get("etag")
-        if etag and _not_modified(request, etag):
-            return Response(status_code=304, headers={"etag": etag, **headers})
-        return response
 
     # ---- background processes (chat-scoped) --------------------------------
     # Keyed by web session id, not agent: processes belong to the chat's live
@@ -605,63 +528,5 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         except WorkspaceError as exc:  # unknown id (or a closed session)
             raise WebError.from_exc(404, "process_not_found", exc) from exc
         return await _process_list(session_id)
-
-    @router.post("/api/workspace/upload", response_model=UploadedFile)
-    async def upload_file(
-        file: UploadFile = File(...),
-        agent: str | None = Query(None),
-        chat: str | None = Query(None, alias="session"),
-        root: str | None = Query(None, max_length=4096),
-    ) -> UploadedFile:
-        """Save a composer/Files-panel upload under the workspace ``uploads/``.
-
-        Requires a workspace the panel serves (same 404 gate). The file's
-        extension is checked against an allowlist (``LOVIA_UPLOAD_ALLOWED_EXT``)
-        and its size against a cap (``LOVIA_MAX_UPLOAD_MB``) enforced while
-        reading, so a disallowed or huge upload is rejected without exhausting
-        memory. The bytes are then written to a collision-free name, immediately
-        servable via ``/api/workspace/raw`` and referenced from chat by path.
-
-        Written through a session of its own, not the chat's: an upload is
-        the user's act, so a chat in a read-only mode takes one too — but
-        only ever under the root (an ``uploads`` that links out of it is
-        refused).
-        """
-        cfg = await require_cfg(agent, chat, root)
-        name = _safe_upload_name(file.filename or "upload")
-        allowed = _allowed_upload_ext()
-        max_bytes = _max_upload_bytes()
-        ext = Path(name).suffix.lower().lstrip(".")
-        try:
-            if allowed is not None and ext and ext not in allowed:
-                raise WebError(
-                    415, "unsupported_file_type", f"file type '.{ext}' is not allowed"
-                )
-            data = bytearray()
-            while chunk := await file.read(1 << 20):
-                data.extend(chunk)
-                if len(data) > max_bytes:
-                    raise WebError(413, "file_too_large", "file too large")
-            if not data:
-                raise WebError(422, "invalid_request", "empty file")
-        finally:
-            await file.close()
-        async with _view(cfg, write=True) as session:
-            saved, name = await _write_upload(session, name, bytes(data))
-        # Type comes from the SAVED extension, never the client's Content-Type;
-        # kind="image" is the browser-previewable set (SVG excluded — it can
-        # carry scripts), so the composer previews only what is safe to render.
-        mime = (
-            preview_image_mime(name)
-            or mimetypes.guess_type(name)[0]
-            or "application/octet-stream"
-        )
-        return UploadedFile(
-            path=saved,
-            name=name,
-            mime=mime,
-            kind="image" if is_preview_image(name) else "file",
-            size=len(data),
-        )
 
     return router

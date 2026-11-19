@@ -13,9 +13,13 @@ metadata table is owned by this module.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 import secrets
+import shutil
 import sqlite3
+import tempfile
 import time
 import uuid
 import zlib
@@ -336,6 +340,19 @@ def _run_waiting(conn: sqlite3.Connection) -> None:
     )
 
 
+def _attachments_id(conn: sqlite3.Connection) -> None:
+    """Chat-owned attachments (0.9.239): the folder a chat's attachments live
+    in, shared by its forks and tasks; NULL (a chat from before) reads as the
+    chat's own id."""
+    present = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
+    if "attachments_id" not in present:
+        conn.execute("ALTER TABLE chat_sessions ADD COLUMN attachments_id TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_sessions_attachments "
+        "ON chat_sessions(attachments_id)"
+    )
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     _reconcile_unversioned,
     _fork_origin,
@@ -348,7 +365,33 @@ _MIGRATIONS: tuple[Migration, ...] = (
     _schedule_name,
     _chat_model,
     _run_waiting,
+    _attachments_id,
 )
+
+# What may name an attachment folder: the hex of a minted chat id. A
+# client-chosen ``session_id`` is any string, and this one becomes a path.
+ATTACHMENTS_ID = re.compile(r"[0-9a-f]{32}")
+
+# A folder no chat claims is a draft that was never sent (or a delete that
+# could not finish): kept this long, so a draft still being written survives.
+_UNCLAIMED_AGE = 24 * 3600
+
+
+def _remove_folders(root: Path, names: Sequence[str]) -> None:
+    """Best-effort: a file held open (Windows) leaves its folder for the
+    next sweep, never fails the delete that freed it."""
+    for name in names:
+        shutil.rmtree(root / name, ignore_errors=True)
+
+
+def _remove_all_folders(root: Path) -> None:
+    """Every attachment folder under ``root`` — only those: a deployer's
+    ``attachments_dir`` may hold more."""
+    try:
+        names = [p.name for p in root.iterdir() if ATTACHMENTS_ID.fullmatch(p.name)]
+    except OSError:
+        return
+    _remove_folders(root, names)
 
 
 @dataclass(frozen=True)
@@ -649,6 +692,12 @@ class ChatStore:
     * ``ChatStore(InMemorySession(), meta_path=":memory:")`` — tests.
     * ``ChatStore(my_session, meta_path="…")`` — keep your custom session
       backend; we still get metadata.
+
+    Composer attachments live beside the metadata, in ``attachments/`` next
+    to ``meta_path`` (a temporary folder for ``:memory:``) — pass
+    ``attachments_dir`` to put them elsewhere. One folder per
+    ``attachments_id``, which a chat's forks and tasks share with it; the
+    store deletes the folder with the last chat that uses it.
     """
 
     def __init__(
@@ -658,8 +707,15 @@ class ChatStore:
         meta_path: str | Path,
         checkpointer: Checkpointer | None = None,
         wal: bool = False,
+        attachments_dir: str | Path | None = None,
     ) -> None:
         self.session = session
+        if attachments_dir is not None:
+            self._attachments: Path | None = Path(attachments_dir)
+        elif str(meta_path) == ":memory:":
+            self._attachments = None  # a temporary folder, made on first use
+        else:
+            self._attachments = Path(meta_path).parent / "attachments"
         # ``wal`` covers only the metadata store owned here; a caller-supplied
         # Session/Checkpointer configures its own (see ChatStore.sqlite, which
         # sets all three consistently).
@@ -671,6 +727,68 @@ class ChatStore:
         # lovia can't open fails the server at startup.
         with self._meta._conn():
             pass
+
+    # ---- attachments ----------------------------------------------------
+
+    @property
+    def attachments_dir(self) -> Path:
+        """The root every chat's attachment folder sits under (created by the
+        first upload, not here)."""
+        if self._attachments is None:
+            self._attachments = Path(tempfile.mkdtemp(prefix="lovia-attachments-"))
+        return self._attachments
+
+    async def attachment_folder(self, session_id: str) -> Path | None:
+        """Where ``session_id``'s attachments live: its ``attachments_id``'s
+        folder — a fork's and a task's are their source's — or, for a chat
+        not created yet (a draft), its own id's. None for an id that can't
+        name a folder (:data:`ATTACHMENTS_ID`)."""
+        owner = await self._read_one(
+            "SELECT COALESCE(attachments_id, id) FROM chat_sessions WHERE id = ?",
+            (session_id,),
+            lambda row: cast(str, row[0]),
+        )
+        owner = owner or session_id
+        if not ATTACHMENTS_ID.fullmatch(owner):
+            return None
+        return self.attachments_dir / owner
+
+    async def sweep_attachments(self, *, max_age: float = _UNCLAIMED_AGE) -> None:
+        """Remove the attachment folders no chat claims, once older than
+        ``max_age`` seconds: drafts never sent, and folders a delete could
+        not remove (a file held open on Windows)."""
+        root = self._attachments
+        if root is None:
+            return
+        claimed = set(
+            await self._read_all(
+                "SELECT DISTINCT COALESCE(attachments_id, id) FROM chat_sessions",
+                (),
+                lambda row: cast(str, row[0]),
+            )
+        )
+        cutoff = time.time() - max_age
+
+        def _impl() -> None:
+            try:
+                entries = list(root.iterdir())
+            except OSError:  # no attachment yet, or a root we can't read
+                return
+            stale = []
+            for entry in entries:
+                name = entry.name
+                if name in claimed or not ATTACHMENTS_ID.fullmatch(name):
+                    continue
+                try:
+                    if entry.is_symlink() or not entry.is_dir():
+                        continue
+                    if entry.stat().st_mtime < cutoff:
+                        stale.append(name)
+                except OSError:
+                    continue
+            _remove_folders(root, stale)
+
+        await asyncio.to_thread(_impl)
 
     # ---- low-level helpers ----------------------------------------------
     # One transaction/read dance, shared by every metadata method.
@@ -773,7 +891,8 @@ class ChatStore:
         (``origin_kind = "spawn"``), and ``scheduled_by``, the schedule whose
         fire created it (``origin_kind = "schedule"``). The workspace binding
         too is set on insert only — :meth:`set_workspace_mode` is the one way
-        to change it — and so is ``model`` (:meth:`set_model`).
+        to change it — and so is ``model`` (:meth:`set_model`), and the
+        attachment folder: the chat's own, a task's parent's.
         """
         now = time.time()
         kind = "spawn" if spawned_from else "schedule" if scheduled_by else None
@@ -782,8 +901,10 @@ class ChatStore:
             INSERT INTO chat_sessions (id, title, agent, created_at, updated_at,
                                        parent_id, origin_kind, origin_session_id,
                                        origin_ref, workspace_root, workspace_mode,
-                                       model)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       model, attachments_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(
+                (SELECT COALESCE(attachments_id, id) FROM chat_sessions
+                 WHERE id = ?), ?))
             ON CONFLICT(id) DO UPDATE SET
                 updated_at = excluded.updated_at,
                 agent = COALESCE(chat_sessions.agent, excluded.agent),
@@ -802,6 +923,9 @@ class ChatStore:
                 workspace_root,
                 workspace_mode,
                 model,
+                # A task reads its chat's attachments: the parent's folder.
+                parent_id,
+                parent_id or session_id,
                 unarchive,
             ),
         )
@@ -995,8 +1119,8 @@ class ChatStore:
         def _publish() -> bool:
             with self._meta._tx() as conn:
                 source = conn.execute(
-                    "SELECT title, agent, workspace_root, workspace_mode, model "
-                    "FROM chat_sessions WHERE id = ?",
+                    "SELECT title, agent, workspace_root, workspace_mode, model, "
+                    "COALESCE(attachments_id, id) FROM chat_sessions WHERE id = ?",
                     (source_id,),
                 ).fetchone()
                 if source is None:
@@ -1009,12 +1133,13 @@ class ChatStore:
                 )
                 # A fork keeps its source's workspace binding: its history
                 # refers to that directory, under those permissions. And its
-                # model: it carries the conversation on.
+                # model: it carries the conversation on. And its attachment
+                # folder: the history names those files by absolute path.
                 conn.execute(
                     "INSERT INTO chat_sessions (id, title, agent, created_at, "
                     "updated_at, origin_kind, origin_session_id, origin_ref, "
-                    "workspace_root, workspace_mode, model) "
-                    "VALUES (?, ?, ?, ?, ?, 'fork', ?, ?, ?, ?, ?)",
+                    "workspace_root, workspace_mode, model, attachments_id) "
+                    "VALUES (?, ?, ?, ?, ?, 'fork', ?, ?, ?, ?, ?, ?)",
                     (
                         fork_id,
                         source[0],
@@ -1026,6 +1151,7 @@ class ChatStore:
                         source[2],
                         source[3],
                         source[4],
+                        source[5],
                     ),
                 )
                 return True
@@ -1108,14 +1234,27 @@ class ChatStore:
         way leaves every chat in place for a retry. Every step deletes the same
         snapshot of the tree: a task added meanwhile is left whole, not stripped
         of its metadata alone.
+
+        The attachment folders go after the commit, each once no chat is left
+        using it — in the same transaction as the rows, so a fork committing
+        alongside either keeps the folder or finds its source gone.
         """
         ids = await self.task_tree(session_id)
         for sid in ids:
             await self._drop_checkpoint(sid)
             await self.session.clear(sid)
 
-        def _impl() -> None:
+        def _impl() -> list[str]:
             with self._meta._tx() as conn:
+                owners = {
+                    row[0]
+                    for sid in ids
+                    for row in conn.execute(
+                        "SELECT COALESCE(attachments_id, id) FROM chat_sessions "
+                        "WHERE id = ?",
+                        (sid,),
+                    )
+                }
                 bound = [
                     (row[0],)
                     for sid in (ids if schedules else ())
@@ -1137,12 +1276,26 @@ class ChatStore:
                         f"DELETE FROM {table} WHERE {column} = ?",
                         [(sid,) for sid in ids],
                     )
+                # ``id = ?`` too: a chat from before the column owns its own.
+                return [
+                    owner
+                    for owner in owners
+                    if ATTACHMENTS_ID.fullmatch(owner)
+                    and conn.execute(
+                        "SELECT 1 FROM chat_sessions "
+                        "WHERE attachments_id = ? OR id = ? LIMIT 1",
+                        (owner, owner),
+                    ).fetchone()
+                    is None
+                ]
 
-        await self._meta._run(_impl)
+        freed = await self._meta._run(_impl)
+        if freed and self._attachments is not None:
+            await asyncio.to_thread(_remove_folders, self._attachments, freed)
 
     async def delete_all(self) -> None:
-        """Remove ALL transcripts, checkpoints, and metadata — and the
-        schedules bound to a chat (as ``delete``)."""
+        """Remove ALL transcripts, checkpoints, metadata and attachments —
+        and the schedules bound to a chat (as ``delete``)."""
         # Read every id directly — ``list`` caps at its limit, which would
         # leave the transcripts/checkpoints of sessions beyond one page orphaned
         # while the unconditional row delete below wiped their metadata.
@@ -1157,6 +1310,8 @@ class ChatStore:
         await self._write("DELETE FROM chat_runs")
         await self._write("DELETE FROM chat_ui_data")
         await self._write("DELETE FROM chat_grants")
+        if self._attachments is not None:
+            await asyncio.to_thread(_remove_all_folders, self._attachments)
 
     # ---- remembered approvals ("always allow" grants) -------------------
 

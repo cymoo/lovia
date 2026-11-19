@@ -809,7 +809,7 @@ app = create_app(agent, workspaces=WorkspaceSwitch(remotes={"box": RemoteHost.ss
 如果你提供的 Agent 本身已经带着某个本地项目的指令或技能，就在这里去掉。`lovia web` 是这样做的，并换上主机上的
 `AGENTS.md`：钩子本身什么都不读，只把 `instructions` 设成一个异步函数，由它在本次运行第一次渲染提示词时经
 `ctx.workspace` 在主机上查找并读取（和本机对话在那里会加载的是[同一批文件](web-ui.md#项目指令)）。
-文件面板、上传和附件读写的也是主机上的文件：页面在同一条连接上另开一个只读 session（上传则只允许写根目录之内），
+文件面板和附件读写的也是主机上的文件：页面在同一条连接上另开一个只读 session（发出的附件只会复制到根目录的 `uploads/`），
 主机连不上时返回 502 `workspace_unreachable`，带附件的消息不会被去掉附件发出去。
 工作区带有 shell `executor` 的 Agent 则完全不能开远程对话（409 `workspace_not_allowed`）：沙箱留在本机，
 命令到了主机上就不受它约束了。把远程位置加进
@@ -820,8 +820,8 @@ app = create_app(agent, workspaces=WorkspaceSwitch(remotes={"box": RemoteHost.ss
 `ssh`。`--lock-workspace` 和 `--no-workspace` 会关闭它。
 
 对话的目录在创建时确定（第一条消息的 `workspace`，不带则用 Agent 自己的目录），之后不再改变；每次运行前都按 `roots`
-校验，服务端不再允许的目录会被拒绝（409 `workspace_not_allowed`），不会被换掉。附件、文件面板和上传都在对话的目录里
-（还没发送的草稿用 `?root=` 指明自己的目录）。运行能到达的每个 Agent（包括 handoff 的目标）都在这个目录里工作。
+校验，服务端不再允许的目录会被拒绝（409 `workspace_not_allowed`），不会被换掉。文件面板和从它添加的工作区文件附件都在对话的目录里
+（还没发送的草稿用 `?root=` 指明自己的目录）；上传的附件跟着对话存，和聊天记录放在一起。运行能到达的每个 Agent（包括 handoff 的目标）都在这个目录里工作。
 
 对话的模式立即生效：进行中的运行从下一次工具调用起按新模式判定，对话的子任务也一起切换。运行开始时拿到的工具不变，
 所以从只读开始的运行要到下次运行才有文件编辑和 shell；handoff 目标各自打开工作区，保持运行开始时的模式；`build`

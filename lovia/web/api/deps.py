@@ -237,8 +237,9 @@ class RouterDeps:
     async def lifespan(self, _app: Any = None) -> AsyncIterator[None]:
         """Run the API's background machinery for the app's lifetime.
 
-        On entry: settles runs a dead process left "running", starts the
-        schedule poller and the ``ask_human`` bridge. On exit: winds down live
+        On entry: settles runs a dead process left "running", removes the
+        attachment folders no chat claims, starts the schedule poller and the
+        ``ask_human`` bridge. On exit: winds down live
         runs cooperatively (leaving resumable checkpoints), closes chat
         workspaces with their background processes, ends ``/api/events``
         streams, and gives memory curation a bounded window to land.
@@ -254,6 +255,7 @@ class RouterDeps:
         from .memory import memory_plugin
 
         await self.store.sweep_stale_runs()
+        await self.store.sweep_attachments()
         scheduler = Scheduler(self, poll_interval=self.scheduler_poll)
         scheduler.start()
         if self.questions is not None:

@@ -4928,6 +4928,7 @@ export function initComposer() {
   attachInput.style.display = 'none';
   document.body.appendChild(attachInput);
   _attachInput = attachInput;
+  syncAttachButton(); // the picker's accept follows the agent from the start
   attachInput.addEventListener('change', () => {
     if (attachInput.files?.length) uploadFiles([...attachInput.files]);
     attachInput.value = ''; // let the same file be picked again

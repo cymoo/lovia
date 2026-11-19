@@ -2,7 +2,7 @@
 import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { draftWorkspaceMode } from './workspace-mode.js';
-import { chatModelInfo, draftChatModel } from './model-config.js';
+import { chatModelInfo, chatModelSeesImages, draftChatModel } from './model-config.js';
 import { draftWorkspaceRoot, ensureLinked, scopeRoot, workspaceName } from './workspaces.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
@@ -4246,10 +4246,11 @@ function forgetChip(chip) {
 }
 
 // Whether the agent takes attachments at all: any file with a workspace (its
-// tools read them), images alone with a model that sees them and no workspace.
+// tools read them), images alone with a model that sees them and no workspace
+// — the model the chat picked, if it picked one.
 function attachEnabled() {
   const agent = store.agents.find((a) => a.name === store.agent);
-  return !!(agent?.workspace || agent?.vision);
+  return !!(agent?.workspace || (chatModelSeesImages() ?? agent?.vision));
 }
 
 // Whether it takes files besides images: only a workspace has tools to read them.
@@ -4988,6 +4989,7 @@ export function initComposer() {
   }
   store.on('agents-loaded', syncAttachButton);
   store.on('agent-changed', syncAttachButton);
+  store.on('chat-model-changed', syncAttachButton); // its model may see, or not
   store.on('workspace-scope-changed', dropStrayAttachments);
   syncAttachButton();
 

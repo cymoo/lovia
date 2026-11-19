@@ -22,6 +22,7 @@ from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ...exceptions import UserError
+from ...providers import provider_from_string, supports_vision
 from ..config.probe import (
     known_context_window,
     unlisted_model_note,
@@ -228,6 +229,25 @@ def _refuse_relative(dirs: list[str]) -> None:
         )
 
 
+def _sees_images(profile: ModelProfile) -> bool:
+    """Whether a chat on ``profile`` takes images inline: its ``vision``
+    setting, ``auto`` answered by the provider it builds (official endpoints
+    see). An incomplete profile sees none."""
+    try:
+        conn = Connection.from_profile(profile)
+        if conn.model is None:
+            return False
+        provider = provider_from_string(
+            conn.model,
+            api_key=conn.api_key,
+            base_url=conn.base_url,
+            supports_vision=profile.vision_override(),
+        )
+    except Exception:  # noqa: BLE001 — an incomplete or unknown profile: no
+        return False
+    return supports_vision(provider)
+
+
 def _known_window(profile: ModelProfile) -> int | None:
     try:
         return known_context_window(Connection.from_profile(profile))
@@ -348,6 +368,9 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                     "window": p.context_window or _known_window(p),
                     "max_tokens": p.max_tokens,
                     "vision": p.vision,
+                    # Whether a chat on it sees images: ``vision`` resolved
+                    # (``auto`` asks the provider) — the composer's attach.
+                    "sees_images": _sees_images(p),
                     "extra_body": p.extra_body,
                 }
                 for p in cfg.models

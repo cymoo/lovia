@@ -4349,6 +4349,16 @@ function syncAttachButton() {
     _pendingAttachments = [];
     renderAttachTray();
     updateSendEnabled();
+  } else if (ok && !filesAllowed()) {
+    // Now an agent that takes images only: what else the tray holds would be
+    // dropped on send — take it out here, saying so, not silently there.
+    const kept = _pendingAttachments.filter((a) => !a.path && MODEL_IMAGE_RE.test(a.name || ''));
+    if (kept.length < _pendingAttachments.length) {
+      _pendingAttachments = kept;
+      renderAttachTray();
+      updateSendEnabled();
+      toast(t('composer.imagesOnly'), { type: 'error' });
+    }
   }
 }
 

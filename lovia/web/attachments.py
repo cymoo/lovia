@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import itertools
 import logging
 import os
@@ -207,6 +208,10 @@ async def user_content(
 
     stored = any(att.path is None for att in attachments)
     linked = any(att.path is not None for att in attachments)
+    if stored and folder is not None:
+        # In use now: a draft idle past the sweep's age is about to become a
+        # chat, and the sweep re-reads the mtime before it removes anything.
+        await asyncio.to_thread(_touch, folder)
     session: WorkspaceSession | None = None
     if linked or (remote and stored):
         try:
@@ -324,6 +329,11 @@ async def _linked(
         log.warning("could not inline image %s: %s", entry.path, exc)
         return entry.path, None
     return entry.path, image.data
+
+
+def _touch(folder: Path) -> None:
+    with contextlib.suppress(OSError):  # no folder: nothing for a sweep to take
+        os.utime(folder)
 
 
 async def _read_local(file: Path, max_bytes: int) -> bytes | None:

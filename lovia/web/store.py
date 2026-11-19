@@ -759,7 +759,13 @@ class ChatStore:
     async def sweep_attachments(self, *, max_age: float = _UNCLAIMED_AGE) -> None:
         """Remove the attachment folders no chat claims, once older than
         ``max_age`` seconds: drafts never sent, and folders a delete could
-        not remove (a file held open on Windows)."""
+        not remove (a file held open on Windows).
+
+        The claims are read once to pick candidates, so each candidate is
+        asked again right before it goes: a draft sent meanwhile has a chat
+        by then, or — sent but not yet created — a fresh mtime, since a send
+        touches the folder first (:func:`~lovia.web.attachments.user_content`).
+        """
         root = self._attachments
         if root is None:
             return
@@ -772,26 +778,37 @@ class ChatStore:
         )
         cutoff = time.time() - max_age
 
-        def _impl() -> None:
+        def _stale(entry: Path) -> bool:
+            try:
+                return (
+                    not entry.is_symlink()
+                    and entry.is_dir()
+                    and entry.stat().st_mtime < cutoff
+                )
+            except OSError:
+                return False
+
+        def _candidates() -> list[str]:
             try:
                 entries = list(root.iterdir())
             except OSError:  # no attachment yet, or a root we can't read
-                return
-            stale = []
-            for entry in entries:
-                name = entry.name
-                if name in claimed or not ATTACHMENTS_ID.fullmatch(name):
-                    continue
-                try:
-                    if entry.is_symlink() or not entry.is_dir():
-                        continue
-                    if entry.stat().st_mtime < cutoff:
-                        stale.append(name)
-                except OSError:
-                    continue
-            _remove_folders(root, stale)
+                return []
+            return [
+                e.name
+                for e in entries
+                if e.name not in claimed
+                and ATTACHMENTS_ID.fullmatch(e.name)
+                and _stale(e)
+            ]
 
-        await asyncio.to_thread(_impl)
+        for name in await asyncio.to_thread(_candidates):
+            still = await self._read_one(
+                "SELECT 1 FROM chat_sessions WHERE attachments_id = ? OR id = ? LIMIT 1",
+                (name, name),
+                lambda row: True,
+            )
+            if still is None and await asyncio.to_thread(_stale, root / name):
+                await asyncio.to_thread(_remove_folders, root, [name])
 
     # ---- low-level helpers ----------------------------------------------
     # One transaction/read dance, shared by every metadata method.

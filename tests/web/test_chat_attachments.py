@@ -150,6 +150,48 @@ async def test_the_sweep_takes_only_old_unclaimed_folders(tmp_path: Path) -> Non
     assert sorted(p.name for p in root.iterdir()) == sorted([claimed, fresh, "notes"])
 
 
+async def test_the_sweep_spares_a_folder_claimed_after_its_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A draft idle past the age, sent while the sweep runs: its chat appears
+    # after the claims were read — the sweep asks again before removing.
+    store = ChatStore.sqlite(tmp_path / "chat.db")
+    draft = _sid()
+    folder = store.attachments_dir / draft
+    _put(folder)
+    an_hour_ago = time.time() - 3600
+    os.utime(folder, (an_hour_ago, an_hour_ago))
+    real = store._read_all
+
+    async def snapshot_then_send(*args, **kwargs):
+        rows = await real(*args, **kwargs)
+        await _chat(store, draft)  # the send lands right after the snapshot
+        return rows
+
+    monkeypatch.setattr(store, "_read_all", snapshot_then_send)
+    await store.sweep_attachments(max_age=60)
+    assert folder.is_dir()
+
+
+async def test_a_send_freshens_its_folder_for_the_sweep(tmp_path: Path) -> None:
+    from lovia.web.attachments import user_content
+    from lovia.web.schemas import Attachment
+
+    store = ChatStore.sqlite(tmp_path / "chat.db")
+    folder = store.attachments_dir / _sid()
+    _put(folder, "a.txt")
+    an_hour_ago = time.time() - 3600
+    os.utime(folder, (an_hour_ago, an_hour_ago))
+    (tmp_path / "ws").mkdir()
+    agent = Agent(
+        name="bot", model=None, workspace=Workspace.local(str(tmp_path / "ws"))
+    )
+    att = Attachment(name="a.txt", mime="text/plain", kind="file")
+    await user_content("see", [att], agent, folder)
+    await store.sweep_attachments(max_age=60)  # its chat isn't created yet
+    assert (folder / "a.txt").is_file()
+
+
 # ------------------------------------------------------------------- API -
 
 

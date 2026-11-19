@@ -425,10 +425,13 @@ An attachment belongs to its chat, not to the project: it is saved in the
 chat's own folder beside the chat history — `attachments/<id>/` next to the
 database, so `~/.lovia/attachments/` for `lovia web` — and never in the
 Workspace, so a Git repository stays clean. The message names each file by its
-absolute path, which the chat's runs may read but never write, in any
-permission mode; the Agent therefore opens a file with Workspace Tools even
-when the model cannot consume it directly, and copies one into the Workspace
-when you ask it to. A chat working on a remote host gets a copy in that
+absolute path, which the chat's runs may read; the Agent therefore opens a
+file with Workspace Tools even when the model cannot consume it directly, and
+copies one into the Workspace when you ask it to. Writing there is denied in
+every permission mode — to the file tools and to a shell redirection (`>`).
+Like every path rule it is a guard, not a sandbox: a shell command that
+rewrites a file itself (`sed -i`, `rm`) is judged by its words, which read as
+reads; only a sandboxed executor makes the folder truly read-only. A chat working on a remote host gets a copy in that
 directory's `uploads/` instead (until hosts keep attachments apart too).
 `--no-workspace` disables attachments as well.
 

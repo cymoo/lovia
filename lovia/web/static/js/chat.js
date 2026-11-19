@@ -3012,11 +3012,13 @@ async function applyEvent({ event, data }) {
   switch (event) {
     case 'session': {
       const known = store.sessions.some((s) => s.id === data.session_id);
-      store.sessionId = data.session_id;
       // The new chat took the draft's id (and its uploads): the tray on
       // screen is this chat's now, and the next new chat mints its own.
+      // Re-keyed first: setting sessionId re-checks the attach button,
+      // which would otherwise shelve this tray as the draft's.
       if (data.session_id === _draftId) _draftId = null;
       _trayKey = data.session_id;
+      store.sessionId = data.session_id;
       if (_shownRun) _shownRun.sessionId = data.session_id;
       store.syncURL(data.session_id);
       // A brand-new session gets a server-generated title shortly after the
@@ -4161,11 +4163,13 @@ store.on('session-switched', () => {
   flushDraft();
   restoreDraft();
   swapTray();
+  syncAttachButton(); // its model may see images, or not
 });
 store.on('reset-chat-view', () => {
   flushDraft();
   restoreDraft();
   swapTray();
+  syncAttachButton(); // back on the default model, which no event announces
 });
 store.on('session-deleted', (id) => {
   try {
@@ -4340,6 +4344,9 @@ function dropStrayAttachments(root) {
 }
 
 function syncAttachButton() {
+  // The tray must be the chat on screen's before its model decides what it
+  // keeps: a switch announces the new chat's model before its tray moves.
+  swapTray();
   const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById('attach'));
   if (!btn) return;
   const ok = attachEnabled();
@@ -4990,6 +4997,7 @@ export function initComposer() {
   store.on('agents-loaded', syncAttachButton);
   store.on('agent-changed', syncAttachButton);
   store.on('chat-model-changed', syncAttachButton); // its model may see, or not
+  store.on('config-loaded', syncAttachButton); // the models' answers arrive late
   store.on('workspace-scope-changed', dropStrayAttachments);
   syncAttachButton();
 

@@ -45,6 +45,7 @@ from ..workspace import (
     RemoteWorkspace,
     WorkspaceDisconnectedError,
     WorkspaceError,
+    WorkspaceLimits,
 )
 from ..workspace.protocol import WorkspaceSession
 from .errors import WebError
@@ -187,6 +188,16 @@ def _fold(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
 
 
+def sees_images(agent: Agent[Any]) -> bool:
+    """Whether ``agent``'s model takes images inline — a ``"vendor:model"``
+    string resolved to its provider first, as a run would (the string itself
+    says nothing). An agent whose model can't be resolved here sees none."""
+    try:
+        return supports_vision(agent.resolve_provider())
+    except Exception:  # noqa: BLE001 — no model, a vendor not installed: no
+        return False
+
+
 async def user_content(
     message: str,
     attachments: list[Attachment] | None,
@@ -201,22 +212,25 @@ async def user_content(
     untouched. Otherwise returns the text, any inlined images, and a note
     naming every attachment.
 
+    An agent without a workspace has no file tools: it gets its images —
+    inline when its model sees them — and nothing else.
+
     A workspace that can't be reached at all (a remote host that is down) is
     a 502, not a message sent without what it was shown.
     """
     attachments = attachments or []
-    cfg = files_config(agent)
-    if not attachments or cfg is None:
+    if not attachments:
         return message
+    cfg = files_config(agent)
 
-    can_see = supports_vision(getattr(agent, "model", None))
+    can_see = sees_images(agent)
     parts: list[ContentPart] = []
     if message.strip():
         parts.append(TextPart(message))
     named: list[str] = []
 
     stored = any(att.path is None for att in attachments)
-    linked = any(att.path is not None for att in attachments)
+    linked = cfg is not None and any(att.path is not None for att in attachments)
     host_folder: str | None = None
     uncopied: set[str] = set()
     if stored and folder is not None:
@@ -226,20 +240,26 @@ async def user_content(
         if isinstance(cfg, RemoteWorkspace):
             host_folder, uncopied = await _staged(cfg, folder)
     session: WorkspaceSession | None = None
-    if linked:
+    if linked and cfg is not None:
         try:
             session = await open_view(cfg)
         except UserError:  # the root is gone: what lives in it can't be had
             session = None
         except WorkspaceError as exc:
             raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
-    max_bytes = cfg.limits.max_file_read_bytes
+    limits = cfg.limits if cfg is not None else WorkspaceLimits()
+    max_bytes = limits.max_file_read_bytes
     try:
         for att in attachments:
             image: bytes | None = None
             if att.path is None:
                 file = await _stored(att, folder)
                 if file is None:
+                    continue
+                if cfg is None and model_image_mime(file.name) is None:
+                    log.warning(
+                        "dropping attachment %r: no workspace to read it", file.name
+                    )
                     continue
                 if file.name in uncopied:
                     # Its host copy is missing or stale: naming it would
@@ -279,7 +299,7 @@ async def user_content(
     # image a non-vision model can't see). Separated from the user's own text
     # with a blank line so history replay doesn't run the two together.
     lead = "\n\n" if message.strip() else ""
-    parts.append(TextPart(f"{lead}{_attachment_note(named)}"))
+    parts.append(TextPart(f"{lead}{_attachment_note(named, tools=cfg is not None)}"))
     return parts
 
 
@@ -455,10 +475,12 @@ async def build_user_input(
     return content if isinstance(content, str) else [user(content)]
 
 
-def _attachment_note(paths: list[str]) -> str:
+def _attachment_note(paths: list[str], *, tools: bool) -> str:
     """A note telling the model where the attachments are, one path a line
-    (a path may hold ``", "``; none holds a newline). The page splits it
-    back out of history (``splitAttachmentNote`` in ``static/js/chat.js``)
-    — keep the two in sync."""
+    (a path may hold ``", "``; none holds a newline) — and, when it has
+    them, to use its file tools. The page splits it back out of history
+    (``splitAttachmentNote`` in ``static/js/attachment-note.js``) — keep the
+    two in sync."""
     lines = "\n".join(paths)
-    return f"[Attached:\n{lines}\nRead with your file tools when relevant.]"
+    hint = "\nRead with your file tools when relevant." if tools else ""
+    return f"[Attached:\n{lines}{hint}]"

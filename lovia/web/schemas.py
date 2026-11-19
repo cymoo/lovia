@@ -26,6 +26,9 @@ class AgentInfo(BaseModel):
     # True when the agent has a browsable local workspace (the Files panel
     # shows itself only for such agents).
     workspace: bool = False
+    # True when the agent's model sees images: without a workspace, images
+    # are the only attachments it takes (inline, there being no file tools).
+    vision: bool = False
     # True when the agent carries a Memory plugin (Settings shows its Memory
     # page only when some agent does).
     memory: bool = False

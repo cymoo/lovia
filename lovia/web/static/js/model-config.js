@@ -78,6 +78,19 @@ export function chatModelInfo() {
   return p ? { model: p.model, window: p.window ?? null } : null;
 }
 
+/**
+ * Whether the model the chat picked for itself sees images; null when it
+ * runs on the default (or the server has no model settings) — the agent's
+ * own `vision` answers then. Read by the composer's attach.
+ * @returns {boolean | null}
+ */
+export function chatModelSeesImages() {
+  const id = pickedModel();
+  if (!id || id === cfg()?.roles.chat) return null;
+  const p = activeProfile();
+  return p ? !!p.sees_images : null;
+}
+
 /** The open chat changed, or what is known of it did. */
 function syncChatModel(/** @type {string | null} */ id, /** @type {any} */ row) {
   const wasNew = _modelOf === null;

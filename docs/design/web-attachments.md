@@ -1,6 +1,6 @@
 # 消息附件：从工作区的 `uploads/` 移到对话自己的目录
 
-> 状态：第 1 步已实现（v0.9.239），第 2 步已实现（v0.9.240）；第 3 步待做 · 2026-11-19 · 范围：`lovia/web`（`store.py`、`attachments.py`、`api/workspace.py`、`api/chat.py`、`api/deps.py`、`static/js/chat.js`、`files.js`），远程部分加两个 workspace 引擎操作（`workspace/remote/serve.py`）。core 不改。
+> 状态：已实现——第 1 步 v0.9.239，第 2 步 v0.9.240，第 3 步 v0.9.241 · 2026-11-19 · 范围：`lovia/web`（`store.py`、`attachments.py`、`api/workspace.py`、`api/chat.py`、`api/deps.py`、`static/js/chat.js`、`files.js`），远程部分加两个 workspace 引擎操作（`workspace/remote/serve.py`）。core 不改。
 >
 > 行号指向 `main`（`b91ae5bb`，v0.9.238）。
 

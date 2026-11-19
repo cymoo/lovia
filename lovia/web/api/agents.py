@@ -14,6 +14,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from ...agent import Agent
 from ...plugins.skills import Skills
 from ...providers.base import context_window as provider_context_window
+from ..attachments import sees_images
 from ..errors import WebError
 from ..schemas import AgentInfo, SkillInfo
 from .deps import RouterDeps
@@ -61,6 +62,7 @@ def agent_info(
         else None,
         tools=[t.name for t in (agent.tools or [])],
         workspace=files_config(agent) is not None,
+        vision=sees_images(agent),
         memory=memory is not None,
         memory_projects=memory is not None and splits_by_project(memory),
         context_window=context_window,

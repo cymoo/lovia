@@ -2,7 +2,7 @@
 import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { draftWorkspaceMode } from './workspace-mode.js';
-import { chatModelInfo, draftChatModel } from './model-config.js';
+import { chatModelInfo, chatModelSeesImages, draftChatModel } from './model-config.js';
 import { draftWorkspaceRoot, ensureLinked, scopeRoot, workspaceName } from './workspaces.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
@@ -3012,11 +3012,13 @@ async function applyEvent({ event, data }) {
   switch (event) {
     case 'session': {
       const known = store.sessions.some((s) => s.id === data.session_id);
-      store.sessionId = data.session_id;
       // The new chat took the draft's id (and its uploads): the tray on
       // screen is this chat's now, and the next new chat mints its own.
+      // Re-keyed first: setting sessionId re-checks the attach button,
+      // which would otherwise shelve this tray as the draft's.
       if (data.session_id === _draftId) _draftId = null;
       _trayKey = data.session_id;
+      store.sessionId = data.session_id;
       if (_shownRun) _shownRun.sessionId = data.session_id;
       store.syncURL(data.session_id);
       // A brand-new session gets a server-generated title shortly after the
@@ -4161,11 +4163,13 @@ store.on('session-switched', () => {
   flushDraft();
   restoreDraft();
   swapTray();
+  syncAttachButton(); // its model may see images, or not
 });
 store.on('reset-chat-view', () => {
   flushDraft();
   restoreDraft();
   swapTray();
+  syncAttachButton(); // back on the default model, which no event announces
 });
 store.on('session-deleted', (id) => {
   try {
@@ -4245,9 +4249,24 @@ function forgetChip(chip) {
   }
 }
 
+// Whether the agent takes attachments at all: any file with a workspace (its
+// tools read them), images alone with a model that sees them and no workspace
+// — the model the chat picked, if it picked one.
 function attachEnabled() {
+  const agent = store.agents.find((a) => a.name === store.agent);
+  return !!(agent?.workspace || (chatModelSeesImages() ?? agent?.vision));
+}
+
+// Whether it takes files besides images: only a workspace has tools to read them.
+function filesAllowed() {
   return !!store.agents.find((a) => a.name === store.agent)?.workspace;
 }
+
+// The images a model takes inline (lovia/web/media.py MODEL_IMAGE_MIME).
+const MODEL_IMAGE_RE = /\.(png|jpe?g|gif|webp)$/i;
+const MODEL_IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
+/** @type {HTMLInputElement | null} */
+let _attachInput = null;
 
 // Past this size a paste stops being a message and starts being a document.
 const PASTE_ATTACH_CHARS = 4000;
@@ -4324,17 +4343,37 @@ function dropStrayAttachments(root) {
   toast(t('ws.attachmentsLeft', { n: stray.length, name: workspaceName(stray[0].root) }));
 }
 
+// The attach button and picker follow the agent and the chat's model. They
+// never touch a tray: these checks run mid-switch, before the chat on
+// screen's agent or model is known, and a draft must not be lost to that.
+// What the chat can't take is left out when it sends (sendableAttachments).
 function syncAttachButton() {
   const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById('attach'));
   if (!btn) return;
   const ok = attachEnabled();
   btn.hidden = !ok;
   btn.disabled = !ok;
-  if (!ok && _pendingAttachments.length) {
-    _pendingAttachments = [];
-    renderAttachTray();
-    updateSendEnabled();
+  if (_attachInput) _attachInput.accept = filesAllowed() ? '' : MODEL_IMAGE_ACCEPT;
+}
+
+/**
+ * The ready chips this send carries: what the agent takes now — nothing
+ * when it takes no attachments, images alone without a workspace. The rest
+ * stays out, said so once (`say`), instead of the server dropping it.
+ */
+function sendableAttachments(say = true) {
+  const ready = pendingReady();
+  const enabled = attachEnabled();
+  const files = filesAllowed();
+  const takes = (/** @type {any} */ a) =>
+    enabled && (files || (!a.path && MODEL_IMAGE_RE.test(a.name || '')));
+  const sendable = ready.filter(takes);
+  if (say && sendable.length < ready.length) {
+    toast(t(enabled ? 'composer.imagesOnly' : 'composer.attachNoWorkspace'), {
+      type: 'error',
+    });
   }
+  return sendable;
 }
 
 function renderAttachTray() {
@@ -4447,6 +4486,13 @@ async function uploadFiles(files) {
   if (!attachEnabled()) {
     toast(t('composer.attachNoWorkspace'), { type: 'error' });
     return;
+  }
+  if (!filesAllowed()) {
+    // No workspace: images its model sees, nothing it would need tools to read.
+    const images = files.filter((f) => MODEL_IMAGE_RE.test(f.name));
+    if (images.length < files.length) toast(t('composer.imagesOnly'), { type: 'error' });
+    files = images;
+    if (!files.length) return;
   }
   // The whole batch belongs to the chat it was picked in: its chips go in that
   // tray now, before the first await — a switch meanwhile carries the tray
@@ -4905,6 +4951,8 @@ export function initComposer() {
   attachInput.multiple = true;
   attachInput.style.display = 'none';
   document.body.appendChild(attachInput);
+  _attachInput = attachInput;
+  syncAttachButton(); // the picker's accept follows the agent from the start
   attachInput.addEventListener('change', () => {
     if (attachInput.files?.length) uploadFiles([...attachInput.files]);
     attachInput.value = ''; // let the same file be picked again
@@ -4925,8 +4973,8 @@ export function initComposer() {
     // the workspace), leaving whatever was already typed intact.
     const text = e.clipboardData?.getData('text/plain') ?? '';
     if (
-      text.length > PASTE_ATTACH_CHARS ||
-      text.split('\n').length > PASTE_ATTACH_LINES
+      filesAllowed() &&
+      (text.length > PASTE_ATTACH_CHARS || text.split('\n').length > PASTE_ATTACH_LINES)
     ) {
       e.preventDefault();
       uploadFiles([pastedTextFile(text)]);
@@ -4954,6 +5002,8 @@ export function initComposer() {
   }
   store.on('agents-loaded', syncAttachButton);
   store.on('agent-changed', syncAttachButton);
+  store.on('chat-model-changed', syncAttachButton); // its model may see, or not
+  store.on('config-loaded', syncAttachButton); // the models' answers arrive late
   store.on('workspace-scope-changed', dropStrayAttachments);
   syncAttachButton();
 
@@ -5066,7 +5116,7 @@ export function initComposer() {
       _steerOnce = false;
       return;
     }
-    let attachments = pendingReady();
+    let attachments = sendableAttachments();
 
     if (store.streaming) {
       const queue = !_steerOnce;
@@ -5097,7 +5147,7 @@ export function initComposer() {
     // Linking may have put the chat in another folder, taking out of the tray
     // what was saved elsewhere: send what the draft holds now.
     message = promptEl.value.trim();
-    attachments = pendingReady();
+    attachments = sendableAttachments(false);
     if (uploading() || (!message && !attachments.length)) return;
     const payload = attachmentPayload(attachments);
     promptEl.value = '';

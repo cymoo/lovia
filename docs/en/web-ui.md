@@ -528,6 +528,48 @@ does not stop them; deleting the chat or stopping the Web server reaps them,
 and a server restart does not restore them. See
 [Workspace](workspace.md#background-processes) for the full lifecycle.
 
+### Attachments at a glance
+
+Using `lovia web`:
+
+- **Your project stays clean.** Attachments live in `~/.lovia/attachments/`
+  (beside the chat history), never in the folder a chat works in. An
+  `uploads/` left by a version before 0.9.239 is yours to delete or ignore.
+- **They go with the chat.** Deleting a chat deletes its attachments once no
+  fork or task of it still uses them; unsent drafts go after a day.
+- **The Agent reads them and doesn't change them.** To keep one in the
+  project, ask the Agent to save it there. `@path` points at a file already in
+  the project without uploading it.
+- **Remote chats keep a copy on the host**, outside the project, in a folder
+  only your account there may enter. Deleting the chat does not delete that
+  copy; the host's temp cleaning does — keep it in mind for sensitive files.
+- **Without a workspace**, images only (PNG, JPEG, GIF, WebP, up to 10 MB),
+  and only with a model that sees them; the attach button follows the model
+  the chat picked.
+
+Building on `lovia web` (`create_app`, a multi-user app):
+
+- **Storage follows the `ChatStore`**: `attachments/` next to its database,
+  so a store per user isolates their attachments, and removing a user's
+  directory removes them. `ChatStore(..., attachments_dir=...)` puts them
+  elsewhere.
+- **The routes**: `POST /api/sessions/{id}/attachments` and
+  `GET /api/sessions/{id}/attachments/{name}` (see
+  [HTTP API](http-api.md)). A new chat's page mints its 32-hex id before
+  the first upload and sends with it; the page only ever sees file names.
+- **Give the agent a workspace config, not a bound session.** A
+  `LocalWorkspace` or `RemoteWorkspace` takes any file. An agent bound to a
+  session you opened yourself takes no uploads: that one session serves
+  every chat. An agent without a workspace takes images, inline, when its
+  model sees them — `/api/agents` reports `vision`, and a `"vendor:model"`
+  string is resolved for it.
+- **Every run gets the folder's two rules** — readable, never writable — its
+  handoff targets too. Your `denied_paths` still win: deny the data
+  directory and the tools can't read attachments (images still go inline).
+  A custom workspace backend has no policy for them to join.
+- **Limits are process-wide** (`LOVIA_MAX_UPLOAD_MB`,
+  `LOVIA_UPLOAD_ALLOWED_EXT`): one server can't set them per user yet.
+
 ## Charts
 
 The `show_chart` tool draws interactive charts in the chat — line, bar, pie,

@@ -1214,6 +1214,22 @@ async def test_workspace_instructions_follow_the_effective_rules(tmp_path) -> No
     bare = Workspace.local(str(tmp_path), mode="coding", baseline=()).instructions()
     assert "Credential stores" not in bare and "Writes to '.git'" not in bare
 
+    # A write-only deny is stated as one, not filed with the credential
+    # stores: a model told a folder is off-limits won't read from it.
+    from lovia.workspace import PathRule
+
+    text = Workspace.local(
+        str(tmp_path),
+        mode="trusted",
+        baseline=(
+            *CREDENTIAL_PATHS,
+            PathRule("/data/in", "deny", ops={"write"}, reason="Copy it out first."),
+        ),
+    ).instructions()
+    stores = next(line for line in text.splitlines() if "Credential stores" in line)
+    assert "/data/in" not in stores
+    assert "Writes to '/data/in' are refused. Copy it out first." in text
+
 
 async def test_workspace_instructions_layout_follows_root_kind(tmp_path) -> None:
     # Non-repo roots get the generic placement rule; a .git entry — a dir, or

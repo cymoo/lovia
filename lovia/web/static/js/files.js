@@ -1422,7 +1422,8 @@ function syncViewerViews() {
     b.setAttribute('aria-selected', String(v.view === view));
   }
   els.viewFile.disabled = deleted;
-  els.attach.classList.toggle('lv-hidden', deleted);
+  // An upload is already the chat's: nothing to attach from the workspace.
+  els.attach.classList.toggle('lv-hidden', deleted || !!v.src);
 }
 
 async function loadDiff(v) {
@@ -1520,9 +1521,15 @@ function renderDiff(d, path) {
 // Returns false when the file couldn't be read (so link-following can retry
 // with a different base); true otherwise. `view` picks diff or file for a
 // file that has both; a silent reopen (an agent write) keeps the one on screen.
-async function openFile(path, { silent = false, view = undefined } = {}) {
-  const name = basename(path);
-  rememberViewing(path);
+// `src` shows a chat's upload instead — not a workspace file: read off its own
+// URLs (`path` is then that URL, the viewer's key), with no tree, diff or path.
+/**
+ * @param {string} path
+ * @param {{ silent?: boolean, view?: string, src?: { name: string, url: string, download: string } }} [opts]
+ */
+async function openFile(path, { silent = false, view = undefined, src = undefined } = {}) {
+  const name = src ? src.name : basename(path);
+  rememberViewing(src ? '' : path);
   if (!els.panel.classList.contains('lv-viewing')) state.listScroll = els.list.scrollTop;
   els.viewer.classList.remove('lv-hidden');
   els.panel.classList.add('lv-viewing');
@@ -1531,7 +1538,7 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
   // what kind of file this is — stays in view. An absolute path (outside the
   // workspace) shows whole, truncated from the left (rtl) to keep the name;
   // the bidi isolate keeps a leading "~/." from being reordered to the far end.
-  if (path.startsWith('/')) {
+  if (!src && path.startsWith('/')) {
     const abs = document.createElement('span');
     abs.className = 'lv-files-viewer-abs';
     const bdi = document.createElement('bdi');
@@ -1550,15 +1557,17 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
     tail.textContent = name.slice(cut);
     els.viewerName.replaceChildren(stem, tail);
   }
-  els.viewerName.title = path;
-  els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
+  els.viewerName.title = src ? name : path;
+  els.download.href = src
+    ? src.download
+    : api.workspaceRawUrl({ agent: store.agent, path, download: true });
   // Off until renderViewerContent re-shows them for text: an image, PDF or
   // binary returns before it, and must not keep the last file's buttons.
   els.mdToggle.classList.add('lv-hidden');
   els.wrapToggle?.classList.add('lv-hidden');
   els.copyContent.classList.add('lv-hidden');
 
-  const e = ext(path);
+  const e = ext(name);
   const kind = IMAGE_EXT.has(e) || e === 'svg'
     ? 'image'
     : e === 'pdf'
@@ -1571,12 +1580,12 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
             ? 'csv'
             : 'text';
   const same = silent && state.viewing?.path === path ? state.viewing : null;
-  const change = diffOf(path);
+  const change = src ? null : diffOf(path);
   const shown =
     change?.status === 'deleted' ? 'diff' : change ? (view ?? same?.view ?? 'file') : 'file';
   // The last diff stays up while a fresh one loads: an agent's edits don't strobe it.
   const diff = shown === 'diff' ? same?.diff : undefined;
-  state.viewing = { path, kind, name, raw: same?.raw ?? false, view: shown, diff };
+  state.viewing = { path, kind, name, raw: same?.raw ?? false, view: shown, diff, src };
   if (!silent) renderList();
   if (!silent && state.mode === 'browse') void refreshChangeMap();
   syncViewerViews();
@@ -1595,7 +1604,7 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
     const rev = revOf(path);
     // SVG included: workspaceImageUrl asks for the form that renders in an
     // <img> and downloads on navigation (util.js) — script-inert either way.
-    img.src = workspaceImageUrl(store.agent, path) + (rev ? `&v=${rev}` : '');
+    img.src = src ? src.url : workspaceImageUrl(store.agent, path) + (rev ? `&v=${rev}` : '');
     els.viewerBody.replaceChildren(img);
     return true;
   }
@@ -1608,11 +1617,14 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
     embed.className = 'lv-files-frame';
     embed.type = 'application/pdf';
     const rev = revOf(path);
-    embed.src =
-      api.workspaceRawUrl({ agent: store.agent, path }) + (rev ? `&v=${rev}` : '');
+    embed.src = src
+      ? src.url
+      : api.workspaceRawUrl({ agent: store.agent, path }) + (rev ? `&v=${rev}` : '');
     els.viewerBody.replaceChildren(embed);
     return true;
   }
+
+  if (src) return showUpload(path, src);
 
   if (kind === 'html') {
     // The whole document, unpaginated — the sandboxed preview needs it in one
@@ -1662,11 +1674,46 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
   return true;
 }
 
+// An upload's text, whole: there is no paged read of a chat's folder. Past
+// UPLOAD_PREVIEW_BYTES, or not text (a NUL early on), it is a download.
+const UPLOAD_PREVIEW_BYTES = 2 * 1024 * 1024;
+
+async function showUpload(path, src) {
+  let text = null;
+  try {
+    const res = await fetch(src.download);
+    if (!res.ok) throw await apiError(res);
+    const size = Number(res.headers.get('content-length'));
+    if (!(size > UPLOAD_PREVIEW_BYTES)) {
+      text = await res.text();
+      if (text.length > UPLOAD_PREVIEW_BYTES || text.slice(0, 1024).includes('\0')) text = null;
+    } else {
+      void res.body?.cancel();
+    }
+  } catch (err) {
+    els.viewerBody.replaceChildren(viewerNote(viewerErrorText(err)));
+    return false;
+  }
+  if (state.viewing?.path !== path) return true;
+  if (text === null) {
+    const dl = document.createElement('a');
+    dl.className = 'lv-btn lv-btn-ghost lv-btn-sm';
+    dl.textContent = t('files.download');
+    dl.href = src.download;
+    dl.setAttribute('download', '');
+    els.viewerBody.replaceChildren(viewerNote(t('files.binary'), dl));
+    return true;
+  }
+  state.viewing.content = text;
+  renderViewerContent();
+  return true;
+}
+
 // Links inside rendered markdown: keep the user in the app. Externals open a
 // new tab; relative hrefs open in the viewer — resolved against the current
 // file's directory first, then (authors often mean root-relative) the root.
 async function followViewerLink(href) {
-  const base = dirname(state.viewing?.path || '');
+  const base = state.viewing?.src ? '' : dirname(state.viewing?.path || '');
   const joined = href.startsWith('/')
     ? href.slice(1)
     : (base ? `${base}/` : '') + href;
@@ -1750,7 +1797,7 @@ function renderViewerContent() {
     const { turn, body } = bodyWrapper();
     // Images resolve like the links below: against the document's own
     // directory first, then the workspace root.
-    renderMarkdownInto(body, v.content, { agent: store.agent, base: dirname(v.path) });
+    renderMarkdownInto(body, v.content, { agent: store.agent, base: v.src ? '' : dirname(v.path) });
     highlightIn(body);
     addCodeBlockControls(body); // language + Copy, as in the chat
     els.viewerBody.appendChild(turn);
@@ -1913,6 +1960,12 @@ export function initFiles() {
         items.push({ label: t('files.download'), icon: icon('download', { size: 15 }), onSelect: () => els.download.click() });
       }
       if (items.length) items.push(null);
+      if (v.src) {
+        // An upload has no place in the tree, nor a path to copy.
+        if (items.length) items.pop();
+        if (items.length) openMenu(els.more, items);
+        return;
+      }
       if (!v.path.startsWith('/')) {
         items.push({
           label: t('files.revealInTree'),
@@ -2127,13 +2180,15 @@ export function initFiles() {
   });
   // A tool card's "open in Files panel" action (chat.js) — open the panel and
   // jump straight to the file the tool touched.
-  store.on('open-workspace-file', async ({ path }) => {
+  // An upload (`src`) opens here too; with no panel to show it in, it downloads.
+  store.on('open-workspace-file', async ({ path, src }) => {
     if (!state.available) {
-      toast(t('files.noWorkspace'));
+      if (src) window.open(src.download, '_blank', 'noopener');
+      else toast(t('files.noWorkspace'));
       return;
     }
     if (!state.open) setOpen(true);
-    if (!(await openFile(path))) {
+    if (!(await openFile(src ? src.url : path, { src }))) {
       toast(t('files.openFailed'), { type: 'error' });
     }
   });

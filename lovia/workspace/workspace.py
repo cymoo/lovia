@@ -304,16 +304,22 @@ def _describe_rules(policy: WorkspacePolicy) -> list[str]:
     """What the baseline and the preset's path rules refuse or ask about —
     derived, so the prompt never claims a protection the policy lacks."""
     lines: list[str] = []
-    off_limits = [
-        r.pattern
+    denied = [
+        r
         for r in policy.baseline or ()
         if isinstance(r, PathRule) and r.action == "deny"
     ]
+    off_limits = [r.pattern for r in denied if "read" in r.ops]
     if off_limits:
         lines.append(
             f"Credential stores ({', '.join(repr(p) for p in off_limits)}) are "
             "off-limits to every tool and command."
         )
+    # A write-only deny (a chat's attachments) is no credential store: called
+    # one, a model won't even read what it was sent.
+    for r in denied:
+        if "read" not in r.ops:
+            lines.append(f"Writes to {r.pattern!r} are refused. {r.reason}".rstrip())
     guarded_writes = [
         r.pattern
         for r in policy.baseline or ()

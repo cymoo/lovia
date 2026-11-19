@@ -15,10 +15,15 @@ Part of the stdlib-only engine: this runs where lovia is not installed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import errno
 import json
 import os
 import platform
+import re
+import stat
 import sys
+import tempfile
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -176,6 +181,12 @@ class _Server:
             return _resolve_root(params["path"])
         if method == "complete_dirs":
             return await asyncio.to_thread(complete_dirs, params["path"])
+        if method == "attachments_list":
+            return await asyncio.to_thread(attachments_list, params["id"])
+        if method == "attachments_put":
+            return await asyncio.to_thread(
+                attachments_put, params["id"], params["name"], params["data"]
+            )
         if method == "open":
             opened = LocalWorkspaceSession(**params)
             self._sessions[opened.id] = opened
@@ -211,6 +222,84 @@ def _resolve_root(path: str) -> str:
     if not resolved.is_dir():
         raise UserError(f"No such directory: {resolved}")
     return resolved.as_posix()
+
+
+# A chat's attachment folder: the hex id the near side names it by.
+_ATTACHMENTS_ID = re.compile(r"[0-9a-f]{32}")
+
+
+def _attachments_root() -> Path:
+    """Where this host keeps copies of chats' attachments: under its temp
+    directory, in a folder this account alone owns. The copies are a cache —
+    the near side holds the originals and puts back what is missing — so the
+    system's temp cleaning is all the deleting they get.
+
+    POSIX ``/tmp`` is shared: the account's folder is made ``0700`` and, if
+    it was already there, must be a real directory this account owns and no
+    one else may enter — or another account that made it first (or planted a
+    link) would be handed the files. Windows' ``%TEMP%`` is the account's own.
+    """
+    tmp = Path(tempfile.gettempdir()).resolve()
+    if os.name != "posix":
+        base = tmp / "lovia"
+        base.mkdir(exist_ok=True)
+    else:
+        base = tmp / f"lovia-{os.getuid()}"
+        try:
+            base.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        st = os.lstat(base)
+        if (
+            not stat.S_ISDIR(st.st_mode)
+            or st.st_uid != os.getuid()
+            or st.st_mode & 0o077
+        ):
+            raise PermissionError(
+                errno.EACCES,
+                "not a private directory of this account; attachments are "
+                "not copied into it",
+                str(base),
+            )
+    root = base / "attachments"
+    root.mkdir(mode=0o700, exist_ok=True)
+    return root
+
+
+def _attachments_folder(chat: str) -> Path:
+    if not _ATTACHMENTS_ID.fullmatch(chat):
+        raise ValueError(f"not an attachment folder id: {chat!r}")
+    return _attachments_root() / chat
+
+
+def attachments_list(chat: str) -> dict[str, Any]:
+    """The folder ``chat``'s attachments are copied to here, as a POSIX path
+    (Windows takes ``/`` too), and the size of each file already in it."""
+    folder = _attachments_folder(chat)
+    files: dict[str, int] = {}
+    if folder.is_dir():
+        for entry in os.scandir(folder):
+            if entry.is_file(follow_symlinks=False):
+                files[entry.name] = entry.stat(follow_symlinks=False).st_size
+    return {"folder": folder.as_posix(), "files": files}
+
+
+def attachments_put(chat: str, name: str, data: bytes) -> None:
+    """Write one copy into ``chat``'s folder here, replacing a stale one
+    whole (a temp file renamed over it — a reader never sees half)."""
+    if name in ("", ".", "..") or "/" in name or "\\" in name or "\0" in name:
+        raise ValueError(f"not a file name: {name!r}")
+    folder = _attachments_folder(chat)
+    folder.mkdir(mode=0o700, exist_ok=True)
+    fd, temp = tempfile.mkstemp(dir=folder, prefix=".put-")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(data)
+        os.replace(temp, folder / name)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temp)
+        raise
 
 
 def main() -> None:

@@ -334,7 +334,8 @@ await box.aclose()
 `inspect.isawaitable` 为真时 `await` 它。
 
 `lovia web` 对远程工作区同样按对话持有 session，也能列出它的后台进程。Files 面板和附件在远程工作区同样可用：
-页面通过同一条连接上自己的只读 session 读取主机上的文件，发出的附件也经它复制到根目录的 `uploads/`。
+页面通过同一条连接上自己的只读 session 读取主机上的文件；对话的附件则用 `RemoteHost.attachments_list` /
+`attachments_put` 复制到主机上——不在根目录里，而是在一个只有主机账号能进入的临时目录。
 
 ## 使用建议
 

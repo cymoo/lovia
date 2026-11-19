@@ -1,0 +1,81 @@
+"""The host side of a remote chat's attachments (``remote/serve.py``).
+
+A host keeps copies of chats' attachments under its temp directory, in a
+folder its account alone owns — POSIX ``/tmp`` is shared, so a folder someone
+else made first, or a link planted in its place, must never receive them.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from lovia.workspace.remote import serve
+
+CHAT = "ab" * 16
+
+
+@pytest.fixture
+def host_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    where = tmp_path / "tmp"
+    where.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(where))
+    return where.resolve()
+
+
+def _account(host_tmp: Path) -> Path:
+    return host_tmp / ("lovia" if os.name != "posix" else f"lovia-{os.getuid()}")
+
+
+def test_copies_are_listed_with_their_sizes(host_tmp: Path) -> None:
+    folder, files = serve.attachments_list(CHAT).values()
+    assert folder == (_account(host_tmp) / "attachments" / CHAT).as_posix()
+    assert files == {}
+    serve.attachments_put(CHAT, "a.txt", b"hello")
+    serve.attachments_put(CHAT, "a.txt", b"hi")  # a stale copy is replaced
+    assert serve.attachments_list(CHAT)["files"] == {"a.txt": 2}
+    assert (Path(folder) / "a.txt").read_bytes() == b"hi"
+    assert [p.name for p in Path(folder).iterdir()] == ["a.txt"]  # no temp left
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+def test_the_account_folder_is_private(host_tmp: Path) -> None:
+    serve.attachments_put(CHAT, "a.txt", b"x")
+    for path in (_account(host_tmp), _account(host_tmp) / "attachments"):
+        assert path.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX temp-dir ownership")
+def test_a_folder_others_can_enter_is_refused(host_tmp: Path) -> None:
+    account = _account(host_tmp)
+    account.mkdir(mode=0o755)
+    account.chmod(0o755)
+    with pytest.raises(PermissionError, match="not a private directory"):
+        serve.attachments_put(CHAT, "a.txt", b"x")
+    assert not (account / "attachments").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX temp-dir ownership")
+def test_a_link_in_the_folders_place_is_refused(host_tmp: Path) -> None:
+    elsewhere = host_tmp / "someone-elses"
+    elsewhere.mkdir(mode=0o700)
+    _account(host_tmp).symlink_to(elsewhere, target_is_directory=True)
+    with pytest.raises(PermissionError):
+        serve.attachments_list(CHAT)
+    assert list(elsewhere.iterdir()) == []
+
+
+@pytest.mark.parametrize("chat", ["../x", "AB" * 16, "ab" * 15, ""])
+def test_only_a_hex_id_names_a_folder(host_tmp: Path, chat: str) -> None:
+    with pytest.raises(ValueError):
+        serve.attachments_list(chat)
+
+
+@pytest.mark.parametrize("name", ["", ".", "..", "../x.txt", "a/b", "a\\b", "a\0b"])
+def test_only_a_plain_name_is_written(host_tmp: Path, name: str) -> None:
+    with pytest.raises(ValueError):
+        serve.attachments_put(CHAT, name, b"x")

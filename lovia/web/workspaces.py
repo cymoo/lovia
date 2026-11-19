@@ -74,9 +74,22 @@ def files_config(agent: Agent[Any]) -> LocalWorkspace | RemoteWorkspace | None:
     return cfg if isinstance(cfg, (LocalWorkspace, RemoteWorkspace)) else None
 
 
-def attachment_policy(policy: WorkspacePolicy, folder: Path) -> WorkspacePolicy:
-    """``policy`` with the chat's attachment ``folder`` readable, never
-    writable.
+@dataclass(frozen=True)
+class HostFolder:
+    """A chat's attachment folder on a remote workspace's host — where the
+    host keeps its copies — as the host resolved it."""
+
+    path: str
+
+
+AttachmentFolder = Path | HostFolder
+"""A chat's attachment folder as its runs reach it: on this machine, or on
+the host a remote chat works on."""
+
+
+def attachment_policy(policy: WorkspacePolicy, where: str) -> WorkspacePolicy:
+    """``policy`` with the chat's attachment folder — ``where``, resolved on
+    the machine that judges the policy — readable, never writable.
 
     The read allow goes first in ``path_rules`` (first match wins there). The
     write deny goes in the baseline: a read allow alone leaves writes to the
@@ -86,7 +99,7 @@ def attachment_policy(policy: WorkspacePolicy, folder: Path) -> WorkspacePolicy:
     """
     # Patterns are globs: a ``[``, ``*`` or ``?`` in the data directory's
     # path (``Work [2026]``) must match itself, or neither rule matches.
-    where = glob.escape(folder.resolve().as_posix())
+    where = glob.escape(where)
     read = PathRule(where, "allow", ops=frozenset({"read"}))
     if read in policy.path_rules:
         return policy
@@ -103,22 +116,33 @@ def attachment_policy(policy: WorkspacePolicy, folder: Path) -> WorkspacePolicy:
     )
 
 
+def guard_workspace(ws: Any, folder: AttachmentFolder) -> Any:
+    """``ws`` with ``folder`` readable and never writable, where they meet: a
+    local folder in a local workspace, a host's in that host's workspace.
+    Anything else — a custom backend, a session already bound — as is."""
+    if isinstance(folder, Path) and isinstance(ws, LocalWorkspace):
+        where = folder.resolve().as_posix()
+    elif isinstance(folder, HostFolder) and isinstance(ws, RemoteWorkspace):
+        where = folder.path
+    else:
+        return ws
+    return replace(ws, policy=attachment_policy(ws.policy, where))
+
+
 def with_attachments(
-    agent: Agent[Any], folder: Path, done: dict[int, Agent[Any]] | None = None
+    agent: Agent[Any],
+    folder: AttachmentFolder,
+    done: dict[int, Agent[Any]] | None = None,
 ) -> Agent[Any]:
-    """``agent`` and every handoff target it reaches, each local workspace's
-    policy reading ``folder`` and never writing it (:func:`attachment_policy`).
-    The original is never touched; an agent with nothing to change comes back
+    """``agent`` and every handoff target it reaches, each workspace's policy
+    reading ``folder`` and never writing it (:func:`guard_workspace`). The
+    original is never touched; an agent with nothing to change comes back
     as is."""
     done = {} if done is None else done
     if id(agent) in done:  # handoffs may form a cycle
         return done[id(agent)]
     ws = agent.workspace
-    guarded = (
-        replace(ws, policy=attachment_policy(ws.policy, folder))
-        if isinstance(ws, LocalWorkspace)
-        else ws
-    )
+    guarded = guard_workspace(ws, folder)
     if guarded is ws and not agent.handoffs:
         done[id(agent)] = agent
         return agent
@@ -149,10 +173,7 @@ _GIT_OUTPUT_CHARS = 2_000_000
 
 
 async def open_view(
-    cfg: LocalWorkspace | RemoteWorkspace,
-    *,
-    write: bool = False,
-    git: bool = False,
+    cfg: LocalWorkspace | RemoteWorkspace, *, git: bool = False
 ) -> WorkspaceSession:
     """A session on ``cfg``'s files for the page itself, not for a run.
 
@@ -160,18 +181,15 @@ async def open_view(
     and under this preset everything outside the root — and everything the
     agent's ``denied_paths`` hide — is a plain ``deny``. Only ``denied_paths``
     carry over from the agent's policy, never its ``path_rules``, which
-    could *widen* access. ``write`` lets it write inside the root, to copy
-    a remote chat's attachments onto its host: the user's own act, so it
-    does not wait on the chat's mode.
-    ``git`` lets it run ``git rev-parse`` / ``status`` / ``diff`` and
-    nothing else, with the path guard still judging every argument.
+    could *widen* access. The page never writes a workspace: an upload is
+    the chat's (:mod:`lovia.web.attachments`). ``git`` lets it run
+    ``git rev-parse`` / ``status`` / ``diff`` and nothing else, with the path
+    guard still judging every argument.
 
     Opened where the files are — on the host, for a remote workspace, over
     the connection its chats share. The caller closes it.
     """
     policy = WorkspacePolicy.readonly(denied_paths=cfg.policy.denied_paths)
-    if write:
-        policy = replace(policy, write="allow")
     if git:
         policy = replace(policy, allow_shell=True, command_rules=_GIT_READS)
         limits = replace(cfg.limits, max_shell_output_chars=_GIT_OUTPUT_CHARS)
@@ -510,14 +528,17 @@ class WorkspaceSessions:
         default_factory=dict
     )
     # Each chat's attachment folder, which every config of its session is
-    # judged with (:func:`attachment_policy`) — a mode switch's too.
-    _folders: dict[str, Path] = field(default_factory=dict)
+    # judged with (:func:`guard_workspace`) — a mode switch's too.
+    _folders: dict[str, AttachmentFolder] = field(default_factory=dict)
     # Serializes opens so two concurrent runs of one chat share a session
     # instead of racing two into existence (the loser would leak unclosed).
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def bind(
-        self, session_id: str, agent: Agent[Any], attachments: Path | None = None
+        self,
+        session_id: str,
+        agent: Agent[Any],
+        attachments: AttachmentFolder | None = None,
     ) -> Agent[Any]:
         """Return ``agent`` with its workspace bound to the chat's session.
 
@@ -527,10 +548,11 @@ class WorkspaceSessions:
         so does an agent the caller already bound to a session of its own:
         that lifetime is not this registry's to manage.
 
-        ``attachments`` is the chat's attachment folder: a local workspace's
-        policy reads it and never writes it — the handoff targets' too, which
-        open sessions of their own past this registry. A remote one's files
-        are on another machine, and a custom backend has no policy to extend.
+        ``attachments`` is the chat's attachment folder — on this machine, or
+        the host's copy of it for a remote chat: the workspace's policy reads
+        it and never writes it, the handoff targets' too, which open sessions
+        of their own past this registry. A custom backend has no policy to
+        extend.
         """
         if attachments is not None:
             self._folders[session_id] = attachments
@@ -572,9 +594,7 @@ class WorkspaceSessions:
     def _guarded(self, session_id: str, cfg: WorkspaceLike) -> WorkspaceLike:
         """``cfg`` with the chat's attachment folder in its policy."""
         folder = self._folders.get(session_id)
-        if folder is None or not isinstance(cfg, LocalWorkspace):
-            return cfg
-        return replace(cfg, policy=attachment_policy(cfg.policy, folder))
+        return cfg if folder is None else guard_workspace(cfg, folder)
 
     def _retune(self, session_id: str, cfg: WorkspaceLike) -> bool:
         session_cfg, session = self._live[session_id]

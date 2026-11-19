@@ -450,7 +450,7 @@ def test_a_run_reads_the_folder_and_never_writes_it(
         path_rules=(PathRule(folder.as_posix(), "allow"),)
     )
     for policy in (base, widened):
-        guarded = attachment_policy(policy, folder)
+        guarded = attachment_policy(policy, folder.resolve().as_posix())
         target = (folder / "cat.png").resolve().as_posix()
         assert guarded.decide_path(rel=None, abs_posix=target, op="read").action == (
             "allow"
@@ -459,7 +459,8 @@ def test_a_run_reads_the_folder_and_never_writes_it(
         assert write.action == "deny"
         if policy.write_outside == "allow":  # only the folder's rule says no
             assert "read-only" in write.reason
-        assert attachment_policy(guarded, folder) == guarded  # idempotent
+        # Idempotent.
+        assert attachment_policy(guarded, folder.resolve().as_posix()) == guarded
 
 
 def test_glob_characters_in_the_data_directory_match_themselves(
@@ -467,7 +468,7 @@ def test_glob_characters_in_the_data_directory_match_themselves(
 ) -> None:
     folder = tmp_path / "Work [2026] *" / "attachments" / _sid()
     folder.mkdir(parents=True)
-    guarded = attachment_policy(WorkspacePolicy.trusted(), folder)
+    guarded = attachment_policy(WorkspacePolicy.trusted(), folder.resolve().as_posix())
     target = (folder / "cat.png").resolve().as_posix()
     assert guarded.decide_path(rel=None, abs_posix=target, op="write").action == "deny"
     # And they stay literal: a sibling the brackets would match as a class.
@@ -500,7 +501,7 @@ def test_denied_paths_still_win_over_the_read(tmp_path: Path) -> None:
     folder = tmp_path / "attachments" / _sid()
     policy = WorkspacePolicy.coding(denied_paths=(tmp_path.resolve().as_posix(),))
     target = (folder / "cat.png").resolve().as_posix()
-    guarded = attachment_policy(policy, folder)
+    guarded = attachment_policy(policy, folder.resolve().as_posix())
     assert guarded.decide_path(rel=None, abs_posix=target, op="read").action == "deny"
 
 

@@ -48,6 +48,23 @@ def _agent(root: Path, script: list) -> Agent:
     )
 
 
+@pytest.fixture(autouse=True)
+def host_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The test host's temp directory — where its attachment copies go — so
+    none land in the machine's real one. The host process inherits it."""
+    where = tmp_path / "host-tmp"
+    where.mkdir()
+    for var in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(var, str(where))
+    return where.resolve()
+
+
+def _host_copies(host_tmp: Path, sid: str) -> Path:
+    """Where the test host keeps chat ``sid``'s attachment copies."""
+    account = "lovia" if os.name != "posix" else f"lovia-{os.getuid()}"
+    return host_tmp / account / "attachments" / sid
+
+
 def _client(agent: Agent, switch: WorkspaceSwitch | None) -> TestClient:
     app = create_app(
         agent, store=ChatStore.in_memory(), titles=False, workspaces=switch
@@ -346,43 +363,100 @@ def _send_upload(c: TestClient, sid: str, name: str, data: bytes):
     )
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
-    reason="needs a directory the account cannot write to",
-)
-def test_a_write_the_host_refuses_is_not_a_missing_file(remote_chat) -> None:
-    # The host's own "no" (here: no permission on uploads/) comes back as
-    # what it is, with what the system said — not as 404 file_not_found.
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX temp-dir ownership")
+def test_a_host_folder_others_can_enter_takes_no_copy(remote_chat, host_tmp) -> None:
+    # The host's own "no" — its folder in the shared temp dir is open to
+    # others — comes back as what it is, with what it said.
     c, sid, there = remote_chat
-    (there / "uploads").mkdir()
-    (there / "uploads").chmod(0o555)
-    try:
-        res = _send_upload(c, sid, "a.txt", b"data")
-    finally:
-        (there / "uploads").chmod(0o755)
+    shared = host_tmp / f"lovia-{os.getuid()}"  # the chat's first run made it
+    shutil.rmtree(shared, ignore_errors=True)
+    shared.mkdir()
+    shared.chmod(0o755)
+    res = _send_upload(c, sid, "a.txt", b"data")
     detail = res.json()["detail"]
     assert (res.status_code, detail["code"]) == (403, "path_denied"), res.text
-    assert "Permission denied" in detail["message"]
+    assert "not a private directory" in detail["message"]
+    assert not (shared / "attachments").exists()
 
 
-def test_a_remote_chats_attachments_are_copied_onto_its_host(remote_chat) -> None:
-    # Until hosts keep attachments outside the workspace (step 2), a sent
-    # upload is copied into the chat directory's uploads/ there.
+def test_a_remote_chats_attachments_live_outside_its_workspace(
+    remote_chat, host_tmp
+) -> None:
+    # The host keeps its copy in a temp folder of the account's own, the
+    # note names it there, and the workspace on the host stays untouched.
     c, sid, there = remote_chat
     # The chat is read-only; an attachment is the user's own act and lands.
     assert c.patch(
         f"/api/sessions/{sid}", json={"workspace_mode": "readonly"}
     ).is_success
     assert _send_upload(c, sid, "cat.png", _PNG).status_code == 200
-    assert (there / "uploads" / "cat.png").read_bytes() == _PNG
+    copy = _host_copies(host_tmp, sid) / "cat.png"
+    assert copy.read_bytes() == _PNG
     note = c.app.state.deps.agents["bot"].model.calls[-1][-1].content[-1].text
     assert note.endswith(
-        "[Attached:\nuploads/cat.png\nRead with your file tools when relevant.]"
+        f"[Attached:\n{copy.as_posix()}\nRead with your file tools when relevant.]"
     )
+    assert not (there / "uploads").exists()
     # A second one of the same name is kept beside it, not over it.
     assert _send_upload(c, sid, "cat.png", b"other").status_code == 200
-    assert (there / "uploads" / "cat.png").read_bytes() == _PNG
-    assert (there / "uploads" / "cat-1.png").read_bytes() == b"other"
+    assert copy.read_bytes() == _PNG
+    assert copy.with_name("cat-1.png").read_bytes() == b"other"
+
+
+def test_a_host_that_lost_its_copies_gets_them_back(remote_chat, host_tmp) -> None:
+    # The copies are a cache: a cleaned temp dir, a rebuilt container, a
+    # copy something changed — the next run puts the original back.
+    c, sid, _there = remote_chat
+    assert _send_upload(c, sid, "a.txt", b"original").status_code == 200
+    folder = _host_copies(host_tmp, sid)
+    (folder / "a.txt").write_bytes(b"changed!!")
+    shutil.copy(folder / "a.txt", folder / "keep.txt")
+    assert c.post("/api/chat", json={"message": "again", "session_id": sid}).is_success
+    assert (folder / "a.txt").read_bytes() == b"original"
+    shutil.rmtree(folder)
+    assert c.post("/api/chat", json={"message": "more", "session_id": sid}).is_success
+    assert (folder / "a.txt").read_bytes() == b"original"
+
+
+def test_a_remote_run_reads_the_hosts_copy_and_never_writes_it(
+    places, host_tmp
+) -> None:
+    here, there = places
+    far = _far()
+    sid = "ef" * 16
+    copy = _host_copies(host_tmp, sid) / "notes.txt"
+    script = [
+        call("read_file", {"path": str(copy)}, call_id="r"),
+        call("write_file", {"path": str(copy), "content": "gone"}, call_id="w"),
+        text("done"),
+    ]
+    agent = _agent(here, script)
+    switch = WorkspaceSwitch(remotes={"far": far}, modes=("readonly", "trusted"))
+    with _client(agent, switch) as c:
+        try:
+            up = c.post(
+                f"/api/sessions/{sid}/attachments",
+                files={"file": ("notes.txt", b"original")},
+            )
+            assert up.status_code == 200, up.text
+            res = c.post(
+                "/api/chat",
+                json={
+                    "message": "go",
+                    "session_id": sid,
+                    "workspace": f"remote://far{there}",
+                    "workspace_mode": "trusted",
+                    "attachments": [
+                        {"name": "notes.txt", "mime": "text/plain", "kind": "file"}
+                    ],
+                },
+            )
+            assert res.status_code == 200, res.text
+        finally:
+            c.portal.call(far.aclose)
+    assert copy.read_bytes() == b"original"
+    results = str(agent.model.calls[2])  # type: ignore[union-attr]
+    assert "original" in results and "read-only" in results
 
 
 def test_attachments_reach_a_remote_chat(remote_chat) -> None:
@@ -443,9 +517,9 @@ async def test_every_way_in_reads_attachments_where_the_chat_works(places) -> No
 
 
 async def test_a_remote_chats_image_past_the_read_limit_is_not_inlined(
-    places,
+    places, host_tmp
 ) -> None:
-    # The copy's bytes come back whole: the read limit still decides inlining.
+    # The read limit decides inlining for a remote chat as for a local one.
     from lovia.web.attachments import user_content
     from lovia.web.schemas import Attachment
     from lovia.workspace import WorkspaceLimits
@@ -465,15 +539,17 @@ async def test_a_remote_chats_image_past_the_read_limit_is_not_inlined(
         attachment = Attachment(name="cat.png", mime="image/png", kind="image")
         parts = await user_content("see", [attachment], agent, folder)
         assert not any(isinstance(p, ImagePart) for p in parts)  # type: ignore[union-attr]
-        assert "uploads/cat.png" in parts[-1].text  # type: ignore[index,union-attr]
+        copy = _host_copies(host_tmp, folder.name) / "cat.png"
+        assert copy.as_posix() in parts[-1].text  # type: ignore[index,union-attr]
     finally:
         await far.aclose()
 
 
-async def test_an_upload_for_a_remote_chat_whose_root_is_gone_is_dropped(
-    places,
+async def test_a_remote_chats_upload_needs_no_root_on_the_host(
+    places, host_tmp
 ) -> None:
-    # Its copy would go on the host: a path on this machine means nothing there.
+    # The copy goes beside the workspace, not into it: a root that is gone
+    # takes nothing with it (the run says so when it opens the root).
     from lovia.web.attachments import user_content
     from lovia.web.schemas import Attachment
 
@@ -488,7 +564,10 @@ async def test_an_upload_for_a_remote_chat_whose_root_is_gone_is_dropped(
             name="bot", model=None, workspace=Workspace.remote(far, str(there))
         )
         attachment = Attachment(name="a.txt", mime="text/plain", kind="file")
-        assert await user_content("see", [attachment], agent, folder) == "see"
+        parts = await user_content("see", [attachment], agent, folder)
+        copy = _host_copies(host_tmp, folder.name) / "a.txt"
+        assert copy.read_text() == "a"
+        assert copy.as_posix() in parts[-1].text  # type: ignore[index,union-attr]
     finally:
         await far.aclose()
 

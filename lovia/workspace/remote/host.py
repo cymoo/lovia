@@ -450,6 +450,22 @@ class RemoteHost:
         found: list[str] = await conn.call("complete_dirs", params={"path": path})
         return found
 
+    async def attachments_list(self, chat: str) -> tuple[str, dict[str, int]]:
+        """The folder on this host that chat ``chat``'s attachment copies go
+        in — under the host's temp directory, in a folder its account alone
+        owns — and the size of each copy already there."""
+        conn = await self._connection()
+        listed = await conn.call("attachments_list", params={"id": chat})
+        return listed["folder"], dict(listed["files"])
+
+    async def attachments_put(self, chat: str, name: str, data: bytes) -> None:
+        """Copy one attachment into chat ``chat``'s folder on this host,
+        replacing a stale copy whole."""
+        conn = await self._connection()
+        await conn.call(
+            "attachments_put", params={"id": chat, "name": name, "data": data}
+        )
+
     def facts(self, root: str) -> RootFacts | None:
         """What the last session opened at ``root`` reported about it."""
         return self._facts.get(root)

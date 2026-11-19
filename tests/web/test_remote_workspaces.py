@@ -429,9 +429,10 @@ def test_a_host_that_lost_its_copies_gets_them_back(remote_chat, host_tmp) -> No
 async def test_an_original_unreadable_here_is_not_the_hosts_fault(
     places, host_tmp, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A local read that fails (a chat deleted meanwhile) leaves that file
-    # behind; the rest still go, and nothing blames the host.
-    from lovia.web.attachments import stage_on_host
+    # A local read that fails leaves that file behind — and out of the
+    # message; the rest still go, and nothing blames the host.
+    from lovia.web.attachments import stage_on_host, user_content
+    from lovia.web.schemas import Attachment
 
     here, there = places
     folder = here / "attachments" / ("12" * 16)
@@ -448,12 +449,22 @@ async def test_an_original_unreadable_here_is_not_the_hosts_fault(
     monkeypatch.setattr(Path, "read_bytes", read_bytes)
     far = _far()
     try:
-        there_folder = await stage_on_host(Workspace.remote(far, str(there)), folder)
+        workspace = Workspace.remote(far, str(there))
+        there_folder, uncopied = await stage_on_host(workspace, folder)
+        # A message names only what has a good copy there.
+        agent = Agent(name="bot", model=None, workspace=workspace)
+        atts = [
+            Attachment(name=n, mime="text/plain", kind="file")
+            for n in ("gone.txt", "ok.txt")
+        ]
+        parts = await user_content("see", atts, agent, folder)
     finally:
         await far.aclose()
     copies = _host_copies(host_tmp, folder.name)
-    assert there_folder == copies.as_posix()
+    assert (there_folder, uncopied) == (copies.as_posix(), {"gone.txt"})
     assert sorted(p.name for p in copies.iterdir()) == ["ok.txt"]
+    note = parts[-1].text  # type: ignore[index,union-attr]
+    assert "ok.txt" in note and "gone.txt" not in note
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX temp-dir ownership")

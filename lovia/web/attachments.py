@@ -207,12 +207,13 @@ async def user_content(
     stored = any(att.path is None for att in attachments)
     linked = any(att.path is not None for att in attachments)
     host_folder: str | None = None
+    uncopied: set[str] = set()
     if stored and folder is not None:
         # In use now: a draft idle past the sweep's age is about to become a
         # chat, and the sweep re-reads the mtime before it removes anything.
         await asyncio.to_thread(_touch, folder)
         if isinstance(cfg, RemoteWorkspace):
-            host_folder = await _staged(cfg, folder)
+            host_folder, uncopied = await _staged(cfg, folder)
     session: WorkspaceSession | None = None
     if linked:
         try:
@@ -228,6 +229,11 @@ async def user_content(
             if att.path is None:
                 file = await _stored(att, folder)
                 if file is None:
+                    continue
+                if file.name in uncopied:
+                    # Its host copy is missing or stale: naming it would
+                    # point the agent at what the user did not send.
+                    log.warning("dropping attachment %r: not on the host", file.name)
                     continue
                 # A remote chat's tools find the host's copy.
                 where = (
@@ -280,11 +286,12 @@ async def _stored(att: Attachment, folder: Path | None) -> Path | None:
     return file
 
 
-async def stage_on_host(cfg: RemoteWorkspace, folder: Path) -> str:
+async def stage_on_host(cfg: RemoteWorkspace, folder: Path) -> tuple[str, set[str]]:
     """Put the chat's attachments on ``cfg``'s host — each one missing there,
     or whose size or mtime differ from the original's (a copy something
     changed: a put stamps the original's mtime) — and return the folder the
-    host keeps them in.
+    host keeps them in, and the names whose copy couldn't be put (their
+    original unreadable here): there is no good copy of those to name.
 
     The host's copies are a cache of ``folder``: a host that lost them (a
     container rebuilt, its temp dir cleaned) gets them back here, before a
@@ -294,17 +301,17 @@ async def stage_on_host(cfg: RemoteWorkspace, folder: Path) -> str:
     there, copies, refused = await cfg.host.attachments_list(folder.name)
     if refused is not None:
         raise PermissionError(refused)  # the host's own words, errno and path
-    await _put_stale(cfg, folder, copies)
-    return there
+    return there, await _put_stale(cfg, folder, copies)
 
 
 async def _put_stale(
     cfg: RemoteWorkspace, folder: Path, copies: dict[str, tuple[int, int]]
-) -> None:
-    """Put each original in ``folder`` whose host copy is missing or differs.
-    Only the host's errors come out of here: an original that can't be read
-    on this side (a chat deleted meanwhile) is left behind, and the message
-    drops it."""
+) -> set[str]:
+    """Put each original in ``folder`` whose host copy is missing or differs;
+    return the names left without a good copy. Only the host's errors come
+    out of here: an original that can't be read on this side is left
+    behind, named in what comes back."""
+    uncopied: set[str] = set()
     local = await asyncio.to_thread(_stats, folder)
     for name, (size, mtime) in local.items():
         if copies.get(name) == (size, int(mtime)):
@@ -313,11 +320,13 @@ async def _put_stale(
             data = await asyncio.to_thread((folder / name).read_bytes)
         except OSError as exc:
             log.warning("not copying attachment %r to %s: %s", name, cfg.host.name, exc)
+            uncopied.add(name)
             continue
         await cfg.host.attachments_put(folder.name, name, data, mtime)
+    return uncopied
 
 
-async def _staged(cfg: RemoteWorkspace, folder: Path) -> str:
+async def _staged(cfg: RemoteWorkspace, folder: Path) -> tuple[str, set[str]]:
     """:func:`stage_on_host` for a message: what goes wrong is its answer —
     the host's own "no" with what it said, a host out of reach a 502."""
     try:

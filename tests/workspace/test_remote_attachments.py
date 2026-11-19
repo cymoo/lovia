@@ -91,6 +91,18 @@ def test_a_link_in_the_folders_place_is_refused(host_tmp: Path) -> None:
     assert list(elsewhere.iterdir()) == []
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX links")
+def test_the_folder_is_named_where_it_really_is(host_tmp: Path) -> None:
+    # A path is judged by where it leads: a rule on a link would miss.
+    serve.attachments_put(CHAT, "a.txt", b"x", 0)
+    account = _account(host_tmp)
+    (account / "attachments").rename(account / "real")
+    (account / "attachments").symlink_to(account / "real", target_is_directory=True)
+    assert (
+        serve.attachments_list(CHAT)["folder"] == (account / "real" / CHAT).as_posix()
+    )
+
+
 def test_a_listing_during_a_put_leaves_it_be(
     host_tmp: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -305,7 +305,7 @@ def attachments_list(chat: str) -> dict[str, Any]:
     try:
         folder = _attachments_root() / chat
     except PermissionError as exc:
-        return {"folder": named.as_posix(), "files": {}, "refused": str(exc)}
+        return {"folder": _real(named), "files": {}, "refused": str(exc)}
     files: dict[str, list[int]] = {}
     if folder.is_dir():
         now = time.time()
@@ -318,7 +318,13 @@ def attachments_list(chat: str) -> dict[str, Any]:
             elif now - st.st_mtime > _ABANDONED:
                 with contextlib.suppress(OSError):
                     os.unlink(entry.path)
-    return {"folder": folder.as_posix(), "files": files, "refused": None}
+    return {"folder": _real(folder), "files": files, "refused": None}
+
+
+def _real(folder: Path) -> str:
+    """``folder`` as policy sees it: links resolved, since a path is judged
+    by where it really leads — a rule naming the link would miss."""
+    return folder.resolve().as_posix()
 
 
 def attachments_put(chat: str, name: str, data: bytes, mtime: float) -> None:

@@ -5665,17 +5665,6 @@ body.lv-files-resizing {
   text-transform: uppercase;
   color: var(--lv-muted-2);
 }
-/* Drop target feedback while dragging files over the panel. */
-.lv-files-panel.lv-drag-over::after {
-  content: '';
-  position: absolute;
-  inset: 6px;
-  pointer-events: none;
-  border: 2px dashed var(--lv-accent);
-  border-radius: var(--lv-radius);
-  background: var(--lv-accent-soft);
-  opacity: 0.5;
-}
 /* "n files written since you last looked" on the Files button. */
 #files-btn {
   position: relative;

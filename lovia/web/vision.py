@@ -2,8 +2,8 @@
 
 When the app is configured with a dedicated vision model and the main model
 itself isn't vision-capable, the builder registers a ``describe_image`` tool.
-The main model calls it with a workspace image path (an ``uploads/…`` file the
-user attached, or one the run produced) and a question; the tool runs a
+The main model calls it with an image's path (one the user attached, as the
+message's note names it, or one the run produced) and a question; the tool runs a
 one-shot turn on the vision model with the image inlined as an
 :class:`~lovia.ImagePart` and returns its text answer.
 
@@ -70,8 +70,9 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
         name=DESCRIBE_IMAGE,
         description=(
             "Have an image file described to you (you will get text, not the "
-            "image). Images the user attaches land under 'uploads/'. Use this "
-            "whenever the user refers to an image you cannot otherwise see.\n"
+            "image). The paths of images the user attaches are listed in their "
+            "message's [Attached: …] note. Use this whenever the user refers "
+            "to an image you cannot otherwise see.\n"
             "- path is workspace-relative or absolute; outside paths may need "
             "approval or be denied by policy.\n"
             "- Supported: jpg, jpeg, png, gif, webp; over 5 MB is refused."
@@ -81,7 +82,8 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
     async def describe_image(
         ctx: RunContext[Any],
         path: Annotated[
-            str, "Workspace-relative path to the image, e.g. 'uploads/photo.png'."
+            str,
+            "Path to the image: workspace-relative, or an attachment's absolute path.",
         ],
         question: Annotated[
             str, "What to ask about the image; defaults to a full description."

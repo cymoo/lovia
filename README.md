@@ -519,8 +519,9 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 - **Full chat out of the box** — SSE streaming, sessions you can branch from
   any reply, messages that steer a running run or queue until it completes,
   approvals, schedules, a memory editor (notes about you, and per project)
-  and file attachments; `@` in the composer mentions a workspace file by
-  path; runs survive browser disconnects.
+  and file attachments, kept with the chat rather than in your repository;
+  `@` in the composer mentions a workspace file by path; runs survive
+  browser disconnects.
 - **Settings without restarts** — `lovia web` keeps models, MCP servers
   (paste the usual `mcpServers` JSON) and the assistant's custom
   instructions, default permission mode and switches in Settings. A change

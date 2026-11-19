@@ -197,14 +197,15 @@ class ProcessInfo(BaseModel):
 
 
 class UploadedFile(BaseModel):
-    """Result of a workspace upload (``POST /api/workspace/upload``).
+    """Result of an upload (``POST /api/sessions/{id}/attachments``).
 
-    The saved file's workspace-relative ``path`` (under ``uploads/``) plus
-    enough metadata for the composer to preview it and re-reference it on send.
-    ``kind`` is ``image`` for previewable image types, else ``file``.
+    The ``name`` it was saved under in the chat's attachment folder — what the
+    composer sends back, and what ``GET …/attachments/{name}`` serves — plus
+    enough metadata to preview it. No path: the page never sees where the
+    server keeps files. ``kind`` is ``image`` for previewable image types,
+    else ``file``.
     """
 
-    path: str
     name: str
     mime: str
     kind: Literal["image", "file"]
@@ -294,17 +295,27 @@ class ServerInfo(BaseModel):
 
 
 class Attachment(BaseModel):
-    """A composer attachment already saved under the workspace.
+    """One file a message carries: an upload, or a workspace file.
 
-    The client echoes back what ``POST /api/workspace/upload`` returned; the
-    server re-validates ``path`` against the workspace root before reading it
-    (never trusts the client's path), so a traversal attempt is dropped.
+    * An upload names what ``POST /api/sessions/{id}/attachments`` returned
+      (``name``, no ``path``); it is looked up in the chat's attachment
+      folder, and only a plain file name is accepted.
+    * A workspace file (the Files panel's "attach") gives its ``path``, which
+      the server re-validates against the chat's workspace root before
+      reading it — never trusting the client's path, so a traversal attempt
+      is dropped. ``name`` is then only a label.
     """
 
-    path: str = Field(max_length=1024)
+    path: str | None = Field(default=None, max_length=1024)
     mime: str = Field(max_length=255)
     kind: Literal["image", "file"]
     name: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def _names_its_file(self) -> "Attachment":
+        if self.path is None and not self.name:
+            raise ValueError("an attachment needs a name (an upload) or a path")
+        return self
 
 
 class ChatRequest(BaseModel):

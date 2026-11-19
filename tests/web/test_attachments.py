@@ -1,8 +1,10 @@
-"""user_content: composer attachments → multimodal content, vision-gated.
+"""user_content: a message's attachments → multimodal content, vision-gated.
 
 Images inline as ImagePart only when the model can see them; otherwise every
-attachment is surfaced as a workspace path in a note. Client paths are never
-trusted — a traversal or a missing file is dropped.
+attachment is surfaced by path in a note. An upload is looked up by name in
+the chat's attachment folder; a workspace file (the Files panel's "attach")
+by its path, through a view of the workspace. Neither is taken on the
+client's word — a traversal or a missing file is dropped.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import uuid
 from pathlib import Path
 
 import httpx
@@ -34,67 +37,132 @@ def _agent(root: Path, *, vision: bool) -> Agent:
     return Agent(name="bot", model=prov, workspace=Workspace.local(str(root)))
 
 
-def _seed_image(root: Path, rel: str = "uploads/cat.png") -> str:
-    (root / "uploads").mkdir(exist_ok=True)
+def _seed_image(root: Path, rel: str = "pics/cat.png") -> str:
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
     (root / rel).write_bytes(PNG)
     return rel
 
 
 def _att(path: str, mime: str, kind: str) -> Attachment:
+    """A workspace file, attached by path."""
     return Attachment(path=path, mime=mime, kind=kind, name=Path(path).name)
+
+
+def _upload(name: str, mime: str = "image/png", kind: str = "image") -> Attachment:
+    """An upload, named as its folder holds it."""
+    return Attachment(name=name, mime=mime, kind=kind)
 
 
 def _texts(parts: list) -> str:
     return " ".join(p.text for p in parts if isinstance(p, TextPart))
 
 
+def _folder(tmp_path: Path, *files: tuple[str, bytes]) -> Path:
+    folder = tmp_path / "store" / "attachments" / uuid.uuid4().hex
+    folder.mkdir(parents=True)
+    for name, data in files:
+        (folder / name).write_bytes(data)
+    return folder
+
+
 async def test_no_attachments_returns_plain_string(tmp_path: Path) -> None:
     agent = _agent(tmp_path, vision=True)
-    assert await build_user_input(ChatRequest(message="hello"), agent) == "hello"
+    assert await build_user_input(ChatRequest(message="hello"), agent, None) == "hello"
 
 
-async def test_vision_inlines_image_and_notes_its_path(tmp_path: Path) -> None:
+async def test_an_upload_is_inlined_and_named_by_absolute_path(tmp_path: Path) -> None:
+    folder = _folder(tmp_path, ("cat.png", PNG))
+    agent = _agent(tmp_path / "ws", vision=True)
+    req = ChatRequest(message="what is this", attachments=[_upload("cat.png")])
+    parts = (await build_user_input(req, agent, folder))[0].content
+    images = [p for p in parts if isinstance(p, ImagePart)]
+    assert len(images) == 1 and base64.b64decode(images[0].data) == PNG
+    assert images[0].mime_type == "image/png"
+    note = parts[-1].text
+    # One path a line, the folder's own — never under the workspace.
+    assert note == (
+        f"\n\n[Attached:\n{(folder / 'cat.png').resolve()}\n"
+        "Read with your file tools when relevant.]"
+    )
+
+
+async def test_the_note_lists_every_attachment_on_its_own_line(tmp_path: Path) -> None:
+    # A data directory may hold ", " (``C:\Users\Li, Wei``): one path a line.
+    folder = _folder(tmp_path / "Li, Wei", ("a.png", PNG), ("b c.csv", b"x,y\n"))
+    _seed_image(tmp_path / "ws")
+    agent = _agent(tmp_path / "ws", vision=False)
+    req = ChatRequest(
+        message="",
+        attachments=[
+            _upload("a.png"),
+            _upload("b c.csv", "text/csv", "file"),
+            _att("pics/cat.png", "image/png", "image"),
+        ],
+    )
+    note = (await build_user_input(req, agent, folder))[0].content[-1].text
+    assert note.splitlines()[1:4] == [
+        str((folder / "a.png").resolve()),
+        str((folder / "b c.csv").resolve()),
+        "pics/cat.png",
+    ]
+
+
+@pytest.mark.parametrize("name", ["../x.png", "sub/cat.png", "..", "ghost.png"])
+async def test_an_upload_outside_the_folder_or_missing_is_dropped(
+    tmp_path: Path, name: str
+) -> None:
+    folder = _folder(tmp_path, ("cat.png", PNG))
+    (folder.parent / "x.png").write_bytes(PNG)
+    agent = _agent(tmp_path / "ws", vision=True)
+    req = ChatRequest(message="hi", attachments=[_upload(name)])
+    assert await build_user_input(req, agent, folder) == "hi"
+
+
+async def test_an_upload_without_a_folder_is_dropped(tmp_path: Path) -> None:
+    agent = _agent(tmp_path, vision=True)
+    req = ChatRequest(message="hi", attachments=[_upload("cat.png")])
+    assert await build_user_input(req, agent, None) == "hi"
+
+
+async def test_vision_inlines_a_workspace_image_and_notes_its_path(
+    tmp_path: Path,
+) -> None:
     rel = _seed_image(tmp_path)
     agent = _agent(tmp_path, vision=True)
     req = ChatRequest(
         message="what is this", attachments=[_att(rel, "image/png", "image")]
     )
-    out = await build_user_input(req, agent)
+    out = await build_user_input(req, agent, None)
     assert isinstance(out, list) and len(out) == 1
     parts = out[0].content
     images = [p for p in parts if isinstance(p, ImagePart)]
     assert len(images) == 1  # inlined once
     assert base64.b64decode(images[0].data) == PNG
-    assert images[0].mime_type == "image/png"
     assert "what is this" in _texts(parts)
     assert rel in _texts(parts)  # path still noted so tools can reach it
 
 
 async def test_non_vision_references_path_without_inlining(tmp_path: Path) -> None:
-    rel = _seed_image(tmp_path)
-    agent = _agent(tmp_path, vision=False)
-    req = ChatRequest(
-        message="what is this", attachments=[_att(rel, "image/png", "image")]
-    )
-    out = await build_user_input(req, agent)
-    parts = out[0].content
+    folder = _folder(tmp_path, ("cat.png", PNG))
+    agent = _agent(tmp_path / "ws", vision=False)
+    req = ChatRequest(message="what is this", attachments=[_upload("cat.png")])
+    parts = (await build_user_input(req, agent, folder))[0].content
     assert not any(isinstance(p, ImagePart) for p in parts)  # NOT inlined
-    assert rel in _texts(parts)
+    assert str(folder.resolve() / "cat.png") in _texts(parts)
 
 
 async def test_file_attachment_is_reference_only_even_with_vision(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "uploads").mkdir()
-    (tmp_path / "uploads" / "report.pdf").write_bytes(b"%PDF-1.4 test")
-    agent = _agent(tmp_path, vision=True)
+    folder = _folder(tmp_path, ("report.pdf", b"%PDF-1.4 test"))
+    agent = _agent(tmp_path / "ws", vision=True)
     req = ChatRequest(
         message="summarize",
-        attachments=[_att("uploads/report.pdf", "application/pdf", "file")],
+        attachments=[_upload("report.pdf", "application/pdf", "file")],
     )
-    parts = (await build_user_input(req, agent))[0].content
+    parts = (await build_user_input(req, agent, folder))[0].content
     assert not any(isinstance(p, ImagePart) for p in parts)
-    assert "uploads/report.pdf" in _texts(parts)
+    assert str(folder.resolve() / "report.pdf") in _texts(parts)
 
 
 async def test_path_traversal_is_dropped(tmp_path: Path) -> None:
@@ -103,17 +171,17 @@ async def test_path_traversal_is_dropped(tmp_path: Path) -> None:
         message="", attachments=[_att("../../etc/passwd", "image/png", "image")]
     )
     # Nothing usable was attached → falls back to the (empty) text turn.
-    assert await build_user_input(req, agent) == ""
+    assert await build_user_input(req, agent, None) == ""
 
 
 async def test_what_the_agent_is_denied_cannot_be_attached(tmp_path: Path) -> None:
-    # Attachments are looked up with the Files panel's eyes: a path the
+    # Workspace files are looked up with the Files panel's eyes: a path the
     # agent's policy hides, a directory, a link out of the root — none goes
     # into the message, by path or inline.
     outside = tmp_path / "outside.png"
     outside.write_bytes(PNG)
     root = tmp_path / "root"
-    (root / "uploads").mkdir(parents=True)
+    (root / "pics").mkdir(parents=True)
     (root / "secret.png").write_bytes(PNG)
     (root / "escape.png").symlink_to(outside)
     prov = ScriptedProvider([text("ok")])
@@ -127,10 +195,10 @@ async def test_what_the_agent_is_denied_cannot_be_attached(tmp_path: Path) -> No
         message="see",
         attachments=[
             _att(p, "image/png", "image")
-            for p in ("secret.png", "uploads", "escape.png", str(outside))
+            for p in ("secret.png", "pics", "escape.png", str(outside))
         ],
     )
-    assert await build_user_input(req, agent) == "see"
+    assert await build_user_input(req, agent, None) == "see"
 
 
 async def test_an_image_too_large_to_inline_is_still_attached_by_path(
@@ -138,34 +206,37 @@ async def test_an_image_too_large_to_inline_is_still_attached_by_path(
 ) -> None:
     from lovia.workspace import WorkspaceLimits
 
-    rel = _seed_image(tmp_path)
+    folder = _folder(tmp_path, ("cat.png", PNG))
     prov = ScriptedProvider([text("ok")])
     prov.supports_vision = True  # type: ignore[attr-defined]
     workspace = Workspace.local(
-        str(tmp_path), limits=WorkspaceLimits(max_file_read_bytes=8)
+        str(tmp_path / "ws"), limits=WorkspaceLimits(max_file_read_bytes=8)
     )
     agent = Agent(name="bot", model=prov, workspace=workspace)
-    req = ChatRequest(message="see", attachments=[_att(rel, "image/png", "image")])
-    parts = (await build_user_input(req, agent))[0].content
+    req = ChatRequest(message="see", attachments=[_upload("cat.png")])
+    parts = (await build_user_input(req, agent, folder))[0].content
     assert not any(isinstance(p, ImagePart) for p in parts)
-    assert rel in _texts(parts)
+    assert "cat.png" in _texts(parts)
 
 
 async def test_missing_file_is_dropped_but_message_survives(tmp_path: Path) -> None:
-    (tmp_path / "uploads").mkdir()
     agent = _agent(tmp_path, vision=True)
     req = ChatRequest(
-        message="hi", attachments=[_att("uploads/ghost.png", "image/png", "image")]
+        message="hi", attachments=[_att("pics/ghost.png", "image/png", "image")]
     )
-    assert await build_user_input(req, agent) == "hi"
+    assert await build_user_input(req, agent, None) == "hi"
 
 
 async def test_no_workspace_agent_ignores_attachments(tmp_path: Path) -> None:
+    folder = _folder(tmp_path, ("x.png", PNG))
     agent = Agent(name="plain", model=ScriptedProvider([text("ok")]))
-    req = ChatRequest(
-        message="hi", attachments=[_att("uploads/x.png", "image/png", "image")]
-    )
-    assert await build_user_input(req, agent) == "hi"
+    req = ChatRequest(message="hi", attachments=[_upload("x.png")])
+    assert await build_user_input(req, agent, folder) == "hi"
+
+
+def test_an_attachment_names_a_file_or_gives_a_path() -> None:
+    with pytest.raises(ValueError):
+        Attachment(mime="image/png", kind="image")
 
 
 def test_history_serialization_preserves_image_parts() -> None:
@@ -199,20 +270,26 @@ async def test_steer_with_attachments_reaches_the_run_as_parts(
         await release.wait()
         return "unblocked"
 
-    rel = _seed_image(tmp_path)
     prov = ScriptedProvider([call("block", {}, call_id="c1"), text("after")])
     prov.supports_vision = True  # type: ignore[attr-defined]
     agent = Agent(
         name="bot", model=prov, tools=[block], workspace=Workspace.local(str(tmp_path))
     )
-    app = create_app(agent, titles=False, store=ChatStore.in_memory())
-    steer = {
-        "session_id": "s1",
-        "message": "look",
-        "attachments": [{"path": rel, "mime": "image/png", "kind": "image"}],
-    }
+    store = ChatStore.sqlite(tmp_path / "data" / "chat.db")
+    app = create_app(agent, titles=False, store=store)
+    sid = uuid.uuid4().hex
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        up = await ac.post(
+            f"/api/sessions/{sid}/attachments",
+            files={"file": ("cat.png", PNG, "image/png")},
+        )
+        assert up.status_code == 200, up.text
+        steer = {
+            "session_id": sid,
+            "message": "look",
+            "attachments": [{"name": "cat.png", "mime": "image/png", "kind": "image"}],
+        }
         body: list[str] = []
 
         async def consume(payload: dict) -> None:
@@ -220,7 +297,7 @@ async def test_steer_with_attachments_reaches_the_run_as_parts(
                 async for line in res.aiter_lines():
                     body.append(line)
 
-        first = asyncio.create_task(consume({"message": "go", "session_id": "s1"}))
+        first = asyncio.create_task(consume({"message": "go", "session_id": sid}))
         for _ in range(250):  # turn 1 underway: the steer drains at turn 2
             if prov.calls:
                 break
@@ -244,8 +321,9 @@ async def test_steer_with_attachments_reaches_the_run_as_parts(
     assert steered.role == "user" and isinstance(steered.content, list)
     assert any(isinstance(p, ImagePart) for p in steered.content)
     assert _texts(steered.content).startswith("look")
-    assert rel in _texts(steered.content)
+    path = (tmp_path / "data" / "attachments" / sid / "cat.png").resolve()
+    assert str(path) in _texts(steered.content)
     frame = body.index("event: user_injected")
     content = json.loads(body[frame + 1].removeprefix("data:"))["content"]
-    assert content.startswith("look\n\n[Attached in the workspace: ")
+    assert content.startswith(f"look\n\n[Attached:\n{path}\n")
     assert "[image]" not in content

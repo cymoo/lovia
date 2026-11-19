@@ -37,7 +37,6 @@ import {
   IMAGE_EXT,
   normalizeRel,
   renderMarkdownInto,
-  uploadFailedText,
   workspaceImageUrl,
 } from './util.js';
 
@@ -1796,65 +1795,6 @@ async function loadMore() {
   }
 }
 
-// ---- Upload into the workspace ---------------------------------------------
-// The panel is where "put a file where the agent can reach it" naturally
-// lives; the composer's attach flow stays the path for "send WITH the next
-// message". Same endpoint (uploads land under uploads/), same allowlist.
-async function uploadToWorkspace(files) {
-  if (!state.available || !files.length) return;
-  let ok = 0;
-  for (const file of files) {
-    try {
-      // The user brought it into this chat: it lists with the chat's own
-      // (until the chat changes — it is on no message to replay from).
-      state.touched.add((await api.uploadFile(file, { agent: store.agent })).path);
-      ok += 1;
-    } catch (err) {
-      toast(uploadFailedText(file.name, err), { type: 'error' });
-    }
-  }
-  if (ok) {
-    toast(t('files.uploaded', { n: ok }));
-    if (state.mode !== 'changes') setMode('changes'); // that's where they surface
-    else refresh();
-  }
-}
-
-function initUpload() {
-  if (!els.upload) return;
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.multiple = true;
-  input.style.display = 'none';
-  document.body.appendChild(input);
-  input.addEventListener('change', () => {
-    if (input.files?.length) uploadToWorkspace([...input.files]);
-    input.value = ''; // let the same file be picked again
-  });
-  els.upload.addEventListener('click', () => input.click());
-
-  els.panel.addEventListener('dragover', (e) => {
-    if (!state.available) return;
-    if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
-    e.preventDefault();
-    els.panel.classList.add('lv-drag-over');
-  });
-  els.panel.addEventListener('dragleave', (e) => {
-    if (!els.panel.contains(/** @type {Node} */ (e.relatedTarget))) {
-      els.panel.classList.remove('lv-drag-over');
-    }
-  });
-  els.panel.addEventListener('drop', (e) => {
-    els.panel.classList.remove('lv-drag-over');
-    if (!state.available) return;
-    const files = [...(e.dataTransfer?.files || [])];
-    if (files.length) {
-      e.preventDefault();
-      uploadToWorkspace(files);
-    }
-  });
-}
-
 // A touched file that's on screen refreshes quietly, debounced — an agent
 // making several quick edits shouldn't strobe the viewer.
 let _reloadTimer = null;
@@ -1903,7 +1843,6 @@ export function initFiles() {
   els.download = document.getElementById('files-download');
   els.viewerClose = document.getElementById('files-viewer-close');
   els.resizer = document.getElementById('files-resizer');
-  els.upload = document.getElementById('files-upload');
 
   els.refresh.innerHTML = icon('refresh-cw', { size: 15 });
   if (els.collapse) {
@@ -1931,7 +1870,6 @@ export function initFiles() {
   els.viewerClose.innerHTML = icon('x', { size: 15 });
   els.viewerClose.title = t('files.closeFile');
   els.viewerClose.setAttribute('aria-label', els.viewerClose.title);
-  if (els.upload) els.upload.innerHTML = icon('upload', { size: 15 });
   els.viewerBack = document.getElementById('files-viewer-back');
   if (els.viewerBack) {
     els.viewerBack.innerHTML = icon('chevron-left', { size: 16 });
@@ -1995,7 +1933,6 @@ export function initFiles() {
 
   if (els.resizer) initResizer();
   initLayout();
-  initUpload();
 
   els.btn.addEventListener('click', () => setOpen(!state.open));
   els.close.addEventListener('click', () => setOpen(false));

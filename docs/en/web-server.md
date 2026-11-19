@@ -929,9 +929,9 @@ host's `AGENTS.md` files in their place: the hook itself reads nothing — it
 sets `instructions` to an async function, which has `ctx.workspace` find and
 read them on the host ([the same files](web-ui.md#project-instructions) a
 local chat there would load) the first time the run renders its prompt. The Files
-panel, uploads and attachments read and write the host's files too, through
-a read-only session of the page's own on the same connection (an upload may
-write inside the root, nowhere else); when the host can't be reached they
+panel and attachments read and write the host's files too, through a
+read-only session of the page's own on the same connection (a sent
+attachment is copied into the root's `uploads/`, nowhere else); when the host can't be reached they
 answer 502 `workspace_unreachable`, and a message is never sent without the
 attachments it came with. An agent whose workspace
 has a shell `executor` cannot open one at all (409 `workspace_not_allowed`):
@@ -950,9 +950,9 @@ can run a shell there can already run `ssh`. `--lock-workspace` and
 A chat's directory is set when it is created — the first message's
 `workspace`, else the agent's own — and never changes; every run checks it
 against `roots` first, so a chat in a directory the server no longer allows
-is refused (409 `workspace_not_allowed`), never moved. Attachments, the Files
-panel and uploads work in the chat's directory (a draft names its own with
-`?root=`). Every agent a run can reach — handoff targets too — works there.
+is refused (409 `workspace_not_allowed`), never moved. The Files panel and
+workspace files attached from it work in the chat's directory (a draft names its own with
+`?root=`); uploads live with the chat, beside its history. Every agent a run can reach — handoff targets too — works there.
 
 A chat's mode applies at once: a run in flight judges its next tool call by
 the new mode, and the chat's subagent tasks switch with it. The tools a run

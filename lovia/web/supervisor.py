@@ -1473,7 +1473,9 @@ class RunSupervisor:
             # Every run of one web session shares that session's workspace session
             # (lazily opened here), so background processes survive across runs —
             # they die with the *chat* (deletion/shutdown), not with the turn.
-            agent = await self.deps.workspaces.bind(session_id, agent)
+            # Its policy reads the chat's attachment folder, never writes it.
+            folder = await self.deps.store.attachment_folder(session_id)
+            agent = await self.deps.workspaces.bind(session_id, agent, folder)
             # That await may have let a concurrent start for this chat in. (Its
             # workspace is this chat's too: nothing to undo.)
             self._check_slot(session_id, cap=False)
@@ -1572,7 +1574,8 @@ class RunSupervisor:
             # Same chat-scoped workspace binding as start(): the resumed leg's
             # background processes are gone (they never survive a restart), but
             # its shell/file tools must land on the chat's one live session.
-            agent = await self.deps.workspaces.bind(session_id, agent)
+            folder = await self.deps.store.attachment_folder(session_id)
+            agent = await self.deps.workspaces.bind(session_id, agent, folder)
             self._check_slot(session_id, cap=False)  # as in start()
             client = dict(client or {})
             ckpt = CheckpointOptions(

@@ -8,7 +8,6 @@ must handle — nested dirs, dotfiles, a binary, an oversized text, a
 
 from __future__ import annotations
 
-import errno
 import time
 from pathlib import Path
 
@@ -343,26 +342,17 @@ def test_raw_image_inline(client: TestClient) -> None:
     assert r.headers["x-content-type-options"] == "nosniff"
 
 
-def test_raw_avif_uses_explicit_mime_not_os_guess(client: TestClient) -> None:
+def _put(ws_app, name: str, data: bytes) -> str:
+    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
+    (root / name).write_bytes(data)
+    return name
+
+
+def test_raw_avif_uses_explicit_mime_not_os_guess(client: TestClient, ws_app) -> None:
     # AVIF isn't in every OS mime database; the explicit preview map must still
     # send a correct image Content-Type, or the nosniff'd inline preview breaks.
-    up = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={
-            "file": (
-                "pic.avif",
-                b"\x00\x00\x00\x1cftypavif",
-                "application/octet-stream",
-            )
-        },
-    )
-    assert up.status_code == 200
-    assert up.json()["kind"] == "image"
-    assert up.json()["mime"] == "image/avif"
-    raw = client.get(
-        "/api/workspace/raw", params={"agent": "bot", "path": up.json()["path"]}
-    )
+    path = _put(ws_app, "pic.avif", b"\x00\x00\x00\x1cftypavif")
+    raw = client.get("/api/workspace/raw", params={"agent": "bot", "path": path})
     assert raw.status_code == 200
     assert raw.headers["content-type"] == "image/avif"
     assert raw.headers["x-content-type-options"] == "nosniff"
@@ -373,52 +363,32 @@ def test_raw_non_image_inline_refused(client: TestClient) -> None:
     assert r.status_code == 415
 
 
-def test_raw_pdf_inline(client: TestClient) -> None:
+def test_raw_pdf_inline(client: TestClient, ws_app) -> None:
     # PDF joins images in the inline set (the Files panel embeds the browser's
     # sandboxed PDF viewer); the explicit media type keeps nosniff happy.
-    up = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("doc.pdf", b"%PDF-1.4 fake", "application/pdf")},
-    )
-    assert up.status_code == 200
-    r = client.get(
-        "/api/workspace/raw", params={"agent": "bot", "path": up.json()["path"]}
-    )
+    path = _put(ws_app, "doc.pdf", b"%PDF-1.4 fake")
+    r = client.get("/api/workspace/raw", params={"agent": "bot", "path": path})
     assert r.status_code == 200
     assert r.headers["content-type"] == "application/pdf"
     assert r.headers["x-content-type-options"] == "nosniff"
     assert "attachment" not in r.headers.get("content-disposition", "")
 
 
-def test_raw_svg_inline_still_refused(client: TestClient) -> None:
+def test_raw_svg_inline_still_refused(client: TestClient, ws_app) -> None:
     # SVG can carry scripts — the PDF exception must not widen to it.
-    up = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("pic.svg", b"<svg xmlns='...'/>", "image/svg+xml")},
-    )
-    assert up.status_code == 200
-    r = client.get(
-        "/api/workspace/raw", params={"agent": "bot", "path": up.json()["path"]}
-    )
+    path = _put(ws_app, "pic.svg", b"<svg xmlns='...'/>")
+    r = client.get("/api/workspace/raw", params={"agent": "bot", "path": path})
     assert r.status_code == 415
 
 
-def test_raw_svg_download_is_how_the_ui_renders_it(client: TestClient) -> None:
+def test_raw_svg_download_is_how_the_ui_renders_it(client: TestClient, ws_app) -> None:
     # The UI points an <img> at this exact response (workspaceImageUrl in
     # static/js/util.js): browsers ignore Content-Disposition for a subresource
     # — where SVG scripts don't run — and honor it for navigation, where they
     # would. Both headers are load-bearing, not cosmetic.
-    up = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("chart.svg", b"<svg xmlns='...'/>", "image/svg+xml")},
-    )
-    assert up.status_code == 200
+    path = _put(ws_app, "chart.svg", b"<svg xmlns='...'/>")
     r = client.get(
-        "/api/workspace/raw",
-        params={"agent": "bot", "path": up.json()["path"], "download": 1},
+        "/api/workspace/raw", params={"agent": "bot", "path": path, "download": 1}
     )
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/svg+xml"
@@ -490,211 +460,6 @@ def test_raw_size_cap(client: TestClient, ws_app) -> None:
     r = client.get(
         "/api/workspace/raw",
         params={"agent": "bot", "path": "huge.bin", "download": 1},
-    )
-    assert r.status_code == 413
-
-
-# --------------------------------------------------------------- upload -
-
-
-def test_upload_writes_to_uploads_and_serves_back(client: TestClient, ws_app) -> None:
-    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
-    r = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("cat.png", PNG_BYTES, "image/png")},
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["path"] == "uploads/cat.png"
-    assert body["kind"] == "image"
-    assert body["mime"] == "image/png"
-    assert body["size"] == len(PNG_BYTES)
-    assert (root / body["path"]).is_file()
-    # Immediately servable via the existing raw endpoint (inline image).
-    raw = client.get(
-        "/api/workspace/raw", params={"agent": "bot", "path": body["path"]}
-    )
-    assert raw.status_code == 200
-    assert raw.content == PNG_BYTES
-
-
-def test_upload_requires_a_workspace(client: TestClient) -> None:
-    r = client.post(
-        "/api/workspace/upload",
-        params={"agent": "plain"},
-        files={"file": ("x.txt", b"hi", "text/plain")},
-    )
-    assert r.status_code == 404
-
-
-def test_upload_sanitizes_filename_no_traversal(client: TestClient, ws_app) -> None:
-    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
-    r = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("../../evil.txt", b"data", "text/plain")},
-    )
-    assert r.status_code == 200
-    path = r.json()["path"]
-    assert path.startswith("uploads/") and ".." not in path
-    target = (root / path).resolve()
-    assert (root / "uploads").resolve() in target.parents
-
-
-def test_upload_dedupes_name_collisions(client: TestClient) -> None:
-    def send() -> str:
-        return client.post(
-            "/api/workspace/upload",
-            params={"agent": "bot"},
-            files={"file": ("dup.txt", b"data", "text/plain")},
-        ).json()["path"]
-
-    assert send() != send()
-
-
-def test_upload_lands_whatever_the_agents_mode(tmp_path: Path) -> None:
-    # An upload is the user's own act: a read-only agent's workspace takes
-    # one too (it is how a file gets in front of it at all).
-    agent = Agent(
-        name="bot",
-        model=ScriptedProvider([text("ok")]),
-        workspace=Workspace.local(str(tmp_path), mode="readonly"),
-    )
-    app = create_app(agent, store=ChatStore.in_memory(), titles=False)
-    with TestClient(app) as c:
-        r = c.post("/api/workspace/upload", files={"file": ("a.txt", b"data")})
-        assert r.status_code == 200, r.text
-    assert (tmp_path / "uploads" / "a.txt").read_bytes() == b"data"
-
-
-def test_upload_that_the_disk_refuses_says_so(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A write the system could not do is a coded error carrying its reason,
-    # not a bare 500 and not "file not found".
-    from lovia.workspace.local import LocalWorkspaceSession
-
-    async def full(self, path, data, *, create_only=False):
-        raise OSError(errno.ENOSPC, "No space left on device", path)
-
-    monkeypatch.setattr(LocalWorkspaceSession, "write_bytes", full)
-    r = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("a.txt", b"data", "text/plain")},
-    )
-    detail = r.json()["detail"]
-    assert (r.status_code, detail["code"]) == (500, "workspace_io_error"), r.text
-    assert "No space left on device" in detail["message"]
-
-
-def test_upload_never_leaves_the_workspace(
-    client: TestClient, ws_app, tmp_path
-) -> None:
-    # An ``uploads`` that links out of the root would carry the write with it.
-    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
-    outside = tmp_path.parent / f"{tmp_path.name}-outside"
-    outside.mkdir()
-    (root / "uploads").symlink_to(outside, target_is_directory=True)
-    r = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("a.txt", b"data", "text/plain")},
-    )
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "path_denied"
-    assert list(outside.iterdir()) == []
-
-
-def test_upload_rejects_empty_file(client: TestClient) -> None:
-    r = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("empty.txt", b"", "text/plain")},
-    )
-    assert r.status_code == 422
-
-
-def test_upload_svg_is_not_treated_as_inline_image(client: TestClient) -> None:
-    svg = b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"
-    r = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("diagram.svg", svg, "image/svg+xml")},
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["kind"] == "file"  # svg is not an inline-safe raster image
-    path = body["path"]
-    # The raw endpoint refuses to serve it inline (would be stored XSS)...
-    assert (
-        client.get(
-            "/api/workspace/raw", params={"agent": "bot", "path": path}
-        ).status_code
-        == 415
-    )
-    # ...but it is still downloadable.
-    dl = client.get(
-        "/api/workspace/raw", params={"agent": "bot", "path": path, "download": 1}
-    )
-    assert dl.status_code == 200
-
-
-def test_upload_rejects_disallowed_extension(client: TestClient) -> None:
-    r = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("payload.exe", b"MZ\x00\x00", "application/octet-stream")},
-    )
-    assert r.status_code == 415
-
-
-def test_upload_allowlist_can_be_overridden(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A narrow allowlist rejects an otherwise-common type...
-    monkeypatch.setenv("LOVIA_UPLOAD_ALLOWED_EXT", "png, jpg")
-    assert (
-        client.post(
-            "/api/workspace/upload",
-            params={"agent": "bot"},
-            files={"file": ("notes.txt", b"hi", "text/plain")},
-        ).status_code
-        == 415
-    )
-    # ...and "*" opens it back up to anything.
-    monkeypatch.setenv("LOVIA_UPLOAD_ALLOWED_EXT", "*")
-    assert (
-        client.post(
-            "/api/workspace/upload",
-            params={"agent": "bot"},
-            files={"file": ("weird.xyz", b"data", "application/octet-stream")},
-        ).status_code
-        == 200
-    )
-
-
-def test_upload_extensionless_file_is_allowed(client: TestClient) -> None:
-    # No extension (README, Makefile, LICENSE) → not rejected by the allowlist.
-    r = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("Makefile", b"all:\n\techo hi\n", "text/plain")},
-    )
-    assert r.status_code == 200
-    assert r.json()["kind"] == "file"
-
-
-def test_upload_size_cap_from_env(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("LOVIA_MAX_UPLOAD_MB", "1")
-    oversize = b"x" * (1024 * 1024 + 1)
-    r = client.post(
-        "/api/workspace/upload",
-        params={"agent": "bot"},
-        files={"file": ("big.txt", oversize, "text/plain")},
     )
     assert r.status_code == 413
 

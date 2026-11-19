@@ -184,7 +184,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 hint="answer its approval card, or send with /api/chat/stream",
             )
         scoped = scope(agent, meta, req, binding)
-        user_input = await build_user_input(req, scoped)
+        folder = await store.attachment_folder(sid) if req.attachments else None
+        user_input = await build_user_input(req, scoped, folder)
         if isinstance(user_input, str) and not user_input.strip():
             # Attachments were given but all invalid (missing / outside the
             # workspace) and there's no text — nothing to run.
@@ -264,7 +265,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # that are missing or escape the chat's directory), so an
         # attachments-only request whose attachments are all invalid reads as
         # empty here. It starts a run, or steers the live one.
-        content = await user_content(req.message, req.attachments, scoped)
+        folder = await store.attachment_folder(sid) if req.attachments else None
+        content = await user_content(req.message, req.attachments, scoped, folder)
         empty = isinstance(content, str) and not content.strip()
         # An empty turn is only meaningful as a pure attach to a live run;
         # rejecting it otherwise before the upsert avoids littering empty rows.
@@ -389,7 +391,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         ctrl = deps.supervisor.get(req.session_id)
         if ctrl is None:
             return {"accepted": False}
-        content = await user_content(message, req.attachments, ctrl.agent)
+        folder = (
+            await store.attachment_folder(req.session_id) if req.attachments else None
+        )
+        content = await user_content(message, req.attachments, ctrl.agent, folder)
         if not content:  # attachments only, and none of them usable
             raise WebError(422, "invalid_request", "empty message")
         if deps.supervisor.get(req.session_id) is not ctrl:

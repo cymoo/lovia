@@ -68,6 +68,8 @@ _DEFAULT_ALLOWED_UPLOAD_EXT = frozenset(
     "lua r m scala clj ex exs vue svelte "
     "zip tar gz tgz bz2 xz 7z parquet ipynb".split()
 )
+# The longest name an upload is saved under.
+_MAX_NAME = 120
 # Names Windows gives to devices, whatever the extension (``con.png``).
 _WINDOWS_DEVICES = frozenset(
     ["con", "prn", "aux", "nul"]
@@ -112,9 +114,9 @@ def safe_upload_name(raw: str) -> str:
     """
     base = Path(raw).name.strip()
     base = re.sub(r"[^\w.\- ]+", "_", base).strip(". ")
-    base = (base or "upload")[:120]
+    base = (base or "upload")[:_MAX_NAME]
     if base.split(".", 1)[0].rstrip().lower() in _WINDOWS_DEVICES:
-        base = f"_{base}"[:120]
+        base = f"_{base}"[:_MAX_NAME]
     return base
 
 
@@ -126,11 +128,15 @@ def is_attachment_name(name: str) -> bool:
 
 def _candidates(name: str) -> Iterator[str]:
     """``name``, then ``stem-1.ext``, ``stem-2.ext``, … — tried in order until
-    one is free (each is created exclusively by its caller)."""
+    one is free (each is created exclusively by its caller). The stem gives
+    way to the suffix, so every candidate stays a name
+    :func:`is_attachment_name` accepts: one past the cap could be saved but
+    never served or sent."""
     yield name
     stem, suffix = Path(name).stem, Path(name).suffix
     for i in itertools.count(1):
-        yield f"{stem}-{i}{suffix}"
+        tail = f"-{i}{suffix}"
+        yield f"{stem[: max(0, _MAX_NAME - len(tail))]}{tail}"
 
 
 def save_attachment(folder: Path, name: str, data: bytes) -> str:
@@ -218,8 +224,10 @@ async def user_content(
                 image = await _read_local(
                     folder / (att.name or ""), cfg.limits.max_file_read_bytes
                 )
-            if image is None:
-                continue  # still attached by path: the note names it
+            if image is None or len(image) > cfg.limits.max_file_read_bytes:
+                # Still attached by path: the note names it. (A remote copy's
+                # bytes come back whole — the read limit applies here too.)
+                continue
             parts.append(
                 ImagePart(data=base64.b64encode(image).decode("ascii"), mime_type=mime)
             )

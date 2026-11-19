@@ -442,6 +442,34 @@ async def test_every_way_in_reads_attachments_where_the_chat_works(places) -> No
         await far.aclose()
 
 
+async def test_a_remote_chats_image_past_the_read_limit_is_not_inlined(
+    places,
+) -> None:
+    # The copy's bytes come back whole: the read limit still decides inlining.
+    from lovia.web.attachments import user_content
+    from lovia.web.schemas import Attachment
+    from lovia.workspace import WorkspaceLimits
+
+    here, there = places
+    folder = here / "attachments" / ("cd" * 16)
+    folder.mkdir(parents=True)
+    (folder / "cat.png").write_bytes(_PNG)
+    far = _far()
+    try:
+        prov = ScriptedProvider([text("ok")])
+        prov.supports_vision = True  # type: ignore[attr-defined]
+        workspace = Workspace.remote(
+            far, str(there), limits=WorkspaceLimits(max_file_read_bytes=8)
+        )
+        agent = Agent(name="bot", model=prov, workspace=workspace)
+        attachment = Attachment(name="cat.png", mime="image/png", kind="image")
+        parts = await user_content("see", [attachment], agent, folder)
+        assert not any(isinstance(p, ImagePart) for p in parts)  # type: ignore[union-attr]
+        assert "uploads/cat.png" in parts[-1].text  # type: ignore[index,union-attr]
+    finally:
+        await far.aclose()
+
+
 async def test_an_upload_for_a_remote_chat_whose_root_is_gone_is_dropped(
     places,
 ) -> None:

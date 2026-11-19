@@ -275,6 +275,23 @@ def test_upload_sanitizes_and_dedupes_names(tmp_path: Path) -> None:
     assert sorted(p.name for p in folder.iterdir()) == ["evil-1.txt", "evil.txt"]
 
 
+def test_a_deduped_long_name_is_still_served_and_sent(tmp_path: Path) -> None:
+    # The suffix must not push a 120-character name past the cap: such a
+    # name would be saved, then refused by every read.
+    sid = _sid()
+    long = "x" * 116 + ".txt"
+    with _client(tmp_path) as c:
+        assert _upload(c, sid, long).json()["name"] == long
+        names = [_upload(c, sid, long).json()["name"] for _ in range(11)]
+        for name in names:
+            assert len(name) <= 120 and name.endswith(".txt")
+            assert c.get(
+                f"/api/sessions/{sid}/attachments/{name}", params={"download": 1}
+            ).is_success
+        assert len(set(names)) == 11
+        assert names[-1].endswith("-11.txt")
+
+
 @pytest.mark.parametrize(
     ("raw", "saved"),
     [

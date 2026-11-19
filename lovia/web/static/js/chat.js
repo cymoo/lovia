@@ -4232,6 +4232,11 @@ function swapTray() {
   updateSendEnabled();
 }
 
+/** Whether any tray still holds `chip` (the user may have removed it). */
+function heldChip(chip) {
+  return [_pendingAttachments, ..._trays.values()].some((tray) => tray.includes(chip));
+}
+
 /** Take `chip` out of whichever tray holds it (an upload may end after a switch). */
 function forgetChip(chip) {
   for (const tray of [_pendingAttachments, ..._trays.values()]) {
@@ -4443,19 +4448,27 @@ async function uploadFiles(files) {
     toast(t('composer.attachNoWorkspace'), { type: 'error' });
     return;
   }
-  for (const file of files) {
-    const chip = {
+  // The whole batch belongs to the chat it was picked in: its chips go in that
+  // tray now, before the first await — a switch meanwhile carries the tray
+  // away with all of them, and the uploads keep the chat and agent they had.
+  const owner = attachOwner();
+  const agent = store.agent;
+  const chips = [...files].map((file) => ({
+    file,
+    chip: {
       uploading: true,
       name: file.name,
       kind: file.type?.startsWith('image/') ? 'image' : 'file',
-      // The chat it is saved with: it can only go with a message there.
-      owner: attachOwner(),
-    };
-    _pendingAttachments.push(chip);
-    renderAttachTray();
-    updateSendEnabled(); // Send waits for it
+      owner,
+    },
+  }));
+  _pendingAttachments.push(...chips.map((c) => c.chip));
+  renderAttachTray();
+  updateSendEnabled(); // Send waits for them
+  for (const { file, chip } of chips) {
+    if (!heldChip(chip)) continue; // removed before its turn
     try {
-      Object.assign(chip, await api.uploadAttachment(chip.owner, file, { agent: store.agent }), {
+      Object.assign(chip, await api.uploadAttachment(owner, file, { agent }), {
         uploading: false,
       });
     } catch (err) {
@@ -4463,8 +4476,8 @@ async function uploadFiles(files) {
       toast(uploadFailedText(file.name, err), { type: 'error' });
     }
     renderAttachTray();
+    updateSendEnabled();
   }
-  updateSendEnabled();
 }
 
 // Attachment views at the top of a user bubble (live send + history replay):

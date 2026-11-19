@@ -268,15 +268,24 @@ def test_a_fork_shows_its_sources_attachments_after_the_source_goes(
     assert not (tmp_path / "data" / "attachments" / sid).exists()
 
 
-def test_an_agent_without_a_workspace_takes_no_upload(tmp_path: Path) -> None:
-    # Its messages would drop the file: refused up front, not lost on send.
-    plain = Agent(name="bot", model=ScriptedProvider([text("ok")]))
+def test_an_agent_without_a_workspace_takes_images_only(tmp_path: Path) -> None:
+    # A file it would need tools to read is refused up front, not lost on
+    # send; an image goes in, and the page learns whether its model sees.
+    prov = ScriptedProvider([text("ok")])
+    prov.supports_vision = True  # type: ignore[attr-defined]
+    plain = Agent(name="bot", model=prov)
     with _client(tmp_path, plain) as c:
+        info = c.get("/api/agents").json()[0]
+        assert {k: info[k] for k in ("workspace", "vision")} == {
+            "workspace": False,
+            "vision": True,
+        }
         r = _upload(c, _sid(), "a.txt")
         assert (r.status_code, r.json()["detail"]["code"]) == (
-            404,
-            "feature_unavailable",
+            415,
+            "unsupported_file_type",
         )
+        assert _upload(c, _sid(), "cat.png", PNG).status_code == 200
 
 
 async def test_an_in_memory_stores_folder_goes_with_it() -> None:

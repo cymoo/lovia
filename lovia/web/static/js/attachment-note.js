@@ -9,8 +9,9 @@
 import { parseReport } from './subagent-report.js';
 import { isImagePath } from './util.js';
 
-// One path a line: a data directory may hold ", " (C:\Users\Li, Wei).
-const NOTE_RE = /\n*\[Attached:\n([^]+?)\nRead with your file tools when relevant\.\]\s*$/;
+// One path a line: a data directory may hold ", " (C:\Users\Li, Wei). The
+// tools line is left out for an agent without a workspace (it has none).
+const NOTE_RE = /\n*\[Attached:\n([^]+?)(?:\nRead with your file tools when relevant\.)?\]\s*$/;
 // Before 0.9.239 uploads went to the workspace's uploads/, ", "-separated —
 // safe there: a sanitized name never holds a comma.
 const LEGACY_NOTE_RE =

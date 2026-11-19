@@ -29,7 +29,7 @@ from ..attachments import (
     save_attachment,
 )
 from ..errors import WebError
-from ..media import is_preview_image, preview_image_mime
+from ..media import is_preview_image, model_image_mime, preview_image_mime
 from ...workspace.workspace import WorkspaceSessionBinding
 from ..schemas import UploadedFile
 from ..workspaces import files_config
@@ -63,9 +63,9 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
         """Save one file into the chat's attachment folder.
 
         ``session_id`` may name a chat that doesn't exist yet: a draft
-        uploads under the id it then sends with, naming its ``agent``. That
-        agent must have a workspace — a message drops attachments otherwise,
-        so the upload is refused up front. The extension is checked
+        uploads under the id it then sends with, naming its ``agent``. An
+        agent without a workspace has no file tools to read with: it takes
+        images only, which its model sees inline. The extension is checked
         against an allowlist (``LOVIA_UPLOAD_ALLOWED_EXT``) and the size
         against a cap (``LOVIA_MAX_UPLOAD_MB``) enforced while reading, so a
         disallowed or huge upload is rejected without exhausting memory. The
@@ -74,14 +74,17 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
         """
         meta = await deps.store.get(session_id)
         picked = deps.pick(deps.agent_of(meta) if meta else agent)
+        name = safe_upload_name(file.filename or "upload")
         if files_config(picked) is None:
-            raise WebError(
-                404,
-                "feature_unavailable",
-                "this agent has no workspace to take attachments",
-                hint="attachments go to an agent with a workspace",
-            )
-        if isinstance(picked.workspace, WorkspaceSessionBinding):
+            if model_image_mime(name) is None:
+                raise WebError(
+                    415,
+                    "unsupported_file_type",
+                    "this agent has no workspace: it takes images only",
+                    hint="png, jpeg, gif or webp; other files need an agent "
+                    "with a workspace to read them",
+                )
+        elif isinstance(picked.workspace, WorkspaceSessionBinding):
             # One session the caller opened serves every chat of the agent:
             # a chat's folder can't be made readable (and never writable)
             # there without opening it to every other chat as well.
@@ -94,7 +97,6 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
                 "not a bound session: lovia web binds one session per chat",
             )
         folder = await folder_of(session_id)
-        name = safe_upload_name(file.filename or "upload")
         allowed = allowed_upload_ext()
         max_bytes = max_upload_bytes()
         ext = Path(name).suffix.lower().lstrip(".")

@@ -4245,9 +4245,23 @@ function forgetChip(chip) {
   }
 }
 
+// Whether the agent takes attachments at all: any file with a workspace (its
+// tools read them), images alone with a model that sees them and no workspace.
 function attachEnabled() {
+  const agent = store.agents.find((a) => a.name === store.agent);
+  return !!(agent?.workspace || agent?.vision);
+}
+
+// Whether it takes files besides images: only a workspace has tools to read them.
+function filesAllowed() {
   return !!store.agents.find((a) => a.name === store.agent)?.workspace;
 }
+
+// The images a model takes inline (lovia/web/media.py MODEL_IMAGE_MIME).
+const MODEL_IMAGE_RE = /\.(png|jpe?g|gif|webp)$/i;
+const MODEL_IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
+/** @type {HTMLInputElement | null} */
+let _attachInput = null;
 
 // Past this size a paste stops being a message and starts being a document.
 const PASTE_ATTACH_CHARS = 4000;
@@ -4330,6 +4344,7 @@ function syncAttachButton() {
   const ok = attachEnabled();
   btn.hidden = !ok;
   btn.disabled = !ok;
+  if (_attachInput) _attachInput.accept = filesAllowed() ? '' : MODEL_IMAGE_ACCEPT;
   if (!ok && _pendingAttachments.length) {
     _pendingAttachments = [];
     renderAttachTray();
@@ -4447,6 +4462,13 @@ async function uploadFiles(files) {
   if (!attachEnabled()) {
     toast(t('composer.attachNoWorkspace'), { type: 'error' });
     return;
+  }
+  if (!filesAllowed()) {
+    // No workspace: images its model sees, nothing it would need tools to read.
+    const images = files.filter((f) => MODEL_IMAGE_RE.test(f.name));
+    if (images.length < files.length) toast(t('composer.imagesOnly'), { type: 'error' });
+    files = images;
+    if (!files.length) return;
   }
   // The whole batch belongs to the chat it was picked in: its chips go in that
   // tray now, before the first await — a switch meanwhile carries the tray
@@ -4905,6 +4927,7 @@ export function initComposer() {
   attachInput.multiple = true;
   attachInput.style.display = 'none';
   document.body.appendChild(attachInput);
+  _attachInput = attachInput;
   attachInput.addEventListener('change', () => {
     if (attachInput.files?.length) uploadFiles([...attachInput.files]);
     attachInput.value = ''; // let the same file be picked again
@@ -4925,8 +4948,8 @@ export function initComposer() {
     // the workspace), leaving whatever was already typed intact.
     const text = e.clipboardData?.getData('text/plain') ?? '';
     if (
-      text.length > PASTE_ATTACH_CHARS ||
-      text.split('\n').length > PASTE_ATTACH_LINES
+      filesAllowed() &&
+      (text.length > PASTE_ATTACH_CHARS || text.split('\n').length > PASTE_ATTACH_LINES)
     ) {
       e.preventDefault();
       uploadFiles([pastedTextFile(text)]);

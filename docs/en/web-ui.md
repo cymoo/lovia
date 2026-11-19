@@ -438,7 +438,10 @@ too — under its temp directory, in a folder only that account may enter
 are a cache: each run and each message puts back whatever the host lost, and
 the system's temp cleaning removes them; deleting the chat removes only the
 original here.
-`--no-workspace` disables attachments as well.
+Without a workspace (`--no-workspace`, or an agent built without one) there
+are no file tools to read with, so an agent takes images only — PNG, JPEG,
+GIF or WebP — and only when its model can see them: they go to the model
+inline, and the composer offers nothing else.
 
 Forks and a chat's tasks share its folder, so a fork still shows the
 attachments its history mentions after the source is deleted. The folder goes

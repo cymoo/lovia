@@ -31,6 +31,17 @@ test('a note with no text of its own', () => {
   assert.deepEqual(out, { text: '', attachments: [{ name: 'x.webp', kind: 'image' }] });
 });
 
+test('a note without the tools line (no workspace)', () => {
+  const out = splitAttachmentNote('see\n\n[Attached:\n/a/b/cat.png\n/a/b/dog.jpg]');
+  assert.deepEqual(out, {
+    text: 'see',
+    attachments: [
+      { name: 'cat.png', kind: 'image' },
+      { name: 'dog.jpg', kind: 'image' },
+    ],
+  });
+});
+
 test('the legacy note still reads: workspace uploads/ paths', () => {
   const text = `hi\n\n[Attached in the workspace: uploads/a.png, uploads/b c.txt. ${TAIL}`;
   assert.deepEqual(splitAttachmentNote(text).attachments, [

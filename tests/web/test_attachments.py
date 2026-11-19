@@ -227,11 +227,28 @@ async def test_missing_file_is_dropped_but_message_survives(tmp_path: Path) -> N
     assert await build_user_input(req, agent, None) == "hi"
 
 
-async def test_no_workspace_agent_ignores_attachments(tmp_path: Path) -> None:
-    folder = _folder(tmp_path, ("x.png", PNG))
-    agent = Agent(name="plain", model=ScriptedProvider([text("ok")]))
-    req = ChatRequest(message="hi", attachments=[_upload("x.png")])
-    assert await build_user_input(req, agent, folder) == "hi"
+async def test_without_a_workspace_images_go_inline_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    # No file tools: an image its model sees, inline; a file it would need
+    # tools for, dropped; the note names the image without the tools line.
+    folder = _folder(tmp_path, ("x.png", PNG), ("notes.txt", b"n"))
+    prov = ScriptedProvider([text("ok")])
+    prov.supports_vision = True  # type: ignore[attr-defined]
+    agent = Agent(name="plain", model=prov)
+    req = ChatRequest(
+        message="hi",
+        attachments=[_upload("x.png"), _upload("notes.txt", "text/plain", "file")],
+    )
+    parts = (await build_user_input(req, agent, folder))[0].content
+    images = [p for p in parts if isinstance(p, ImagePart)]
+    assert [base64.b64decode(p.data) for p in images] == [PNG]
+    assert parts[-1].text == f"\n\n[Attached:\n{(folder / 'x.png').resolve()}]"
+    # A workspace file (by path) has nowhere to be read from.
+    linked = ChatRequest(
+        message="hi", attachments=[_att("a.png", "image/png", "image")]
+    )
+    assert await build_user_input(linked, agent, folder) == "hi"
 
 
 def test_an_attachment_names_a_file_or_gives_a_path() -> None:

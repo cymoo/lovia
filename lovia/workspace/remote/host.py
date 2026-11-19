@@ -450,20 +450,26 @@ class RemoteHost:
         found: list[str] = await conn.call("complete_dirs", params={"path": path})
         return found
 
-    async def attachments_list(self, chat: str) -> tuple[str, dict[str, int]]:
+    async def attachments_list(
+        self, chat: str
+    ) -> tuple[str, dict[str, tuple[int, int]]]:
         """The folder on this host that chat ``chat``'s attachment copies go
         in — under the host's temp directory, in a folder its account alone
-        owns — and the size of each copy already there."""
+        owns — and each copy already there: its size and whole-second mtime."""
         conn = await self._connection()
         listed = await conn.call("attachments_list", params={"id": chat})
-        return listed["folder"], dict(listed["files"])
+        files = {name: (size, mtime) for name, (size, mtime) in listed["files"].items()}
+        return listed["folder"], files
 
-    async def attachments_put(self, chat: str, name: str, data: bytes) -> None:
+    async def attachments_put(
+        self, chat: str, name: str, data: bytes, mtime: float
+    ) -> None:
         """Copy one attachment into chat ``chat``'s folder on this host,
-        replacing a stale copy whole."""
+        replacing a stale copy whole, stamped with the original's ``mtime``."""
         conn = await self._connection()
         await conn.call(
-            "attachments_put", params={"id": chat, "name": name, "data": data}
+            "attachments_put",
+            params={"id": chat, "name": name, "data": data, "mtime": mtime},
         )
 
     def facts(self, root: str) -> RootFacts | None:

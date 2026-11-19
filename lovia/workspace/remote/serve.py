@@ -24,6 +24,7 @@ import re
 import stat
 import sys
 import tempfile
+import time
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -185,7 +186,11 @@ class _Server:
             return await asyncio.to_thread(attachments_list, params["id"])
         if method == "attachments_put":
             return await asyncio.to_thread(
-                attachments_put, params["id"], params["name"], params["data"]
+                attachments_put,
+                params["id"],
+                params["name"],
+                params["data"],
+                params["mtime"],
             )
         if method == "open":
             opened = LocalWorkspaceSession(**params)
@@ -272,29 +277,47 @@ def _attachments_folder(chat: str) -> Path:
     return _attachments_root() / chat
 
 
+# A put in progress writes here first. No attachment name starts with a dot.
+_PUTTING = ".put-"
+# A put's temp file older than this was left by one that never finished.
+_ABANDONED = 3600.0
+
+
 def attachments_list(chat: str) -> dict[str, Any]:
     """The folder ``chat``'s attachments are copied to here, as a POSIX path
-    (Windows takes ``/`` too), and the size of each file already in it."""
+    (Windows takes ``/`` too), and each copy already in it by name, with its
+    size and whole-second mtime — a put stamps the original's, so a copy
+    changed here no longer matches. A put's temp file is no copy: skipped,
+    and removed once it is old enough to be one a dropped host left."""
     folder = _attachments_folder(chat)
-    files: dict[str, int] = {}
+    files: dict[str, list[int]] = {}
     if folder.is_dir():
+        now = time.time()
         for entry in os.scandir(folder):
-            if entry.is_file(follow_symlinks=False):
-                files[entry.name] = entry.stat(follow_symlinks=False).st_size
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            st = entry.stat(follow_symlinks=False)
+            if not entry.name.startswith(_PUTTING):
+                files[entry.name] = [st.st_size, int(st.st_mtime)]
+            elif now - st.st_mtime > _ABANDONED:
+                with contextlib.suppress(OSError):
+                    os.unlink(entry.path)
     return {"folder": folder.as_posix(), "files": files}
 
 
-def attachments_put(chat: str, name: str, data: bytes) -> None:
+def attachments_put(chat: str, name: str, data: bytes, mtime: float) -> None:
     """Write one copy into ``chat``'s folder here, replacing a stale one
-    whole (a temp file renamed over it — a reader never sees half)."""
+    whole (a temp file renamed over it — a reader never sees half), stamped
+    with the original's ``mtime``."""
     if name in ("", ".", "..") or "/" in name or "\\" in name or "\0" in name:
         raise ValueError(f"not a file name: {name!r}")
     folder = _attachments_folder(chat)
     folder.mkdir(mode=0o700, exist_ok=True)
-    fd, temp = tempfile.mkstemp(dir=folder, prefix=".put-")
+    fd, temp = tempfile.mkstemp(dir=folder, prefix=_PUTTING)
     try:
         with os.fdopen(fd, "wb") as out:
             out.write(data)
+        os.utime(temp, (mtime, mtime))
         os.replace(temp, folder / name)
     except BaseException:
         with contextlib.suppress(OSError):

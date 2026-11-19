@@ -11,6 +11,7 @@ import base64
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -413,9 +414,46 @@ def test_a_host_that_lost_its_copies_gets_them_back(remote_chat, host_tmp) -> No
     shutil.copy(folder / "a.txt", folder / "keep.txt")
     assert c.post("/api/chat", json={"message": "again", "session_id": sid}).is_success
     assert (folder / "a.txt").read_bytes() == b"original"
+    # The same size, changed in place (``sed -i``): its mtime gives it away
+    # (in whole seconds: an edit within the second of the copy goes unseen).
+    (folder / "a.txt").write_bytes(b"ORIGINAL")
+    later = time.time() + 100
+    os.utime(folder / "a.txt", (later, later))
+    assert c.post("/api/chat", json={"message": "once", "session_id": sid}).is_success
+    assert (folder / "a.txt").read_bytes() == b"original"
     shutil.rmtree(folder)
     assert c.post("/api/chat", json={"message": "more", "session_id": sid}).is_success
     assert (folder / "a.txt").read_bytes() == b"original"
+
+
+async def test_an_original_unreadable_here_is_not_the_hosts_fault(
+    places, host_tmp, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A local read that fails (a chat deleted meanwhile) leaves that file
+    # behind; the rest still go, and nothing blames the host.
+    from lovia.web.attachments import stage_on_host
+
+    here, there = places
+    folder = here / "attachments" / ("12" * 16)
+    folder.mkdir(parents=True)
+    (folder / "gone.txt").write_text("g")
+    (folder / "ok.txt").write_text("k")
+    real = Path.read_bytes
+
+    def read_bytes(self: Path) -> bytes:
+        if self.name == "gone.txt":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    far = _far()
+    try:
+        there_folder = await stage_on_host(Workspace.remote(far, str(there)), folder)
+    finally:
+        await far.aclose()
+    copies = _host_copies(host_tmp, folder.name)
+    assert there_folder == copies.as_posix()
+    assert sorted(p.name for p in copies.iterdir()) == ["ok.txt"]
 
 
 def test_a_remote_run_reads_the_hosts_copy_and_never_writes_it(

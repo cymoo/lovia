@@ -282,19 +282,27 @@ async def _stored(att: Attachment, folder: Path | None) -> Path | None:
 
 async def stage_on_host(cfg: RemoteWorkspace, folder: Path) -> str:
     """Put the chat's attachments on ``cfg``'s host — each one missing there,
-    or of another size (a copy something changed) — and return the folder
-    the host keeps them in.
+    or whose size or mtime differ from the original's (a copy something
+    changed: a put stamps the original's mtime) — and return the folder the
+    host keeps them in.
 
     The host's copies are a cache of ``folder``: a host that lost them (a
     container rebuilt, its temp dir cleaned) gets them back here, before a
-    run and on every send.
+    run and on every send. Only the host's errors come out of here: an
+    original that can't be read on this side (a chat deleted meanwhile) is
+    left behind, and the message drops it.
     """
-    local = await asyncio.to_thread(_sizes, folder)
-    there, sizes = await cfg.host.attachments_list(folder.name)
-    for name, size in local.items():
-        if sizes.get(name) != size:
+    local = await asyncio.to_thread(_stats, folder)
+    there, copies = await cfg.host.attachments_list(folder.name)
+    for name, (size, mtime) in local.items():
+        if copies.get(name) == (size, int(mtime)):
+            continue
+        try:
             data = await asyncio.to_thread((folder / name).read_bytes)
-            await cfg.host.attachments_put(folder.name, name, data)
+        except OSError as exc:
+            log.warning("not copying attachment %r to %s: %s", name, cfg.host.name, exc)
+            continue
+        await cfg.host.attachments_put(folder.name, name, data, mtime)
     return there
 
 
@@ -330,18 +338,22 @@ async def attachments_for_run(
         return None
 
 
-def _sizes(folder: Path) -> dict[str, int]:
-    """Each attachment in ``folder`` by name, with its size; none for a
-    folder not made yet."""
+def _stats(folder: Path) -> dict[str, tuple[int, float]]:
+    """Each attachment in ``folder`` by name, with its size and mtime; none
+    for a folder not made yet."""
     try:
         entries = list(os.scandir(folder))
     except OSError:
         return {}
-    return {
-        e.name: e.stat(follow_symlinks=False).st_size
-        for e in entries
-        if e.is_file(follow_symlinks=False)
-    }
+    stats: dict[str, tuple[int, float]] = {}
+    for e in entries:
+        try:
+            if e.is_file(follow_symlinks=False):
+                st = e.stat(follow_symlinks=False)
+                stats[e.name] = (st.st_size, st.st_mtime)
+        except OSError:  # gone meanwhile
+            continue
+    return stats
 
 
 async def _linked(

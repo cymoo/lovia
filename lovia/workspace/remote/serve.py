@@ -233,6 +233,13 @@ def _resolve_root(path: str) -> str:
 _ATTACHMENTS_ID = re.compile(r"[0-9a-f]{32}")
 
 
+def _attachments_base() -> Path:
+    """The account's own folder under this host's temp directory — named
+    only: :func:`_attachments_root` makes it and vouches for it."""
+    tmp = Path(tempfile.gettempdir()).resolve()
+    return tmp / ("lovia" if os.name != "posix" else f"lovia-{os.getuid()}")
+
+
 def _attachments_root() -> Path:
     """Where this host keeps copies of chats' attachments: under its temp
     directory, in a folder this account alone owns. The copies are a cache —
@@ -244,12 +251,10 @@ def _attachments_root() -> Path:
     one else may enter — or another account that made it first (or planted a
     link) would be handed the files. Windows' ``%TEMP%`` is the account's own.
     """
-    tmp = Path(tempfile.gettempdir()).resolve()
+    base = _attachments_base()
     if os.name != "posix":
-        base = tmp / "lovia"
         base.mkdir(exist_ok=True)
     else:
-        base = tmp / f"lovia-{os.getuid()}"
         try:
             base.mkdir(mode=0o700)
         except FileExistsError:
@@ -288,8 +293,19 @@ def attachments_list(chat: str) -> dict[str, Any]:
     (Windows takes ``/`` too), and each copy already in it by name, with its
     size and whole-second mtime — a put stamps the original's, so a copy
     changed here no longer matches. A put's temp file is no copy: skipped,
-    and removed once it is old enough to be one a dropped host left."""
-    folder = _attachments_folder(chat)
+    and removed once it is old enough to be one a dropped host left.
+
+    A folder this host won't vouch for (:func:`_attachments_root`) is still
+    named, with why as ``refused``: whatever copies sit there must stay
+    read-only to the chat's runs, and the near side needs the path for that.
+    """
+    if not _ATTACHMENTS_ID.fullmatch(chat):
+        raise ValueError(f"not an attachment folder id: {chat!r}")
+    named = _attachments_base() / "attachments" / chat
+    try:
+        folder = _attachments_root() / chat
+    except PermissionError as exc:
+        return {"folder": named.as_posix(), "files": {}, "refused": str(exc)}
     files: dict[str, list[int]] = {}
     if folder.is_dir():
         now = time.time()
@@ -302,7 +318,7 @@ def attachments_list(chat: str) -> dict[str, Any]:
             elif now - st.st_mtime > _ABANDONED:
                 with contextlib.suppress(OSError):
                     os.unlink(entry.path)
-    return {"folder": folder.as_posix(), "files": files}
+    return {"folder": folder.as_posix(), "files": files, "refused": None}
 
 
 def attachments_put(chat: str, name: str, data: bytes, mtime: float) -> None:
@@ -317,12 +333,14 @@ def attachments_put(chat: str, name: str, data: bytes, mtime: float) -> None:
     try:
         with os.fdopen(fd, "wb") as out:
             out.write(data)
-        os.utime(temp, (mtime, mtime))
         os.replace(temp, folder / name)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(temp)
         raise
+    # Stamped once in place: a temp file dated back to the original's mtime
+    # would look abandoned to a listing that runs meanwhile, which removes it.
+    os.utime(folder / name, (mtime, mtime))
 
 
 def main() -> None:

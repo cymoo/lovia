@@ -32,9 +32,13 @@ def _account(host_tmp: Path) -> Path:
 
 
 def test_copies_are_listed_with_their_size_and_mtime(host_tmp: Path) -> None:
-    folder, files = serve.attachments_list(CHAT).values()
-    assert folder == (_account(host_tmp) / "attachments" / CHAT).as_posix()
-    assert files == {}
+    listed = serve.attachments_list(CHAT)
+    assert listed == {
+        "folder": (_account(host_tmp) / "attachments" / CHAT).as_posix(),
+        "files": {},
+        "refused": None,
+    }
+    folder = listed["folder"]
     serve.attachments_put(CHAT, "a.txt", b"hello", 1_700_000_000.5)
     # A stale copy is replaced, stamped with the original's mtime.
     serve.attachments_put(CHAT, "a.txt", b"hi", 1_700_000_100.9)
@@ -70,6 +74,10 @@ def test_a_folder_others_can_enter_is_refused(host_tmp: Path) -> None:
     with pytest.raises(PermissionError, match="not a private directory"):
         serve.attachments_put(CHAT, "a.txt", b"x", 0)
     assert not (account / "attachments").exists()
+    # Still named, with why: what sits there must stay guarded.
+    listed = serve.attachments_list(CHAT)
+    assert listed["folder"] == (account / "attachments" / CHAT).as_posix()
+    assert listed["files"] == {} and "not a private directory" in listed["refused"]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX temp-dir ownership")
@@ -77,9 +85,27 @@ def test_a_link_in_the_folders_place_is_refused(host_tmp: Path) -> None:
     elsewhere = host_tmp / "someone-elses"
     elsewhere.mkdir(mode=0o700)
     _account(host_tmp).symlink_to(elsewhere, target_is_directory=True)
+    assert serve.attachments_list(CHAT)["refused"]
     with pytest.raises(PermissionError):
-        serve.attachments_list(CHAT)
+        serve.attachments_put(CHAT, "a.txt", b"x", 0)
     assert list(elsewhere.iterdir()) == []
+
+
+def test_a_listing_during_a_put_leaves_it_be(
+    host_tmp: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The copy is stamped with an old mtime; its temp file must not carry it
+    # while a listing could take it for one a dropped host abandoned.
+    real = os.replace
+
+    def replace_after_a_listing(src, dst):
+        assert serve.attachments_list(CHAT)["files"] == {}
+        real(src, dst)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "replace", replace_after_a_listing)
+        serve.attachments_put(CHAT, "a.txt", b"x", 1)
+    assert serve.attachments_list(CHAT)["files"] == {"a.txt": [1, 1]}
 
 
 @pytest.mark.parametrize("chat", ["../x", "AB" * 16, "ab" * 15, ""])

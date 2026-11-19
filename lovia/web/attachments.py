@@ -288,12 +288,24 @@ async def stage_on_host(cfg: RemoteWorkspace, folder: Path) -> str:
 
     The host's copies are a cache of ``folder``: a host that lost them (a
     container rebuilt, its temp dir cleaned) gets them back here, before a
-    run and on every send. Only the host's errors come out of here: an
-    original that can't be read on this side (a chat deleted meanwhile) is
-    left behind, and the message drops it.
+    run and on every send. A host that won't keep copies (its folder isn't
+    private to its account) is a :class:`PermissionError` saying why.
     """
+    there, copies, refused = await cfg.host.attachments_list(folder.name)
+    if refused is not None:
+        raise PermissionError(refused)  # the host's own words, errno and path
+    await _put_stale(cfg, folder, copies)
+    return there
+
+
+async def _put_stale(
+    cfg: RemoteWorkspace, folder: Path, copies: dict[str, tuple[int, int]]
+) -> None:
+    """Put each original in ``folder`` whose host copy is missing or differs.
+    Only the host's errors come out of here: an original that can't be read
+    on this side (a chat deleted meanwhile) is left behind, and the message
+    drops it."""
     local = await asyncio.to_thread(_stats, folder)
-    there, copies = await cfg.host.attachments_list(folder.name)
     for name, (size, mtime) in local.items():
         if copies.get(name) == (size, int(mtime)):
             continue
@@ -303,7 +315,6 @@ async def stage_on_host(cfg: RemoteWorkspace, folder: Path) -> str:
             log.warning("not copying attachment %r to %s: %s", name, cfg.host.name, exc)
             continue
         await cfg.host.attachments_put(folder.name, name, data, mtime)
-    return there
 
 
 async def _staged(cfg: RemoteWorkspace, folder: Path) -> str:
@@ -324,18 +335,26 @@ async def attachments_for_run(
 ) -> AttachmentFolder | None:
     """The attachment folder a run of ``session_id`` reads (and never
     writes): the chat's own, or for a remote chat the host's copy — put
-    there first, whatever the host lost. None when there is none to guard:
-    an id that names no folder, or a host that would not take the copies
-    (the run then can't reach them; the next one tries again)."""
+    there first, whatever the host lost. None for an id that names no folder.
+
+    A remote run always gets its folder, guarded: a host that won't keep
+    copies, or a put that fails, leaves the copies short (logged, tried
+    again next run) — never what is already there writable. A host out of
+    reach fails the run here, as opening its session would next.
+    """
     folder = await store.attachment_folder(session_id)
     cfg = files_config(agent)
     if folder is None or not isinstance(cfg, RemoteWorkspace):
         return folder
-    try:
-        return HostFolder(await stage_on_host(cfg, folder))
-    except (OSError, WorkspaceError) as exc:
-        log.warning("attachments not on %s for %s: %s", cfg.host.name, session_id, exc)
-        return None
+    there, copies, refused = await cfg.host.attachments_list(folder.name)
+    if refused is not None:
+        log.warning("attachments not copied to %s: %s", cfg.host.name, refused)
+    else:
+        try:
+            await _put_stale(cfg, folder, copies)
+        except (OSError, WorkspaceError) as exc:
+            log.warning("attachments not copied to %s: %s", cfg.host.name, exc)
+    return HostFolder(there)
 
 
 def _stats(folder: Path) -> dict[str, tuple[int, float]]:

@@ -456,6 +456,47 @@ async def test_an_original_unreadable_here_is_not_the_hosts_fault(
     assert sorted(p.name for p in copies.iterdir()) == ["ok.txt"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX temp-dir ownership")
+def test_copies_a_host_now_refuses_stay_read_only(places, host_tmp) -> None:
+    # Its folder turned open to others after the copies went in: the run
+    # copies nothing more, but what is there stays guarded.
+    here, there = places
+    far = _far()
+    sid = "cd" * 16
+    copy = _host_copies(host_tmp, sid) / "notes.txt"
+    script = [
+        text("ok"),
+        call("write_file", {"path": str(copy), "content": "gone"}, call_id="w"),
+        text("done"),
+    ]
+    agent = _agent(here, script)
+    switch = WorkspaceSwitch(remotes={"far": far}, modes=("readonly", "trusted"))
+    with _client(agent, switch) as c:
+        try:
+            up = c.post(
+                f"/api/sessions/{sid}/attachments",
+                files={"file": ("notes.txt", b"original")},
+            )
+            assert up.status_code == 200, up.text
+            first = {
+                "message": "go",
+                "session_id": sid,
+                "workspace": f"remote://far{there}",
+                "workspace_mode": "trusted",
+                "attachments": [
+                    {"name": "notes.txt", "mime": "text/plain", "kind": "file"}
+                ],
+            }
+            assert c.post("/api/chat", json=first).status_code == 200
+            (host_tmp / f"lovia-{os.getuid()}").chmod(0o755)
+            res = c.post("/api/chat", json={"message": "edit", "session_id": sid})
+            assert res.status_code == 200, res.text
+        finally:
+            c.portal.call(far.aclose)
+    assert copy.read_bytes() == b"original"
+    assert "read-only" in str(agent.model.calls[2])  # type: ignore[union-attr]
+
+
 def test_a_remote_run_reads_the_hosts_copy_and_never_writes_it(
     places, host_tmp
 ) -> None:

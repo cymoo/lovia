@@ -452,14 +452,16 @@ class RemoteHost:
 
     async def attachments_list(
         self, chat: str
-    ) -> tuple[str, dict[str, tuple[int, int]]]:
+    ) -> tuple[str, dict[str, tuple[int, int]], str | None]:
         """The folder on this host that chat ``chat``'s attachment copies go
         in — under the host's temp directory, in a folder its account alone
-        owns — and each copy already there: its size and whole-second mtime."""
+        owns — each copy already there (its size and whole-second mtime), and
+        why the host won't keep copies there, if it won't: the folder is
+        named all the same, so what sits in it can still be guarded."""
         conn = await self._connection()
         listed = await conn.call("attachments_list", params={"id": chat})
         files = {name: (size, mtime) for name, (size, mtime) in listed["files"].items()}
-        return listed["folder"], files
+        return listed["folder"], files, listed["refused"]
 
     async def attachments_put(
         self, chat: str, name: str, data: bytes, mtime: float

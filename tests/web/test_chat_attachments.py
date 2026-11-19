@@ -361,6 +361,18 @@ def test_a_caller_owned_session_takes_no_upload(tmp_path: Path) -> None:
     assert "bound session" in detail["hint"]
 
 
+def test_names_stay_distinct_on_any_host_filesystem(tmp_path: Path) -> None:
+    # A Linux folder holds A.txt and a.txt apart; a macOS or Windows host
+    # copying it would not — so the second upload takes a suffix.
+    from lovia.web.attachments import save_attachment
+
+    folder = tmp_path / _sid()
+    assert save_attachment(folder, "A.txt", b"1") == "A.txt"
+    assert save_attachment(folder, "a.txt", b"2") == "a-1.txt"
+    assert save_attachment(folder, "é.txt", b"3") == "é.txt"
+    assert save_attachment(folder, "é.txt", b"4") == "é-1.txt"
+
+
 def test_a_deduped_long_name_is_still_served_and_sent(tmp_path: Path) -> None:
     # The suffix must not push a 120-character name past the cap: such a
     # name would be saved, then refused by every read.

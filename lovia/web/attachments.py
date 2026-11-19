@@ -31,6 +31,7 @@ import itertools
 import logging
 import os
 import re
+import unicodedata
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -158,14 +159,19 @@ def _candidates(name: str) -> Iterator[str]:
 def save_attachment(folder: Path, name: str, data: bytes) -> str:
     """Write ``data`` into ``folder`` at a collision-free name; return it.
 
-    Each candidate is created exclusively, so two concurrent uploads that
-    settle on one name can't clobber each other — the loser moves on to the
-    next suffix. On a case-insensitive filesystem ``A.png`` takes ``a.png``'s
-    place the same way.
+    Collision-free on any filesystem the folder is copied to, not just this
+    one: a name is taken when one already there differs only in case or
+    Unicode form — ``A.png`` and ``a.png`` are one file on a default macOS
+    or Windows host, whatever this one says. Each candidate is created
+    exclusively, so two concurrent uploads of one name can't clobber each
+    other — the loser moves on to the next suffix.
     """
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    taken = {_fold(p.name) for p in folder.iterdir()}
     for candidate in _candidates(name):
+        if _fold(candidate) in taken:
+            continue
         try:
             fd = os.open(folder / candidate, flags, 0o600)
         except FileExistsError:
@@ -174,6 +180,11 @@ def save_attachment(folder: Path, name: str, data: bytes) -> str:
             out.write(data)
         return candidate
     raise AssertionError("unreachable: the candidates never run out")
+
+
+def _fold(name: str) -> str:
+    """``name`` as a case-insensitive, normalizing filesystem compares it."""
+    return unicodedata.normalize("NFC", name).casefold()
 
 
 async def user_content(

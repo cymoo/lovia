@@ -103,6 +103,28 @@ def test_the_folder_is_named_where_it_really_is(host_tmp: Path) -> None:
     )
 
 
+def test_a_file_gone_mid_scan_is_skipped(
+    host_tmp: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A put renames its temp file away between the scan seeing it and the
+    # stat: that entry is skipped, the listing goes on.
+    serve.attachments_put(CHAT, "a.txt", b"x", 0)
+    real = os.scandir
+
+    class Gone:
+        name = ".put-abc"
+        path = "/nonexistent/.put-abc"
+
+        def is_file(self, follow_symlinks: bool = True) -> bool:
+            return True
+
+        def stat(self, follow_symlinks: bool = True) -> os.stat_result:
+            raise FileNotFoundError(self.path)
+
+    monkeypatch.setattr(os, "scandir", lambda p: [Gone(), *real(p)])
+    assert serve.attachments_list(CHAT)["files"] == {"a.txt": [1, 0]}
+
+
 def test_a_listing_during_a_put_leaves_it_be(
     host_tmp: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

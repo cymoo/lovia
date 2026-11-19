@@ -310,9 +310,12 @@ def attachments_list(chat: str) -> dict[str, Any]:
     if folder.is_dir():
         now = time.time()
         for entry in os.scandir(folder):
-            if not entry.is_file(follow_symlinks=False):
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                st = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:  # a put renamed it into place meanwhile
                 continue
-            st = entry.stat(follow_symlinks=False)
             if not entry.name.startswith(_PUTTING):
                 files[entry.name] = [st.st_size, int(st.st_mtime)]
             elif now - st.st_mtime > _ABANDONED:

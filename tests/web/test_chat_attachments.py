@@ -286,6 +286,22 @@ def test_an_agent_without_a_workspace_takes_images_only(tmp_path: Path) -> None:
             "unsupported_file_type",
         )
         assert _upload(c, _sid(), "cat.png", PNG).status_code == 200
+        # Larger than inlined would be accepted and never seen: refused.
+        from lovia.workspace import WorkspaceLimits
+
+        big = PNG + b"\0" * WorkspaceLimits().max_file_read_bytes
+        assert _upload(c, _sid(), "big.png", big).status_code == 413
+
+
+def test_a_vendor_model_string_is_resolved_for_vision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "openai:gpt-5.5" says nothing itself: its provider decides, as in a run.
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    agent = Agent(name="bot", model="openai:gpt-5.5")
+    with _client(tmp_path, agent) as c:
+        assert c.get("/api/agents").json()[0]["vision"] is True
 
 
 async def test_an_in_memory_stores_folder_goes_with_it() -> None:

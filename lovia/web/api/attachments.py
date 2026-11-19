@@ -30,6 +30,7 @@ from ..attachments import (
 )
 from ..errors import WebError
 from ..media import is_preview_image, model_image_mime, preview_image_mime
+from ...workspace import WorkspaceLimits
 from ...workspace.workspace import WorkspaceSessionBinding
 from ..schemas import UploadedFile
 from ..workspaces import files_config
@@ -99,6 +100,9 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
         folder = await folder_of(session_id)
         allowed = allowed_upload_ext()
         max_bytes = max_upload_bytes()
+        if files_config(picked) is None:
+            # Only inline reaches the model then: no larger than it inlines.
+            max_bytes = min(max_bytes, WorkspaceLimits().max_file_read_bytes)
         ext = Path(name).suffix.lower().lstrip(".")
         try:
             if allowed is not None and ext and ext not in allowed:

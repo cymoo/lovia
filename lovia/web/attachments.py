@@ -188,6 +188,16 @@ def _fold(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
 
 
+def sees_images(agent: Agent[Any]) -> bool:
+    """Whether ``agent``'s model takes images inline — a ``"vendor:model"``
+    string resolved to its provider first, as a run would (the string itself
+    says nothing). An agent whose model can't be resolved here sees none."""
+    try:
+        return supports_vision(agent.resolve_provider())
+    except Exception:  # noqa: BLE001 — no model, a vendor not installed: no
+        return False
+
+
 async def user_content(
     message: str,
     attachments: list[Attachment] | None,
@@ -213,7 +223,7 @@ async def user_content(
         return message
     cfg = files_config(agent)
 
-    can_see = supports_vision(getattr(agent, "model", None))
+    can_see = sees_images(agent)
     parts: list[ContentPart] = []
     if message.strip():
         parts.append(TextPart(message))

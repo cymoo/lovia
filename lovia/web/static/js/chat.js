@@ -4343,31 +4343,37 @@ function dropStrayAttachments(root) {
   toast(t('ws.attachmentsLeft', { n: stray.length, name: workspaceName(stray[0].root) }));
 }
 
+// The attach button and picker follow the agent and the chat's model. They
+// never touch a tray: these checks run mid-switch, before the chat on
+// screen's agent or model is known, and a draft must not be lost to that.
+// What the chat can't take is left out when it sends (sendableAttachments).
 function syncAttachButton() {
-  // The tray must be the chat on screen's before its model decides what it
-  // keeps: a switch announces the new chat's model before its tray moves.
-  swapTray();
   const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById('attach'));
   if (!btn) return;
   const ok = attachEnabled();
   btn.hidden = !ok;
   btn.disabled = !ok;
   if (_attachInput) _attachInput.accept = filesAllowed() ? '' : MODEL_IMAGE_ACCEPT;
-  if (!ok && _pendingAttachments.length) {
-    _pendingAttachments = [];
-    renderAttachTray();
-    updateSendEnabled();
-  } else if (ok && !filesAllowed()) {
-    // Now an agent that takes images only: what else the tray holds would be
-    // dropped on send — take it out here, saying so, not silently there.
-    const kept = _pendingAttachments.filter((a) => !a.path && MODEL_IMAGE_RE.test(a.name || ''));
-    if (kept.length < _pendingAttachments.length) {
-      _pendingAttachments = kept;
-      renderAttachTray();
-      updateSendEnabled();
-      toast(t('composer.imagesOnly'), { type: 'error' });
-    }
+}
+
+/**
+ * The ready chips this send carries: what the agent takes now — nothing
+ * when it takes no attachments, images alone without a workspace. The rest
+ * stays out, said so once (`say`), instead of the server dropping it.
+ */
+function sendableAttachments(say = true) {
+  const ready = pendingReady();
+  const enabled = attachEnabled();
+  const files = filesAllowed();
+  const takes = (/** @type {any} */ a) =>
+    enabled && (files || (!a.path && MODEL_IMAGE_RE.test(a.name || '')));
+  const sendable = ready.filter(takes);
+  if (say && sendable.length < ready.length) {
+    toast(t(enabled ? 'composer.imagesOnly' : 'composer.attachNoWorkspace'), {
+      type: 'error',
+    });
   }
+  return sendable;
 }
 
 function renderAttachTray() {
@@ -5110,7 +5116,7 @@ export function initComposer() {
       _steerOnce = false;
       return;
     }
-    let attachments = pendingReady();
+    let attachments = sendableAttachments();
 
     if (store.streaming) {
       const queue = !_steerOnce;
@@ -5141,7 +5147,7 @@ export function initComposer() {
     // Linking may have put the chat in another folder, taking out of the tray
     // what was saved elsewhere: send what the draft holds now.
     message = promptEl.value.trim();
-    attachments = pendingReady();
+    attachments = sendableAttachments(false);
     if (uploading() || (!message && !attachments.length)) return;
     const payload = attachmentPayload(attachments);
     promptEl.value = '';

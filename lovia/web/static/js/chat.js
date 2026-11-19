@@ -4400,8 +4400,9 @@ function renderAttachTray() {
 }
 
 /**
- * Open an attachment where it reads best: an image in the lightbox, a file —
- * from the workspace or uploaded — in the Files panel's viewer.
+ * Open an attachment where it reads best: an image in the lightbox, a
+ * workspace file in the Files panel's viewer, an upload — the chat's, not the
+ * workspace's — in a preview over the chat.
  * @param {{ path?: string, name?: string, owner?: string }} att
  * @param {boolean} image
  */
@@ -4413,8 +4414,10 @@ function previewAttachment(att, image) {
   } else if (att.path) {
     store.emit('open-workspace-file', { path: att.path });
   } else {
-    store.emit('open-workspace-file', {
-      src: { name: att.name || '', url: href, download: attachmentHref(att, true) },
+    store.emit('preview-upload', {
+      name: att.name || '',
+      url: href,
+      download: attachmentHref(att, true),
     });
   }
 }
@@ -4567,10 +4570,10 @@ function makeAttachmentView(att) {
     a.appendChild(img);
     return a;
   }
-  // A file opens in the Files panel's viewer (rendered in-app: text, md, csv,
-  // code, PDF, or a download for binaries) instead of forcing a browser
-  // download — a workspace file by its path, an upload off its own URLs. The
-  // href (a download) is what a modified click or no JS gets.
+  // A file opens in-app (text, md, csv, code, PDF; a download for binaries)
+  // instead of forcing a browser download — a workspace file in the Files
+  // panel, an upload in a preview over the chat. The href (a download) is what
+  // a modified click or no JS gets.
   const a = document.createElement('a');
   a.className = 'lv-msg-attach-file';
   const href = att.path

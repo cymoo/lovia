@@ -632,17 +632,35 @@ async def test_reactive_budget_is_capped_by_the_reported_window():
 async def test_offloading_the_turns_huge_result_keeps_the_live_request_verbatim():
     """The turn's own huge tool result crowds the live user message out of the
     protected tail; once it is offloaded the tail must take that message back,
-    or the summary that follows folds the user's exact words away."""
+    or the summary that follows folds the user's exact words away. The history
+    is long enough that the summary must still run after the offload."""
     history = []
-    for i in range(30):
+    for i in range(300):
         history += [user(f"q{i} " + "h" * 2_000), _assistant(f"a{i} " + "h" * 2_000)]
     live = user("LIVE: rename the column to exactly `cust_id_v2`")
     entries = [*history, live, call("c1"), out("c1", "r" * 600_000)]
     res = await Compaction(summarizer=FakeSummarizer()).compact(
         req(entries, model="m", overflow=True, reported_window=128_000)
     )
-    assert res.compacted is True
+    assert res.reason == "reactive_offload+summary"
     assert live in res.entries
+
+
+async def test_an_overflow_the_estimate_explains_compacts_like_the_proactive_path():
+    """A cold start: the count was right, only the window was unknown. Shrink
+    to the normal target against the named window — not the overshoot meant
+    for a refuted count, which would fold away a pasted document that fits."""
+    history = []
+    for i in range(100):
+        history += [user(f"q{i} " + "h" * 9_000), _assistant(f"a{i} " + "h" * 9_000)]
+    live = user("LIVE " + "d" * 120_000)  # a ~30K-token paste
+    entries = [*history, live, call("c1"), out("c1", "ok")]
+    res = await Compaction(summarizer=FakeSummarizer()).compact(
+        req(entries, model="m", overflow=True, reported_window=128_000)
+    )
+    assert live in res.entries
+    assert res.tokens_after is not None
+    assert res.tokens_after < 128_000 - 16_384
 
 
 async def test_a_reported_window_never_loosens_the_reactive_budget():

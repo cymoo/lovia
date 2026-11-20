@@ -273,31 +273,34 @@ class Compaction:
             return self._result(
                 req, state, view, raw + overhead, tokens, tokens_before, [], None
             )
+        # After an overflow, does the estimate explain it? If the prompt was
+        # over a window we now know (usually the one the error just named),
+        # the count was right and only the window was missing: compact exactly
+        # as the proactive path would have against that window. Otherwise the
+        # count itself is refuted — budget against the failed prompt and
+        # overshoot, so stages are sure to shrink below what was rejected.
+        # Usable input, not raw windows: a window under ``reserve_output``
+        # keeps half of itself as usable.
+        distrust = False
         if aggressive:
-            # An overflow proves the effective limit is at most the failed
-            # prompt itself — a window above it is refuted, so budget against
-            # the prompt size to guarantee stages have room to shrink. A known
-            # window *below* it still binds: a prompt several times over the
-            # limit would otherwise shrink to a fraction of itself and
-            # overflow again on the one retry. Compare *usable* input, not raw
-            # windows: a window under ``reserve_output`` keeps half of itself,
-            # which can exceed the failed prompt and loosen the budget.
-            window = max(tokens, 1) + self.reserve_output_tokens
             if (
                 model_window is not None
                 and usable_tokens(model_window, self.reserve_output_tokens) < tokens
             ):
                 window = model_window
+            else:
+                window = max(tokens, 1) + self.reserve_output_tokens
+                distrust = True
         assert window is not None
 
-        budget = self._build_budget(window, aggressive)
+        budget = self._build_budget(window, distrust)
         if not aggressive and tokens < budget.trigger_tokens:
             return self._result(
                 req, state, view, raw + overhead, tokens, tokens_before, [], budget
             )
 
         tail_tokens = self.keep_recent_tokens or max(1, budget.usable // 5)
-        if aggressive:
+        if distrust:
             tail_tokens = min(tail_tokens, max(1, budget.usable // 10))
         # Measure the tail on *rendered* entries (1:1 index-aligned with the
         # body): already-cleared/offloaded results cost marker-size in the
@@ -417,11 +420,12 @@ class Compaction:
             state.ratio,
         )
 
-    def _build_budget(self, window: int, aggressive: bool) -> TokenBudget:
+    def _build_budget(self, window: int, overshoot: bool) -> TokenBudget:
         """Watermark budget for this call.
 
-        The aggressive form tightens the target on *resolved* token counts so
-        fraction and absolute watermarks compare in the same units.
+        The overshoot form (after an overflow the estimate does not explain)
+        tightens the target on *resolved* token counts so fraction and
+        absolute watermarks compare in the same units.
         """
         budget = TokenBudget(
             window=window,
@@ -429,7 +433,7 @@ class Compaction:
             trigger=self.compact_at,
             target=self.compact_to,
         )
-        if aggressive:
+        if overshoot:
             budget = TokenBudget(
                 window=window,
                 reserve_output=self.reserve_output_tokens,

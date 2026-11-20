@@ -84,9 +84,13 @@ Three guarantees shape the design:
   immediate context verbatim.
 - **Reactive backstop.** If the provider still rejects the prompt
   (`ContextOverflowError`), the policy gets one shot at a more aggressive
-  view (tail tightened to 10%, thresholds dropped, target ~25% of usable,
+  view (thresholds dropped, oversized results in the tail offloadable,
   truncation allowed) and the turn is retried — only when the rebuilt view
-  is meaningfully smaller. With the default stages the error surfaces only
+  is meaningfully smaller. How hard it shrinks depends on whether the
+  estimate explains the overflow: if the prompt was over a window now known
+  (usually the one the error named), it compacts to the normal `compact_to`
+  of that window; if not, the count itself was wrong, so it overshoots —
+  tail 10%, target ~25% of the failed prompt. With the default stages the error surfaces only
   when the latest user turn alone exceeds the window; its hint says what to
   do.
 
@@ -222,10 +226,11 @@ content. `lovia/context/policy.py` is a one-screen read.
   main call goes out — but budget-sensitive deployments should know turn N
   can contain a hidden LLM call.
 - **The first overflow on an unknown model is a real, failed request.**
-  The endpoint's rejection is what teaches lovia the window, and the
-  compaction burst that follows targets ~25% of the usable window instead
-  of the proactive 60% — it compacts more than twice as hard. Set
-  `context_window=...` up front where you know it. Ollama never overflows
+  The endpoint's rejection is what teaches lovia the window; the retry is
+  then sized against it like a proactive compaction, so a long history
+  recovers in that one retry. Endpoints whose error names no limit
+  (llama.cpp) get the overshoot instead. Set `context_window=...` up front
+  where you know it. Ollama never overflows
   at all (it [truncates silently](providers.md#sharp-edges)), so there it
   is not optional.
 - **Don't share one `Compaction` across agents with different windows** —

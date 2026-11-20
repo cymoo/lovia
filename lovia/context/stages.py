@@ -36,9 +36,12 @@ from .state import (
     fingerprint,
     result_digest,
     unique_result_ids,
+    window_key,
 )
 from .summarizer import LLMSummarizer, Summarizer
 from .tokens import TokenBudget, TokenCounter, usable_tokens
+from ..exceptions import ContextOverflowError
+from ..providers._windows import plausible_window
 from ..providers.base import context_window as _provider_context_window
 from ..providers.base import discover_context_window as _discover_context_window
 from ..transcript import InputEntry, ToolResultEntry, TranscriptEntry
@@ -404,7 +407,30 @@ class SummarizeHistory:
             # only its window, never the fold or the run.
             logger.warning("context.summary: window probe failed (%s)", exc)
         summarizer_window = _provider_context_window(summarizer_provider)
-        for window in (ctx.model_window, summarizer_window):
+        # A limit the folding endpoint itself named on an earlier refusal
+        # (below). Keyed like the run's learned windows, by the provider that
+        # actually does the fold — known only through the ``.provider`` hook:
+        # ``None`` there means the run's own provider (``LLMSummarizer()``),
+        # while a backend without the hook folds somewhere unknown, so its
+        # limit is never filed under the run model's key.
+        run_key = window_key(ctx.request.provider, ctx.request.model)
+        fold_key: str | None = None
+        if summarizer_provider is None:
+            if hasattr(self.summarizer, "provider"):
+                fold_key = run_key
+        elif summarizer_provider is ctx.request.provider:
+            fold_key = run_key
+        else:
+            fold_key = window_key(
+                summarizer_provider, getattr(summarizer_provider, "model", None)
+            )
+            if fold_key == run_key:
+                # A different provider that keys like the run's (no
+                # ``base_url`` or ``model`` to tell them apart): its limit
+                # must not cap the run model, so it is not remembered.
+                fold_key = None
+        learned = state.learned_windows.get(fold_key) if fold_key else None
+        for window in (ctx.model_window, summarizer_window, learned):
             if window is not None:
                 usable = min(usable, usable_tokens(window, ctx.budget.reserve_output))
         # The summary rides in every later view and fold request, so it may
@@ -472,6 +498,7 @@ class SummarizeHistory:
         running = prior.text if prior is not None else None
         folded = False
         start = 0
+        retried_at = -1  # the chunk start already re-cut after a refusal
         while start < len(span):
             # Grow the chunk entry by entry, remembering the largest pair-safe
             # cut that still fits ``cap``. Stop at the first pair-safe cut that
@@ -502,6 +529,44 @@ class SummarizeHistory:
                 text = await self.summarizer.summarize(
                     span[start:end], req=ctx.request, prior_summary=running
                 )
+            except ContextOverflowError as exc:
+                # The folding model refused the chunk and (usually) named its
+                # limit — a summarizer on an endpoint that publishes no window
+                # learns it here. Retry this chunk once, cut to fit, and
+                # remember the limit for the session when the folding provider
+                # is known; anything else is an ordinary failure.
+                reported = exc.reported_window
+                shrunk = (
+                    usable_tokens(reported, ctx.budget.reserve_output)
+                    if plausible_window(reported)
+                    else usable
+                )
+                if retried_at != start and shrunk < usable:
+                    assert reported is not None
+                    logger.info(
+                        "context.summary: folding model named a %d-token "
+                        "window; re-chunking",
+                        reported,
+                    )
+                    if fold_key is not None:
+                        state.learned_windows[fold_key] = reported
+                    usable = shrunk
+                    max_tokens = usable // 4
+                    retried_at = start
+                    # A carried summary over the new cap would make the
+                    # re-cut fold's result fail ``fits`` anyway — don't spend
+                    # it. The next burst, sized by the learned window from
+                    # the start, re-covers the prefix from scratch.
+                    if running is None or fits(running):
+                        continue
+                state.summary_failures += 1
+                logger.warning(
+                    "context.summary: summarizer overflowed (%s); failure %d/%d",
+                    exc,
+                    state.summary_failures,
+                    self.max_failures,
+                )
+                return folded
             except Exception as exc:
                 # Never propagate, even on the aggressive path: replacing the
                 # original ContextOverflowError with the summarizer's own

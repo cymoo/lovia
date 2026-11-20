@@ -209,6 +209,66 @@ async def test_live_summarizer_sections_and_incremental_fold():
             await aclose()
 
 
+async def test_live_summarizer_learns_a_smaller_folding_window():
+    """A summarizer on its own, smaller endpoint that publishes no window
+    (#501): the first fold is refused with the limit named, the chunk is
+    re-cut to fit, real summaries come back, and a planted fact survives."""
+    model = _live_model()
+    real = provider_from_string(f"openai:{model}")
+    limit = 16_000
+
+    class SmallEndpoint:
+        """The real model, refusing prompts over ``limit`` like a small one."""
+
+        name = "small"
+        base_url = "https://small-summaries.test/v1"
+
+        def __init__(self) -> None:
+            self.model = model
+            self.refusals = 0
+
+        async def stream(self, entries, **kw):
+            from lovia.context import TokenCounter
+
+            if TokenCounter().count(entries) > limit:
+                self.refusals += 1
+                raise ContextOverflowError(
+                    f"This model's maximum context length is {limit} tokens.",
+                    reported_window=limit,
+                )
+            async for delta in real.stream(entries, **kw):
+                yield delta
+
+    small = SmallEndpoint()
+    fact = "By the way, the vault code is VX-3308 — please remember it."
+    history = _chat_history(220, facts={3: fact})  # ~26K tokens
+    policy = Compaction(
+        context_window=200_000,
+        compact_at=0.05,
+        compact_to=0.02,
+        keep_recent_tokens=2_000,
+        reserve_output_tokens=2_000,
+        summarizer=LLMSummarizer(small),
+    )
+    try:
+        req = CompactionRequest(
+            entries=[*history, _user("What is the vault code?")],
+            provider=real,
+            model=model,
+        )
+        res = await policy.compact(req)
+    finally:
+        aclose = getattr(real, "aclose", None)
+        if callable(aclose):
+            await aclose()
+
+    assert small.refusals == 1  # refused once, then sized to the named window
+    assert res.summary is not None
+    for section in REQUIRED_SECTIONS:
+        assert section.lower() in res.summary.lower()
+    assert "vx-3308" in res.summary.lower()
+
+
 # ---------------------------------------------------------------------------
 # 3. Mid-run clearing burst: old tool results dropped, recent kept usable
 # ---------------------------------------------------------------------------

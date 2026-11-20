@@ -66,11 +66,11 @@ class StageContext:
             not disable :class:`OffloadToolResults` — it still emits preview
             markers and recall falls back to the transcript; a store keeps the
             output recoverable once the transcript no longer retains it.
-        model_window: The model's real context window when known. On the
-            aggressive path ``budget.window`` is derived from the *failed
-            prompt* (which exceeded the real window), so anything that must
-            fit in an actual model call — like the summarizer's fold chunks —
-            sizes against this instead.
+        model_window: The model's real context window when known. After an
+            overflow the estimate cannot explain, ``budget.window`` is derived
+            from the *failed prompt* instead, so anything that must fit in an
+            actual model call — like the summarizer's fold chunks — sizes
+            against this.
     """
 
     request: CompactionRequest
@@ -379,7 +379,7 @@ class SummarizeHistory:
             return False  # nothing precedes the protected tail: no probe either
 
         # The fold requests must fit every model involved, not just the
-        # budget: the aggressive budget is sized to the failed prompt, which
+        # budget: an overshoot budget is sized to the failed prompt, which
         # can dwarf the run model's real window (``ctx.model_window``), and a
         # summarizer wired to its own provider can run a *smaller* model than
         # the run's — hand it run-sized chunks and every burst overflows the
@@ -595,10 +595,10 @@ class TruncateHistory:
     frontier is exhausted or what survives it still does not fit, the cut
     moves up to the anchor, if *that* fits: otherwise the latest turn is the
     overflow itself and dropping the context around it would cost recency
-    for nothing. "Fits" is the aggressive target and, when the model's real
-    window is known, half of its usable space — the aggressive budget is
-    sized to the failed prompt, which a session moved to a smaller model can
-    dwarf. The anchor is never dropped.
+    for nothing. "Fits" is the budget's target and, when the model's real
+    window is known, half of its usable space — an overshoot budget is sized
+    to the failed prompt, which a session moved to a smaller model can dwarf.
+    The anchor is never dropped.
 
     Runs on the aggressive path only. The proactive path has headroom to
     spare: a failed summary there costs at most one provider rejection before
@@ -622,8 +622,8 @@ class TruncateHistory:
             return cut
 
         # The surviving tail alone, not the view: the summary and the tool
-        # schemas are fixed costs the aggressive target (a quarter of the
-        # failed prompt) may not even cover.
+        # schemas are fixed costs an overshoot target (a quarter of the failed
+        # prompt) may not even cover.
         def survivors(cut: int) -> int:
             return ctx.calibrated(ctx.counter.count(render_entries(body[cut:], state)))
 

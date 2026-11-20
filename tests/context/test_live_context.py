@@ -340,6 +340,43 @@ async def test_live_offload_archives_to_store():
     assert await store.get(result_digest(big)) == big
 
 
+async def test_live_huge_tool_result_is_fixed_before_sending():
+    """This turn's own tool returns several times the window. The view is
+    compacted before it is sent — no call is refused or retried, every real
+    prompt (the provider's own count) stays under the window, and the model
+    still answers from the offload preview."""
+    model = _live_model()
+
+    @tool
+    def read_log() -> str:
+        """Read the service log."""
+        noise = "noise line 0123456789 abcdefghij klmnopqrst uvwxyz\n" * 4_000
+        return "FIRST LINE: incident code ZQ-5521.\n" + noise  # ~200K chars
+
+    agent = _agent(
+        model, "You are a concise assistant. Use tools when asked.", tools=[read_log]
+    )
+    window = 32_000
+    result, seen = await _run_collect(
+        agent,
+        "Call read_log once, then reply with only the incident code from its "
+        "first line.",
+        context_policy=Compaction(context_window=window),
+    )
+
+    assert "ZQ-5521" in (result.output or "")
+    prompts = [
+        e.usage.input_tokens
+        for e in seen
+        if isinstance(e, events.MessageCompleted) and e.usage is not None
+    ]
+    assert len(prompts) >= 2  # the tool call, then the answer
+    assert max(prompts) < window
+    compacted = _compactions(seen)
+    assert compacted and all(not e.notice.reactive for e in compacted)
+    assert not any(isinstance(e, events.ModelRetrying) for e in seen)
+
+
 # ---------------------------------------------------------------------------
 # 6. Large history (tens of thousands of tokens) compacts within budget
 # ---------------------------------------------------------------------------
@@ -481,4 +518,74 @@ async def test_live_estimator_accuracy_across_content_types():
             assert 0.5 <= real / est <= 1.6, (
                 f"{name}: real {real} / est {est} = {real / est:.2f} outside "
                 "the calibration clamp's comfortable range"
+            )
+
+
+async def test_live_padded_tool_output_stays_within_the_pre_send_margin():
+    """Compaction acts before sending only past 1.4x the window, on the raw
+    estimate. Column-padded tool output (psql tables, ``ls -l``, ``ps``) is
+    where bytes/4 over-counts most: it must stay under that margin, or a
+    result that fits could be offloaded on the estimate alone."""
+    model = _live_model()
+    import httpx
+
+    from lovia.context import TokenCounter
+    from lovia.context.compaction import _CERTAINLY_OVER
+
+    rows = range(400)
+    samples = {
+        "psql": "\n".join(
+            [" id  |      name       |   amount   | status  ", "-" * 46]
+            + [
+                f" {i:<4}| {'customer_' + str(i):<16}| {i * 37.5:>10.2f} | "
+                f"{'paid' if i % 3 else 'pending':<8}"
+                for i in rows
+            ]
+        ),
+        "box": "\n".join(
+            ["┌──────┬──────────────────┬────────────┐"]
+            + [f"│ {i:<4} │ {'item_' + str(i):<16} │ {i * 3:>10} │" for i in rows]
+            + ["└──────┴──────────────────┴────────────┘"]
+        ),
+        "ls": "\n".join(
+            f"-rw-r--r--   1 neo  staff   {i * 1013:>9} Nov 21 09:{i % 60:02d} "
+            f"file_{i:04d}.log"
+            for i in rows
+        ),
+        "ps": "\n".join(
+            f"neo      {1000 + i:>6}   {i % 9}.{i % 7}  0.{i % 5}  "
+            f"{4000000 + i:>8} {120000 + i:>7}   ??  S    9:{i % 60:02d}AM   "
+            f"0:0{i % 9}.{i % 99:02d} /usr/bin/worker --id {i}"
+            for i in rows
+        ),
+    }
+    counter = TokenCounter()
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        base = os.environ["OPENAI_BASE_URL"].rstrip("/")
+
+        async def prompt_tokens(text: str) -> int:
+            r = await client.post(
+                f"{base}/chat/completions",
+                headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": text}],
+                    "max_tokens": 16,
+                    "temperature": 0,
+                },
+            )
+            r.raise_for_status()
+            return r.json()["usage"]["prompt_tokens"]
+
+        framing = await prompt_tokens("hi") - 1
+        overcount = {}
+        for name, text in samples.items():
+            real = await prompt_tokens(text) - framing
+            overcount[name] = counter.count_entry(_user(text)) / real
+        print(f"\nbytes/4 over-count: {overcount}")
+        for name, factor in overcount.items():
+            assert factor < _CERTAINLY_OVER, (
+                f"{name}: estimate is {factor:.2f}x the real count, past the "
+                f"{_CERTAINLY_OVER}x pre-send margin"
             )

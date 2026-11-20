@@ -9,6 +9,8 @@ How a call flows:
 2. Over the watermark (or after a provider overflow), stages run in order —
    offload, clear, summarize, and after an overflow truncate — each recording
    new sticky decisions until the view is under the *compact_to* watermark.
+   A view already over a known window is not sent to be refused: an
+   ordinary pass runs first, then the overflow moves if it still does not fit.
    The gap between the two is hysteresis: compaction happens in rare bursts,
    not every turn.
 3. Token thresholds estimate the *whole* request: cheap per-entry estimates
@@ -67,6 +69,14 @@ _CALIBRATION_ALPHA = 0.2
 # Aggressive (post-overflow) overrides.
 _REACTIVE_TARGET = 0.25
 
+# A view is treated as certain to be refused before sending only when its
+# estimate exceeds the window by this factor: bytes/4 over-counts English
+# prose by up to ~1.39x before the ratio has calibrated
+# (docs/ratio-calibration.md: converged 0.72). Missing a doomed call costs
+# one refused round-trip, recovered as before; a false alarm would offload a
+# result that fit — so the margin errs toward sending.
+_CERTAINLY_OVER = 1.4
+
 
 def _plural(n: int, noun: str) -> str:
     """``1 tool result`` / ``2 tool results`` — naive count + noun for notices."""
@@ -111,10 +121,15 @@ class Compaction:
         """Configure automatic compaction.
 
         Args:
-            context_window: The model's context window in tokens. When
-                omitted, the policy asks the provider; if the provider does
-                not know either, proactive compaction is skipped and only
-                the reactive overflow path runs.
+            context_window: The model's context window in tokens — a limit
+                enforced before sending: a view still certainly over it
+                (estimated past 1.4x) after an ordinary pass is compacted as
+                after an overflow, so a value
+                set below the real window caps the prompt, not just the
+                budget. When omitted, the
+                policy asks the provider; if the provider does not know
+                either, proactive compaction is skipped and only the reactive
+                overflow path runs.
             compact_at: When to start compacting — a fraction of the usable
                 window (``0.85`` = 85% full) or an absolute token count
                 (``150_000``).
@@ -267,6 +282,31 @@ class Compaction:
         # The real window (when known) survives the aggressive override below:
         # stages that make actual model calls (summarize) size against it.
         model_window = window
+        # Certainly over a known window before anything is sent: sending would
+        # buy a rejection and spend the runner's one retry. Measured against
+        # the raw window, not the usable space — between the two the outcome
+        # depends on the request's ``max_tokens`` (Anthropic's default equals
+        # the reserve and is refused; OpenAI's dialect sends none and passes)
+        # — and only past the estimator's margin (``_CERTAINLY_OVER``). The
+        # estimate explains this "overflow", so the budget below is the
+        # trusted one; the stages get a second, overflow-moves pass if the
+        # ordinary one leaves the view still certainly over (the stage loop).
+        # The margin was sized for the raw bytes/4 over-count, so the ratio may
+        # only lower the estimate here: a ratio raised by dense content (logs,
+        # hashes) would otherwise over-count the prose that follows past it.
+        # Content that truly under-counts just falls back to send-and-recover.
+        certain_limit = (
+            int(model_window * _CERTAINLY_OVER) if model_window is not None else None
+        )
+        certain_ratio = min(state.ratio, 1.0)
+
+        def certainly_over(raw_total: int) -> bool:
+            return (
+                certain_limit is not None
+                and int(raw_total * certain_ratio) > certain_limit
+            )
+
+        over_capacity = not aggressive and certainly_over(raw + overhead)
         if window is None and not aggressive:
             # No budget information: never compact proactively; the
             # reactive overflow path remains as the safety net.
@@ -333,39 +373,77 @@ class Compaction:
                 budget.usable,
             )
 
+        # Which passes the stages run: one with the overflow moves after a
+        # real overflow; one ordinary pass otherwise. A view over capacity
+        # before sending gets the ordinary pass first — the overflow moves
+        # cost the newest tool result or unsummarized history, so they must
+        # not pre-empt an ordinary move that would make the view fit — and the
+        # overflow pass only if it is still certainly over. When even an ideal
+        # ordinary pass could not get it under — the system message, the tool
+        # schemas and the protected tail alone are certainly over (this turn's
+        # own huge result, usually); everything before the tail, a carried-in
+        # summary included, counts as sheddable — skip straight to the
+        # overflow pass rather than pay for a summary that cannot help. The
+        # overflow pass is exactly the one the refusal would have triggered —
+        # the same budget, down to the same target — so this path ends where
+        # sending first would have, minus the refused call.
+        passes = [aggressive]
+        if over_capacity:
+            systems, _ = split_system(req.entries)
+            floor = (
+                counter.count([*systems, *render_entries(body[protected_from:], state)])
+                + overhead
+            )
+            hopeless = certainly_over(floor)
+            passes = [True] if hopeless else [False, True]
+            logger.info(
+                "context.compact: view (%d est. tokens) is certainly over the "
+                "%d-token window before sending; %s",
+                tokens,
+                model_window,
+                "overflow moves at once"
+                if hopeless
+                else "overflow moves if an ordinary pass leaves it so",
+            )
+
         reasons: list[str] = []
         try:
-            for stage in self.stages:
-                ctx = StageContext(
-                    request=req,
-                    state=state,
-                    counter=counter,
-                    budget=budget,
-                    current_tokens=tokens,
-                    protected_from=protected_from,
-                    aggressive=aggressive,
-                    store=self.store,
-                    model_window=model_window,
-                )
-                if await stage.plan(body, ctx):
-                    reasons.append(stage.name)
-                    view = render_view(req.entries, state)
-                    raw = counter.count(view)
-                    tokens = int((raw + overhead) * state.ratio)
-                    # An offloaded or cleared result shrinks the tail, which can
-                    # now take in the live user message it crowded out — later
-                    # stages must not summarize that away. Only ever widened.
-                    protected_from = min(
-                        protected_from,
-                        protected_tail_start(
-                            render_entries(body, state),
-                            counter,
-                            state.ratio,
-                            tail_tokens,
-                        ),
+            for n, overflow_moves in enumerate(passes):
+                if n and not certainly_over(raw + overhead):
+                    break  # the ordinary pass got it out of certain refusal
+                for stage in self.stages:
+                    ctx = StageContext(
+                        request=req,
+                        state=state,
+                        counter=counter,
+                        budget=budget,
+                        current_tokens=tokens,
+                        protected_from=protected_from,
+                        aggressive=overflow_moves,
+                        store=self.store,
+                        model_window=model_window,
                     )
-                if tokens <= budget.target_tokens:
-                    break
+                    if await stage.plan(body, ctx):
+                        if stage.name not in reasons:
+                            reasons.append(stage.name)
+                        view = render_view(req.entries, state)
+                        raw = counter.count(view)
+                        tokens = int((raw + overhead) * state.ratio)
+                        # An offloaded or cleared result shrinks the tail,
+                        # which can now take in the live user message it
+                        # crowded out — later stages must not summarize that
+                        # away. Only ever widened.
+                        protected_from = min(
+                            protected_from,
+                            protected_tail_start(
+                                render_entries(body, state),
+                                counter,
+                                state.ratio,
+                                tail_tokens,
+                            ),
+                        )
+                    if tokens <= budget.target_tokens:
+                        break
         except BaseException:
             # Stages are expected to log-and-return-False on failure, but an
             # unexpected raise must still keep what was already decided (and

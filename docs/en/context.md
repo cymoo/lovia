@@ -51,8 +51,9 @@ the window and — under pressure — renders a smaller view in
    summary replaces the oldest span — structured sections (session intent,
    current state, key facts, artifacts, constraints, next steps) rather
    than freeform prose.
-4. **Truncate** (`TruncateHistory`, overflow path only): when the provider
-   has rejected the prompt and the three stages above still leave it over
+4. **Truncate** (`TruncateHistory`, aggressive path only): when the
+   provider has rejected the prompt — or the view is already over the
+   window before sending — and the three stages above still leave it over
    the window — a summarizer that keeps failing, or a recent span too big
    to protect — the unsummarized span is dropped and a short note takes
    its place in the view. Lossy, but the alternative is a session that
@@ -90,9 +91,15 @@ Three guarantees shape the design:
   estimate explains the overflow: if the prompt was over a window now known
   (usually the one the error named), it compacts to the normal `compact_to`
   of that window; if not, the count itself was wrong, so it overshoots —
-  tail 10%, target ~25% of the failed prompt. With the default stages the error surfaces only
-  when the latest user turn alone exceeds the window; its hint says what to
-  do.
+  tail 10%, target ~25% of the failed prompt. A view whose estimate is
+  certainly over a known window before sending — more than 1.4× it, past
+  what an uncalibrated estimate over-counts (typically this turn's own huge
+  tool result) — gets an ordinary pass first and, if it is still that far
+  over, the first form up
+  front — the same pass the refusal would have triggered, without sending
+  it just to be refused. With
+  the default stages the error surfaces only when the latest user turn alone
+  exceeds the window; its hint says what to do.
 
 Each compaction emits a
 [`ContextCompacted` event](streaming.md#transitions-and-context) with a
@@ -190,8 +197,10 @@ Stages *plan* (record sticky decisions); rendering is a pure function of
 transcript + state. Never make a stage undo a decision — monotonicity is
 what keeps the prefix cache-stable. A stage's `ctx` is a `StageContext`
 (the request, the sticky `CompactionState`, a `TokenCounter`, the
-`TokenBudget`, the protected-tail boundary, the aggressive flag); the
-pieces Compaction itself is built from are exported for reuse —
+`TokenBudget`, the protected-tail boundary, the aggressive flag — set after
+an overflow, and before sending a view still over the window after an
+ordinary pass). The pieces Compaction itself is built from are exported for
+reuse —
 `render_view`, the `clear_marker` / `offload_marker` / `summary_entry`
 builders, `transcript_to_text`, `OffloadRecord` / `SummaryState`, and the
 summarizer's `REQUIRED_SECTIONS` / `SUMMARY_SYSTEM_PROMPT` /

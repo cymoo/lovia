@@ -45,8 +45,8 @@ agent = Agent(..., context_policy=NoopContextPolicy())
 3. **总结旧历史**（`SummarizeHistory`）：用增量 LLM summary 替换最早的一段历史。summary
    使用结构化章节（session intent、current state、key facts、artifacts、constraints、
    next steps），不会写成随意散文。
-4. **截断**（`TruncateHistory`，仅溢出路径）：provider 已经拒绝了 prompt，而上面三阶段
-   之后仍然超窗——summarizer 持续失败，或者最近一段大到保护不住——就直接丢掉尚未总结的那段，
+4. **截断**（`TruncateHistory`，仅激进路径）：provider 已经拒绝了 prompt（或者发送前视图就已超窗），
+   而上面三阶段之后仍然超窗——summarizer 持续失败，或者最近一段大到保护不住——就直接丢掉尚未总结的那段，
    在 view 中留一条简短说明。这是有损的，但另一种结局是该 session 之后每一轮都以同样方式失败。
 
 这些标记会保留配对关系（`call_id`、错误标记），并告诉模型如何取回内容：
@@ -71,8 +71,10 @@ agent = Agent(..., context_policy=NoopContextPolicy())
   渲染更激进的 view（阈值降低，尾部里超大的工具结果也可卸载，允许截断）并重试本轮。
   只有重建的 view 明显更小时才重试。压多狠取决于估算能否解释这次溢出：如果 prompt 超过了现在已知的
   窗口（通常就是报错里点名的那个），就按这个窗口的常规 `compact_to` 压缩；如果解释不了，说明计数本身
-  错了，就多压一些——尾部 10%，目标约为失败 prompt 的 25%。使用默认阶段时，错误只会在最新一轮用户消息本身就超窗时
-  向外暴露；其 hint 会说明该怎么办。
+  错了，就多压一些——尾部 10%，目标约为失败 prompt 的 25%。如果窗口已知、发送前估算就一定超窗（超过窗口 1.4 倍，超出未校准估算可能的高估；通常是本轮
+  自己的一个巨大工具结果），会先跑一遍普通压缩，仍一定超窗才提前按第一种方式压缩——也就是被拒后本来会跑的那一遍，
+  只是不必先发出去等着被拒。使用默认阶段时，错误只会在最新一轮
+  用户消息本身就超窗时向外暴露；其 hint 会说明该怎么办。
 
 每次压缩都会发出 [`ContextCompacted` 事件](streaming.md#转移与上下文)，其中带有
 `CompactionNotice`（原因、压缩前后 token、便于阅读的 detail）。Web UI 会实时渲染它，并在重新加载时
@@ -154,7 +156,8 @@ policy = Compaction(stages=[DropOldImages(), ClearToolResults()])
 
 stage 只做 *plan*（记录可延续的决策）；渲染是 transcript + state 的纯函数。stage 不要撤销已有决策：
 单调性是保持 prefix cache 稳定的关键。stage 的 `ctx` 是 `StageContext`
-（request、sticky `CompactionState`、`TokenCounter`、`TokenBudget`、受保护尾部边界、aggressive flag）。
+（request、sticky `CompactionState`、`TokenCounter`、`TokenBudget`、受保护尾部边界、aggressive flag——
+溢出后，以及发送前跑完普通一遍仍超窗时为 True）。
 Compaction 自己用到的部件也导出了，方便复用：`render_view`、`clear_marker` /
 `offload_marker` / `summary_entry` builder、`transcript_to_text`、`OffloadRecord` /
 `SummaryState`，以及 summarizer 的 `REQUIRED_SECTIONS` / `SUMMARY_SYSTEM_PROMPT` /

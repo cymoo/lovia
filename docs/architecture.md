@@ -213,8 +213,9 @@ method handles both triggers:
   semantics) → `SummarizeHistory` (incremental LLM summary of the older
   prefix; anti-thrash skip below 10% projected savings; circuit breaker whose
   failure count rides the scratch across runs, with the overflow path as its
-  half-open probe) → `TruncateHistory` (overflow path only: drop what nothing
-  else could shrink, never past the latest user message). Custom stages
+  half-open probe) → `TruncateHistory` (aggressive path only — after an
+  overflow, or a view already over the window before sending: drop what
+  nothing else could shrink, never past the latest user message). Custom stages
   implement the `Stage` protocol (`async def plan(body, ctx) -> bool`).
   Design rationale, invariants and open optimizations live in
   `docs/design/context-compaction.md` (in the repository; not part of the

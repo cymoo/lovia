@@ -1792,10 +1792,24 @@ function formatTokens(n) {
 // switches. Clicking the ring opens a detail popover (tokens, cache split,
 // model).
 let _lastUsage = null; // the most recent run's usage dict, for the popover
+// The streamed run's usage so far: each model call's (`message_completed`)
+// summed, so the ring moves call by call; `done` then brings the run's own.
+let _runUsage = null;
 
 // The prompt size of the run's final model call — the context-fill numerator.
 function contextFill(usage) {
   return usage?.last_input_tokens ?? usage?.input_tokens;
+}
+
+/** Fold one model call's usage into the run's, and show it. */
+function addCallUsage(call) {
+  if (!contextFill(call)) return; // a provider that reports none
+  const sum = { ...call };
+  for (const k of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'total_tokens']) {
+    sum[k] = (_runUsage?.[k] ?? 0) + (call[k] ?? 0);
+  }
+  _runUsage = sum; // last_input_tokens stays this call's: the prompt it sent
+  updateContextMeter(_runUsage);
 }
 
 /**
@@ -3084,6 +3098,7 @@ async function applyEvent({ event, data }) {
       // The run this view follows, by the id its lifecycle events carry: what
       // a message queued now waits on.
       _shownRunId = data.run_id ?? null;
+      _runUsage = null;
       if (data.run_id) store.shownRuns.add(data.run_id); // its outcome is on screen
       updateSendEnabled(); // a message can queue behind it now
       _onAdmit?.(data.run_id);
@@ -3168,6 +3183,7 @@ async function applyEvent({ event, data }) {
       store.reasoningText = '';
       store.reasoningStart = 0;
       store.reasoningEnd = 0;
+      addCallUsage(data.usage);
       break;
 
     case 'user_injected': {
@@ -3303,6 +3319,7 @@ async function applyEvent({ event, data }) {
       _sawDone = true;
       if (_shownRun) _shownRun.usage = data?.usage ?? null;
       _dropRecoveries = 0; // the connection proved healthy — re-arm recovery
+      _runUsage = null;
       updateContextMeter(data?.usage);
       // Stamp the run's token spend into the turn footer — the data is
       // already on the wire; hovering shows the input/output split. A zero

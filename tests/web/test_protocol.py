@@ -214,6 +214,24 @@ def _data(ev: events.Event) -> dict[str, Any]:
     return json.loads(payload["data"])
 
 
+def test_message_completed_carries_its_calls_usage() -> None:
+    """The context ring's live numerator: the call's prompt, per call."""
+    usage = Usage(input_tokens=1200, output_tokens=30, cache_read_tokens=1000)
+    data = _data(events.MessageCompleted(entries=[], usage=usage))
+    assert data["usage"] == {
+        "input_tokens": 1200,
+        "output_tokens": 30,
+        "cache_read_tokens": 1000,
+        "cache_write_tokens": 0,
+        "total_tokens": 1230,
+        "last_input_tokens": 1200,
+    }
+    # A provider that reports none: no last_input_tokens to show.
+    assert (
+        "last_input_tokens" not in _data(events.MessageCompleted(entries=[]))["usage"]
+    )
+
+
 def test_error_event_carries_code_and_provider_facts() -> None:
     data = _data(
         events.RunFailed(

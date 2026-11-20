@@ -304,7 +304,7 @@ of `event:` / `data:` pairs: the Runner's
 | `text_delta` | `{delta}` |
 | `reasoning_delta` | `{delta}` |
 | `output_discarded` | `{}` — clear the current turn's rendered deltas |
-| `message_completed` | `{message}` — one assistant turn, assembled |
+| `message_completed` | `{message, usage}` — one assistant turn, assembled; `usage` is that model call's, with `last_input_tokens` its prompt size |
 | `user_injected` | `{content, turn}` |
 | `tool_call` | `{id, name, arguments}` — `arguments` is the raw JSON string |
 | `tool_result` | `{id, name, result, is_error, images?}` — `images` lists `{index, mime_type}` stubs served by `GET /api/sessions/{id}/tool-images/{call_id}/{index}` |

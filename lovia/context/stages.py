@@ -544,7 +544,12 @@ class SummarizeHistory:
                     usable = shrunk
                     max_tokens = usable // 4
                     retried_at = start
-                    continue
+                    # A carried summary over the new cap would make the
+                    # re-cut fold's result fail ``fits`` anyway — don't spend
+                    # it. The next burst, sized by the learned window from
+                    # the start, re-covers the prefix from scratch.
+                    if running is None or fits(running):
+                        continue
                 state.summary_failures += 1
                 logger.warning(
                     "context.summary: summarizer overflowed (%s); failure %d/%d",

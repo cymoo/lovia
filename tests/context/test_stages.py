@@ -419,6 +419,31 @@ async def test_summarize_learns_the_window_its_folding_model_names():
     assert summarizer.refused == 1
 
 
+async def test_a_carried_summary_over_the_shrunk_cap_spends_no_doomed_fold():
+    """The prior summary (~3K tokens) fits the run-sized cap but not the one
+    the folding model's 8K window implies: re-cutting would fold on top of it
+    and have the result rejected. Fail without that fold; the next burst,
+    sized by the learned window, re-covers from scratch and succeeds."""
+    body = _texts(10, chars=4_000)  # ~1K tokens each
+    prior = SummaryState(
+        text="P" * 12_000, covered=2, fingerprint=fingerprint(body[:2])
+    )
+    state = CompactionState(summary=prior)
+    summarizer = _RefusingSummarizer(limit=4_500, reported=8_192)
+    roomy = TokenBudget(window=100_000, reserve_output=0, trigger=0.75, target=0.5)
+    stage = SummarizeHistory(summarizer=summarizer)
+
+    ctx = make_ctx(body, state=state, protected_from=8, budget=roomy)
+    assert await stage.plan(body, ctx) is False
+    assert summarizer.refused == 1 and summarizer.calls == []  # no doomed fold
+    assert state.summary is prior and state.summary_failures == 1
+
+    ctx = make_ctx(body, state=state, protected_from=8, budget=roomy)
+    assert await stage.plan(body, ctx) is True
+    assert summarizer.refused == 1
+    assert state.summary is not None and state.summary.covered == 8
+
+
 async def test_a_custom_summarizer_without_the_provider_hook_learns_nothing():
     """A backend without ``.provider`` folds on an unknown model: its refusal
     still re-cuts this chunk, but the limit must never be filed under the run

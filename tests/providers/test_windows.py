@@ -283,7 +283,8 @@ async def test_a_passing_failure_is_asked_again_after_a_cooldown(monkeypatch) ->
     """A 5xx or a timeout says nothing about the window: remembering it as a
     miss would cost every later session of the process its proactive budget."""
     now = [1_000.0]
-    monkeypatch.setattr(_windows.time, "monotonic", lambda: now[0])
+    # The module's own clock, not ``time.monotonic``: asyncio's loop runs on that.
+    monkeypatch.setattr(_windows, "monotonic", lambda: now[0])
     answers: list[int | None | Exception] = [ProbeUnavailable("HTTP 503"), 8_192]
 
     async def fetch() -> int | None:
@@ -297,6 +298,27 @@ async def test_a_passing_failure_is_asked_again_after_a_cooldown(monkeypatch) ->
     assert len(answers) == 1
     now[0] += _windows._RETRY_AFTER
     assert await _resolver().discover(fetch) == 8_192
+
+
+async def test_a_late_failure_never_reopens_an_answered_probe(monkeypatch) -> None:
+    now = [1_000.0]
+    monkeypatch.setattr(_windows, "monotonic", lambda: now[0])
+
+    async def late_failure() -> int | None:
+        await asyncio.sleep(0.01)
+        raise ProbeUnavailable("HTTP 503")
+
+    async def answer() -> int | None:
+        return 8_192
+
+    async def never() -> int | None:  # pragma: no cover - must never run
+        raise AssertionError("re-probed an endpoint that already answered")
+
+    await asyncio.gather(
+        _resolver().discover(late_failure), _resolver().discover(answer)
+    )
+    now[0] += _windows._RETRY_AFTER
+    assert await _resolver().discover(never) == 8_192
 
 
 async def test_discover_declines_to_spend_a_request() -> None:

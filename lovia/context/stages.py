@@ -392,7 +392,12 @@ class SummarizeHistory:
         # one request per process).
         usable = ctx.budget.usable
         summarizer_provider = getattr(self.summarizer, "provider", None)
-        await _discover_context_window(summarizer_provider)
+        try:
+            await _discover_context_window(summarizer_provider)
+        except Exception as exc:
+            # Adapters promise not to raise; a custom one that does must cost
+            # only its window, never the fold or the run.
+            logger.warning("context.summary: window probe failed (%s)", exc)
         summarizer_window = _provider_context_window(summarizer_provider)
         for window in (ctx.model_window, summarizer_window):
             if window is not None:

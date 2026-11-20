@@ -1223,7 +1223,7 @@ async def test_discover_fails_open(response: dict) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status_code", [429, 503])
+@pytest.mark.parametrize("status_code", [401, 403, 429, 503])
 async def test_discover_asks_again_after_a_passing_failure(
     status_code: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:

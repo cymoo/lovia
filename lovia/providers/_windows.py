@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import math
 import re
-import time
+from time import monotonic
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeGuard
 
@@ -192,10 +192,11 @@ _RETRY_AFTER = 300.0
 
 
 class ProbeUnavailable(Exception):
-    """The endpoint could not answer now: unreachable, slow, 429 or 5xx.
+    """The endpoint could not answer now: unreachable, slow, 401/403, 429, 5xx.
 
     Raised by the fetchers so :meth:`WindowResolver.discover` asks again later,
-    rather than remembering a passing outage as "publishes no window".
+    rather than remembering a passing outage — or a key since corrected, the
+    memo being per endpoint, not per key — as "publishes no window".
     """
 
 
@@ -242,7 +243,7 @@ async def _get_json(
         # InvalidURL is not an HTTPError: a malformed base_url must degrade to
         # "unknown" here and fail loudly on the model call itself.
         return None
-    if response.status_code == 429 or response.status_code >= 500:
+    if response.status_code in (401, 403, 429) or response.status_code >= 500:
         raise ProbeUnavailable(f"HTTP {response.status_code}")
     if not response.is_success:
         return None
@@ -264,7 +265,7 @@ async def _get_json(
 # at all — the context policy learns it from
 # ``ContextOverflowError.reported_window`` and persists it per session.
 _ADVERTISED: dict[tuple[str, str], int] = {}
-# When each endpoint may be asked again (``time.monotonic()``): ``inf`` once it
+# When each endpoint may be asked again (``monotonic()``): ``inf`` once it
 # has answered, a short cooldown after a passing failure.
 _NEXT_PROBE: dict[tuple[str, str], float] = {}
 
@@ -302,11 +303,14 @@ class WindowResolver:
         returns whatever :meth:`window` would, so callers never special-case
         a miss.
         """
-        if self._probe and time.monotonic() >= _NEXT_PROBE.get(self._key, 0.0):
+        if self._probe and monotonic() >= _NEXT_PROBE.get(self._key, 0.0):
             try:
                 window = await fetch()
             except ProbeUnavailable:
-                _NEXT_PROBE[self._key] = time.monotonic() + _RETRY_AFTER
+                # ``max``: a concurrent probe of the same key may already have
+                # answered (``inf``); a late failure must not reopen it.
+                retry_at = monotonic() + _RETRY_AFTER
+                _NEXT_PROBE[self._key] = max(_NEXT_PROBE.get(self._key, 0.0), retry_at)
             else:
                 _NEXT_PROBE[self._key] = math.inf
                 if window is not None:

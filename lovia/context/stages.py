@@ -413,13 +413,22 @@ class SummarizeHistory:
         # ``None`` there means the run's own provider (``LLMSummarizer()``),
         # while a backend without the hook folds somewhere unknown, so its
         # limit is never filed under the run model's key.
+        run_key = window_key(ctx.request.provider, ctx.request.model)
         fold_key: str | None = None
-        if summarizer_provider is not None:
+        if summarizer_provider is None:
+            if hasattr(self.summarizer, "provider"):
+                fold_key = run_key
+        elif summarizer_provider is ctx.request.provider:
+            fold_key = run_key
+        else:
             fold_key = window_key(
                 summarizer_provider, getattr(summarizer_provider, "model", None)
             )
-        elif hasattr(self.summarizer, "provider"):
-            fold_key = window_key(ctx.request.provider, ctx.request.model)
+            if fold_key == run_key:
+                # A different provider that keys like the run's (no
+                # ``base_url`` or ``model`` to tell them apart): its limit
+                # must not cap the run model, so it is not remembered.
+                fold_key = None
         learned = state.learned_windows.get(fold_key) if fold_key else None
         for window in (ctx.model_window, summarizer_window, learned):
             if window is not None:

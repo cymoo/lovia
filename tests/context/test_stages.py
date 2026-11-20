@@ -444,6 +444,24 @@ async def test_a_carried_summary_over_the_shrunk_cap_spends_no_doomed_fold():
     assert state.summary is not None and state.summary.covered == 8
 
 
+async def test_a_summarizer_keyed_like_the_run_model_learns_nothing():
+    """Two different adapters without ``base_url``/``model`` share a key: a
+    limit learned for the summarizer would cap the run model's budget."""
+    summarizer = _RefusingSummarizer(limit=1_000, reported=2_000)
+
+    class Anonymous:
+        def context_window(self) -> int | None:
+            return None
+
+    summarizer.provider = Anonymous()
+    body = _texts(10, chars=1_000)
+    roomy = TokenBudget(window=100_000, reserve_output=0, trigger=0.75, target=0.5)
+    ctx = make_ctx(body, protected_from=8, budget=roomy)  # run provider: None
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is True
+    assert summarizer.refused == 1  # still re-cut for this call
+    assert ctx.state.learned_windows == {}
+
+
 async def test_a_custom_summarizer_without_the_provider_hook_learns_nothing():
     """A backend without ``.provider`` folds on an unknown model: its refusal
     still re-cuts this chunk, but the limit must never be filed under the run

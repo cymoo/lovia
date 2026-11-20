@@ -1,0 +1,160 @@
+# 上下文压缩：设计与不变量
+
+> 状态：描述现状（含 #497–#499 之后的行为），并列出候选优化 · 2026-11-21 · 范围：`lovia/context/`（`compaction.py`、`stages.py`、`render.py`、`state.py`、`tokens.py`、`summarizer.py`、`policy.py`）、`lovia/runtime/loop.py`（压缩调用与溢出重试）、`lovia/providers/_windows.py`（窗口来源）。
+>
+> 用户文档是 `docs/{en,zh}/context.md`，讲"怎么用"。本文讲"为什么这样设计、哪些性质不能破坏、还能往哪里改"。改 `lovia/context/` 之前先读 §8 的不变量。
+
+## 结论
+
+长对话能一直跑下去，靠的是一个**只改视图、不改历史**的压缩流水线：
+
+- runner 每次调用模型前，把完整 transcript 交给 `ContextPolicy`，拿回这一次要发的**视图**。transcript 和 Session 从不被改写。
+- 默认实现 `Compaction` 把"决定"和"渲染"分开。各阶段只往 `CompactionState` 里记**单调**的决定（清掉哪个工具结果、摘要覆盖到哪）；`render_view` 是纯函数，用 transcript + 决定重建视图。决定只增不减，所以两次调用之间 prompt 前缀逐字节不变，provider 的 prompt cache 一直命中。
+- 平时什么都不做；估算超过 `compact_at`（默认可用窗口的 85%）才按"便宜的先来"依次跑阶段，压到 `compact_to`（60%）为止。
+- provider 仍然拒绝时（`ContextOverflowError`），再压一次并重试**一次**。
+
+这套设计的三个核心取舍：**缓存稳定优先于压得最狠**；**宁可估算偏保守，也不发注定失败的请求**（§9 的 O1 说明这一条目前还没完全做到）；**窗口只信端点，不信模型名**。
+
+## 1. 分层与数据流
+
+```text
+RunLoop（runtime/loop.py）
+  │ 每个 turn：CompactionRequest(entries=transcript 快照, provider, tools, last_input_tokens, scratch)
+  ▼
+Compaction.compact（compaction.py）
+  1. CompactionState.load(scratch)；校验摘要指纹；修正切在工具对中间的覆盖边界；GC 失效的决定
+  2. 校准：用上一次真实 input_tokens 更新估算倍率
+  3. 渲染 + 估算；确定窗口（配置 / provider / 报错学到的）
+  4. 没超 trigger → 原样重放决定，结束
+  5. 否则依次跑阶段，每个阶段改了状态就重新渲染、重新估算、重算受保护尾部；到 target 就停
+  6. state.save(scratch)，返回 ContextResult(view, compacted, reason, tokens_before/after, detail)
+  │
+  ▼ provider 拒绝（ContextOverflowError，可能带 reported_window）
+RunLoop：overflow=True 再 compact 一次；视图明显变小（< 失败时的 95%）才重试一次，否则带 hint 抛出
+```
+
+- **core 只认协议。** `ContextPolicy.compact(req) -> ContextResult` 是唯一接口；`NoopContextPolicy` 关掉压缩。自定义阶段实现 `Stage.plan(body, ctx) -> bool`。
+- **状态的归属在 runner。** `scratch` 是 runner 持有的 dict：随 checkpoint 的 `RunHead.context_state` 保存（可续跑），run 结束后写进 Session segment 的 `meta`，下一个 run 继承最新一段带状态的 segment。没有进程内缓存，也不写 Session 正文。
+
+## 2. 窗口从哪来
+
+完整链路见 `docs/{en,zh}/providers.md#context-windows`。设计要点：
+
+- 窗口是 **(endpoint, model, deployment)** 的事实，不是模型名的事实。所以不内置"模型名 → 窗口"表（#499 删掉了），只信三个来源：显式配置、端点在溢出报错里给出的数字、`GET /models` 公布的数字。
+- **报错里的数字只往下压。** 它是端点在执行限制，`min(配置/公布值, 学到的值)`；用户故意配小的窗口不会被抬高。学到的值按 `window_key(provider, model)` 存在 `CompactionState.learned_windows`，**只在当前 session 内**有效（跨会话共享被否决，见 §10）。
+- **探测在进程内记忆。** `WindowResolver` 按 `(base_url, model)` 记住 `/models` 的答案；拿不到答案（连不上、超时、401/403、429、5xx）5 分钟后再问，不会把一次故障当成"不公布"。
+- **窗口未知不是错误。** 主动压缩跳过，只靠溢出路径兜底；第一次溢出教会窗口，之后按真实值压缩。
+
+## 3. 估算与校准
+
+- `TokenCounter`：每条 entry 按 UTF-8 字节数 / 4 估算（CJK 约 0.75 token/字），图片、文件按固定成本；按 `id()` 记忆，长 transcript 每轮只新算新增部分。provider 自带 tokenizer（`TokenEstimator`）时用它。
+- 工具 schema 单独计（`count_tools`），作为加法项，不进倍率——否则大工具集会把倍率顶到上限。
+- **校准**：`ratio` 是钳在 `[0.5, 2.5]` 的 EMA（α=0.2），用 `last_input_tokens / last_view_estimate` 更新，两边都含 schema。实测各类文本收敛到 0.72–0.87，稳态误差约 1%（`docs/ratio-calibration.md`）。
+- 各 adapter 把 `Usage.input_tokens` 归一成**完整** prompt 大小（Anthropic 的缓存读写量会加回去），否则开了 prompt cache 后倍率会塌到下限。
+- 校准滞后一次调用。溢出重试时把 `last_input_tokens` 置空，避免拿上一轮的真实值去配这一轮更大的估算。
+
+## 4. 水位与预算
+
+`TokenBudget`（`tokens.py`）：
+
+| 量 | 定义 |
+| --- | --- |
+| `usable` | `window − reserve_output_tokens`；reserve 不小于窗口时取半个窗口（小模型兜底） |
+| `trigger_tokens` | `compact_at` 换算；低于它什么都不做 |
+| `target_tokens` | `compact_to` 换算，且始终比 trigger 小 1 以上（保证有滞回） |
+
+水位可以是比例（float）或绝对 token 数（int），绝对值会被夹到 `usable` 以内。滞回（85% → 60%）让压缩成为少数几次"爆发"，而不是每轮都改前缀——这直接决定缓存命中率。
+
+## 5. 受保护尾部
+
+`protected_tail_start`（`render.py`）算出 body 中第一个受保护的下标，所有阶段都不能动它之后的内容：
+
+1. 从尾部往前累加，直到用完 `tail_tokens`（默认 `usable // 5`，或 `keep_recent_tokens`）。最新一条总是受保护。
+2. **锚定**：最近一条用户消息在尾部之外时，只要"从它到结尾"不超过 2 倍尾部预算，就把它拉进来——当前请求不能被摘要掉。拉不进时（工具循环里用户消息很早），摘要的 "Session intent" 节会逐字引用它。
+3. **成对安全**：向左扩到不会把工具调用和它的结果拆开的位置。
+4. 在**渲染后**的 entry 上计量（已清理/卸载的按标记大小算）；**每个阶段改完都重算一次，只允许变宽**——本轮巨大的工具结果被卸载后，尾部能把它挤出去的用户消息重新收回来（#497）。
+
+溢出路径上，单条超过 target 的工具结果会失去尾部豁免（`_oversized`），否则一条巨大的输出会让恢复不可能。
+
+## 6. 阶段
+
+默认顺序是"便宜的先来"，每个阶段到 target 就停：
+
+| 阶段 | 做什么 | 成本 | 主要边界 |
+| --- | --- | --- | --- |
+| `OffloadToolResults` | 大结果（≥4000 字符）换成带预览的标记；配了 store 就把全文按内容摘要存档 | 免费（store I/O 尽力而为） | 最近 2 个结果和受保护尾部不动 |
+| `ClearToolResults` | 旧结果换成一行 recall 标记（Anthropic `clear_tool_uses` 语义） | 免费 | 最近 3 个（溢出时 1 个），≤200 字符的不动（溢出时 0） |
+| `SummarizeHistory` | 把"上次覆盖边界 → 受保护尾部"之间的内容折叠进滚动摘要 | 一次或几次 LLM 调用 | 预计节省 <10% 跳过；连续失败 3 次熔断（溢出路径仍尝试，作为半开探测） |
+| `TruncateHistory` | 仅溢出路径：前面都压不下时，直接丢弃，留一条带累计计数的说明 | 免费，但丢信息 | 不越过锚点（最新用户消息）；放不下时才推到锚点 |
+
+几个刻意的设计：
+
+- **标记保留 `call_id` 和 `is_error`**，视图里的工具对永远合法。offload 标记用内容摘要做 recall 引用（store 跨 session 共享，`call_id` 只在 session 内唯一）。
+- **摘要是增量的**：只把新的一段连同旧摘要交给 summarizer；分块上限是"可用窗口减去旧摘要"的一半，且同时受主模型和摘要模型窗口约束（摘要模型用自己的 provider 时，第一次折叠前会探测它的窗口）。每块成功就立刻提交，中途失败不丢已有进度；分块只能结束在成对安全的位置。
+- **摘要最多占可用窗口的 1/4**，超出按失败处理；从大窗口带过来、在小窗口放不下的旧摘要会从头重做。
+- **截断复用摘要的覆盖边界**：被丢弃的一段记成一条"摘要"，渲染、指纹、成对安全全部沿用摘要的逻辑；之后成功的折叠会用真正的摘要替换这条说明。
+
+## 7. 溢出路径
+
+provider 拒绝后，`overflow=True` 再压一次。关键问题是**这次溢出能不能用估算解释**（#497）：
+
+| 情况 | 判断 | 预算 | 尾部 |
+| --- | --- | --- | --- |
+| 估算可信，只是窗口未知或报大了 | 估算 > 已知窗口（通常就是报错给出的）的 `usable` | 按真实窗口的常规 `compact_to` | 常规 |
+| 估算本身错了 | 窗口未知，或估算 ≤ `usable` 却还是溢出 | 按失败 prompt 算，目标压到其 25%（多压，留余量） | 收紧到 10% |
+
+两种情况下各阶段的溢出专用手段都开着：尾部里的超大结果可卸载、清理更激进、跳过熔断、允许截断。
+
+为什么要分开：25% 的力度是为"计数不可信"准备的。冷启动时计数是对的，套用它会把本来放得下的内容（比如刚粘贴的文档）摘要掉——这是 #497 三轮 review 的共同根源。
+
+runner 只重试一次，并且只在重建的视图明显更小时重试（同样大小的 prompt 必然再被拒）。重试仍失败就抛出 `ContextOverflowError`，hint 说明是最新消息太大还是该开新对话。
+
+## 8. 不变量（改代码前逐条核对）
+
+1. **view-only**：不改 `req.entries`、不写 Session。坏的压缩只会影响一次模型调用。
+2. **单调**：已清理的不恢复，摘要覆盖只增长；任何阶段都不能"撤销"决定。这是前缀稳定、缓存命中的前提。
+3. **成对安全**：视图里不能出现找不到调用的工具结果。覆盖边界、分块边界、截断边界都必须落在 `pair_safe_cuts` 为真的位置；加载时发现边界切在工具对中间，就往前回退。
+4. **当前请求不被吞**：最新用户消息在受保护尾部内（放得下时），或被摘要逐字引用；截断永远不越过锚点。
+5. **决定按 `call_id` 引用，且只对唯一的 id 生效**：会复用 id 的 provider（`call_0`）上，重复的 id 不做决定，失效的记录在加载时清掉。
+6. **状态可丢**：`CompactionState.load` 对垃圾、缺键、旧版本一律返回新状态；摘要指纹不匹配就重置摘要，按 `call_id` 的决定保留。
+7. **阶段不抛异常**：失败就记日志、返回 False。溢出路径上一个逃出来的异常会顶替原本的 `ContextOverflowError`，误导用户。
+8. **窗口只往下压**：报错学到的窗口只能把配置/公布值压低，不能抬高。
+
+## 9. 候选优化
+
+按"收益 / 成本"排序。都还没做；每一项落地前单独开 PR 并补测试。
+
+**O1　不发注定失败的请求（高收益，小改动）。** 主动路径跑完后，如果估算仍超过已知窗口的 `usable`，现在照样发出去，由 provider 拒绝后再走溢出路径。实测：128K 窗口、本轮一个约 150K token 的工具结果，主动路径先做了一次（不必要的）摘要调用，然后把 150K 发出去，必然失败。原因是受保护尾部里的超大结果只有溢出路径才允许卸载。改法：主动路径结束时若 `tokens > usable` 且窗口已知，直接用"估算可信"那一行（§7）再跑一遍阶段。收益：省掉一次大请求的往返（provider 要先处理完整个 prompt 才拒绝）；runner 那一次重试留给估算真的出错的情况；也省掉本例中那次白做的摘要。
+
+**O2　摘要模型溢出后学窗口（中收益，小改动）。** 即 #501：摘要模型单独配置、端点又不公布窗口（OpenAI 官方）时，分块会超过摘要模型的窗口。摘要调用的 `ContextOverflowError` 带了 `reported_window` 时，按摘要模型的 `window_key` 记进 `learned_windows`，缩小分块重试这一块。
+
+**O3　校准倍率按模型分开（中低收益，小改动）。** `learned_windows` 按 `(endpoint, model)` 分开存，`ratio` 却是整个 session 共用一个。同一会话里换模型（web 的按对话切换模型、handoff 到别的 provider）后，前几轮用的是另一个 tokenizer 的倍率；EMA 要几轮才收敛，倍率偏低的方向可能导致一次溢出。改法：`ratio` 按 `window_key` 存（状态版本 +1），新 key 从 1.0 开始。
+
+**O4　利用 prompt cache 做摘要（潜在高收益，大改动，先测量）。** 现在的摘要调用把要折叠的一段转成纯文本，放进一个全新的对话发出去，不命中任何缓存。在昂贵模型上折叠几十万 token 时，这是压缩的主要成本。另一种做法：沿用当前视图的前缀（system + tools + 视图到覆盖边界），后面追加一句"请总结"，就能命中上一轮写下的缓存。难点：分块（一段比窗口还大时没法沿用前缀）、tools 要逐字一致才算同一前缀、各 provider 的缓存规则不同、摘要模型单独配置时用不上。先在真实会话里量一下摘要调用占总成本的比例，再决定。
+
+**O5　文档与注释的漂移（必做，零风险）。** #497 之后，`stages.py` 里有几处注释仍说"溢出预算按失败 prompt 算"（现在只有估算不可信时才这样）；`architecture.md` 说熔断是"每个 run"的（实际随 scratch 跨 run 保留），阶段列表里也没有 `TruncateHistory`。随本文一起修正。
+
+## 10. 已知限制与不做
+
+已知限制（都是现有行为，暂不改）：
+
+- **工具循环中途，本轮用户消息超过可用窗口约 40%**（例如粘贴 50K token 的文档），锚定额度不够，会被摘要掉，只在 "Session intent" 里留一段引用。要改就得调整整体的锚定策略，正常路径和溢出路径一起改。
+- **摘要只看文字**：被折叠的历史里的图片只剩 `[image]` 占位。本轮的图片在受保护尾部内，不受影响。
+- **绝对水位大于真实窗口**时会被夹到 `usable`，压缩目标没有余量，正常路径会频繁触发。属于配置错误，不加专门处理。
+
+不做：
+
+- **运行时拉模型目录**（models.dev、LiteLLM）：给核心加网络依赖，而且按模型名查，和"窗口取决于部署"矛盾。需要的人在用户侧查一下，把结果传给 `Compaction(context_window=...)`，十来行代码。
+- **跨会话 / 落盘记住学到的窗口**：`(base_url, model)` 区分不了同一网关后面的不同凭据和路由；一次解析错误会污染所有会话，而且偏小的窗口永远撞不到溢出、不会被纠正。没有任何同类项目这样做。
+- **压缩时改写 transcript 或 Session**：违背 view-only，也会让续跑和审计失去依据。
+
+## 11. 测试地图
+
+| 关注点 | 位置 |
+| --- | --- |
+| 流水线端到端（触发、滞回、溢出、学窗口、冷启动、当前请求保留） | `tests/context/test_pipeline.py` |
+| 各阶段边界（分块、熔断、截断锚点、超大结果、摘要模型窗口） | `tests/context/test_stages.py` |
+| 渲染、成对安全、受保护尾部 | `tests/context/test_render.py` |
+| 状态加载容错、指纹 | `tests/context/test_state.py` |
+| 窗口来源（报错解析、`/models`、探测记忆与冷却） | `tests/providers/test_windows.py`、`tests/runtime/test_context_window_discovery.py` |
+| 校准收敛（需要真实端点） | `tests/context/test_live_context.py`、`docs/ratio-calibration.md` |

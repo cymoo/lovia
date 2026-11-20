@@ -69,13 +69,13 @@ def _validate_watermark(value: int | float, name: str) -> None:
 def usable_tokens(window: int, reserve_output: int) -> int:
     """Prompt tokens left in ``window`` after reserving output headroom.
 
-    ``reserve_output`` defaults to a size tuned for 100K+ windows, so on a
-    small one it may take at most half: a 4K local model keeps 2K for the
-    prompt rather than nothing. Capping at half (rather than switching to
-    half only once the reserve exceeds the window) keeps this continuous —
-    a 17K window must not leave 616 tokens where a 16K one leaves 8K.
+    ``reserve_output`` defaults to a size tuned for 100K+ windows, so it can
+    exceed a small one outright (a 4K local model). Halving the window then
+    beats reserving nothing and beats going negative.
     """
-    return max(window - reserve_output, window // 2, 1)
+    if reserve_output >= window:
+        return max(window // 2, 1)
+    return window - reserve_output
 
 
 @dataclass(frozen=True)
@@ -84,8 +84,8 @@ class TokenBudget:
 
     Attributes:
         window: The model's total context window (prompt + output tokens).
-        reserve_output: Headroom kept free for the model's reply, capped at
-            half the window.
+        reserve_output: Headroom kept free for the model's reply. When it
+            does not fit in ``window``, half the window is reserved instead.
         trigger: Prompt size at which compaction starts — a fraction of
             :attr:`usable` (float) or an absolute token count (int).
         target: Prompt size compaction shrinks down to, in the same units.

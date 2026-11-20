@@ -699,8 +699,11 @@ async def test_ordinary_moves_come_first_when_they_can_make_the_view_fit():
 
 
 async def test_a_window_just_above_the_reserve_keeps_its_history():
-    """17K window, default 16K reserve: half the window stays usable (as for
-    16K), so a 1.2K view is not over capacity and nothing is truncated."""
+    """17K window, default 16K reserve: only 616 tokens are usable, but a 1.2K
+    view is far under the window itself. Whether the provider takes it
+    depends on the request's ``max_tokens``, so it is not "known not to fit":
+    no pre-send truncation — the provider decides, and a rejection is
+    recovered as before."""
     entries = [user(f"q{i} " + "x" * 800) for i in range(6)]
     for window in (16_000, 17_000):
         res = await Compaction(
@@ -1099,6 +1102,53 @@ async def test_runner_never_sends_a_view_known_not_to_fit():
     )
     assert result.output == "done"
     assert Enforcing.attempts == 2
+
+
+async def test_runner_retries_when_the_overflow_view_lands_just_under_the_window():
+    """The rebuilt view must land clearly below the refused one, not just
+    under the usable window: the runner retries only a prompt it sees shrink
+    by 5%. Here an ordinary offload alone would stop within that band (and,
+    with the summarizer down, nothing else would run) — the run must still
+    get its retry."""
+
+    class Enforcing:
+        name = "enforcing"
+        model = "m"
+        calls = 0
+
+        async def stream(self, entries, **kw):
+            type(self).calls += 1
+            chars = sum(
+                len(str(getattr(e, "content", None) or getattr(e, "output", "")))
+                for e in entries
+            )
+            if chars // 4 + 16_384 > 100_000:
+                raise ContextOverflowError(
+                    "input length and max_tokens exceed context limit",
+                    reported_window=100_000,
+                )
+            from lovia.transcript import FinishDelta, TextDelta
+
+            yield TextDelta(text="ok")
+            yield FinishDelta(reason="stop")
+
+    history: list = [user("task")]
+    history += [_assistant("h" * 13_200) for _ in range(20)]
+    history += [call("c1"), out("c1", "r" * 16_000)]
+    for k in (2, 3):
+        history += [call(f"c{k}"), out(f"c{k}", "ok")]
+    history += [_assistant("t" * 60_000)]
+    sess = InMemorySession()
+    await sess.append("s", history)
+    result = await Runner.run(
+        Agent(name="a", instructions="sys", model=Enforcing()),
+        "now",
+        session=sess,
+        session_id="s",
+        context_policy=Compaction(summarizer=FailingSummarizer()),
+    )
+    assert result.output == "ok"
+    assert Enforcing.calls == 2
 
 
 async def test_runner_emits_context_compacted_event():

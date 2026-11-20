@@ -121,7 +121,8 @@ _NO_WINDOW_FIELD: object = object()
 # After a context overflow, retry the model call only if reactive compaction
 # shrank the estimated prompt below this fraction of the size that failed.
 # Deliberately permissive — it exists to skip near-no-op retries, not to
-# second-guess a real shrink.
+# second-guess a real shrink. ``Compaction`` lands its post-overflow view below
+# ``_REACTIVE_FIT`` (context/compaction.py), which must stay under this.
 _RETRY_SHRINK_FACTOR = 0.95
 
 _logged_once: set[tuple[object, ...]] = set()

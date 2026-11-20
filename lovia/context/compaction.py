@@ -9,7 +9,7 @@ How a call flows:
 2. Over the watermark (or after a provider overflow), stages run in order —
    offload, clear, summarize, and after an overflow truncate — each recording
    new sticky decisions until the view is under the *compact_to* watermark.
-   A view already over the usable window is not sent to be refused: an
+   A view already over a known window is not sent to be refused: an
    ordinary pass runs first, then the overflow moves if it still does not fit.
    The gap between the two is hysteresis: compaction happens in rare bursts,
    not every turn.
@@ -68,6 +68,11 @@ _CALIBRATION_ALPHA = 0.2
 
 # Aggressive (post-overflow) overrides.
 _REACTIVE_TARGET = 0.25
+# After a rejection the estimate explains, the overflow moves run until the
+# view is at most this fraction of the refused one. Must stay below the
+# runner's ``_RETRY_SHRINK_FACTOR`` (runtime/loop.py), or a landing between
+# the two would be compacted but never retried.
+_REACTIVE_FIT = 0.9
 
 
 def _plural(n: int, noun: str) -> str:
@@ -273,14 +278,16 @@ class Compaction:
         # stages that make actual model calls (summarize) size against it.
         model_window = window
         # Already over a known window before anything is sent: sending would
-        # buy a certain rejection and spend the runner's one retry. The
+        # buy a certain rejection and spend the runner's one retry. The raw
+        # window, not the usable space: between the two the outcome depends on
+        # the ``max_tokens`` the request carries (Anthropic's default equals
+        # the reserve and is refused; OpenAI's dialect sends none and passes),
+        # so only a view over the window itself is certainly refused. The
         # estimate explains this "overflow", so the budget below is the
         # trusted one; the stages get a second, overflow-moves pass if the
         # ordinary one cannot make the view fit (see the stage loop).
         over_capacity = (
-            not aggressive
-            and model_window is not None
-            and tokens > usable_tokens(model_window, self.reserve_output_tokens)
+            not aggressive and model_window is not None and tokens > model_window
         )
         if window is None and not aggressive:
             # No budget information: never compact proactively; the
@@ -304,13 +311,7 @@ class Compaction:
             ):
                 window = model_window
             else:
-                # The window whose usable space is exactly the failed prompt.
-                # ``usable_tokens`` caps the reserve at half the window, so a
-                # reserve larger than the prompt must shrink to it — else a
-                # small failed prompt would get room to spare and nothing
-                # would compact.
-                failed = max(tokens, 1)
-                window = failed + min(self.reserve_output_tokens, failed)
+                window = max(tokens, 1) + self.reserve_output_tokens
                 distrust = True
         assert window is not None
 
@@ -364,6 +365,19 @@ class Compaction:
         # still over the window — this turn's own huge result, usually), skip
         # straight to the overflow pass rather than pay for a summary that
         # cannot help.
+        # Where the overflow moves stop (``StageContext.overflowing``). A
+        # refuted estimate is held to the overshoot target (``None``). A
+        # trusted one fits under the usable window — after a real rejection,
+        # also clearly below what was refused: the estimate just missed once,
+        # and the runner retries only a prompt it sees shrink
+        # (``_RETRY_SHRINK_FACTOR`` in runtime/loop.py, which this stays under).
+        if distrust:
+            fit_tokens: int | None = None
+        elif req.overflow:
+            fit_tokens = min(budget.usable, int(tokens * _REACTIVE_FIT))
+        else:
+            fit_tokens = budget.usable
+
         passes = [aggressive]
         if over_capacity:
             covered = state.summary.covered if state.summary is not None else 0
@@ -386,7 +400,7 @@ class Compaction:
         reasons: list[str] = []
         try:
             for n, overflow_moves in enumerate(passes):
-                if n and tokens <= budget.usable:
+                if n and fit_tokens is not None and tokens <= fit_tokens:
                     break  # the ordinary pass made it fit
                 for stage in self.stages:
                     ctx = StageContext(
@@ -399,9 +413,7 @@ class Compaction:
                         aggressive=overflow_moves,
                         store=self.store,
                         model_window=model_window,
-                        # A trusted estimate fits once under the usable
-                        # window; a refuted one is held to the overshoot target.
-                        fit_tokens=None if distrust else budget.usable,
+                        fit_tokens=fit_tokens,
                     )
                     if await stage.plan(body, ctx):
                         if stage.name not in reasons:

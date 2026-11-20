@@ -283,10 +283,6 @@ def test_usable_tokens_matches_the_budget_property():
     assert usable_tokens(2_000, 16_384) == 1_000  # reserve doesn't fit
     assert usable_tokens(1, 16_384) == 1  # never zero or negative
     assert usable_tokens(4_096, 4_096) == 2_048  # equal counts as "doesn't fit"
-    # Continuous: a window just above the reserve keeps half, not a sliver.
-    assert usable_tokens(17_000, 16_384) == 8_500
-    assert usable_tokens(32_768, 16_384) == 16_384
-    assert usable_tokens(40_000, 16_384) == 40_000 - 16_384
 
 
 def test_budget_validation():

@@ -120,8 +120,7 @@ Compaction(
 
 - **Watermarks** accept a fraction of the usable window (`0.85`) or an
   absolute token count (`150_000`); "usable" = window −
-  `reserve_output_tokens`, the reserve taking at most half of a small
-  window. Nothing happens below `compact_at`; a breach
+  `reserve_output_tokens`. Nothing happens below `compact_at`; a breach
   shrinks the view to `compact_to` (hysteresis, so the policy doesn't
   thrash at the boundary).
 - **`context_window=None`** resolves the window from the endpoint — its

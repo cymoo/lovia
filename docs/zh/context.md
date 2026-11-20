@@ -96,7 +96,7 @@ Compaction(
 ```
 
 **触发水位。** `compact_at` 和 `compact_to` 可以写成可用窗口比例（如 `0.85`），也可以写成
-绝对 token 数（如 `150_000`）。可用窗口是总窗口减去 `reserve_output_tokens`（窗口较小时，预留最多占一半）。低于触发水位时
+绝对 token 数（如 `150_000`）。可用窗口是总窗口减去 `reserve_output_tokens`。低于触发水位时
 不处理；触发后会缩到目标水位，留出余量，避免在边界反复压缩。
 
 **确定上下文窗口。** `context_window=None` 时，Lovia 会先读取端点的 `/models` 列表，再从首次

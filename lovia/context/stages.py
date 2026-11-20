@@ -63,7 +63,7 @@ class StageContext:
         protected_from: Body index of the first protected entry. Entries at
             or after it must stay verbatim for every stage.
         aggressive: ``True`` after a provider overflow, or when the view is
-            already over the usable window before sending. It unlocks the
+            already over the window before sending. It unlocks the
             overflow-only moves (touching an oversized protected result,
             clearing recent results, truncation) — but only while the view is
             over ``fit_tokens``; see :meth:`overflowing`.
@@ -626,8 +626,8 @@ class TruncateHistory:
     The anchor is never dropped.
 
     Runs only while the view still does not fit (:meth:`StageContext.overflowing`):
-    after an overflow, or when the view is already over the usable window
-    before sending. A view that fits keeps its history even when it is above
+    after an overflow, or when the view is already over the window before
+    sending. A view that fits keeps its history even when it is above
     the target — dropping it then would buy margin with lost context.
     """
 

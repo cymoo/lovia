@@ -209,6 +209,75 @@ async def test_live_summarizer_sections_and_incremental_fold():
             await aclose()
 
 
+async def test_live_a_model_switch_keeps_each_models_ratio():
+    """Calibrate on the real endpoint, then switch the session to a second
+    endpoint identity: it starts its own ratio instead of inheriting the
+    first one's, and the first one's ratio is kept for when it comes back."""
+    from lovia.session import STATE_META_KEY
+
+    model = _live_model()
+    real = provider_from_string(f"openai:{model}")
+
+    class OtherEndpoint:
+        """The same real model, under a different endpoint identity."""
+
+        name = "other"
+        base_url = "https://other-endpoint.test/v1"
+
+        def __init__(self) -> None:
+            self.model = model
+
+        async def stream(self, entries, **kw):
+            async for delta in real.stream(entries, **kw):
+                yield delta
+
+    @tool
+    def pick_animal() -> str:
+        """Pick an animal."""
+        return "otter"
+
+    instructions = "Call pick_animal, then answer in three words."
+    sess = InMemorySession()
+    await sess.append("s", _chat_history(40))
+    policy = Compaction(context_window=1_000_000)
+    try:
+        # Calibration needs two calls in one run (a tool loop): each run's
+        # first call has no real count to pair with yet.
+        await Runner.run(
+            _agent(model, instructions, tools=[pick_animal]),
+            "Which animal?",
+            context_policy=policy,
+            session=sess,
+            session_id="s",
+        )
+
+        async def carried() -> dict:
+            meta = (await sess.segments("s"))[-1].meta or {}
+            return meta[STATE_META_KEY]["context"]
+
+        first = await carried()
+        assert first["ratio_key"].startswith(real.base_url)
+        assert first["ratio"] != 1.0  # calibrated on real counts
+
+        other = OtherEndpoint()
+        await Runner.run(
+            Agent(
+                name="o", model=other, instructions=instructions, tools=[pick_animal]
+            ),
+            "One more?",
+            context_policy=policy,
+            session=sess,
+            session_id="s",
+        )
+        second = await carried()
+        assert second["ratio_key"].startswith(other.base_url)
+        assert second["ratios"][first["ratio_key"]] == first["ratio"]
+    finally:
+        aclose = getattr(real, "aclose", None)
+        if callable(aclose):
+            await aclose()
+
+
 async def test_live_summarizer_learns_a_smaller_folding_window():
     """A summarizer on its own, smaller endpoint that publishes no window
     (#501): the first fold is refused with the limit named, the chunk is

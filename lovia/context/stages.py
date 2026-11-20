@@ -39,6 +39,7 @@ from .state import (
 from .summarizer import LLMSummarizer, Summarizer
 from .tokens import TokenBudget, TokenCounter, usable_tokens
 from ..providers.base import context_window as _provider_context_window
+from ..providers.base import discover_context_window as _discover_context_window
 from ..transcript import InputEntry, ToolResultEntry, TranscriptEntry
 
 if TYPE_CHECKING:
@@ -386,10 +387,13 @@ class SummarizeHistory:
         # Reuse the budget's own headroom rule: a learned window can be
         # smaller than ``reserve_output`` (a 4K local model), and subtracting
         # outright would collapse the cap to a single token per chunk.
+        # The runner warms up only the run provider's window, so a separate
+        # summarizer provider is asked here (memoized per endpoint: at most
+        # one request per process).
         usable = ctx.budget.usable
-        summarizer_window = _provider_context_window(
-            getattr(self.summarizer, "provider", None)
-        )
+        summarizer_provider = getattr(self.summarizer, "provider", None)
+        await _discover_context_window(summarizer_provider)
+        summarizer_window = _provider_context_window(summarizer_provider)
         for window in (ctx.model_window, summarizer_window):
             if window is not None:
                 usable = min(usable, usable_tokens(window, ctx.budget.reserve_output))

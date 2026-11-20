@@ -26,7 +26,9 @@ every handoff. Budgets live elsewhere: the one user-facing window knob is
 
 from __future__ import annotations
 
+import math
 import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeGuard
 
@@ -183,6 +185,19 @@ def window_from_models_payload(payload: Any, model: str) -> int | None:
 # and then be forgotten, never stall the run.
 _PROBE_TIMEOUT = 10.0
 
+# How long a probe that could not get an answer *right now* waits before the
+# endpoint is asked again. Long enough that an endpoint whose /models hangs
+# costs a timeout every few minutes, not every run.
+_RETRY_AFTER = 300.0
+
+
+class ProbeUnavailable(Exception):
+    """The endpoint could not answer now: unreachable, slow, 429 or 5xx.
+
+    Raised by the fetchers so :meth:`WindowResolver.discover` asks again later,
+    rather than remembering a passing outage as "publishes no window".
+    """
+
 
 async def fetch_reported_window(
     client: httpx.AsyncClient,
@@ -193,9 +208,9 @@ async def fetch_reported_window(
 ) -> int | None:
     """Ask ``GET {base_url}/models`` what ``model``'s context window is.
 
-    Fails open: an unreachable endpoint, a slow one, an error status, a non-JSON
-    body or a listing without window metadata all yield ``None``. The caller is
-    trying to do better than "unknown", so nothing here is worth raising over.
+    A definite answer without a window — a 4xx, a non-JSON body, a listing
+    without window metadata — yields ``None``. A passing failure raises
+    :class:`ProbeUnavailable`.
     """
     payload = await _get_json(client, f"{base_url}/models", headers)
     return window_from_models_payload(payload, model)
@@ -206,7 +221,7 @@ async def fetch_model_window(
 ) -> int | None:
     """Ask a single-model endpoint (``GET …/models/{id}``) for its window.
 
-    Fails open exactly like :func:`fetch_reported_window`.
+    Fails like :func:`fetch_reported_window`.
     """
     return window_from_model_entry(await _get_json(client, url, headers))
 
@@ -221,12 +236,19 @@ async def _get_json(
             follow_redirects=True,
             timeout=_PROBE_TIMEOUT,
         )
-        if not response.is_success:
-            return None
-        return response.json()
-    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+    except httpx.TransportError as exc:
+        raise ProbeUnavailable(str(exc)) from exc
+    except (httpx.HTTPError, httpx.InvalidURL):
         # InvalidURL is not an HTTPError: a malformed base_url must degrade to
         # "unknown" here and fail loudly on the model call itself.
+        return None
+    if response.status_code == 429 or response.status_code >= 500:
+        raise ProbeUnavailable(f"HTTP {response.status_code}")
+    if not response.is_success:
+        return None
+    try:
+        return response.json()
+    except ValueError:
         return None
 
 
@@ -242,20 +264,22 @@ async def _get_json(
 # at all — the context policy learns it from
 # ``ContextOverflowError.reported_window`` and persists it per session.
 _ADVERTISED: dict[tuple[str, str], int] = {}
-_PROBED: set[tuple[str, str]] = set()
+# When each endpoint may be asked again (``time.monotonic()``): ``inf`` once it
+# has answered, a short cooldown after a passing failure.
+_NEXT_PROBE: dict[tuple[str, str], float] = {}
 
 
 def clear_endpoint_cache() -> None:
     """Forget every remembered endpoint window. For tests."""
     _ADVERTISED.clear()
-    _PROBED.clear()
+    _NEXT_PROBE.clear()
 
 
 class WindowResolver:
     """One ``(endpoint, model)``'s context window, and the memo behind it.
 
-    Owns what the *endpoint* advertised about itself on ``/models``, probed at
-    most once per process. Budgets are not its business — the one user-facing
+    Owns what the *endpoint* advertised about itself on ``/models``, asked
+    until it answers once per process. Budgets are not its business — the one user-facing
     window knob is ``Compaction(context_window=...)``, and the limit an
     endpoint names while rejecting a prompt travels via
     ``ContextOverflowError.reported_window`` into the context policy's
@@ -271,15 +295,20 @@ class WindowResolver:
         return _ADVERTISED.get(self._key)
 
     async def discover(self, fetch: Callable[[], Awaitable[int | None]]) -> int | None:
-        """Ask what the endpoint publishes — at most once per process.
+        """Ask what the endpoint publishes, until it answers once per process.
 
-        A no-op when this endpoint is known to publish none or when it was
-        already asked. Returns whatever :meth:`window` would, so callers never
-        special-case a miss.
+        A no-op when this endpoint is known to publish none, when it already
+        answered, and within a cooldown after it could not. Never raises;
+        returns whatever :meth:`window` would, so callers never special-case
+        a miss.
         """
-        if self._probe and self._key not in _PROBED:
-            window = await fetch()
-            _PROBED.add(self._key)
-            if window is not None:
-                _ADVERTISED.setdefault(self._key, window)
+        if self._probe and time.monotonic() >= _NEXT_PROBE.get(self._key, 0.0):
+            try:
+                window = await fetch()
+            except ProbeUnavailable:
+                _NEXT_PROBE[self._key] = time.monotonic() + _RETRY_AFTER
+            else:
+                _NEXT_PROBE[self._key] = math.inf
+                if window is not None:
+                    _ADVERTISED.setdefault(self._key, window)
         return self.window()

@@ -1223,6 +1223,26 @@ async def test_discover_fails_open(response: dict) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [429, 503])
+async def test_discover_asks_again_after_a_passing_failure(
+    status_code: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lovia.providers import _windows
+
+    monkeypatch.setattr(_windows, "_RETRY_AFTER", 0.0)
+    responses = [
+        httpx.Response(status_code),
+        httpx.Response(200, json={"data": [{"id": "m", "max_model_len": 32_768}]}),
+    ]
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: responses.pop(0))
+    )
+    provider = OpenAIChatProvider(model="m", base_url="http://gw/v1", client=client)
+    assert await provider.discover_context_window() is None
+    assert await provider.discover_context_window() == 32_768
+
+
+@pytest.mark.asyncio
 async def test_discover_survives_an_unreachable_endpoint() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("dns boom")

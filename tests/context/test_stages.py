@@ -386,6 +386,30 @@ async def test_summarize_chunks_bounded_by_the_summarizers_own_window():
     assert summarizer.calls == [body[:4], body[4:8]]
 
 
+async def test_summarize_asks_the_summarizers_own_endpoint_for_its_window():
+    """No bundled table: a summarizer on its own provider (Opus run, Haiku
+    summaries) only knows its window once its endpoint has been asked."""
+
+    class ProbedProvider:
+        def __init__(self) -> None:
+            self.window: int | None = None
+
+        def context_window(self) -> int | None:
+            return self.window
+
+        async def discover_context_window(self) -> int | None:
+            self.window = 1_000
+            return self.window
+
+    summarizer = FakeSummarizer("S1")
+    summarizer.provider = ProbedProvider()
+    body = _texts(10)
+    roomy = TokenBudget(window=100_000, reserve_output=0, trigger=0.75, target=0.5)
+    ctx = make_ctx(body, protected_from=8, budget=roomy)
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is True
+    assert summarizer.calls == [body[:4], body[4:8]]  # cut to the probed 1K
+
+
 async def test_summarize_summarizer_window_binds_on_aggressive_with_model_window():
     # min-of-both, on the aggressive path: the run model's window (50k) does
     # not save a smaller summarizer model — its own 1k window must bind, or a

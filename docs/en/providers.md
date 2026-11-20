@@ -280,9 +280,11 @@ Two consequences worth knowing:
   (`api.openai.com`), and when it was already asked. Answers — misses included
   — are memoized per `(endpoint, model)` for the life of the process, so an
   endpoint is asked at most once even though a `"vendor:model"` string is
-  resolved into a fresh provider on every run and every handoff. The probe runs
-  before the first model call with its own short timeout; a slow endpoint costs
-  a moment, never the run.
+  resolved into a fresh provider on every run and every handoff. A probe that
+  got no answer at all (unreachable, timed out, 429, 5xx) is retried after a
+  few minutes instead. The probe runs before the first model call with its own
+  short timeout; a slow endpoint costs a moment, never the run. A summarizer on
+  its own provider is probed the same way, on its first fold.
 - **Anthropic windows come from the endpoint.** The official Models API
   publishes `max_input_tokens` per model, so the probe reads the window as
   served to *your* org — 1M on the current generation, 200K on older models.

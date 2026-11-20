@@ -10,7 +10,9 @@ import asyncio
 
 import pytest
 
+from lovia.providers import _windows
 from lovia.providers._windows import (
+    ProbeUnavailable,
     WindowResolver,
     window_from_error,
     window_from_models_payload,
@@ -275,6 +277,26 @@ async def test_discover_asks_once_and_caches_the_miss() -> None:
     assert await _resolver().discover(fetch) is None
     assert await _resolver().discover(fetch) is None  # a *fresh* resolver
     assert calls == 1
+
+
+async def test_a_passing_failure_is_asked_again_after_a_cooldown(monkeypatch) -> None:
+    """A 5xx or a timeout says nothing about the window: remembering it as a
+    miss would cost every later session of the process its proactive budget."""
+    now = [1_000.0]
+    monkeypatch.setattr(_windows.time, "monotonic", lambda: now[0])
+    answers: list[int | None | Exception] = [ProbeUnavailable("HTTP 503"), 8_192]
+
+    async def fetch() -> int | None:
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    assert await _resolver().discover(fetch) is None
+    assert await _resolver().discover(fetch) is None  # within the cooldown
+    assert len(answers) == 1
+    now[0] += _windows._RETRY_AFTER
+    assert await _resolver().discover(fetch) == 8_192
 
 
 async def test_discover_declines_to_spend_a_request() -> None:

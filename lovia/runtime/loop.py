@@ -1352,9 +1352,12 @@ class RunLoop:
         state.run_ctx.usage.add(assistant.usage)
         # Remember the real input-token count so the next turn's ContextPolicy
         # can size compaction against actual usage rather than the chars/4
-        # heuristic.
-        if assistant.usage and assistant.usage.input_tokens:
-            state.last_input_tokens = assistant.usage.input_tokens
+        # heuristic. A call that reports none clears it: the policy pairs this
+        # count with the estimate of *this* call's view, and an older call's
+        # count (another model's, after a handoff) would mis-calibrate it.
+        state.last_input_tokens = (
+            assistant.usage.input_tokens or None if assistant.usage else None
+        )
         # Enforce the budget against this turn's tokens. The turn-start check
         # (``_check_limits``) ran before the model call, so on a final turn that
         # produces output without tool calls this is the only place an

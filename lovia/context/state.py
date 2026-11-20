@@ -148,10 +148,12 @@ class CompactionState:
         if self.ratio_key == key:
             return
         if self.ratio_key is not None:
+            # Take the target out first, so trimming can't evict it.
+            restored = self.ratios.pop(key, 1.0)
             self.ratios[self.ratio_key] = self.ratio
             while len(self.ratios) > _MAX_RATIOS:
                 del self.ratios[next(iter(self.ratios))]
-            self.ratio = self.ratios.pop(key, 1.0)
+            self.ratio = restored
             self.last_view_estimate = None
         self.ratio_key = key
 

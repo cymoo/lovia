@@ -270,6 +270,19 @@ async def test_policy_usage_is_on_the_books_but_not_the_calibration() -> None:
     assert result.last_input_tokens == 1
 
 
+async def test_a_call_without_a_token_count_clears_the_last_one() -> None:
+    """The policy pairs ``last_input_tokens`` with the estimate of the view
+    just sent: a call that reports no count must not leave an older call's
+    (another model's, after a handoff) to be mis-paired with it."""
+    counted = call("ping", {})
+    counted.usage = Usage(input_tokens=40, output_tokens=1)
+    silent = text("done")
+    silent.usage = Usage(input_tokens=0, output_tokens=1)
+    agent = Agent(name="t", model=ScriptedProvider([counted, silent]), tools=[ping])
+    result = await Runner.run(agent, "hi")
+    assert result.last_input_tokens is None
+
+
 async def test_policy_usage_counts_against_the_budget_before_the_model_call() -> None:
     provider = ScriptedProvider([text("done")])
     agent = Agent(name="t", model=provider)

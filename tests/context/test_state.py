@@ -44,6 +44,16 @@ def test_other_models_ratios_are_bounded():
     assert "m18" in state.ratios and "m0" not in state.ratios
 
 
+def test_switching_back_to_the_oldest_kept_model_restores_its_ratio():
+    """With the store full, the target is the oldest entry: it must be taken
+    out before the trim, or the trim evicts exactly the ratio wanted back."""
+    state = CompactionState(ratio=0.6, ratio_key="k0")
+    for i in range(1, 9):
+        state.use_ratio_for(f"k{i}")  # k0..k7 stored, k8 live
+    state.use_ratio_for("k0")
+    assert state.ratio == 0.6
+
+
 def test_load_drops_malformed_ratios():
     scratch: dict = {}
     CompactionState().save(scratch)

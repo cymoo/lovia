@@ -129,6 +129,11 @@ class RouterDeps:
     # when it received one. ``None`` — an app from ``create_app`` alone —
     # means no ``/api/config`` routes and no ``settings`` feature flag.
     config_runtime: "ConfigRuntime | None" = None
+    # Serve "show in Finder" / "open in editor" (desktop.py): they act on this
+    # machine, so only for a browser on it — ``create_app`` sets it when the
+    # API has no auth guard (a loopback server). Each request is still checked
+    # for a local Host and Origin.
+    desktop: bool = False
     # Builds each run's ``RunContext.deps`` from a RunTrigger (see
     # run_deps.py); ``None`` runs everything without deps, like core.
     run_deps: "RunDepsFn | None" = None

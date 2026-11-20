@@ -415,6 +415,18 @@ export const api = {
   // The same bytes as a Response, for code that reads them.
   /** @param {RawOpts} [opts] */
   workspaceRaw: (opts) => request(rawPath(opts)),
+  // On this machine (info.desktop): 'reveal' selects the entry in the file
+  // manager, 'edit' opens a file in an editor. `path` '.' is the root;
+  // `root` (a sidebar project's) overrides the panel's scope.
+  /** @param {'reveal' | 'edit'} action @param {{ agent?: string, path: string, root?: string }} opts */
+  workspaceDesktop: (action, { agent, path, root }) =>
+    request(`/api/workspace/${action}${qs({ agent, ...(root ? { root } : _scope()) })}`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ path }),
+    }).then(async (res) => {
+      if (!res.ok) throw await apiError(res);
+    }),
   // Bytes of one image a tool result carried — served from the transcript,
   // so it shows exactly what the model saw. `index` is 0-based over that
   // result's image parts (the SSE / history `images` stubs).

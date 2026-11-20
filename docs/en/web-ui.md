@@ -512,6 +512,15 @@ move through it. An open file's "⋯" menu shows it in the tree. A folder too
 large for the workspace's listing cap (`max_list_results`) lists that many
 entries and says so.
 
+When the browser is on the machine lovia web runs on (a loopback server with
+no token), a row's right-click menu, an open file's "⋯" menu and a project's
+sidebar menu also **show it in Finder** (Explorer; on Linux, open its folder),
+and a file's **open it in an editor**: the app its type opens with when that is
+a code or text editor (VS Code, Cursor, Zed, JetBrains IDEs, Sublime Text, …),
+else the system's plain-text editor — a `.sh` or `.py` that would run goes to
+the text editor instead. Editing is macOS and Windows only, and neither shows
+for a chat on a remote host.
+
 The panel is read-only: it has no upload. To put a file in the project, copy it
 into the folder yourself, or attach it and ask the Agent to save it. The change
 list leaves out the agent's scratch dir `tmp/`, and the "new files" badge

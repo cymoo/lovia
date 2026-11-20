@@ -23,9 +23,11 @@ class AgentInfo(BaseModel):
     mode: str | None = None
     instructions: str | None = None
     tools: list[str] = Field(default_factory=list)
-    # True when the agent has a browsable local workspace (the Files panel
+    # True when the agent has a browsable workspace (the Files panel
     # shows itself only for such agents).
     workspace: bool = False
+    # True when that workspace is on another host: no desktop actions there.
+    remote: bool = False
     # True when the agent's model sees images: without a workspace, images
     # are the only attachments it takes (inline, there being no file tools).
     vision: bool = False
@@ -124,6 +126,13 @@ class WorkspacePaths(BaseModel):
 
     paths: list[str]
     truncated: bool = False
+
+
+class DesktopRequest(BaseModel):
+    """``POST /api/workspace/reveal`` and ``/edit``: which entry (``.`` is
+    the workspace root)."""
+
+    path: str = Field(".", max_length=4096)
 
 
 class ChangesRequest(BaseModel):
@@ -282,6 +291,14 @@ class AssociateResponse(BaseModel):
     root: str
 
 
+class DesktopInfo(BaseModel):
+    """``POST /api/workspace/reveal`` / ``edit``, as this machine does them."""
+
+    # Selects it in Finder / in Explorer; "folder": opens the folder (Linux).
+    reveal: Literal["finder", "explorer", "folder"]
+    edit: bool
+
+
 class ServerInfo(BaseModel):
     """Server-level capabilities, for a custom UI to introspect on load."""
 
@@ -295,6 +312,8 @@ class ServerInfo(BaseModel):
     features: dict[str, bool] = Field(default_factory=dict)
     # Per-chat permission modes; None when chats can't pick one.
     workspace_modes: WorkspaceModesInfo | None = None
+    # The desktop actions on this machine; None when the server offers none.
+    desktop: DesktopInfo | None = None
 
 
 class Attachment(BaseModel):

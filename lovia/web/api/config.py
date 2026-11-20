@@ -45,6 +45,7 @@ from ..config.schema import (
     is_global_dir,
     slugify,
 )
+from ..auth import is_local_name
 from ..config.mcp import parse_servers, restore_secrets, spec_of
 from ..config.schema import MCPServerConfig
 from ..config.skills import scan_skills_status
@@ -53,11 +54,6 @@ from ..mcp import CONNECT_TIMEOUT, MCPStatus, probe
 from ..project_mcp import ProjectServer, read_project_servers
 from ..workspaces import WorkspaceRef
 from .deps import RouterDeps
-
-# Loopback names a same-machine browser legitimately uses. Anything else in
-# the Host header of an *unauthenticated* config write is a DNS-rebinding
-# smell — a foreign page resolving its own domain to 127.0.0.1.
-_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
 
 def _mask(secret: str | None) -> dict[str, object]:
@@ -293,10 +289,7 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         deployment would otherwise have. Deployments behind a proxy carry a
         token/auth, which makes the Host header irrelevant.
         """
-        if not runtime.require_local_host:
-            return
-        host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
-        if host in _LOCAL_HOSTS or host.endswith(".localhost"):
+        if not runtime.require_local_host or is_local_name(request.headers.get("host")):
             return
         raise WebError(
             403,

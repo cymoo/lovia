@@ -407,6 +407,7 @@ def create_app(
         # Without an auth guard the config write endpoints fall back to a
         # loopback-Host check (the DNS-rebinding guard in api/config.py).
         config_runtime.require_local_host = guard is None
+    deps.desktop = guard is None
     app.include_router(
         build_api_router(deps),
         dependencies=[Depends(guard)] if guard is not None else None,

@@ -120,7 +120,8 @@ Compaction(
 
 - **Watermarks** accept a fraction of the usable window (`0.85`) or an
   absolute token count (`150_000`); "usable" = window −
-  `reserve_output_tokens`. Nothing happens below `compact_at`; a breach
+  `reserve_output_tokens`, the reserve taking at most half of a small
+  window. Nothing happens below `compact_at`; a breach
   shrinks the view to `compact_to` (hysteresis, so the policy doesn't
   thrash at the boundary).
 - **`context_window=None`** resolves the window from the endpoint — its
@@ -193,7 +194,10 @@ Stages *plan* (record sticky decisions); rendering is a pure function of
 transcript + state. Never make a stage undo a decision — monotonicity is
 what keeps the prefix cache-stable. A stage's `ctx` is a `StageContext`
 (the request, the sticky `CompactionState`, a `TokenCounter`, the
-`TokenBudget`, the protected-tail boundary, the aggressive flag); the
+`TokenBudget`, the protected-tail boundary, the aggressive flag). A stage
+with lossy moves of its own should gate them on `ctx.overflowing(tokens)`
+rather than on `ctx.aggressive` alone: the flag says the view did not fit
+when the pass began, and the moves should stop once it does. The
 pieces Compaction itself is built from are exported for reuse —
 `render_view`, the `clear_marker` / `offload_marker` / `summary_entry`
 builders, `transcript_to_text`, `OffloadRecord` / `SummaryState`, and the

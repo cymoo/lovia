@@ -96,7 +96,7 @@ Compaction(
 ```
 
 **触发水位。** `compact_at` 和 `compact_to` 可以写成可用窗口比例（如 `0.85`），也可以写成
-绝对 token 数（如 `150_000`）。可用窗口是总窗口减去 `reserve_output_tokens`。低于触发水位时
+绝对 token 数（如 `150_000`）。可用窗口是总窗口减去 `reserve_output_tokens`（窗口较小时，预留最多占一半）。低于触发水位时
 不处理；触发后会缩到目标水位，留出余量，避免在边界反复压缩。
 
 **确定上下文窗口。** `context_window=None` 时，Lovia 会先读取端点的 `/models` 列表，再从首次
@@ -156,6 +156,8 @@ policy = Compaction(stages=[DropOldImages(), ClearToolResults()])
 stage 只做 *plan*（记录可延续的决策）；渲染是 transcript + state 的纯函数。stage 不要撤销已有决策：
 单调性是保持 prefix cache 稳定的关键。stage 的 `ctx` 是 `StageContext`
 （request、sticky `CompactionState`、`TokenCounter`、`TokenBudget`、受保护尾部边界、aggressive flag）。
+自定义 stage 如果有自己的有损手段，应该用 `ctx.overflowing(tokens)` 判断，而不只看 `ctx.aggressive`：
+这个 flag 只表示这一遍开始时视图放不下，放得下之后就该停手。
 Compaction 自己用到的部件也导出了，方便复用：`render_view`、`clear_marker` /
 `offload_marker` / `summary_entry` builder、`transcript_to_text`、`OffloadRecord` /
 `SummaryState`，以及 summarizer 的 `REQUIRED_SECTIONS` / `SUMMARY_SYSTEM_PROMPT` /

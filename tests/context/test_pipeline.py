@@ -681,6 +681,34 @@ async def test_a_view_over_the_window_is_fixed_before_sending():
     assert res.tokens_after < 128_000 - 16_384
 
 
+async def test_ordinary_moves_come_first_when_they_can_make_the_view_fit():
+    """Over the window before sending, but clearing old results is enough:
+    this turn's big result (which fits on its own) must stay verbatim —
+    offloading it would also make a later recall of it loop forever."""
+    entries = [user("start")]
+    for i in range(24):
+        entries += [call(f"o{i}"), out(f"o{i}", "h" * 3_000)]
+    newest = out("big", "r" * 104_000)  # ~26K tokens, fits a 40K window
+    entries += [_assistant("ok"), user("read the log"), call("big"), newest]
+    res = await Compaction(
+        context_window=40_000, reserve_output_tokens=0, summarizer=FakeSummarizer()
+    ).compact(req(entries, model="m"))
+    assert res.tokens_before is not None and res.tokens_before > 40_000
+    assert res.tokens_after is not None and res.tokens_after < 40_000
+    assert newest in res.entries
+
+
+async def test_a_window_just_above_the_reserve_keeps_its_history():
+    """17K window, default 16K reserve: half the window stays usable (as for
+    16K), so a 1.2K view is not over capacity and nothing is truncated."""
+    entries = [user(f"q{i} " + "x" * 800) for i in range(6)]
+    for window in (16_000, 17_000):
+        res = await Compaction(
+            context_window=window, summarizer=FailingSummarizer()
+        ).compact(req(entries, model="m"))
+        assert res.entries == entries, window
+
+
 async def test_a_view_under_the_window_keeps_the_proactive_limits():
     """Over the trigger but still under the usable window: an ordinary
     proactive pass — a recent result is not offloaded however large."""

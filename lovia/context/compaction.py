@@ -9,8 +9,8 @@ How a call flows:
 2. Over the watermark (or after a provider overflow), stages run in order —
    offload, clear, summarize, and after an overflow truncate — each recording
    new sticky decisions until the view is under the *compact_to* watermark.
-   A view already over the usable window is compacted as after an overflow
-   before it is sent, rather than sent to be refused.
+   A view already over the usable window is not sent to be refused: an
+   ordinary pass runs first, then the overflow moves if it still does not fit.
    The gap between the two is hysteresis: compaction happens in rare bursts,
    not every turn.
 3. Token thresholds estimate the *whole* request: cheap per-entry estimates
@@ -272,24 +272,16 @@ class Compaction:
         # The real window (when known) survives the aggressive override below:
         # stages that make actual model calls (summarize) size against it.
         model_window = window
-        if (
+        # Already over a known window before anything is sent: sending would
+        # buy a certain rejection and spend the runner's one retry. The
+        # estimate explains this "overflow", so the budget below is the
+        # trusted one; the stages get a second, overflow-moves pass if the
+        # ordinary one cannot make the view fit (see the stage loop).
+        over_capacity = (
             not aggressive
             and model_window is not None
             and tokens > usable_tokens(model_window, self.reserve_output_tokens)
-        ):
-            # Already over the window before anything is sent — typically this
-            # turn's own huge tool result, which sits in the protected tail
-            # where only the overflow moves may touch it. Sending first would
-            # buy a certain rejection and spend the runner's one retry, so
-            # compact as after an overflow the estimate explains: same target,
-            # and the overflow moves only while the view still does not fit
-            # (``StageContext.overflowing``).
-            logger.info(
-                "context.compact: view (%d est. tokens) is over the usable "
-                "window before sending; compacting as after an overflow",
-                tokens,
-            )
-            aggressive = True
+        )
         if window is None and not aggressive:
             # No budget information: never compact proactively; the
             # reactive overflow path remains as the safety net.
@@ -312,7 +304,13 @@ class Compaction:
             ):
                 window = model_window
             else:
-                window = max(tokens, 1) + self.reserve_output_tokens
+                # The window whose usable space is exactly the failed prompt.
+                # ``usable_tokens`` caps the reserve at half the window, so a
+                # reserve larger than the prompt must shrink to it — else a
+                # small failed prompt would get room to spare and nothing
+                # would compact.
+                failed = max(tokens, 1)
+                window = failed + min(self.reserve_output_tokens, failed)
                 distrust = True
         assert window is not None
 
@@ -356,42 +354,76 @@ class Compaction:
                 budget.usable,
             )
 
+        # Which passes the stages run: one with the overflow moves after a
+        # real overflow; one ordinary pass otherwise. A view over capacity
+        # before sending gets the ordinary pass first — the overflow moves
+        # cost the newest tool result or unsummarized history, so they must
+        # not pre-empt an ordinary move that would make the view fit — and the
+        # overflow pass only if it still does not. When even an ideal ordinary
+        # pass could not fit (what is left once the unprotected span is gone is
+        # still over the window — this turn's own huge result, usually), skip
+        # straight to the overflow pass rather than pay for a summary that
+        # cannot help.
+        passes = [aggressive]
+        if over_capacity:
+            covered = state.summary.covered if state.summary is not None else 0
+            compactable = int(
+                counter.count(render_entries(body[covered:protected_from], state))
+                * state.ratio
+            )
+            hopeless = tokens - compactable > budget.usable
+            passes = [True] if hopeless else [False, True]
+            logger.info(
+                "context.compact: view (%d est. tokens) is over the usable "
+                "window (%d) before sending; %s",
+                tokens,
+                budget.usable,
+                "overflow moves at once"
+                if hopeless
+                else "overflow moves if the ordinary pass falls short",
+            )
+
         reasons: list[str] = []
         try:
-            for stage in self.stages:
-                ctx = StageContext(
-                    request=req,
-                    state=state,
-                    counter=counter,
-                    budget=budget,
-                    current_tokens=tokens,
-                    protected_from=protected_from,
-                    aggressive=aggressive,
-                    store=self.store,
-                    model_window=model_window,
-                    # A trusted estimate fits once under the usable window;
-                    # a refuted one is held to the overshoot target.
-                    fit_tokens=None if distrust else budget.usable,
-                )
-                if await stage.plan(body, ctx):
-                    reasons.append(stage.name)
-                    view = render_view(req.entries, state)
-                    raw = counter.count(view)
-                    tokens = int((raw + overhead) * state.ratio)
-                    # An offloaded or cleared result shrinks the tail, which can
-                    # now take in the live user message it crowded out — later
-                    # stages must not summarize that away. Only ever widened.
-                    protected_from = min(
-                        protected_from,
-                        protected_tail_start(
-                            render_entries(body, state),
-                            counter,
-                            state.ratio,
-                            tail_tokens,
-                        ),
+            for n, overflow_moves in enumerate(passes):
+                if n and tokens <= budget.usable:
+                    break  # the ordinary pass made it fit
+                for stage in self.stages:
+                    ctx = StageContext(
+                        request=req,
+                        state=state,
+                        counter=counter,
+                        budget=budget,
+                        current_tokens=tokens,
+                        protected_from=protected_from,
+                        aggressive=overflow_moves,
+                        store=self.store,
+                        model_window=model_window,
+                        # A trusted estimate fits once under the usable
+                        # window; a refuted one is held to the overshoot target.
+                        fit_tokens=None if distrust else budget.usable,
                     )
-                if tokens <= budget.target_tokens:
-                    break
+                    if await stage.plan(body, ctx):
+                        if stage.name not in reasons:
+                            reasons.append(stage.name)
+                        view = render_view(req.entries, state)
+                        raw = counter.count(view)
+                        tokens = int((raw + overhead) * state.ratio)
+                        # An offloaded or cleared result shrinks the tail,
+                        # which can now take in the live user message it
+                        # crowded out — later stages must not summarize that
+                        # away. Only ever widened.
+                        protected_from = min(
+                            protected_from,
+                            protected_tail_start(
+                                render_entries(body, state),
+                                counter,
+                                state.ratio,
+                                tail_tokens,
+                            ),
+                        )
+                    if tokens <= budget.target_tokens:
+                        break
         except BaseException:
             # Stages are expected to log-and-return-False on failure, but an
             # unexpected raise must still keep what was already decided (and

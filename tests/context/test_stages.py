@@ -419,6 +419,35 @@ async def test_summarize_learns_the_window_its_folding_model_names():
     assert summarizer.refused == 1
 
 
+async def test_a_custom_summarizer_without_the_provider_hook_learns_nothing():
+    """A backend without ``.provider`` folds on an unknown model: its refusal
+    still re-cuts this chunk, but the limit must never be filed under the run
+    model's key, where it would cap the main budget for the whole session."""
+
+    class Custom:
+        def __init__(self) -> None:
+            self.refused = 0
+            self.calls: list = []
+
+        async def summarize(self, entries, *, req, prior_summary=None):
+            from lovia import ContextOverflowError
+            from lovia.context import TokenCounter
+
+            if TokenCounter().count(entries) > 1_000:
+                self.refused += 1
+                raise ContextOverflowError("too long", reported_window=2_000)
+            self.calls.append(entries)
+            return "S"
+
+    custom = Custom()
+    body = _texts(10, chars=1_000)
+    roomy = TokenBudget(window=100_000, reserve_output=0, trigger=0.75, target=0.5)
+    ctx = make_ctx(body, protected_from=8, budget=roomy)
+    assert await SummarizeHistory(summarizer=custom).plan(body, ctx) is True
+    assert custom.refused == 1  # re-cut locally
+    assert ctx.state.learned_windows == {}
+
+
 async def test_summarize_refusal_without_a_named_window_is_a_failure():
     summarizer = _RefusingSummarizer(limit=1_000, reported=None)
     body = _texts(10, chars=1_000)

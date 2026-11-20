@@ -409,13 +409,18 @@ class SummarizeHistory:
         summarizer_window = _provider_context_window(summarizer_provider)
         # A limit the folding endpoint itself named on an earlier refusal
         # (below). Keyed like the run's learned windows, by the provider that
-        # actually does the fold.
-        fold_key = (
-            window_key(summarizer_provider, getattr(summarizer_provider, "model", None))
-            if summarizer_provider is not None
-            else window_key(ctx.request.provider, ctx.request.model)
-        )
-        learned = state.learned_windows.get(fold_key)
+        # actually does the fold — known only through the ``.provider`` hook:
+        # ``None`` there means the run's own provider (``LLMSummarizer()``),
+        # while a backend without the hook folds somewhere unknown, so its
+        # limit is never filed under the run model's key.
+        fold_key: str | None = None
+        if summarizer_provider is not None:
+            fold_key = window_key(
+                summarizer_provider, getattr(summarizer_provider, "model", None)
+            )
+        elif hasattr(self.summarizer, "provider"):
+            fold_key = window_key(ctx.request.provider, ctx.request.model)
+        learned = state.learned_windows.get(fold_key) if fold_key else None
         for window in (ctx.model_window, summarizer_window, learned):
             if window is not None:
                 usable = min(usable, usable_tokens(window, ctx.budget.reserve_output))
@@ -518,8 +523,9 @@ class SummarizeHistory:
             except ContextOverflowError as exc:
                 # The folding model refused the chunk and (usually) named its
                 # limit — a summarizer on an endpoint that publishes no window
-                # learns it here. Remember it for this session and retry this
-                # chunk once, cut to fit; anything else is an ordinary failure.
+                # learns it here. Retry this chunk once, cut to fit, and
+                # remember the limit for the session when the folding provider
+                # is known; anything else is an ordinary failure.
                 reported = exc.reported_window
                 shrunk = (
                     usable_tokens(reported, ctx.budget.reserve_output)
@@ -533,7 +539,8 @@ class SummarizeHistory:
                         "window; re-chunking",
                         reported,
                     )
-                    state.learned_windows[fold_key] = reported
+                    if fold_key is not None:
+                        state.learned_windows[fold_key] = reported
                     usable = shrunk
                     max_tokens = usable // 4
                     retried_at = start

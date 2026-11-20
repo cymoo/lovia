@@ -694,9 +694,11 @@ class RunLoop:
             last_input_tokens=(
                 snapshot.last_input_tokens if snapshot is not None else None
             ),
-            calibration_tokens=(
-                snapshot.last_input_tokens if snapshot is not None else None
-            ),
+            # Not seeded on resume: the head keeps the last *reported* count,
+            # which need not belong to the view the carried estimate
+            # describes (a usage-less call, or one interrupted after its
+            # compaction). One skipped sample beats one mis-paired.
+            calibration_tokens=None,
             context_state=context_state,
             started_at=(
                 snapshot.started_at if snapshot is not None else self._invoked_at

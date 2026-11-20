@@ -270,6 +270,38 @@ async def test_policy_usage_is_on_the_books_but_not_the_calibration() -> None:
     assert result.last_input_tokens == 1
 
 
+async def test_a_resumed_run_gives_calibration_nothing_first() -> None:
+    """Call 2 dies after its compaction ran: the checkpointed estimate is
+    call 2's view, while the head's count is call 1's. The resumed run's first
+    compaction must not pair them."""
+    seen: list[int | None] = []
+
+    class Recording:
+        async def compact(self, req: CompactionRequest) -> ContextResult:
+            seen.append(req.last_input_tokens)
+            return ContextResult(entries=list(req.entries))
+
+    class Dropping(ScriptedProvider):
+        calls = 0
+
+        async def stream(self, *args: Any, **kwargs: Any):
+            type(self).calls += 1
+            if type(self).calls == 2:
+                raise ConnectionError("dropped")
+            async for delta in super().stream(*args, **kwargs):
+                yield delta
+
+    first = call("ping", {}, call_id="c1")
+    first.usage = Usage(input_tokens=300, output_tokens=1)
+    agent = Agent(name="t", model=Dropping([first, text("done")]), tools=[ping])
+    checkpoint = CheckpointOptions(InMemoryCheckpointer(), "r")
+    with pytest.raises(ConnectionError):
+        await Runner.run(agent, "hi", context_policy=Recording(), checkpoint=checkpoint)
+    seen.clear()
+    await Runner.run(agent, "hi", context_policy=Recording(), checkpoint=checkpoint)
+    assert seen and seen[0] is None
+
+
 async def test_a_call_without_a_token_count_gives_calibration_nothing() -> None:
     """The policy pairs the real count with the estimate of the view just
     sent: after a call that reports none, an older call's count (another

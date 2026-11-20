@@ -743,29 +743,34 @@ body.lv-sidebar-resizing {
 .lv-session-item.lv-active .lv-session-title {
   color: var(--lv-ink);
 }
-/* A live background run for this session (detach/reconnect). */
-.lv-session-item.lv-running .lv-session-title::after {
+/* A live background run for this session (detach/reconnect): a dot after the
+   title's text (and its mark), outside the title's ellipsis so a long title
+   can't clip it, pushing what's left (agent, age) to the row's end. */
+.lv-session-item:is(.lv-running, .lv-waiting) .lv-session-title {
+  flex: 0 1 auto;
+}
+.lv-session-item:is(.lv-running, .lv-waiting) .lv-session-branch {
+  margin-right: 0;
+}
+.lv-session-main > :is(.lv-session-agent, .lv-session-age, .lv-session-folder) {
+  order: 2;
+}
+.lv-session-item:is(.lv-running, .lv-waiting) .lv-session-main::after {
   content: "";
-  display: inline-block;
+  order: 1;
+  flex-shrink: 0;
   width: 6px;
   height: 6px;
-  margin-left: 7px;
+  margin: 0 auto 0 -1px; /* 7px off the text with the row's 8px gap */
   border-radius: 50%;
   background: var(--lv-ok);
-  vertical-align: middle;
   animation: lv-run-pulse 1.6s var(--lv-ease) infinite;
 }
 /* A run suspended on an approval card: still, not running, but waiting on
    the user — the task dot's approval color, without the pulse. */
-.lv-session-item.lv-waiting .lv-session-title::after {
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-left: 7px;
-  border-radius: 50%;
+.lv-session-item.lv-waiting .lv-session-main::after {
   background: var(--lv-warn);
-  vertical-align: middle;
+  animation: none;
 }
 @keyframes lv-run-pulse {
   0%,
@@ -6306,8 +6311,12 @@ body.lv-files-resizing {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* A square, so the hover fill is a circle; the margin centres it on the
+     38px send button beside it. */
   width: 30px;
-  height: 38px; /* matches the send button's row height */
+  height: 30px;
+  margin-bottom: 4px;
+  padding: 0;
   border-radius: 50%;
   color: var(--lv-accent);
   cursor: pointer;
@@ -6476,9 +6485,26 @@ body.lv-files-resizing {
    row, the component's body below at full card width. */
 .lv-tool .lv-figure-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
-  gap: 12px;
+  gap: 8px 12px;
   margin-bottom: 4px;
+}
+/* The card's summary line already names it (figure.js): the title shows in
+   full screen only, where that line is out of view. A chart left with no
+   subtitle floats its toolbar over its top corner instead of an empty row. */
+.lv-tool .lv-figure--named:not(:fullscreen) .lv-figure-title {
+  display: none;
+}
+.lv-tool .lv-chart.lv-figure--named:not(:fullscreen):not(:has(.lv-figure-subtitle)) {
+  position: relative;
+}
+.lv-tool .lv-chart.lv-figure--named:not(:fullscreen):not(:has(.lv-figure-subtitle)) .lv-figure-head {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  margin: 0;
 }
 .lv-tool .lv-figure-heading {
   flex: 1;
@@ -6577,15 +6603,24 @@ body.lv-files-resizing {
 .lv-tool .lv-html-paused span {
   flex: 1;
 }
-/* Tables (tables.js): a filter row, the table (scrolling sideways when wide),
-   and a pager. */
+/* Tables (tables.js): a filter row (in the head, beside the toolbar and under
+   a title), the table (scrolling sideways when wide), and a pager. */
 .lv-tool .lv-table .lv-figure-body {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
+.lv-tool .lv-table .lv-figure-head {
+  align-items: center;
+  margin-bottom: 8px;
+}
+.lv-tool .lv-table .lv-figure-heading:has(~ .lv-table-bar) {
+  flex-basis: 100%;
+}
 .lv-tool .lv-table-bar {
   display: flex;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 8px;
 }

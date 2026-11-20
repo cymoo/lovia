@@ -15,6 +15,9 @@ const LABELS = {
   zh: { full: '全屏查看', exitFull: '退出全屏', failed: '操作失败' },
 };
 
+/** @param {string} s */
+const oneLine = (s) => s.replace(/\s+/g, ' ').trim();
+
 /**
  * @typedef {object} Figure
  * @property {HTMLElement} fig The card — what goes full screen.
@@ -50,6 +53,10 @@ export function figure(el, { kind, heading, lang }) {
     head.append(titles);
     fig.setAttribute('role', 'figure');
     fig.setAttribute('aria-label', heading.text);
+    // The tool card's line already names it ("Table <title>"): the title
+    // would only repeat that, so it shows in full screen alone (styles.css).
+    const line = el.closest('.lv-tool')?.querySelector(':scope > summary .lv-tool-summary')?.textContent;
+    if (line && oneLine(line).includes(oneLine(heading.text))) fig.classList.add('lv-figure--named');
   }
   const tools = document.createElement('div');
   tools.className = 'lv-figure-tools';

@@ -30,6 +30,8 @@ from lovia.workspace import (
     WorkspaceLimits,
     WorkspacePolicy,
 )
+from lovia.workspace.types import RootFacts
+from lovia.workspace.workspace import render_instructions
 
 
 async def _session(tmp_path, **kwargs) -> LocalWorkspaceSession:
@@ -1250,6 +1252,24 @@ async def test_workspace_instructions_venv_guidance_follows_shell(tmp_path) -> N
     # shell, absent for readonly (which has none — nothing to install with).
     assert ".venv" in Workspace.local(str(tmp_path), mode="coding").instructions()
     assert ".venv" not in Workspace.local(str(tmp_path), mode="readonly").instructions()
+
+
+def test_workspace_instructions_name_cmd_exe_where_it_runs_commands() -> None:
+    # Told nothing, a model writes POSIX shell, multi-line `python -c` and all.
+    coding = WorkspacePolicy.coding()
+
+    def text(policy: WorkspacePolicy, shell: str) -> str:
+        return render_instructions(policy, RootFacts(name="ws", shell=shell))
+
+    assert "cmd.exe" not in text(coding, "sh")
+    assert "cmd.exe" in text(coding, "cmd")
+    assert "write it to a file" in text(coding, "cmd")
+    # Nowhere to put the script: no advice to write one.
+    readonly = replace(coding, write="deny")
+    assert "write it to a file" not in text(readonly, "cmd")
+    assert local_module.root_facts(Path.cwd()).shell == (
+        "cmd" if os.name == "nt" else "sh"
+    )
 
 
 async def test_workspace_instructions_default_to_pip_guidance(tmp_path) -> None:

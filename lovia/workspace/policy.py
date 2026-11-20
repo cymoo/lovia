@@ -345,8 +345,17 @@ def _mask_literal(command: str) -> str | None:
     design: on such a line nothing is guessed, and no grant is offered.
 
     Windows' cmd.exe has no single quotes and expands ``%VAR%`` inside double
-    ones: there the command is its own reading, as it always was."""
+    ones: there the command is its own reading, as it always was — None when
+    a line break falls inside double quotes, since the split cuts there and
+    each line of a quoted script (``python -c "<newline>import sys…"``)
+    would pass for a command (``import``, ``try:``) with a grant of its own."""
     if os.name == "nt":
+        quoted = False
+        for c in command:
+            if c == '"':
+                quoted = not quoted
+            elif quoted and c in "\r\n":
+                return None
         return command
     out: list[str] = []
     quote = ""

@@ -8,6 +8,7 @@ from typing import Callable
 
 import pytest
 
+from lovia.approvals import Verdict
 from lovia.workspace import PathRule, WorkspacePolicy
 from lovia.workspace.command_guard import extract_path_claims
 from lovia.workspace.local import LocalWorkspaceSession
@@ -97,6 +98,29 @@ def test_shell_command_is_judged_on_a_drive_path(
         session.decide_command(f"dir > {spell(tmp_path / 'ws' / 'a.txt')}").action
         == "allow"
     )
+
+
+@windows_only
+def test_a_quoted_multi_line_script_offers_no_grant_per_line() -> None:
+    # Cut at each quoted line break, the script's lines passed for commands:
+    # "always allow import, try:, print, except, \"".
+    policy = WorkspacePolicy()
+    script = (
+        'python -c "\nimport sys\ntry:\n    print(1)\nexcept ImportError:\n    pass\n"'
+    )
+    assert policy.decide_command(script) == Verdict("ask")
+    assert policy.decide_command('python -c "print(1)"').scopes == ("shell:python",)
+    # A break between commands is still a cut, each with its own grant.
+    assert policy.decide_command("git status\ndir").scopes == ("shell:git", "shell:dir")
+
+
+@windows_only
+async def test_cmd_runs_only_the_first_line_of_a_command(tmp_path: Path) -> None:
+    # What the workspace prompt tells the model about cmd.exe, checked.
+    session = _session(tmp_path, WorkspacePolicy(shell_default="allow"))
+    result = await session.run("echo first\necho second")
+    assert "first" in result.stdout
+    assert "second" not in result.stdout
 
 
 @pytest.mark.skipif(os.name == "nt", reason="backslash is a separator on Windows")

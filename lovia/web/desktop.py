@@ -235,8 +235,8 @@ def _mac_default_app(path: Path) -> tuple[str, str] | None:
 
 
 def _win_assoc(ext: str) -> str | None:
-    """The executable Windows opens ``ext`` files with (None if not an exe:
-    a store app, say)."""
+    """The executable Windows opens ``ext`` files with (None if not an exe —
+    a store app, say — or none: the "How do you want to open this?" picker)."""
     import ctypes
     from ctypes import wintypes
 
@@ -256,4 +256,7 @@ def _win_assoc(ext: str) -> str | None:
     if assoc(0, 2, ext, "open", buf, ctypes.byref(size)) != 0:
         return None
     exe = buf.value
-    return exe if exe.lower().endswith(".exe") and Path(exe).is_file() else None
+    name = PureWindowsPath(exe).name.lower()
+    if not name.endswith(".exe") or name == "openwith.exe":
+        return None
+    return exe if Path(exe).is_file() else None

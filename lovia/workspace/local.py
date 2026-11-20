@@ -193,6 +193,7 @@ def root_facts(root: Path) -> RootFacts:
         # .git may be a worktree's *file*, hence exists().
         git=(root / ".git").exists(),
         python=_python_pkg_flavor(root),
+        shell="cmd" if os.name == "nt" else "sh",
     )
 
 

@@ -261,6 +261,21 @@ def render_instructions(
             "so the shell is not a way around them; a command that needs "
             "broader access will ask for approval instead."
         )
+        if facts.shell == "cmd":
+            # Unsaid, models write POSIX shell — a multi-line `python -c "…"`
+            # that cmd.exe cuts at its first line break.
+            cmd = (
+                "Shell commands run under Windows cmd.exe, not a POSIX shell: "
+                "a command is one line (nothing after a line break runs), "
+                "only double quotes quote, and grep, head, tail and sed are "
+                "not there — use the file tools or findstr."
+            )
+            if policy.write != "deny":
+                cmd += (
+                    " For a multi-line script, write it to a file under "
+                    f"'{SCRATCH_DIR}/' and run that."
+                )
+            lines.append(cmd)
         lines.append(
             "Python work stays in the workspace's own virtualenv: when a "
             "real '.venv' (or 'venv') virtualenv exists at the root — one "

@@ -149,6 +149,8 @@ class RootFacts:
     name: str
     git: bool = False
     python: Literal["uv", "poetry", "pip"] = "pip"
+    shell: Literal["sh", "cmd"] = "sh"
+    """What runs shell commands there: ``/bin/sh``, or cmd.exe on Windows."""
 
 
 @dataclass(frozen=True, kw_only=True)

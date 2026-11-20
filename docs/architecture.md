@@ -216,8 +216,9 @@ method handles both triggers:
   half-open probe) → `TruncateHistory` (overflow path only: drop what nothing
   else could shrink, never past the latest user message). Custom stages
   implement the `Stage` protocol (`async def plan(body, ctx) -> bool`).
-  Design rationale, invariants and open optimizations:
-  [docs/design/context-compaction.md](design/context-compaction.md).
+  Design rationale, invariants and open optimizations live in
+  `docs/design/context-compaction.md` (in the repository; not part of the
+  docs site).
 - **Protected tail.** `render.protected_tail_start()` computes the verbatim
   tail every stage must respect: token-budgeted (`keep_recent_tokens`,
   default usable//5), anchors the most recent user message when affordable,

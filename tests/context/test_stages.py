@@ -367,6 +367,80 @@ async def test_summarize_chunks_bounded_by_model_window_on_aggressive():
     assert summarizer.calls == [body[:4], body[4:8]]
 
 
+class _RefusingSummarizer(FakeSummarizer):
+    """A summarizer whose own endpoint publishes no window, but refuses an
+    oversized chunk and names its limit — api.openai.com behind a smaller
+    summary model (#501)."""
+
+    def __init__(self, *, limit: int, reported: int | None) -> None:
+        super().__init__("S")
+
+        class _Endpoint:  # identity for the learned-window key
+            base_url = "https://summaries.test/v1"
+            model = "small"
+
+            def context_window(self) -> int | None:
+                return None
+
+        self.provider = _Endpoint()
+        self.limit = limit
+        self.reported = reported
+        self.refused = 0
+
+    async def summarize(self, entries, *, req, prior_summary=None):
+        from lovia import ContextOverflowError
+        from lovia.context import TokenCounter
+
+        if TokenCounter().count(entries) > self.limit:
+            self.refused += 1
+            raise ContextOverflowError("too long", reported_window=self.reported)
+        return await super().summarize(entries, req=req, prior_summary=prior_summary)
+
+
+async def test_summarize_learns_the_window_its_folding_model_names():
+    from lovia.context.state import window_key
+
+    summarizer = _RefusingSummarizer(limit=1_000, reported=2_000)
+    # ~2K-token span: one chunk under the run's budget, over the folder's 1K.
+    body = _texts(10, chars=1_000)
+    roomy = TokenBudget(window=100_000, reserve_output=0, trigger=0.75, target=0.5)
+    ctx = make_ctx(body, protected_from=8, budget=roomy)
+    stage = SummarizeHistory(summarizer=summarizer)
+    assert await stage.plan(body, ctx) is True  # re-chunked, then folded
+    assert summarizer.refused == 1
+    assert ctx.state.summary is not None and ctx.state.summary.covered == 8
+    key = window_key(summarizer.provider, "small")
+    assert ctx.state.learned_windows[key] == 2_000
+
+    # The next burst sizes against the learned window from the start.
+    more = body + _texts(10, chars=1_000)
+    ctx = make_ctx(more, state=ctx.state, protected_from=18, budget=roomy)
+    assert await stage.plan(more, ctx) is True
+    assert summarizer.refused == 1
+
+
+async def test_summarize_refusal_without_a_named_window_is_a_failure():
+    summarizer = _RefusingSummarizer(limit=1_000, reported=None)
+    body = _texts(10, chars=1_000)
+    roomy = TokenBudget(window=100_000, reserve_output=0, trigger=0.75, target=0.5)
+    ctx = make_ctx(body, protected_from=8, budget=roomy)
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is False
+    assert ctx.state.summary_failures == 1
+    assert summarizer.refused == 1
+
+
+async def test_summarize_retries_a_refused_chunk_only_once():
+    """A window it names but still refuses within: one re-cut, then a failure
+    — never a loop."""
+    summarizer = _RefusingSummarizer(limit=10, reported=2_000)
+    body = _texts(10)
+    roomy = TokenBudget(window=100_000, reserve_output=0, trigger=0.75, target=0.5)
+    ctx = make_ctx(body, protected_from=8, budget=roomy)
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is False
+    assert summarizer.refused == 2
+    assert ctx.state.summary_failures == 1
+
+
 async def test_summarize_chunks_bounded_by_the_summarizers_own_window():
     # A summarizer wired to its own (smaller) model must not be handed fold
     # chunks sized to the run model's window — every burst would overflow

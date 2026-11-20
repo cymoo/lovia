@@ -1353,8 +1353,10 @@ def test_table_window_covers_the_whole_claude_line(
 async def test_discover_reads_the_official_models_api() -> None:
     """api.anthropic.com publishes ``max_input_tokens`` per model (2026-03+).
 
-    The listing describes the deployment as served to *this* org, so it beats
-    the bundled table — here a 500K cap on a model the table lists at 1M.
+    The Models API describes the deployment as served to *this* org, so it
+    beats the bundled table — here a 500K cap on a model the table lists at 1M.
+    The probe retrieves the one model rather than paging the listing, so an
+    alias resolves too.
     """
     seen: list[httpx.Request] = []
 
@@ -1363,16 +1365,11 @@ async def test_discover_reads_the_official_models_api() -> None:
         return httpx.Response(
             200,
             json={
-                "data": [
-                    {
-                        "type": "model",
-                        "id": "claude-opus-4-8",
-                        "display_name": "Claude Opus 4.8",
-                        "max_input_tokens": 500_000,
-                        "max_tokens": 128_000,
-                    }
-                ],
-                "has_more": False,
+                "type": "model",
+                "id": "claude-opus-4-8-20260601",
+                "display_name": "Claude Opus 4.8",
+                "max_input_tokens": 500_000,
+                "max_tokens": 128_000,
             },
         )
 
@@ -1385,10 +1382,7 @@ async def test_discover_reads_the_official_models_api() -> None:
     assert provider.context_window() == 1_000_000  # the table, before the probe
     assert await provider.discover_context_window() == 500_000
     assert provider.context_window() == 500_000
-    assert seen[0].url.path == "/v1/models"
-    # The official listing paginates at 20 entries by default; the probe asks
-    # for a page large enough to hold the whole catalog.
-    assert seen[0].url.params["limit"] == "100"
+    assert seen[0].url.path == "/v1/models/claude-opus-4-8"
     assert seen[0].headers["x-api-key"] == "x"
 
 
@@ -1414,9 +1408,6 @@ async def test_discover_reads_a_window_from_a_compatible_gateway() -> None:
     assert seen[0].url.host == "gw.test"
     assert seen[0].url.path == "/anthropic/models"
     assert seen[0].headers["x-api-key"] == "x"
-    # The pagination param is official-API dialect; a strict gateway would
-    # 400 on it and the probe would memoize the miss for the whole process.
-    assert "limit" not in seen[0].url.params
 
 
 @pytest.mark.asyncio

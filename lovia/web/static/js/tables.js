@@ -161,7 +161,7 @@ function renderTable(el, props, ctx) {
   const L = LABELS[ctx.lang] || LABELS.en;
   const numeric = numericColumns(rows, columns.length);
   const collator = new Intl.Collator(ctx.lang, { numeric: true, sensitivity: 'base' });
-  const { body, tool, filename } = figure(el, {
+  const { fig, body, tool, filename } = figure(el, {
     kind: 'table',
     heading: title ? { text: title } : null,
     lang: ctx.lang,
@@ -198,7 +198,9 @@ function renderTable(el, props, ctx) {
     count = document.createElement('span');
     count.className = 'lv-table-count';
     bar.append(input, count);
-    body.append(bar);
+    // In the head, before the toolbar: one row of controls, under the title
+    // when it shows (styles.css).
+    fig.querySelector('.lv-figure-tools')?.before(bar);
   }
 
   const scroll = document.createElement('div');

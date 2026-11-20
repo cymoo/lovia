@@ -113,10 +113,13 @@ class Compaction:
         """Configure automatic compaction.
 
         Args:
-            context_window: The model's context window in tokens. When
-                omitted, the policy asks the provider; if the provider does
-                not know either, proactive compaction is skipped and only
-                the reactive overflow path runs.
+            context_window: The model's context window in tokens — a limit
+                enforced before sending: a view over its usable space is
+                compacted as after an overflow, so a value set below the real
+                window caps the prompt, not just the budget. When omitted, the
+                policy asks the provider; if the provider does not know
+                either, proactive compaction is skipped and only the reactive
+                overflow path runs.
             compact_at: When to start compacting — a fraction of the usable
                 window (``0.85`` = 85% full) or an absolute token count
                 (``150_000``).

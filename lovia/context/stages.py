@@ -152,9 +152,9 @@ def _result_indices(body: list[TranscriptEntry], state: CompactionState) -> list
 def _oversized(entry: ToolResultEntry, ctx: StageContext) -> bool:
     """A result that single-handedly blows the target budget.
 
-    On the aggressive (post-overflow) path such a result loses its
-    keep-last/protected-tail immunity: keeping it verbatim guarantees the
-    retry fails again, while a marker (with recall fallback) lets the
+    While the view does not fit (:meth:`StageContext.overflowing`) such a
+    result loses its keep-last/protected-tail immunity: keeping it verbatim
+    guarantees the call fails, while a marker (with recall fallback) lets the
     run make progress.
     """
     return ctx.calibrated(ctx.counter.count_entry(entry)) > ctx.budget.target_tokens
@@ -267,9 +267,9 @@ class ClearToolResults:
 
         Args:
             keep_last: The N most recent tool results are never cleared
-                (1 on the aggressive path).
+                (1 while the view does not fit).
             min_chars: Results at or below this length stay inline
-                (0 on the aggressive path).
+                (0 while the view does not fit).
             clear_at_least_tokens: When set, keep clearing until at least
                 this many (calibrated) tokens were freed even if the target
                 watermark was already reached — amortizes the prompt-cache
@@ -357,10 +357,10 @@ class SummarizeHistory:
                 using the run's own provider.
             min_savings_ratio: Skip the (expensive) summary call when the
                 projected saving is below this fraction of the current view —
-                anti-thrash. Ignored on the aggressive path.
+                anti-thrash. Ignored while the view does not fit.
             max_failures: Consecutive summarizer failures before the circuit
-                breaker stops trying proactively. The aggressive (overflow)
-                path still attempts — it is the half-open probe that lets a
+                breaker stops trying proactively. A view that does not fit
+                still attempts — it is the half-open probe that lets a
                 session recover once the summarizer works again.
             max_summary_chars: Reject a summary longer than this (treated as a
                 failure). The summary is replayed verbatim into every view, so
@@ -386,12 +386,15 @@ class SummarizeHistory:
 
     async def plan(self, body: list[TranscriptEntry], ctx: StageContext) -> bool:
         state = ctx.state
+        # Both relaxations below (breaker probe, no anti-thrash floor) are
+        # overflow moves: they hold only while the view does not fit.
+        overflowing = ctx.overflowing(ctx.current_tokens)
         # Circuit breaker with a half-open probe: proactive attempts stop
-        # after ``max_failures``, but the aggressive path still tries — the
+        # after ``max_failures``, but a view that does not fit still tries — the
         # failure counter is carried in the scratch across runs like every
         # other sticky decision, so without a probe a burst of transient
         # failures would disable summarization for the rest of the session.
-        if state.summary_failures >= self.max_failures and not ctx.aggressive:
+        if state.summary_failures >= self.max_failures and not overflowing:
             logger.warning(
                 "context.summary: circuit breaker tripped after %d failures",
                 state.summary_failures,
@@ -469,7 +472,7 @@ class SummarizeHistory:
         )
         projected_savings = span_tokens - growth
         if (
-            not ctx.aggressive
+            not overflowing
             and projected_savings < self.min_savings_ratio * ctx.current_tokens
         ):
             return False

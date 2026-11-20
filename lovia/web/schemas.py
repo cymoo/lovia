@@ -23,9 +23,11 @@ class AgentInfo(BaseModel):
     mode: str | None = None
     instructions: str | None = None
     tools: list[str] = Field(default_factory=list)
-    # True when the agent has a browsable local workspace (the Files panel
+    # True when the agent has a browsable workspace (the Files panel
     # shows itself only for such agents).
     workspace: bool = False
+    # True when that workspace is on another host: no desktop actions there.
+    remote: bool = False
     # True when the agent's model sees images: without a workspace, images
     # are the only attachments it takes (inline, there being no file tools).
     vision: bool = False

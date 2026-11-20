@@ -14,6 +14,7 @@ editor. The type's own app may not be one — ``.ts`` is a video to macOS, a
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -21,6 +22,8 @@ from pathlib import Path, PureWindowsPath
 from typing import Literal
 
 Reveal = Literal["finder", "explorer", "folder"]
+
+_MAC_OPEN = "/usr/bin/open"
 
 # macOS bundle ids. A trailing "." is a prefix (every JetBrains IDE).
 _MAC_EDITORS = (
@@ -97,11 +100,11 @@ def can_edit() -> bool:
 def reveal(path: Path) -> None:
     """Select ``path`` in a file manager window (Linux: open its folder)."""
     if sys.platform == "darwin":
-        _launch(["open", "-R", str(path)])
+        _launch([_MAC_OPEN, "-R", str(path)])
     elif sys.platform == "win32":
         # explorer parses its own command line: a comma ends /select's
         # argument unless the path is quoted (and a path never holds `"`).
-        _launch_detached(f'explorer /select,"{path}"')
+        _launch_detached(f'"{_windows_exe("explorer.exe")}" /select,"{path}"')
     else:
         _launch(["xdg-open", str(path if path.is_dir() else path.parent)])
 
@@ -110,7 +113,7 @@ def edit(path: Path) -> None:
     """Open the file ``path`` in an editor (see the module docstring)."""
     if sys.platform == "darwin":
         app = _mac_app_for(path)
-        _launch(["open", "-a", app, str(path)] if app else ["open", "-t", str(path)])
+        _launch([_MAC_OPEN, *(["-a", app] if app else ["-t"]), str(path)])
     elif sys.platform == "win32":
         _launch_detached([_win_editor_for(path), str(path)])
     else:
@@ -140,7 +143,13 @@ def _win_editor_for(path: Path) -> str:
     if exe and PureWindowsPath(exe).name.lower() in _WIN_EDITORS:
         return exe
     # Whatever the user reads text in — that is what .txt is for.
-    return _win_assoc(".txt") or "notepad.exe"
+    return _win_assoc(".txt") or _windows_exe("System32", "notepad.exe")
+
+
+def _windows_exe(*parts: str) -> str:
+    """A program under the Windows directory, by full path: a bare name is
+    looked up in this server's current directory first — the project's."""
+    return str(PureWindowsPath(os.environ.get("SystemRoot", r"C:\Windows"), *parts))
 
 
 def _launch(argv: list[str]) -> None:

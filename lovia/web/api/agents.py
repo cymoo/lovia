@@ -13,6 +13,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ...agent import Agent
 from ...plugins.skills import Skills
+from ...workspace import RemoteWorkspace
 from ...providers.base import context_window as provider_context_window
 from ..attachments import sees_images
 from ..errors import WebError
@@ -55,13 +56,15 @@ def agent_info(
 ) -> AgentInfo:
     """Public, JSON-safe view of an agent (name, static instructions, tools)."""
     memory = memory_plugin(agent)
+    files = files_config(agent)
     return AgentInfo(
         name=name,
         instructions=agent.instructions
         if isinstance(agent.instructions, str)
         else None,
         tools=[t.name for t in (agent.tools or [])],
-        workspace=files_config(agent) is not None,
+        workspace=files is not None,
+        remote=isinstance(files, RemoteWorkspace),
         vision=sees_images(agent),
         memory=memory is not None,
         memory_projects=memory is not None and splits_by_project(memory),

@@ -910,6 +910,16 @@ function rowIcon(entry) {
 }
 
 /**
+ * Whether the panel's files are on another host: the chat's directory says,
+ * else (no directories, or the agent's own) the agent's workspace does.
+ */
+function servesRemote() {
+  const root = scopeRoot();
+  if (root) return isRemote(root);
+  return !!store.agents.find((a) => a.name === store.agent)?.remote;
+}
+
+/**
  * A row's right-click menu — what you'd otherwise open the file to reach:
  * attach it to the chat, copy its path, download it, and on this machine show
  * it in the file manager or open it in an editor. A folder offers its path
@@ -932,7 +942,7 @@ function rowMenu(entry, e, row) {
   const local =
     entry.status === 'deleted'
       ? []
-      : desktopItems({ path: entry.path, isDir: entry.is_dir, remote: isRemote(scopeRoot()) });
+      : desktopItems({ path: entry.path, isDir: entry.is_dir, remote: servesRemote() });
   const tail = local.length ? [null, ...local] : [];
   if (entry.is_dir || entry.status === 'deleted') {
     openMenu(at, [copy, ...tail]);
@@ -2033,7 +2043,7 @@ export function initFiles() {
           icon: icon('folder-open', { size: 15 }),
           onSelect: () => void revealInTree(v.path),
         });
-        items.push(...desktopItems({ path: v.path, isDir: false, remote: isRemote(scopeRoot()) }));
+        items.push(...desktopItems({ path: v.path, isDir: false, remote: servesRemote() }));
       }
       items.push({
         label: t('files.copyPath'),

@@ -52,13 +52,14 @@ def test_macos_reveals_and_edits_without_running(
     desktop.reveal(f)
     for name in ("a.py", "a.md", "a.ts", "a.command", "a.unknown"):
         desktop.edit(tmp_path / name)
+    op = "/usr/bin/open"
     assert launched == [
-        ["open", "-R", str(f)],
-        ["open", "-a", "/Apps/PyCharm.app", str(tmp_path / "a.py")],
-        ["open", "-a", "/Apps/Visual Studio Code.app", str(tmp_path / "a.md")],
-        ["open", "-t", str(tmp_path / "a.ts")],
-        ["open", "-t", str(tmp_path / "a.command")],
-        ["open", "-t", str(tmp_path / "a.unknown")],
+        [op, "-R", str(f)],
+        [op, "-a", "/Apps/PyCharm.app", str(tmp_path / "a.py")],
+        [op, "-a", "/Apps/Visual Studio Code.app", str(tmp_path / "a.md")],
+        [op, "-t", str(tmp_path / "a.ts")],
+        [op, "-t", str(tmp_path / "a.command")],
+        [op, "-t", str(tmp_path / "a.unknown")],
     ]
 
 
@@ -66,6 +67,7 @@ def test_windows_quotes_the_selection_and_falls_back_to_the_text_editor(
     monkeypatch: pytest.MonkeyPatch, launched: list[Any]
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("SystemRoot", r"C:\Windows")
     assoc = {
         ".py": r"C:\Python\py.exe",  # runs the script: not an editor
         ".md": r"C:\VS Code\Code.exe",
@@ -77,12 +79,13 @@ def test_windows_quotes_the_selection_and_falls_back_to_the_text_editor(
         desktop.edit(Path(name))
     monkeypatch.setattr(desktop, "_win_assoc", lambda ext: None)
     desktop.edit(Path("x.js"))
+    # By full path: a bare name would run an explorer.exe in the project.
     assert launched == [
-        r'explorer /select,"C:\work\a,b.txt"',
+        r'"C:\Windows\explorer.exe" /select,"C:\work\a,b.txt"',
         [assoc[".txt"], "x.py"],
         [assoc[".md"], "x.md"],
         [assoc[".txt"], "Makefile"],
-        ["notepad.exe", "x.js"],
+        [r"C:\Windows\System32\notepad.exe", "x.js"],
     ]
 
 
@@ -243,6 +246,21 @@ def test_a_sidebar_project_is_named_by_its_root(
     res = c.post("/api/workspace/reveal", params={"root": str(other)}, json={})
     assert res.status_code == 204
     assert opened == [("reveal", other.resolve())]
+
+
+def test_a_remote_agent_says_so_and_is_refused(
+    tmp_path: Path, opened: list[tuple[str, Path]]
+) -> None:
+    from lovia.workspace import RemoteHost
+
+    far = RemoteHost("far", command=(), python=f"{sys.executable} -I -S")
+    bot = Agent(name="bot", model=None, workspace=Workspace.remote(far, str(tmp_path)))
+    c = _local(create_app(bot, store=ChatStore.in_memory(), titles=False))
+    assert c.get("/api/agents").json()[0]["remote"] is True
+    res = c.post("/api/workspace/reveal", json={})
+    assert res.status_code == 404
+    assert res.json()["detail"]["code"] == "feature_unavailable"
+    assert opened == []
 
 
 def test_a_launcher_failure_is_reported(

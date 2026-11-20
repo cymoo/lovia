@@ -586,6 +586,43 @@ async def test_leading_system_run_swap_keeps_summary():
 # ---------------------------------------------------------------------------
 
 
+async def test_a_model_switch_keeps_each_models_calibration():
+    """Calibrate on model A, switch to B mid-session: B starts from 1.0 and
+    is not calibrated with A's real count; switching back restores A's."""
+
+    class Endpoint:
+        def __init__(self, url: str) -> None:
+            self.base_url = url
+
+    a, b = Endpoint("https://a.test/v1"), Endpoint("https://b.test/v1")
+    pipeline = Compaction(context_window=100_000, summarizer=FakeSummarizer())
+    entries = [user("x" * 400) for _ in range(5)]
+    scratch: dict = {}
+
+    async def call_with(provider, real_factor: float | None) -> float:
+        est = CompactionState.load(scratch).last_view_estimate
+        real = int(est * real_factor) if est and real_factor else None
+        await pipeline.compact(
+            req(
+                entries,
+                provider=provider,
+                model="m",
+                scratch=scratch,
+                last_input_tokens=real,
+            )
+        )
+        return CompactionState.load(scratch).ratio
+
+    await call_with(a, None)
+    for _ in range(15):
+        ratio_a = await call_with(a, 0.6)  # A's tokenizer: 0.6x the estimate
+    assert ratio_a < 0.7
+
+    # B's first call arrives with A's last real count: it must not count.
+    assert await call_with(b, 0.6) == 1.0
+    assert await call_with(a, None) == ratio_a
+
+
 async def test_reactive_compacts_even_without_window_info():
     summarizer = FakeSummarizer("Reactive summary.")
     pipeline = Compaction(summarizer=summarizer)

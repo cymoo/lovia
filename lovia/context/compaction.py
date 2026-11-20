@@ -245,6 +245,7 @@ class Compaction:
         # with records nothing can render.
         state.prune(unique_result_ids(body))
 
+        state.use_ratio_for(window_key(req.provider, req.model))
         self._calibrate(state, req)
 
         counter = self._counter_for(req.provider)

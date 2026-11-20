@@ -107,7 +107,8 @@ Session 的后续运行中复用。只有所有来源都无法确定窗口时，
 恢复机制。
 
 **估算 token。** 默认估算器以 UTF-8 字节数为基础，单独计算图片、文件和工具 schema 的固定成本，
-再用 Provider 返回的实际 input token 数做 EMA 校准。真实端点测试中，英文、中文、中英混合和代码
+再用 Provider 返回的实际 input token 数做 EMA 校准（每个模型一个校准倍率，会话中途换模型不会沿用另一个
+tokenizer 的修正）。真实端点测试中，英文、中文、中英混合和代码
 混合文本的稳态误差约为 0.7–1.3%；测试范围和原始结果见
 [校准报告](https://github.com/cymoo/lovia/blob/main/docs/ratio-calibration.md)。Provider 也可以实现
 `TokenEstimator`，提供更精确的计数。

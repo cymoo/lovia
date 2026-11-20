@@ -41,6 +41,9 @@ SCRATCH_KEY = "context"
 # old bare-call_id markers still works via the transcript fallback.
 _VERSION = 3
 
+# Other models' ratios a session keeps; the oldest falls off past this.
+_MAX_RATIOS = 8
+
 RATIO_MIN, RATIO_MAX = 0.5, 2.5
 """Clamp bounds for the calibration ratio, applied both when updating the EMA
 and when loading persisted state — one weird usage report (or a corrupted
@@ -114,6 +117,10 @@ class CompactionState:
             rejections, keyed by :func:`window_key`. Persisting them is the
             point: an unknown or overstated window costs one overflow, once,
             and every later run on this session sizes itself correctly.
+        ratio_key: The :func:`window_key` that :attr:`ratio` was learned for
+            — tokenizer error belongs to a model, not to a session.
+        ratios: The ratios of other models this session has used, by
+            :func:`window_key`, restored when it switches back to one.
     """
 
     cleared: set[str] = field(default_factory=set)
@@ -123,6 +130,30 @@ class CompactionState:
     last_view_estimate: int | None = None
     summary_failures: int = 0
     learned_windows: dict[str, int] = field(default_factory=dict)
+    ratio_key: str | None = None
+    ratios: dict[str, float] = field(default_factory=dict)
+
+    def use_ratio_for(self, key: str) -> None:
+        """Make :attr:`ratio` the one learned for the model behind ``key``.
+
+        A session can switch models (a per-chat model pick, a handoff to an
+        agent on another provider); carrying one model's tokenizer error to
+        the next would mis-size the first turns after the switch — low by
+        up to the gap between the two ratios, the direction with no backstop
+        but a refused call. A model seen before gets its own ratio back, a
+        new one starts from 1.0, and the pending calibration pair is dropped:
+        its real count came from the other model. State without a key
+        (fresh, or written before ratios were per model) adopts ``key``.
+        """
+        if self.ratio_key == key:
+            return
+        if self.ratio_key is not None:
+            self.ratios[self.ratio_key] = self.ratio
+            while len(self.ratios) > _MAX_RATIOS:
+                del self.ratios[next(iter(self.ratios))]
+            self.ratio = self.ratios.pop(key, 1.0)
+            self.last_view_estimate = None
+        self.ratio_key = key
 
     def decided(self, call_id: str) -> bool:
         """Whether a sticky decision already exists for this tool result."""
@@ -210,6 +241,19 @@ class CompactionState:
                 if isinstance(key, str) and plausible_window(value)
             }
 
+        ratio_key = raw.get("ratio_key")
+        if isinstance(ratio_key, str):
+            state.ratio_key = ratio_key
+        ratios = raw.get("ratios")
+        if isinstance(ratios, dict):
+            state.ratios = {
+                key: min(RATIO_MAX, max(RATIO_MIN, float(value)))
+                for key, value in ratios.items()
+                if isinstance(key, str)
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            }
+
         return state
 
     def save(self, scratch: dict[str, Any]) -> None:
@@ -234,6 +278,8 @@ class CompactionState:
             "last_view_estimate": self.last_view_estimate,
             "summary_failures": self.summary_failures,
             "learned_windows": dict(self.learned_windows),
+            "ratio_key": self.ratio_key,
+            "ratios": dict(self.ratios),
         }
 
 

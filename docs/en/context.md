@@ -140,7 +140,9 @@ Compaction(
   under-counted 4× — with flat costs for images/files, plus the tool
   schemas the request carries (a fixed additive payload that would
   otherwise poison the multiplier), corrected by an EMA against the
-  provider's *real* input-token counts as turns complete. Providers can
+  provider's *real* input-token counts as turns complete — one ratio per
+  model, so a mid-session model switch doesn't inherit another tokenizer's
+  correction. Providers can
   supply exact counting by implementing `TokenEstimator`. In live calibration
   across English, Chinese, mixed-language, and code-heavy transcripts, the
   calibrated estimate reached roughly **99% accuracy** (about 0.7–1.3% steady

@@ -18,7 +18,40 @@ def _full_state() -> CompactionState:
         last_view_estimate=1234,
         summary_failures=1,
         learned_windows={"https://api.deepseek.com/v1\x00deepseek-chat": 65_536},
+        ratio_key="https://api.deepseek.com/v1\x00deepseek-chat",
+        ratios={"https://api.openai.com/v1\x00gpt-5.5": 0.9},
     )
+
+
+def test_use_ratio_for_keeps_each_models_ratio():
+    state = CompactionState(ratio=0.8, last_view_estimate=500)
+    state.use_ratio_for("a")  # unkeyed state adopts the current model
+    assert (state.ratio, state.ratio_key, state.last_view_estimate) == (0.8, "a", 500)
+
+    state.use_ratio_for("b")  # a new model starts fresh, pair dropped
+    assert (state.ratio, state.ratio_key, state.last_view_estimate) == (1.0, "b", None)
+    state.ratio = 1.3
+
+    state.use_ratio_for("a")  # back again: its own ratio
+    assert state.ratio == 0.8 and state.ratios == {"b": 1.3}
+
+
+def test_other_models_ratios_are_bounded():
+    state = CompactionState(ratio_key="m0")
+    for i in range(1, 20):
+        state.use_ratio_for(f"m{i}")
+    assert len(state.ratios) == 8
+    assert "m18" in state.ratios and "m0" not in state.ratios
+
+
+def test_load_drops_malformed_ratios():
+    scratch: dict = {}
+    CompactionState().save(scratch)
+    scratch["context"]["ratio_key"] = 7
+    scratch["context"]["ratios"] = {"a": "x", "b": True, "c": 9.0, 3: 1.0}
+    loaded = CompactionState.load(scratch)
+    assert loaded.ratio_key is None
+    assert loaded.ratios == {"c": 2.5}  # clamped like the live ratio
 
 
 def test_state_round_trips_through_scratch():

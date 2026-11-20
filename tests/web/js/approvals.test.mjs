@@ -15,6 +15,9 @@ import {
   scopeLabel,
   scopeList,
   scopePick,
+  shellArgs,
+  shellMeta,
+  foldCommand,
   splitNote,
 } from '../../../lovia/web/static/js/approvals.js';
 import { setDefaultView } from '../../../lovia/web/static/js/tool-views.js';
@@ -143,4 +146,45 @@ test('an answer here hides only the request it answered', () => {
   decided.set('t1', JSON.stringify(first));
   pendingTaskApprovals(tasks, new Map([['t1', { pending_approval: null }]]), 'p', decided);
   assert.equal(decided.size, 0);
+});
+
+test('shell card: the command alone, with only the non-default options', () => {
+  const args = (o) => JSON.stringify(o);
+  assert.deepEqual(shellArgs('shell', args({ command: 'ls' })), {
+    command: 'ls', cwd: null, timeout: null, background: false,
+  });
+  // Defaults say nothing; a set option is kept.
+  assert.deepEqual(
+    shellArgs('shell', args({ command: 'ls', cwd: '.', timeout: null, background: false, description: ' ' })),
+    { command: 'ls', cwd: null, timeout: null, background: false },
+  );
+  assert.deepEqual(shellArgs('shell', args({ command: 'make', cwd: 'src', timeout: 600, background: true })), {
+    command: 'make', cwd: 'src', timeout: 600, background: true,
+  });
+  // Anything else falls back to the generic rows, which show it all.
+  for (const other of [
+    args({ command: 'ls', env: { A: '1' } }),
+    args({ command: ['ls'] }),
+    args({ command: 'ls', cwd: 3 }),
+    args({ command: 'ls', description: 'not split off' }),
+    'not json',
+    undefined,
+  ]) {
+    assert.equal(shellArgs('shell', other), null);
+  }
+  assert.equal(shellArgs('read_file', args({ command: 'ls' })), null);
+  assert.equal(shellMeta({ cwd: null, timeout: null, background: false }), '');
+  assert.equal(shellMeta({ cwd: 'src', timeout: 600, background: false }), 'in src · timeout 600s');
+  // The background path ignores timeout, so the card does not promise one.
+  assert.equal(shellMeta({ cwd: 'src', timeout: 600, background: true }), 'in src · in the background');
+});
+
+test('a long command folds, and says how much it hides', () => {
+  const lines = (n) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n');
+  assert.deepEqual(foldCommand(lines(12)), { shown: lines(12), hidden: 0 });
+  assert.deepEqual(foldCommand(lines(20)), { shown: lines(20), hidden: 0 });
+  // A trailing newline is not a line of its own.
+  assert.deepEqual(foldCommand(`${lines(20)}\n`), { shown: `${lines(20)}\n`, hidden: 0 });
+  assert.deepEqual(foldCommand(lines(30)), { shown: lines(15), hidden: 15 });
+  assert.deepEqual(foldCommand(lines(21)), { shown: lines(15), hidden: 6 });
 });

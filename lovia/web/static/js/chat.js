@@ -53,6 +53,9 @@ import {
   scopeLabel,
   scopeList,
   scopePick,
+  shellArgs,
+  shellMeta,
+  foldCommand,
   splitNote,
 } from './approvals.js';
 import { BlockStream } from './stream-blocks.js';
@@ -1083,11 +1086,21 @@ function buildApprovalCard(call, sessionId, { decided, remembered, resumed, fail
   }
   node.querySelector('.lv-approve').textContent = t('approval.approve');
   node.querySelector('.lv-decline').textContent = t('approval.deny');
-  node.querySelector('.lv-approval-name').textContent = call.name;
   // The model's own summary goes apart from what acts, marked as its words.
   const { note, rest } = splitNote(call.arguments);
-  const argsEl = node.querySelector('.lv-approval-args');
-  fillParams(argsEl, rest);
+  /** @type {Element | null} */
+  let argsEl = node.querySelector('.lv-approval-args');
+  const shell = shellArgs(call.name, rest);
+  if (shell) {
+    // The heading already says it runs a command: the command is the card.
+    node.querySelector('.lv-approval-name')?.remove();
+    const block = buildShellCommand(shell);
+    argsEl?.replaceWith(block);
+    argsEl = block;
+  } else {
+    node.querySelector('.lv-approval-name').textContent = call.name;
+    fillParams(argsEl, rest);
+  }
   if (note) {
     const said = document.createElement('div');
     said.className = 'lv-approval-note';
@@ -1158,6 +1171,47 @@ function buildApprovalCard(call, sessionId, { decided, remembered, resumed, fail
   node.querySelector('.lv-approve').addEventListener('click', () => resolve('approve'));
   node.querySelector('.lv-decline').addEventListener('click', () => resolve('deny'));
   return node;
+}
+
+/**
+ * A shell approval's command, one frame with no scrollbar of its own: shown
+ * whole, or folded past a length behind a button that says how much is left
+ * (foldCommand); the non-default options go under it.
+ * @param {{ command: string, cwd: string | null, timeout: number | null, background: boolean }} shell
+ * @returns {HTMLElement}
+ */
+function buildShellCommand(shell) {
+  const wrap = document.createElement('div');
+  wrap.className = 'lv-approval-shell';
+  const frame = document.createElement('div');
+  frame.className = 'lv-approval-command';
+  const code = document.createElement('pre');
+  const { shown, hidden } = foldCommand(shell.command);
+  code.textContent = shown;
+  frame.append(code);
+  if (hidden) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'lv-approval-more';
+    more.textContent = t('approval.moreLines', { n: hidden });
+    more.addEventListener('click', () => {
+      code.textContent = shell.command;
+      // Focus stays on the card, not on the button it just took away.
+      code.tabIndex = -1;
+      code.focus({ preventScroll: true });
+      more.remove();
+    });
+    frame.append(more);
+  }
+  wrap.append(frame);
+  const meta = shellMeta(shell);
+  if (meta) {
+    const line = document.createElement('div');
+    line.className = 'lv-approval-meta';
+    line.textContent = meta;
+    wrap.append(line);
+  }
+  return wrap;
 }
 
 // ---- A task's approvals, in the chat that spawned it -----------------------

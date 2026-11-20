@@ -133,8 +133,8 @@ def build_provider(conn: Connection) -> Provider | None:
 def known_context_window(conn: Connection) -> int | None:
     """The window the provider can name without I/O, if it can name one.
 
-    That is an explicit setting, whatever the endpoint has already told this
-    process, or the bundled table — never a fresh network probe.
+    That is whatever the endpoint has already told this process — never a
+    fresh network probe.
     """
     provider = build_provider(conn)
     if provider is None:

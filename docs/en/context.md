@@ -122,7 +122,7 @@ Compaction(
   thrash at the boundary).
 - **`context_window=None`** resolves the window from the endpoint — its
   `/models` listing, or the limit it names the first time it rejects a
-  prompt — falling back to the adapter's table. See
+  prompt. See
   [context windows](providers.md#context-windows) for the full chain. A
   window it names always caps yours, so an unlisted model costs one
   overflow and is then sized correctly for the rest of the session. Only

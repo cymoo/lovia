@@ -41,7 +41,6 @@ from ._content import (
 from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
 from ._windows import (
     WindowResolver,
-    WindowTable,
     fetch_reported_window,
     window_from_error,
 )
@@ -302,13 +301,10 @@ class OpenAIChatProvider:
             base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
         self._host = urlparse(self.base_url).hostname or ""
+        # The official API publishes no window on /models; don't ask it. Its
+        # windows are learned from the first overflow, which names the limit.
         self._windows = WindowResolver(
-            base_url=self.base_url,
-            model=model,
-            host=self._host,
-            table=_OPENAI_CONTEXT_WINDOWS,
-            # The official API publishes no window on /models; don't ask it.
-            probe=not self._on_official_host(),
+            base_url=self.base_url, model=model, probe=not self._on_official_host()
         )
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._client = client
@@ -655,35 +651,3 @@ def _is_context_overflow(status: int, body: str) -> bool:
     if "string too long" in lowered and "context" in lowered:
         return True
     return False
-
-
-# Bundled windows, keyed by the host that serves them. "gpt-4.1" means
-# 1,047,576 tokens *on api.openai.com*; it says nothing about the "gpt-4.1" a
-# vLLM box re-exposes at --max-model-len 8192, and this adapter serves both.
-# An unlisted host gets no rules and relies on what the endpoint reports.
-#
-# The table is only ever an optimization — it spares the first long conversation
-# one overflow — so staleness is harmless and it stays small. Date-pinned
-# snapshots resolve via suffix stripping.
-#
-# Exact entries, except where a whole naming family provably agrees: GPT-5
-# releases disagree (400K vs 1.05M), so a prefix rule would be guessing. And a
-# guess that is too *small* never self-corrects — it cannot provoke the overflow
-# that would teach the real number.
-_OPENAI_CONTEXT_WINDOWS: WindowTable = {
-    "api.openai.com": (
-        ("gpt-4.1", 1_047_576),
-        ("gpt-5", 400_000),
-        ("gpt-5.5", 1_050_000),
-        ("gpt-5.5-pro", 1_050_000),
-        ("gpt-5.4", 1_050_000),
-        ("gpt-5.4-mini", 400_000),
-        ("gpt-5.2", 400_000),
-        ("gpt-5.2-pro", 400_000),
-    ),
-    # DeepSeek publishes no window on /models, so without this every new session
-    # spends an overflow learning it. The number is the one the endpoint itself
-    # named, read off a real rejection (2026-07):
-    #   "This model's maximum context length is 1048565 tokens."
-    "api.deepseek.com": (("deepseek-v4-pro", 1_048_565),),
-}

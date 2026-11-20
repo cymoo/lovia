@@ -948,6 +948,45 @@ async def test_runner_reactive_compaction_recovers_from_overflow():
     assert provider.last_input_lengths[1] < provider.last_input_lengths[0]
 
 
+class _EnforcingProvider:
+    """Knows no window up front, but enforces one and names it when refusing —
+    the cold start on an endpoint that publishes nothing (api.openai.com)."""
+
+    name = "enforcing"
+    model = "fake-model"
+
+    def __init__(self, window: int) -> None:
+        self.window = window
+        self.stream_count = 0
+
+    async def stream(self, entries, *, tools=None, response_format=None, settings=None):
+        self.stream_count += 1
+        chars = sum(len(str(getattr(e, "content", ""))) for e in entries)
+        if chars // 4 > self.window:
+            raise ContextOverflowError("too long", reported_window=self.window)
+        from lovia.transcript import FinishDelta, TextDelta
+
+        yield TextDelta(text="fits now")
+        yield FinishDelta(reason="stop")
+
+
+async def test_runner_recovers_a_cold_start_history_far_over_the_window():
+    """No window known, ~25x over the real one: the single retry must fit."""
+    provider = _EnforcingProvider(window=8_192)
+    agent = Agent(name="t", instructions="x", model=provider)
+    sess = InMemorySession()
+    await sess.append("s1", [user(f"turn {i} " + "x" * 4_000) for i in range(200)])
+    result = await Runner.run(
+        agent,
+        "go",
+        context_policy=Compaction(summarizer=FakeSummarizer()),
+        session=sess,
+        session_id="s1",
+    )
+    assert result.output == "fits now"
+    assert provider.stream_count == 2
+
+
 async def test_runner_emits_context_compacted_event():
     summarizer = FakeSummarizer("S.")
     policy = Compaction(summarizer=summarizer)

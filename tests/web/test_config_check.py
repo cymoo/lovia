@@ -121,8 +121,8 @@ def test_format_summary_shows_values_and_config() -> None:
     assert "openai:gpt-5.5" in text
     assert "sk-…1234" in text
     assert "~/.lovia/config.json" in text
-    # gpt-5.5 is in the provider's static table.
-    assert "auto (provider reports" in text
+    # api.openai.com publishes no window: it is learned from the first overflow.
+    assert "auto (reactive overflow handling)" in text
     assert text.endswith("serving on http://127.0.0.1:8000")
 
 

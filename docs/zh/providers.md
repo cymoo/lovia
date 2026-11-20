@@ -213,20 +213,19 @@ Provider 缓存能让长 agent 循环的成本变得可控。system prompt 和�
 | --- | --- |
 | 显式配置 | `Compaction(context_window=…)`——`lovia web` 里是模型配置中的上下文窗口。这是**唯一**面向用户的旋钮；下面各条全部自动 |
 | **端点自己的拒绝** | 撞墙一次之后：provider 会在报错里点名上限（`maximum context length is 65536 tokens`） |
-| **端点的 `/models` 列表** | vLLM / SGLang 公布 `max_model_len`；Anthropic 官方 API 公布 `max_input_tokens`；Groq、Together、OpenRouter 也各自公布 |
-| 内置表 | 按 **host** 索引：`api.openai.com` 上的 OpenAI 别名、`api.anthropic.com` 上的整条 Claude 线、`api.deepseek.com` 上的 DeepSeek |
+| **端点的 `/models` 列表** | vLLM / SGLang 公布 `max_model_len`；Anthropic 官方 API 公布 `max_input_tokens`；DeepSeek、Groq、Together、OpenRouter 也各自公布 |
 | — | 都问不到：不做主动压缩，只剩 reactive overflow 兜底 |
 
 只有第二条有资格**覆盖**显式配置，而且只能往下压——那是端点在执行限制，不是猜测。
 你在 200K 的模型上配 `100_000`，它仍然是 100K。
 
-表按 host 索引，因为 `gpt-4.1` 是关于 **OpenAI 那个部署**的事实。vLLM 用
-`--max-model-len 8192` 重新暴露出来的 `gpt-4.1` 完全是另一回事，而这个适配器同时服务两者
-——所以表里没有的 host 不会给出任何窗口，只依赖端点自己报告。
+Lovia 不内置「模型名→窗口」表。这种表每次模型发布都会过时，而且模型名不等于部署：vLLM 用
+`--max-model-len 8192` 重新暴露出来的 `gpt-4.1`，和 OpenAI 的 `gpt-4.1` 完全是两回事。
 
-实际效果：一个表里没有的模型，每个 session 的代价是**一次**撞墙。端点点名的窗口随报错
-进入 policy 状态并随 session 持久化，之后的每一轮（以及同一 session 之后的每次 run）
-都按真实值计算。
+实际效果：端点不公布窗口的模型（主要是 OpenAI 官方 API），每个 session 的代价是**一次**撞墙。
+重建的 prompt 会按报错里点名的窗口计算，所以即使历史很长，这一次重试也能放得下。之后这个窗口
+进入 policy 状态并随 session 持久化，之后的每一轮（以及同一 session 之后的每次 run）都按真实值
+计算。配置 `context_window` 可以连这一次也省掉。
 
 两点值得知道：
 
@@ -238,7 +237,6 @@ Provider 缓存能让长 agent 循环的成本变得可控。system prompt 和�
 - **Anthropic 的窗口来自端点本身。** 官方 Models API 按模型公布 `max_input_tokens`，
   探测读到的是**你的组织**实际拿到的窗口——当前一代是 1M，更早的模型是 200K。
   探测直接查询单个模型（`GET /models/{model}`），所以别名也能解析。
-  内置表只在探测答不上来时垫底。
 
 ## 自定义 Provider
 

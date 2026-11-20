@@ -59,7 +59,6 @@ from ._content import (
 from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
 from ._windows import (
     WindowResolver,
-    WindowTable,
     fetch_model_window,
     fetch_reported_window,
     window_from_error,
@@ -128,16 +127,9 @@ class AnthropicProvider:
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self._official_dialect = official_dialect
         self._supports_vision = supports_vision
-        self._windows = WindowResolver(
-            base_url=self.base_url,
-            model=model,
-            host=self._host,
-            table=_ANTHROPIC_CONTEXT_WINDOWS,
-            # The official Models API publishes ``max_input_tokens`` (since
-            # 2026-03), so the official host is worth asking too — it knows
-            # the deployment's real window where the table can only guess.
-            probe=True,
-        )
+        # The official Models API publishes ``max_input_tokens`` (since
+        # 2026-03), so every host is worth asking.
+        self._windows = WindowResolver(base_url=self.base_url, model=model, probe=True)
         self._client = client
         self._owns_client = client is None
         self._timeout = resolve_timeout(timeout)
@@ -169,7 +161,7 @@ class AnthropicProvider:
 
         The official API publishes ``max_input_tokens`` on
         ``GET /models/{model}`` (since 2026-03) — the window as served to
-        *this* org, which outranks the bundled table. Anthropic-dialect
+        *this* org. Anthropic-dialect
         gateways (DeepSeek's ``/anthropic``, Kimi, GLM) may publish one on
         their ``GET /models`` listing.
         """
@@ -828,40 +820,3 @@ def _is_context_overflow(status: int, body: str) -> bool:
     return any(needle in lowered for needle in _OVERFLOW_NEEDLES) or (
         "max_tokens_to_sample" in lowered and "exceeds" in lowered
     )
-
-
-# Bundled windows, keyed by the host that serves them: a gateway re-exposing
-# "claude-sonnet-4-5" may cap it, and only api.anthropic.com can vouch for the
-# vendor's own number. An unlisted host relies on what the endpoint reports.
-#
-# The table is only ever the pre-probe answer: the official Models API
-# publishes ``max_input_tokens`` per model (since 2026-03), and what the
-# endpoint advertises outranks anything written here. It still matters for
-# the first call of a process, and when the probe cannot answer (no API key,
-# endpoint unreachable).
-#
-# Since the 4.6 generation the default window is 1M with no beta header, so
-# those models carry exact entries — a deployment served less corrects itself
-# on the first overflow, because Anthropic's rejections name the limit. The
-# 200K family prefixes remain the floor for everything older (the ``context-1m``
-# beta era and before) and for family members newer than this file: a floor
-# that is too low only makes proactive compaction trigger early, it can never
-# fail a request. Date-pinned snapshots resolve via suffix stripping.
-_ANTHROPIC_CONTEXT_WINDOWS: WindowTable = {
-    "api.anthropic.com": (
-        ("claude-fable-5", 1_000_000),
-        ("claude-mythos-5", 1_000_000),
-        ("claude-opus-4-8", 1_000_000),
-        ("claude-opus-4-7", 1_000_000),
-        ("claude-opus-4-6", 1_000_000),
-        ("claude-sonnet-5", 1_000_000),
-        ("claude-sonnet-4-6", 1_000_000),
-        ("claude-opus-", 200_000),
-        ("claude-sonnet-", 200_000),
-        ("claude-haiku-", 200_000),
-        ("claude-3-", 200_000),
-    ),
-    # DeepSeek's Anthropic-dialect endpoint, verified the same way as its /v1
-    # one: it names 1048565 when it refuses, and publishes nothing on /models.
-    "api.deepseek.com": (("deepseek-v4-pro", 1_048_565),),
-}

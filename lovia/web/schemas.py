@@ -126,6 +126,13 @@ class WorkspacePaths(BaseModel):
     truncated: bool = False
 
 
+class DesktopRequest(BaseModel):
+    """``POST /api/workspace/reveal`` and ``/edit``: which entry (``.`` is
+    the workspace root)."""
+
+    path: str = Field(".", max_length=4096)
+
+
 class ChangesRequest(BaseModel):
     """``POST /api/workspace/changes``: the paths this chat wrote."""
 
@@ -282,6 +289,14 @@ class AssociateResponse(BaseModel):
     root: str
 
 
+class DesktopInfo(BaseModel):
+    """``POST /api/workspace/reveal`` / ``edit``, as this machine does them."""
+
+    # Selects it in Finder / in Explorer; "folder": opens the folder (Linux).
+    reveal: Literal["finder", "explorer", "folder"]
+    edit: bool
+
+
 class ServerInfo(BaseModel):
     """Server-level capabilities, for a custom UI to introspect on load."""
 
@@ -295,6 +310,8 @@ class ServerInfo(BaseModel):
     features: dict[str, bool] = Field(default_factory=dict)
     # Per-chat permission modes; None when chats can't pick one.
     workspace_modes: WorkspaceModesInfo | None = None
+    # The desktop actions on this machine; None when the server offers none.
+    desktop: DesktopInfo | None = None
 
 
 class Attachment(BaseModel):

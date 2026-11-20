@@ -23,7 +23,8 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
-from ..schemas import ServerInfo, WorkspaceModesInfo
+from .. import desktop
+from ..schemas import DesktopInfo, ServerInfo, WorkspaceModesInfo
 from .agents import build_agents_router
 from .attachments import build_attachments_router
 from .chat import build_chat_router
@@ -108,6 +109,11 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 "workspace_switch": deps.workspace_switch is not None,
             },
             workspace_modes=_workspace_modes(deps),
+            desktop=(
+                DesktopInfo(reveal=desktop.reveal_kind(), edit=desktop.can_edit())
+                if deps.desktop
+                else None
+            ),
         )
 
     if deps.config_runtime is not None:

@@ -19,6 +19,7 @@ import { icon } from './icons.js';
 import { confirmDialog, copyToClipboard, openMenu, promptDialog, showDialog } from './ui.js';
 import { hasProjectMemory } from './memory.js';
 import { openSettings } from './settings.js';
+import { desktopItems } from './desktop.js';
 
 const PICK_KEY = 'lovia-workspace'; // sessionStorage: this tab's pick
 const COLLAPSED_KEY = 'lovia-workspace-collapsed'; // localStorage: folded groups
@@ -343,6 +344,7 @@ export function groupHeader(group, rerender) {
         ? []
         : [{ label: t('session.rename'), icon: icon('pencil', { size: 15 }), onSelect: () => void renameWorkspace(group) }]),
       { label: t('ws.copyPath'), icon: icon('copy', { size: 15 }), onSelect: () => void copyPath(root) },
+      ...desktopItems({ path: '.', isDir: true, root, remote: isRemote(root) }),
       // A folder's own memory, when an agent keeps one per project (General
       // is no project).
       ...(group.kind !== 'general' && hasProjectMemory()

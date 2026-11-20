@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Awaitable, Callable
+from urllib.parse import urlsplit
 
 try:
     from fastapi import Request
@@ -42,6 +43,22 @@ TOKEN_COOKIE = "lovia_token"
 def is_loopback(host: str) -> bool:
     """True for loopback binds. NB: "0.0.0.0" / "::" are wildcards, not loopback."""
     return host in {"127.0.0.1", "localhost", "::1"} or host.startswith("127.")
+
+
+def is_local_name(value: str | None) -> bool:
+    """True when a ``Host`` header or an ``Origin`` names this machine.
+
+    Without a token, the Host is what tells a same-machine browser from a
+    foreign page whose domain was pointed at 127.0.0.1 (DNS rebinding).
+    """
+    if not value:
+        return False
+    netloc = value.split("://", 1)[1] if "://" in value else value
+    try:
+        name = urlsplit(f"//{netloc}").hostname or ""
+    except ValueError:  # a malformed IPv6 literal
+        return False
+    return name in {"localhost", "127.0.0.1", "::1"} or name.endswith(".localhost")
 
 
 def generate_token() -> str:

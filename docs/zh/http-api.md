@@ -146,6 +146,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `workspace_unreachable` | 502 | 连不上远程位置所在的主机，无法确认目录或读写其中的文件（`hint` 里是它的报错） |
 | `workspace_io_error` | 500 | 工作区所在的系统没能完成读写，比如磁盘已满；`message` 是系统的报错。操作系统权限不足则是 403 `path_denied` |
 | `attachment_io_error` | 500 | 上传的文件没能存进对话的附件目录，比如磁盘已满；`message` 是系统的报错 |
+| `launch_failed` | 502 | 系统的文件管理器或编辑器启动工具（`open`、`xdg-open`）拒绝了请求；`message` 是它的报错 |
 | `file_too_large` | 413 | 超过工作区读取或上传上限 |
 | `unsupported_file_type` | 415 | 不支持内联预览，或扩展名不允许上传 |
 | `too_many_runs` | 429 | 已达到并发 Run 上限 |
@@ -156,7 +157,7 @@ API 路由抛出的错误都使用同一种响应体：
 | 方法与路径 | 用途 |
 | --- | --- |
 | `GET /healthz` | 存活检查（由 `create_app` 提供，不属于 `build_api_router`） |
-| `GET /api/info` | 标题、Agent 列表、默认 Agent、版本和功能开关；对话可以选择权限模式时（`create_app(workspaces=)`）还有 `workspace_modes: {modes, default}`，否则为 `null` |
+| `GET /api/info` | 标题、Agent 列表、默认 Agent、版本和功能开关；对话可以选择权限模式时（`create_app(workspaces=)`）还有 `workspace_modes: {modes, default}`，否则为 `null`；服务能在自己的桌面上显示文件时还有 `desktop: {reveal, edit}`（`reveal` 取 `finder`、`explorer` 或 `folder`），否则为 `null` |
 | `GET /api/agents` · `GET /api/agents/{name}` | 查看 Agent 的 instructions、工具和能力（`workspace`、`vision`：模型能否看图） |
 | `POST /api/chat` | 执行一次**阻塞式** Turn → `{output, session_id, usage}`：托管 Run，请求等待其结束（[详见](#阻塞式-turn)） |
 | `POST /api/chat/stream` | **SSE**：启动 Run，或连接到 Session 中正在执行的 Run（新消息会作为追加指令注入） |
@@ -183,6 +184,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/workspace` · `/files` · `/file` · `/raw` | 读取 Agent [工作区](workspace.md)中的文件；带 `?session=` 时读该对话的目录，带 `?root=` 时读还没发送的草稿的目录（按新对话的规则校验） |
 | `GET /api/workspace/paths` | 目录下的所有文件 → `{paths, truncated}`：相对根目录、已排序，就是输入框 `@` 菜单的列表。经文件面板的只读视图调用 Agent 自己的 `list_files('.', pattern='**/*')`——在 Git 工作区里遵守忽略规则，不含点开头的文件、`denied_paths` 屏蔽的文件和目录；远程对话在远端主机上执行。上限 20000 条（目录也计入），被截掉时 `truncated` 为真。`?session=` / `?root=` 同文件面板 |
 | `POST /api/workspace/changes` | `{paths}`（最多 500 个，按对话里工具调用的写法）→ `{git, truncated, files: [{path, is_dir, touched, status, old_path, added, removed, size, mtime}]}`：仍然存在的路径按修改时间倒序（`touched: true`）；目录在 git 仓库里时，后面是 `git status` 在该目录下看到的其余未提交改动，最多 200 项（`truncated` 表示还有更多）。`status` 取 `modified`、`added`、`untracked`、`deleted`、`renamed` 或 `null`；`added` / `removed` 是相对 `HEAD` 的行数。`?session=` / `?root=` 同文件面板 |
+| `POST /api/workspace/reveal` · `/edit` | `{path}`（`.` 表示根目录）→ 204：在本机文件管理器中选中该项（Finder、资源管理器；Linux 上打开所在文件夹），或用编辑器打开文件——该类型的关联应用是已知编辑器时用它，否则用纯文本编辑器，所以文件绝不会被执行（仅 macOS 和 Windows）。只在没有鉴权的服务上提供（`/api/info` 的 `desktop`，否则为 `null`，也没有这两个路由），且请求的 `Host` 和 `Origin` 必须是本机；读取规则同文件面板，远程工作区返回 404 `feature_unavailable`。`?session=` / `?root=` 同文件面板 |
 | `GET /api/workspace/diff?path=&old=` | `{path, diff, binary, truncated}`：该文件相对 `HEAD` 的 unified diff（`old` 是重命名前的路径，这样移动按一次改名比较），按工作区的 shell 输出上限截断。不在 git 仓库里或仓库还没有提交时返回 404 `feature_unavailable` |
 | `POST /api/sessions/{id}/attachments` | multipart 的 `file` → `{name, mime, kind, size}`：把一个附件存进对话的附件目录（和聊天记录放在一起，不在工作区里）；受扩展名白名单和大小上限约束，重名时换一个 `name`，消息再以 `attachments: [{name, mime, kind}]` 引用它。`{id}` 可以是还不存在的对话——草稿的 id，第一次发送时用它新建对话——必须是 32 位小写十六进制（否则 422）。对话的 Agent（草稿用 `?agent=` 指明）没有工作区时只接受图片（PNG、JPEG、GIF、WebP，否则 415 `unsupported_file_type`），因为没有文件工具，图片直接发给模型；工作区绑定的是调用方自己打开的 session 时，返回 404 `feature_unavailable`：那个 session 由所有对话共用，没法只让某一个对话的附件保持只读 |
 | `GET /api/sessions/{id}/attachments/{name}?download=` | 按 `name` 取一个附件：图片和 PDF 内联显示，`download=1` 时任何文件都作为下载（同 `/api/workspace/raw`）。fork 和子任务读的是源对话的（共用同一个目录）；对话删除后返回 404 |

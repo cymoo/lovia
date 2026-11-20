@@ -83,6 +83,7 @@ ErrorCode = Literal[
     "workspace_unreachable",
     "workspace_io_error",
     "attachment_io_error",
+    "launch_failed",
     "file_too_large",
     "unsupported_file_type",
     "too_many_runs",

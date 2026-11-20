@@ -30,7 +30,7 @@ import hashlib
 import inspect
 import mimetypes
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
@@ -58,11 +58,13 @@ from ...workspace import (
 )
 from ...workspace.paths import resolve_path
 from ...workspace.protocol import WorkspaceSession
-from .. import changes
+from .. import changes, desktop
+from ..auth import is_local_name
 from ..errors import WebError
 from ..media import is_preview_image, preview_image_mime
 from ..schemas import (
     ChangesRequest,
+    DesktopRequest,
     ProcessInfo,
     WorkspaceChanges,
     WorkspaceDiff,
@@ -485,6 +487,81 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             # For a body that is never started (the client already gone).
             background=BackgroundTask(held.aclose),
         )
+
+    # ---- desktop: show in Finder, open in an editor ---------------------------
+    # Mounted on an unguarded (loopback) server alone; see desktop.py.
+
+    async def _desktop_target(
+        request: Request,
+        agent_name: str | None,
+        chat: str | None,
+        root: str | None,
+        path: str,
+    ) -> Path:
+        """The entry on this disk, by the same read rule as ``raw``."""
+        origin = request.headers.get("origin")
+        if not is_local_name(request.headers.get("host")) or (
+            origin is not None and not is_local_name(origin)
+        ):
+            raise WebError(
+                403,
+                "local_origin_required",
+                "desktop actions need a browser on this machine",
+            )
+        cfg = await require_cfg(agent_name, chat, root)
+        if not isinstance(cfg, LocalWorkspace):
+            raise WebError(
+                404, "feature_unavailable", "the files are on another machine"
+            )
+        async with _view(cfg) as session:
+            await _must_read(session, path)
+        target = resolve_path(Path(cfg.root).expanduser().resolve(), path).abs
+        if not target.exists():
+            raise WebError(404, "file_not_found", "no such file")
+        return target
+
+    async def _launch(action: Callable[[Path], None], target: Path) -> Response:
+        try:
+            await asyncio.to_thread(action, target)
+        except (desktop.LaunchError, OSError) as exc:
+            raise WebError(
+                502, "launch_failed", str(exc) or type(exc).__name__
+            ) from exc
+        return Response(status_code=204)
+
+    if deps.desktop:
+
+        @router.post("/api/workspace/reveal", status_code=204)
+        async def reveal_entry(
+            request: Request,
+            body: DesktopRequest,
+            agent: str | None = Query(None),
+            chat: str | None = Query(None, alias="session"),
+            root: str | None = Query(None, max_length=4096),
+        ) -> Response:
+            """Select the entry in the system file manager (Linux: open its
+            folder)."""
+            target = await _desktop_target(request, agent, chat, root, body.path)
+            return await _launch(desktop.reveal, target)
+
+        @router.post("/api/workspace/edit", status_code=204)
+        async def edit_entry(
+            request: Request,
+            body: DesktopRequest,
+            agent: str | None = Query(None),
+            chat: str | None = Query(None, alias="session"),
+            root: str | None = Query(None, max_length=4096),
+        ) -> Response:
+            """Open the file in an editor — its type's app when that is one,
+            else the plain-text editor (never a program that runs it)."""
+            if not desktop.can_edit():
+                raise WebError(
+                    404, "feature_unavailable", "no editor launcher on this platform"
+                )
+            target = await _desktop_target(request, agent, chat, root, body.path)
+            if not target.is_file():
+                raise WebError(400, "invalid_request", "not a file")
+            return await _launch(desktop.edit, target)
 
     # ---- background processes (chat-scoped) --------------------------------
     # Keyed by web session id, not agent: processes belong to the chat's live

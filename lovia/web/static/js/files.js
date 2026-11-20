@@ -26,7 +26,8 @@ import {
 } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
-import { scopeRoot } from './workspaces.js';
+import { isRemote, scopeRoot } from './workspaces.js';
+import { desktopItems } from './desktop.js';
 import { sortRows } from './tables.js';
 import { renderMermaid } from './diagrams.js';
 import { sandboxFrame } from './sandbox.js';
@@ -910,8 +911,9 @@ function rowIcon(entry) {
 
 /**
  * A row's right-click menu — what you'd otherwise open the file to reach:
- * attach it to the chat, copy its path, download it. A folder (or a file git
- * says is deleted) offers its path.
+ * attach it to the chat, copy its path, download it, and on this machine show
+ * it in the file manager or open it in an editor. A folder offers its path
+ * and the file manager; a file git says is deleted, its path.
  * @param {{ path: string, is_dir: boolean, status?: string | null }} entry
  * @param {MouseEvent} e
  * @param {HTMLElement} row
@@ -927,8 +929,13 @@ function rowMenu(entry, e, row) {
       if (await copyToClipboard(entry.path)) toast(t('ws.pathCopied'));
     },
   };
+  const local =
+    entry.status === 'deleted'
+      ? []
+      : desktopItems({ path: entry.path, isDir: entry.is_dir, remote: isRemote(scopeRoot()) });
+  const tail = local.length ? [null, ...local] : [];
   if (entry.is_dir || entry.status === 'deleted') {
-    openMenu(at, [copy]);
+    openMenu(at, [copy, ...tail]);
     return;
   }
   openMenu(at, [
@@ -953,6 +960,7 @@ function rowMenu(entry, e, row) {
         a.click();
       },
     },
+    ...tail,
   ]);
 }
 
@@ -2025,6 +2033,7 @@ export function initFiles() {
           icon: icon('folder-open', { size: 15 }),
           onSelect: () => void revealInTree(v.path),
         });
+        items.push(...desktopItems({ path: v.path, isDir: false, remote: isRemote(scopeRoot()) }));
       }
       items.push({
         label: t('files.copyPath'),

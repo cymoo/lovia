@@ -275,10 +275,14 @@ class Compaction:
             )
         if aggressive:
             # An overflow proves the effective limit is at most the failed
-            # prompt itself — any configured/claimed window is now refuted,
-            # so budget against the actual prompt size to guarantee stages
-            # have room to shrink.
+            # prompt itself — a window above it is refuted, so budget against
+            # the prompt size to guarantee stages have room to shrink. A known
+            # window *below* it still binds: a prompt several times over the
+            # limit would otherwise shrink to a fraction of itself and
+            # overflow again on the one retry.
             window = max(tokens, 1) + self.reserve_output_tokens
+            if model_window is not None:
+                window = min(window, model_window)
         assert window is not None
 
         budget = self._build_budget(window, aggressive)

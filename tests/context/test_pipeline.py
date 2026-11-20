@@ -616,6 +616,19 @@ async def test_reactive_ignores_refuted_window_claim():
     assert len(res.entries) < len(entries)
 
 
+async def test_reactive_budget_is_capped_by_the_reported_window():
+    """A prompt several times over the limit must come back under it, not
+    merely shrink against its own size — the runner retries only once."""
+    pipeline = _pipeline(reserve_output_tokens=1_000, summarizer=FakeSummarizer())
+    entries = [user(f"turn {i} " + "x" * 4_000) for i in range(200)]  # ~200K
+    res = await pipeline.compact(
+        req(entries, model="m", overflow=True, reported_window=8_192)
+    )
+    assert res.compacted is True
+    assert res.tokens_after is not None
+    assert res.tokens_after < 8_192 - 1_000
+
+
 def _scratch_with_learned(window: int, key: str = "\x00m") -> dict:
     scratch: dict = {}
     CompactionState(learned_windows={key: window}).save(scratch)

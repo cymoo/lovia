@@ -167,7 +167,8 @@ required_sections=...)`，不要 fork 这段实现。
 请记住它，它的优先级压过所有其他窗口来源）、runner 会帮你在 checkpoint 中往返保存的
 `scratch` dict，以及一个 `usage` 累加器：策略自己发起的模型调用把开销加进去，runner 会并入
 本次运行的 usage 和预算。
-返回 view，加上 `changed`/`compacted` 标志和可选 token 数。可选 `tools()` 方法可以贡献工具；
+返回 view，加上 `changed`/`compacted` 标志、可选 token 数，以及可选的 `window`（这次预算
+所依据的窗口，runner 转发为 `MessageCompleted.context_window`，web 的上下文圆环据此显示）。可选 `tools()` 方法可以贡献工具；
 `lovia.tools` 里的 `recall_tool_result(store)` 是 `Compaction` 用来提供 recall 的工厂，
 任何会丢内容的策略都可以复用。`lovia/context/policy.py` 很短，一屏就能读完。
 

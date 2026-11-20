@@ -67,7 +67,7 @@ Three guarantees shape every consumer:
 | `ReasoningDelta` | `delta` | a fragment of chain-of-thought, for providers that expose it — render as collapsed/secondary text, never rely on it for behavior |
 | `OutputDiscarded` | — | the turn's streamed deltas so far are void; clear what you rendered — a fresh stream follows |
 | `ModelRetrying` | `error`, `attempt`, `max_attempts`, `delay` | the model call failed transiently; per the [retry policy](retries.md), attempt `attempt + 1` follows in `delay` seconds |
-| `MessageCompleted` | `entries`, `usage` | one assistant turn fully assembled: the new `TranscriptEntry` values it produced, and that model call's `Usage` (`input_tokens` is the prompt it sent) |
+| `MessageCompleted` | `entries`, `usage`, `context_window` | one assistant turn fully assembled: the new `TranscriptEntry` values it produced, that model call's `Usage` (`input_tokens` is the prompt it sent), and the window the context policy budgeted it against (`None` when unknown) |
 | `UserMessageInjected` | `content`, `turn` | a [mailbox](cancellation.md#steering-a-live-run) message was folded in as a user turn |
 
 `OutputDiscarded` fires when the runner recovers from a mid-stream provider

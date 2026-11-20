@@ -194,6 +194,8 @@ class ModelTurnResult:
 
     assistant: AssistantTurn | None = None
     turn_entries: list[TranscriptEntry] = field(default_factory=list)
+    # The window the call's view was budgeted against (ContextResult.window).
+    context_window: int | None = None
 
 
 __all__ = ["ActiveAgent", "ModelTurnResult", "PluginActivation", "RunState"]

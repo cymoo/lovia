@@ -437,7 +437,9 @@ class RunLoop:
                     yield await self._emit(
                         state,
                         events.MessageCompleted(
-                            entries=turn.turn_entries, usage=assistant.usage.clone()
+                            entries=turn.turn_entries,
+                            usage=assistant.usage.clone(),
+                            context_window=turn.context_window,
                         ),
                     )
                     # Persist requested tool calls before executing them, so a
@@ -872,6 +874,7 @@ class RunLoop:
             scratch=state.context_state,
         )
         ctx_result = await self._compact(state, request)
+        turn.context_window = ctx_result.window
         view = await self._build_view(state, ctx_result)
         if ctx_result.compacted:
             yield await self._emit(
@@ -912,6 +915,7 @@ class RunLoop:
             request.overflow = True
             request.reported_window = overflow.reported_window
             ctx_result = await self._compact(state, request)
+            turn.context_window = ctx_result.window  # now with what it learned
             # Retry only when the rebuilt view is meaningfully smaller than
             # the one that just failed (both numbers come from the same
             # estimator, so the comparison is scale-free). A near-identical

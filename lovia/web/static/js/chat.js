@@ -1787,14 +1787,25 @@ function formatTokens(n) {
 // How full the model's context is: the run's last_input_tokens IS the prompt
 // the model just saw (usage.input_tokens sums every call's prompt, so it
 // overstates fill on tool-looping runs — older records lack the field and
-// fall back to it), and the agent advertises its window via
-// AgentInfo.context_window. Hidden until usage is known; hides again on chat
-// switches. Clicking the ring opens a detail popover (tokens, cache split,
-// model).
+// fall back to it). The window is the one the run budgeted against
+// (usage.context_window: configured, endpoint-reported, or learned from an
+// overflow), else the page-load guess (AgentInfo / the chat's model pick).
+// Hidden until usage is known; hides again on chat switches. Clicking the
+// ring opens a detail popover (tokens, cache split, model).
 let _lastUsage = null; // the most recent run's usage dict, for the popover
 // The streamed run's usage so far: each model call's (`message_completed`)
 // summed, so the ring moves call by call; `done` then brings the run's own.
 let _runUsage = null;
+// The window the chat's runs reported, and the model it belongs to: it wins
+// over the page-load guess until the chat moves to another model.
+let _runWindow = null;
+
+/** Remember the window a call or run record reports, for the current model. */
+function noteRunWindow(usage) {
+  if (usage?.context_window) {
+    _runWindow = { model: contextModel().model, window: usage.context_window };
+  }
+}
 
 // The prompt size of the run's final model call — the context-fill numerator.
 function contextFill(usage) {
@@ -1809,6 +1820,7 @@ function addCallUsage(call) {
     sum[k] = (_runUsage?.[k] ?? 0) + (call[k] ?? 0);
   }
   _runUsage = sum; // last_input_tokens stays this call's: the prompt it sent
+  noteRunWindow(call);
   updateContextMeter(_runUsage);
 }
 
@@ -1817,10 +1829,11 @@ function addCallUsage(call) {
  * chat's own pick where it has one, else the agent's.
  */
 function contextModel() {
-  const own = chatModelInfo();
-  if (own) return own;
   const agent = store.agents.find((a) => a.name === store.agent);
-  return { model: agent?.model, window: agent?.context_window };
+  const picked = chatModelInfo() ?? { model: agent?.model, window: agent?.context_window };
+  return _runWindow && _runWindow.model === picked.model
+    ? { model: picked.model, window: _runWindow.window }
+    : picked;
 }
 
 function updateContextMeter(usage) {
@@ -1856,6 +1869,7 @@ function updateContextMeter(usage) {
 
 function hideContextMeter() {
   _lastUsage = null;
+  _runWindow = null;
   document.getElementById('context-ring')?.classList.add('lv-hidden');
   toggleContextPopover(false);
 }
@@ -1950,6 +1964,7 @@ async function restoreContextMeter(sessionId) {
   const usage = records.find((r) => r.usage)?.usage; // bad fires store none
   // Bail when superseded: the user switched on, or a live `done` beat us.
   if (!usage || store.sessionId !== sessionId || _lastUsage) return;
+  noteRunWindow(usage);
   updateContextMeter(usage);
 }
 
@@ -3319,7 +3334,7 @@ async function applyEvent({ event, data }) {
       _sawDone = true;
       if (_shownRun) _shownRun.usage = data?.usage ?? null;
       _dropRecoveries = 0; // the connection proved healthy — re-arm recovery
-      _runUsage = null;
+      _runUsage = null; // `done` names no window: the calls' one stands
       updateContextMeter(data?.usage);
       // Stamp the run's token spend into the turn footer — the data is
       // already on the wire; hovering shows the input/output split. A zero

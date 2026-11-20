@@ -206,8 +206,10 @@ rejecting the last prompt — remember it, it outranks every other window
 source), a `scratch` dict the runner round-trips through checkpoints for
 you, and a `usage` accumulator: add the spend of any model call the policy
 makes itself and the runner folds it into the run's usage and budget.
-Return the view plus `changed`/`compacted` flags and optional token
-counts. An optional `tools()` method contributes tools —
+Return the view plus `changed`/`compacted` flags, optional token
+counts, and an optional `window` — the window the call was budgeted
+against, which the runner forwards as `MessageCompleted.context_window`
+(the web UI's context ring reads it). An optional `tools()` method contributes tools —
 `recall_tool_result(store)` from `lovia.tools` is the factory
 `Compaction` uses to ship recall, reusable by any policy that drops
 content. `lovia/context/policy.py` is a one-screen read.

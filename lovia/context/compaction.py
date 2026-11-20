@@ -271,7 +271,7 @@ class Compaction:
             # No budget information: never compact proactively; the
             # reactive overflow path remains as the safety net.
             return self._result(
-                req, state, view, raw + overhead, tokens, tokens_before, [], None
+                req, state, view, raw + overhead, tokens, tokens_before, [], None, None
             )
         # After an overflow, does the estimate explain it? If the prompt was
         # over a window we now know (usually the one the error just named),
@@ -296,7 +296,15 @@ class Compaction:
         budget = self._build_budget(window, distrust)
         if not aggressive and tokens < budget.trigger_tokens:
             return self._result(
-                req, state, view, raw + overhead, tokens, tokens_before, [], budget
+                req,
+                state,
+                view,
+                raw + overhead,
+                tokens,
+                tokens_before,
+                [],
+                budget,
+                model_window,
             )
 
         tail_tokens = self.keep_recent_tokens or max(1, budget.usable // 5)
@@ -375,7 +383,15 @@ class Compaction:
                 budget.pressure(tokens),
             )
         return self._result(
-            req, state, view, raw + overhead, tokens, tokens_before, reasons, budget
+            req,
+            state,
+            view,
+            raw + overhead,
+            tokens,
+            tokens_before,
+            reasons,
+            budget,
+            model_window,
         )
 
     def tools(self) -> list["Tool"]:
@@ -455,6 +471,7 @@ class Compaction:
         tokens_before: int,
         reasons: list[str],
         budget: TokenBudget | None,
+        window: int | None,
     ) -> ContextResult:
         # ``estimate`` includes the tool-schema overhead, so the next call's
         # calibration pairs the provider's real count against the same total.
@@ -502,6 +519,7 @@ class Compaction:
             tokens_before=tokens_before,
             tokens_after=tokens,
             detail=detail,
+            window=window,
         )
 
     def _learn_window(

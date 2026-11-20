@@ -106,6 +106,12 @@ class ContextResult:
     tokens_after: int | None = None
     """Estimated prompt tokens of the returned view."""
 
+    window: int | None = None
+    """The context window this call was budgeted against, when the policy
+    knows one — configured, reported by the endpoint, or learned from an
+    overflow. The runner forwards it as
+    :attr:`~lovia.events.MessageCompleted.context_window`."""
+
     detail: list[str] = field(default_factory=list)
     """Human-readable bullets describing what the policy did this call
     (e.g. ``["2 tool results offloaded"]``), surfaced verbatim in the

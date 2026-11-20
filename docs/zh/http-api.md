@@ -279,7 +279,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `text_delta` | `{delta}` |
 | `reasoning_delta` | `{delta}` |
 | `output_discarded` | `{}`：清除当前 Turn 已显示的增量内容 |
-| `message_completed` | `{message, usage}`：完整的模型回复；`usage` 是这次模型调用的用量，`last_input_tokens` 即它的提示长度 |
+| `message_completed` | `{message, usage}`：完整的模型回复；`usage` 是这次模型调用的用量，`last_input_tokens` 即它的提示长度；已知时 `context_window` 是为它做预算所依据的窗口（运行记录保留最后一个） |
 | `user_injected` | `{content, turn}` |
 | `tool_call` | `{id, name, arguments}`：`arguments` 是原始 JSON 字符串 |
 | `tool_result` | `{id, name, result, is_error, images?}`：`images` 列出 `{index, mime_type}`，图片本身通过 `GET /api/sessions/{id}/tool-images/{call_id}/{index}` 获取 |

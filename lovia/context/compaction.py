@@ -48,7 +48,7 @@ from .stages import (
     TruncateHistory,
 )
 from .summarizer import Summarizer
-from .tokens import TokenBudget, TokenCounter, _validate_watermark
+from .tokens import TokenBudget, TokenCounter, _validate_watermark, usable_tokens
 from ..providers._windows import plausible_window
 from ..providers.base import context_window as _provider_context_window
 from ..transcript import TranscriptEntry, split_system
@@ -279,10 +279,15 @@ class Compaction:
             # the prompt size to guarantee stages have room to shrink. A known
             # window *below* it still binds: a prompt several times over the
             # limit would otherwise shrink to a fraction of itself and
-            # overflow again on the one retry.
+            # overflow again on the one retry. Compare *usable* input, not raw
+            # windows: a window under ``reserve_output`` keeps half of itself,
+            # which can exceed the failed prompt and loosen the budget.
             window = max(tokens, 1) + self.reserve_output_tokens
-            if model_window is not None:
-                window = min(window, model_window)
+            if (
+                model_window is not None
+                and usable_tokens(model_window, self.reserve_output_tokens) < tokens
+            ):
+                window = model_window
         assert window is not None
 
         budget = self._build_budget(window, aggressive)

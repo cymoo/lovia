@@ -629,6 +629,22 @@ async def test_reactive_budget_is_capped_by_the_reported_window():
     assert res.tokens_after < 8_192 - 1_000
 
 
+async def test_a_reported_window_never_loosens_the_reactive_budget():
+    """Under the default reserve an 8K window keeps half of itself (4K usable),
+    which is more than this ~2.4K failed prompt — it must not raise the target
+    above what the prompt alone would set."""
+    entries = [user(f"turn {i} " + "x" * 400) for i in range(24)]
+
+    async def after(**kw) -> int:
+        res = await Compaction(summarizer=FakeSummarizer()).compact(
+            req(entries, model="m", overflow=True, **kw)
+        )
+        assert res.tokens_after is not None
+        return res.tokens_after
+
+    assert await after(reported_window=8_192) <= await after()
+
+
 def _scratch_with_learned(window: int, key: str = "\x00m") -> dict:
     scratch: dict = {}
     CompactionState(learned_windows={key: window}).save(scratch)

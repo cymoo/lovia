@@ -410,6 +410,29 @@ async def test_summarize_asks_the_summarizers_own_endpoint_for_its_window():
     assert summarizer.calls == [body[:4], body[4:8]]  # cut to the probed 1K
 
 
+async def test_summarize_skips_the_probe_when_nothing_can_be_folded():
+    """A lone protected message has no history to fold — don't make the main
+    request wait on the summarizer's endpoint for nothing."""
+
+    class CountingProvider:
+        probes = 0
+
+        def context_window(self) -> int | None:
+            return None
+
+        async def discover_context_window(self) -> int | None:
+            self.probes += 1
+            return None
+
+    provider = CountingProvider()
+    summarizer = FakeSummarizer("S1")
+    summarizer.provider = provider
+    body = [user("only " + "x" * 4_000)]
+    ctx = make_ctx(body, protected_from=0, budget=_ROOMY)
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is False
+    assert provider.probes == 0
+
+
 async def test_summarize_folds_when_the_summarizers_probe_raises():
     """A custom provider that breaks the never-raise contract costs only its
     window: the fold goes ahead, sized to the run's budget."""

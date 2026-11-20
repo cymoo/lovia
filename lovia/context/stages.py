@@ -375,6 +375,8 @@ class SummarizeHistory:
                 state.summary_failures,
             )
             return False
+        if ctx.protected_from == 0:
+            return False  # nothing precedes the protected tail: no probe either
 
         # The fold requests must fit every model involved, not just the
         # budget: the aggressive budget is sized to the failed prompt, which

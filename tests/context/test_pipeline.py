@@ -670,7 +670,8 @@ async def test_a_view_over_the_window_is_fixed_before_sending():
     history = []
     for i in range(20):
         history += [user(f"q{i} " + "h" * 2_000), _assistant(f"a{i} " + "h" * 2_000)]
-    entries = [*history, user("read the log"), call("c1"), out("c1", "r" * 600_000)]
+    # ~300K tokens: certainly over 128K whatever the estimator's error.
+    entries = [*history, user("read the log"), call("c1"), out("c1", "r" * 1_200_000)]
     summarizer = FakeSummarizer()
     res = await Compaction(context_window=128_000, summarizer=summarizer).compact(
         req(entries, model="m")
@@ -915,17 +916,29 @@ async def test_proactive_path_never_truncates():
 
 
 async def test_a_view_over_the_window_truncates_before_sending():
-    """Over the window with the summarizer down: drop history now rather than
-    send a prompt the provider will refuse."""
+    """Certainly over the window with the summarizer down: drop history now
+    rather than send a prompt the provider will refuse."""
     pipeline = _pipeline(
         context_window=10_000, compact_to=0.25, summarizer=FailingSummarizer()
     )
-    entries = [user(f"q{i} " + "x" * 4_000) for i in range(12)]  # ~12K
+    entries = [user(f"q{i} " + "x" * 4_000) for i in range(18)]  # ~18K
     res = await pipeline.compact(req(entries))
     assert res.reason is not None and "truncate" in res.reason
     assert not res.reason.startswith("reactive_")
     assert entries[-1] in res.entries  # the latest user message survives
     assert res.tokens_after is not None and res.tokens_after < 10_000
+
+
+async def test_a_view_only_slightly_over_the_window_is_left_to_the_provider():
+    """~1.2x the window is within what an uncalibrated estimate over-counts:
+    no lossy move on the estimate alone — the provider decides, and a real
+    refusal is recovered as before."""
+    pipeline = _pipeline(
+        context_window=10_000, compact_to=0.25, summarizer=FailingSummarizer()
+    )
+    entries = [user(f"q{i} " + "x" * 4_000) for i in range(12)]  # ~12K
+    res = await pipeline.compact(req(entries))
+    assert res.entries == entries  # nothing truncated
 
 
 async def test_proactive_circuit_breaker_stops_after_limit():
@@ -1088,8 +1101,8 @@ async def test_runner_never_sends_a_view_known_not_to_fit():
                 + len(getattr(e, "output", "") or "")
                 for e in entries
             )
-            if size // 4 > 32_000:
-                raise ContextOverflowError("too long", reported_window=32_000)
+            if size // 4 > 20_000:
+                raise ContextOverflowError("too long", reported_window=20_000)
             async for delta in super().stream(entries, **kw):
                 yield delta
 
@@ -1098,7 +1111,7 @@ async def test_runner_never_sends_a_view_known_not_to_fit():
     result = await Runner.run(
         agent,
         "read the log",
-        context_policy=Compaction(context_window=32_000, summarizer=FakeSummarizer()),
+        context_policy=Compaction(context_window=20_000, summarizer=FakeSummarizer()),
     )
     assert result.output == "done"
     assert Enforcing.attempts == 2

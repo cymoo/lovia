@@ -91,9 +91,11 @@ Three guarantees shape the design:
   estimate explains the overflow: if the prompt was over a window now known
   (usually the one the error named), it compacts to the normal `compact_to`
   of that window; if not, the count itself was wrong, so it overshoots —
-  tail 10%, target ~25% of the failed prompt. A view that is already over a
-  known window before sending (typically this turn's own huge tool result)
-  gets an ordinary pass first and, if it is still over, the first form up
+  tail 10%, target ~25% of the failed prompt. A view whose estimate is
+  certainly over a known window before sending — more than 1.4× it, past
+  what an uncalibrated estimate over-counts (typically this turn's own huge
+  tool result) — gets an ordinary pass first and, if it is still that far
+  over, the first form up
   front — the same pass the refusal would have triggered, without sending
   it just to be refused. With
   the default stages the error surfaces only when the latest user turn alone

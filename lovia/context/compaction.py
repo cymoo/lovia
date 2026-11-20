@@ -69,6 +69,14 @@ _CALIBRATION_ALPHA = 0.2
 # Aggressive (post-overflow) overrides.
 _REACTIVE_TARGET = 0.25
 
+# A view is treated as certain to be refused before sending only when its
+# estimate exceeds the window by this factor: bytes/4 over-counts English
+# prose by up to ~1.39x before the ratio has calibrated
+# (docs/ratio-calibration.md: converged 0.72). Missing a doomed call costs
+# one refused round-trip, recovered as before; a false alarm would offload a
+# result that fit — so the margin errs toward sending.
+_CERTAINLY_OVER = 1.4
+
 
 def _plural(n: int, noun: str) -> str:
     """``1 tool result`` / ``2 tool results`` — naive count + noun for notices."""
@@ -114,8 +122,9 @@ class Compaction:
 
         Args:
             context_window: The model's context window in tokens — a limit
-                enforced before sending: a view still over it after an
-                ordinary pass is compacted as after an overflow, so a value
+                enforced before sending: a view still certainly over it
+                (estimated past 1.4x) after an ordinary pass is compacted as
+                after an overflow, so a value
                 set below the real window caps the prompt, not just the
                 budget. When omitted, the
                 policy asks the provider; if the provider does not know
@@ -273,17 +282,20 @@ class Compaction:
         # The real window (when known) survives the aggressive override below:
         # stages that make actual model calls (summarize) size against it.
         model_window = window
-        # Already over a known window before anything is sent: sending would
-        # buy a certain rejection and spend the runner's one retry. The raw
-        # window, not the usable space: between the two the outcome depends on
-        # the ``max_tokens`` the request carries (Anthropic's default equals
-        # the reserve and is refused; OpenAI's dialect sends none and passes),
-        # so only a view over the window itself is certainly refused. The
+        # Certainly over a known window before anything is sent: sending would
+        # buy a rejection and spend the runner's one retry. Measured against
+        # the raw window, not the usable space — between the two the outcome
+        # depends on the request's ``max_tokens`` (Anthropic's default equals
+        # the reserve and is refused; OpenAI's dialect sends none and passes)
+        # — and only past the estimator's margin (``_CERTAINLY_OVER``). The
         # estimate explains this "overflow", so the budget below is the
         # trusted one; the stages get a second, overflow-moves pass if the
-        # ordinary one cannot make the view fit (see the stage loop).
+        # ordinary one leaves the view still certainly over (the stage loop).
+        certain_limit = (
+            int(model_window * _CERTAINLY_OVER) if model_window is not None else None
+        )
         over_capacity = (
-            not aggressive and model_window is not None and tokens > model_window
+            not aggressive and certain_limit is not None and tokens > certain_limit
         )
         if window is None and not aggressive:
             # No budget information: never compact proactively; the
@@ -356,38 +368,39 @@ class Compaction:
         # before sending gets the ordinary pass first — the overflow moves
         # cost the newest tool result or unsummarized history, so they must
         # not pre-empt an ordinary move that would make the view fit — and the
-        # overflow pass only if it still does not. When even an ideal ordinary
-        # pass could not fit (what is left once the unprotected span is gone is
-        # still over the window — this turn's own huge result, usually), skip
-        # straight to the overflow pass rather than pay for a summary that
-        # cannot help. The overflow pass is exactly the one the refusal would
-        # have triggered — the same budget, down to the same target — so this
-        # path ends where sending first would have, minus the refused call.
+        # overflow pass only if it is still certainly over. When even an ideal
+        # ordinary pass could not get it under (what is left once the
+        # unprotected span is gone is still certainly over — this turn's own
+        # huge result, usually), skip straight to the overflow pass rather
+        # than pay for a summary that cannot help. The overflow pass is
+        # exactly the one the refusal would have triggered — the same budget,
+        # down to the same target — so this path ends where sending first
+        # would have, minus the refused call.
         passes = [aggressive]
         if over_capacity:
-            assert model_window is not None
+            assert certain_limit is not None
             covered = state.summary.covered if state.summary is not None else 0
             compactable = int(
                 counter.count(render_entries(body[covered:protected_from], state))
                 * state.ratio
             )
-            hopeless = tokens - compactable > model_window
+            hopeless = tokens - compactable > certain_limit
             passes = [True] if hopeless else [False, True]
             logger.info(
-                "context.compact: view (%d est. tokens) is over the %d-token "
-                "window before sending; %s",
+                "context.compact: view (%d est. tokens) is certainly over the "
+                "%d-token window before sending; %s",
                 tokens,
                 model_window,
                 "overflow moves at once"
                 if hopeless
-                else "overflow moves if an ordinary pass leaves it over",
+                else "overflow moves if an ordinary pass leaves it so",
             )
 
         reasons: list[str] = []
         try:
             for n, overflow_moves in enumerate(passes):
-                if n and model_window is not None and tokens <= model_window:
-                    break  # the ordinary pass got it under the window
+                if n and certain_limit is not None and tokens <= certain_limit:
+                    break  # the ordinary pass got it out of certain refusal
                 for stage in self.stages:
                     ctx = StageContext(
                         request=req,

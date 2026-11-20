@@ -16,7 +16,7 @@ and Anthropic's context-editing primitives:
 3. :class:`SummarizeHistory` — fold the older prefix into a running LLM
    summary (the only stage that costs inference).
 4. :class:`TruncateHistory` — aggressive path only (after an overflow, or a
-   view still over the window before sending): drop what the stages above
+   view still certainly over the window before sending): drop what the stages above
    could not shrink, so no session is stuck overflowing forever.
 """
 
@@ -63,7 +63,7 @@ class StageContext:
         protected_from: Body index of the first protected entry. Entries at
             or after it must stay verbatim for every stage.
         aggressive: ``True`` after a provider overflow, or before sending a
-            view still over the window after an ordinary pass — compact
+            view still certainly over the window after an ordinary pass — compact
             harder.
         store: Optional durable sink for offloaded result bodies. ``None`` does
             not disable :class:`OffloadToolResults` — it still emits preview
@@ -604,7 +604,8 @@ class TruncateHistory:
     The anchor is never dropped.
 
     Runs on the aggressive path only: after a provider overflow, or before
-    sending a view that is over the window even after an ordinary pass.
+    sending a view that is certainly over the window even after an ordinary
+    pass.
     Below that the proactive path has headroom to spare.
     """
 

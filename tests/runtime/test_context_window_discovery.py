@@ -1,10 +1,7 @@
 """When the runner gives an endpoint the chance to report its own window.
 
 The runner asks whenever the *policy* has no window of its own; the adapter then
-decides whether that costs a request. Crucially the runner must not skip the
-question because a bundled table has an answer — the endpoint outranks the table,
-and a deployment that caps a familiar model would otherwise be budgeted at the
-table's number.
+decides whether that costs a request.
 """
 
 from __future__ import annotations
@@ -52,8 +49,8 @@ async def test_asks_the_endpoint_when_the_policy_has_no_window() -> None:
     assert provider.probes == 1
 
 
-async def test_asks_even_when_a_table_already_has_an_answer() -> None:
-    """The endpoint outranks the table, so it must still get a say."""
+async def test_asks_even_when_the_provider_already_names_a_window() -> None:
+    """Whether a probe is worth a request is the adapter's call, not ours."""
     provider = _Probeable([text("hi")], window=200_000)
     await _run(provider)
     assert provider.probes == 1
@@ -108,29 +105,30 @@ _SSE = (
 )
 
 
-async def test_the_table_says_nothing_about_a_foreign_host() -> None:
-    """``gpt-4.1`` on api.openai.com is 1M. On a vLLM box it is whatever that
-    box was started with, and the bundled table must not pretend otherwise."""
+async def test_a_name_alone_yields_no_window() -> None:
+    """``gpt-4.1`` on a vLLM box is whatever that box was started with."""
     provider = OpenAIChatProvider(model="gpt-4.1", base_url="http://vllm:8000/v1")
     assert provider.context_window() is None
 
-    official = OpenAIChatProvider(
-        model="gpt-4.1", api_key="x", base_url="https://api.openai.com/v1"
-    )
-    assert official.context_window() == 1_047_576
 
-
-async def test_a_self_reported_window_overrides_the_bundled_table() -> None:
-    """The endpoint outranks the table, so the runner must still ask it.
-
-    Here the table does know ``deepseek-v4-pro`` on this host, but a deployment
-    that publishes a smaller served window has the final say.
-    """
+async def test_the_run_learns_the_window_deepseek_publishes() -> None:
+    """DeepSeek's ``GET /models`` carries ``context_window`` per model."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/models"):
             return httpx.Response(
-                200, json={"data": [{"id": "deepseek-v4-pro", "max_model_len": 65_536}]}
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "deepseek-v4-pro",
+                            "object": "model",
+                            "owned_by": "deepseek",
+                            "context_window": 1_048_576,
+                        }
+                    ],
+                },
             )
         return httpx.Response(200, content=_SSE)
 
@@ -139,8 +137,8 @@ async def test_a_self_reported_window_overrides_the_bundled_table() -> None:
         base_url="https://api.deepseek.com",
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
-    assert provider.context_window() == 1_048_565  # the table, on its own
+    assert provider.context_window() is None
 
     await _run(provider)
 
-    assert provider.context_window() == 65_536
+    assert provider.context_window() == 1_048_576

@@ -18,8 +18,9 @@ Providers MAY additionally implement three optional methods used by
   provider's model accepts; ``None`` (or absent method) means "unknown". Purely
   local: no I/O, safe to call per turn.
 * ``async discover_context_window() -> int | None`` — ask the *endpoint* what
-  the window is. The runner calls this once, before the first model call; the
-  adapter decides whether that costs a request, and caches the answer.
+  the window is. The runner calls this once, before the first model call (the
+  summarize stage likewise, for a summarizer's own provider); the adapter
+  decides whether that costs a request, and caches the answer.
 
 None is required, and a provider that implements none simply gets the
 heuristics. But the Protocols are ``runtime_checkable``, which only checks that
@@ -176,10 +177,11 @@ async def discover_context_window(provider: object) -> int | None:
     """Ask ``provider`` to look its context window up at the endpoint.
 
     Separate from :func:`context_window` — and deliberately ``async`` — because
-    this one can make a network request. It is a one-shot warm-up the runner
-    performs before the first model call, never something a policy triggers
-    from inside a hot path. Adapters cache the answer (a miss included) and
-    never raise, so calling this is always safe and at most costs one request.
+    this one can make a network request. It is a one-shot warm-up: the runner
+    performs it before the first model call, and the summarize stage for a
+    summarizer on its own provider — never something a per-turn hot path
+    triggers. Adapters cache the answer (a miss included) and never raise, so
+    calling this is always safe and at most costs one request.
     """
     if isinstance(provider, ContextWindowDiscovery):
         result = await provider.discover_context_window()

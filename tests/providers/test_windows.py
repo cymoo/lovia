@@ -10,11 +10,10 @@ import asyncio
 
 import pytest
 
+from lovia.providers import _windows
 from lovia.providers._windows import (
-    rules_for_host,
+    ProbeUnavailable,
     WindowResolver,
-    strip_snapshot,
-    table_window,
     window_from_error,
     window_from_models_payload,
 )
@@ -233,83 +232,23 @@ def test_models_payload_returns_none_when_unknown(payload: object) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The bundled table: exact match, then longest prefix
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [
-        ("gpt-4.1-2025-04-14", "gpt-4.1"),  # OpenAI's YYYY-MM-DD
-        ("claude-sonnet-4-5-20250929", "claude-sonnet-4-5"),  # Anthropic's YYYYMMDD
-        ("gpt-4.1", "gpt-4.1"),
-        ("deepseek-v4-pro", "deepseek-v4-pro"),
-        ("model-12345", "model-12345"),  # not a date
-    ],
-)
-def test_strip_snapshot(model: str, expected: str) -> None:
-    assert strip_snapshot(model) == expected
-
-
-_RULES = (
-    ("gpt-5", 400_000),
-    ("gpt-5.5", 1_050_000),
-    ("claude-sonnet-", 200_000),
-    ("claude-sonnet-4-5", 111_111),  # an exact rule beats its own family
-)
-
-
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [
-        ("gpt-5", 400_000),
-        ("gpt-5.5", 1_050_000),  # exact, not via a "gpt-5" prefix
-        ("gpt-5-mini", None),  # exact rules never match by prefix
-        ("claude-sonnet-4-6", 200_000),  # family prefix
-        ("claude-sonnet-4-6-20260101", 200_000),  # snapshot, then family
-        ("claude-sonnet-4-5", 111_111),  # exact wins over the family
-        ("claude-opus-4-8", None),
-        ("", None),
-    ],
-)
-def test_table_window(model: str, expected: int | None) -> None:
-    assert table_window(model, _RULES) == expected
-
-
-def test_table_window_prefers_the_longest_prefix() -> None:
-    rules = (("a-", 1024), ("a-b-", 2048), ("a-b-c-", 4096))
-    assert table_window("a-x", rules) == 1024
-    assert table_window("a-b-x", rules) == 2048
-    assert table_window("a-b-c-x", rules) == 4096
-
-
-# ---------------------------------------------------------------------------
-# WindowResolver — precedence, and the per-endpoint memo
+# WindowResolver — the per-endpoint memo
 # ---------------------------------------------------------------------------
 
 
 def _resolver(**kw) -> WindowResolver:
-    defaults = dict(
-        base_url="http://gw/v1",
-        host="gw",
-        model="m",
-        table={"gw": (("m", 200_000),)},
-        probe=True,
-    )
+    defaults = dict(base_url="http://gw/v1", model="m", probe=True)
     return WindowResolver(**{**defaults, **kw})
 
 
-def test_resolver_falls_back_to_the_table() -> None:
-    assert _resolver().window() == 200_000
-
-
-async def test_an_advertised_window_beats_the_table() -> None:
-    """A listing reflects the deployment as served; the table only guesses."""
+async def test_resolver_knows_nothing_until_the_endpoint_answers() -> None:
+    """No bundled guess: a name alone never yields a window."""
 
     async def fetch() -> int | None:
         return 8_192
 
-    assert await _resolver().discover(fetch) == 8_192  # beats the table's 200_000
+    assert _resolver().window() is None
+    assert await _resolver().discover(fetch) == 8_192
 
 
 async def test_the_advertised_memo_outlives_the_provider_that_probed() -> None:
@@ -324,7 +263,7 @@ async def test_the_advertised_memo_outlives_the_provider_that_probed() -> None:
     await _resolver().discover(fetch)
     assert _resolver().window() == 8_192  # a fresh resolver, no I/O
     # ...but only for that endpoint.
-    assert _resolver(base_url="http://other/v1").window() == 200_000
+    assert _resolver(base_url="http://other/v1").window() is None
 
 
 async def test_discover_asks_once_and_caches_the_miss() -> None:
@@ -335,9 +274,51 @@ async def test_discover_asks_once_and_caches_the_miss() -> None:
         calls += 1
         return None
 
-    assert await _resolver(table={}).discover(fetch) is None
-    assert await _resolver(table={}).discover(fetch) is None  # a *fresh* resolver
+    assert await _resolver().discover(fetch) is None
+    assert await _resolver().discover(fetch) is None  # a *fresh* resolver
     assert calls == 1
+
+
+async def test_a_passing_failure_is_asked_again_after_a_cooldown(monkeypatch) -> None:
+    """A 5xx or a timeout says nothing about the window: remembering it as a
+    miss would cost every later session of the process its proactive budget."""
+    now = [1_000.0]
+    # The module's own clock, not ``time.monotonic``: asyncio's loop runs on that.
+    monkeypatch.setattr(_windows, "monotonic", lambda: now[0])
+    answers: list[int | None | Exception] = [ProbeUnavailable("HTTP 503"), 8_192]
+
+    async def fetch() -> int | None:
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    assert await _resolver().discover(fetch) is None
+    assert await _resolver().discover(fetch) is None  # within the cooldown
+    assert len(answers) == 1
+    now[0] += _windows._RETRY_AFTER
+    assert await _resolver().discover(fetch) == 8_192
+
+
+async def test_a_late_failure_never_reopens_an_answered_probe(monkeypatch) -> None:
+    now = [1_000.0]
+    monkeypatch.setattr(_windows, "monotonic", lambda: now[0])
+
+    async def late_failure() -> int | None:
+        await asyncio.sleep(0.01)
+        raise ProbeUnavailable("HTTP 503")
+
+    async def answer() -> int | None:
+        return 8_192
+
+    async def never() -> int | None:  # pragma: no cover - must never run
+        raise AssertionError("re-probed an endpoint that already answered")
+
+    await asyncio.gather(
+        _resolver().discover(late_failure), _resolver().discover(answer)
+    )
+    now[0] += _windows._RETRY_AFTER
+    assert await _resolver().discover(never) == 8_192
 
 
 async def test_discover_declines_to_spend_a_request() -> None:
@@ -346,7 +327,7 @@ async def test_discover_declines_to_spend_a_request() -> None:
     async def fetch() -> int | None:  # pragma: no cover - must never run
         raise AssertionError("probed an endpoint that could not help")
 
-    assert await _resolver(probe=False).discover(fetch) == 200_000
+    assert await _resolver(probe=False).discover(fetch) is None
 
 
 async def test_concurrent_probes_all_see_the_window() -> None:
@@ -364,48 +345,3 @@ def test_models_payload_matches_an_id_that_contains_a_colon() -> None:
     """A colon is lovia's vendor separator, but Ollama puts one in its names."""
     payload = _payload({"id": "llama3:8b", "max_model_len": 8192})
     assert window_from_models_payload(payload, "llama3:8b") == 8192
-
-
-# ---------------------------------------------------------------------------
-# The table is keyed by host: a name means nothing without the endpoint
-# ---------------------------------------------------------------------------
-
-_TABLE = {
-    "api.openai.com": (("gpt-4.1", 1_047_576),),
-    "api.deepseek.com": (("deepseek-v4-pro", 1_048_565),),
-}
-
-
-@pytest.mark.parametrize(
-    ("host", "expected"),
-    [
-        ("api.openai.com", (("gpt-4.1", 1_047_576),)),
-        ("eu.api.openai.com", (("gpt-4.1", 1_047_576),)),  # regional subdomain
-        ("api.deepseek.com", (("deepseek-v4-pro", 1_048_565),)),
-        ("vllm", ()),  # a box merely re-exposing the name
-        ("evilapi.openai.com", ()),  # lookalike, not a subdomain
-        ("", ()),
-    ],
-)
-def test_rules_for_host(host: str, expected: tuple) -> None:
-    assert rules_for_host(host, _TABLE) == expected
-
-
-def test_a_foreign_host_gets_no_window_from_the_table() -> None:
-    """``gpt-4.1`` on vLLM is whatever vLLM was started with — not 1M."""
-    official = WindowResolver(
-        base_url="https://api.openai.com/v1",
-        host="api.openai.com",
-        model="gpt-4.1",
-        table=_TABLE,
-        probe=False,
-    )
-    foreign = WindowResolver(
-        base_url="http://vllm:8000/v1",
-        host="vllm",
-        model="gpt-4.1",
-        table=_TABLE,
-        probe=True,
-    )
-    assert official.window() == 1_047_576
-    assert foreign.window() is None

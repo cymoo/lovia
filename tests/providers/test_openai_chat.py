@@ -842,27 +842,6 @@ def test_build_payload_none_valued_option_removes_adapter_default() -> None:
     assert "stream_options" not in payload
 
 
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [
-        ("gpt-4.1", 1_047_576),
-        ("gpt-4.1-2025-04-14", 1_047_576),  # date-pinned snapshot
-        ("o3-2025-04-16", None),
-        # GPT-5 releases disagree on their window, so the table stays exact:
-        # "gpt-5.5" must never resolve through a "gpt-5" prefix.
-        ("gpt-5", 400_000),
-        ("gpt-5.5", 1_050_000),
-        ("gpt-5.5-pro", 1_050_000),
-        ("gpt-5-mini", None),
-    ],
-)
-def test_table_window_per_model(model: str, expected: int | None) -> None:
-    provider = OpenAIChatProvider(
-        model=model, api_key="sk-test", base_url="https://api.openai.com/v1"
-    )
-    assert provider.context_window() == expected
-
-
 @pytest.mark.asyncio
 async def test_chat_stream_handles_null_arguments_and_missing_index() -> None:
     body = _sse(
@@ -1244,6 +1223,26 @@ async def test_discover_fails_open(response: dict) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 403, 429, 503])
+async def test_discover_asks_again_after_a_passing_failure(
+    status_code: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lovia.providers import _windows
+
+    monkeypatch.setattr(_windows, "_RETRY_AFTER", 0.0)
+    responses = [
+        httpx.Response(status_code),
+        httpx.Response(200, json={"data": [{"id": "m", "max_model_len": 32_768}]}),
+    ]
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: responses.pop(0))
+    )
+    provider = OpenAIChatProvider(model="m", base_url="http://gw/v1", client=client)
+    assert await provider.discover_context_window() is None
+    assert await provider.discover_context_window() == 32_768
+
+
+@pytest.mark.asyncio
 async def test_discover_survives_an_unreachable_endpoint() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("dns boom")
@@ -1266,7 +1265,8 @@ async def test_discover_never_asks_the_official_api() -> None:
         client=client,
     )
 
-    assert await provider.discover_context_window() == 1_050_000  # from the table
+    # Unknown until the first overflow names the limit.
+    assert await provider.discover_context_window() is None
     assert seen == []  # api.openai.com publishes no window; asking is pure waste
 
 

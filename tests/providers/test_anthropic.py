@@ -1314,38 +1314,6 @@ def test_context_overflow_recognizes_openai_phrasing_from_compat_gateways() -> N
     assert window_from_error(body) == 1_048_565
 
 
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [
-        # The 4.6 generation onward defaults to 1M with no beta header;
-        # exact entries carry those. Everything older sits on the 200K
-        # family-prefix floor.
-        ("claude-fable-5", 1_000_000),
-        ("claude-opus-4-8", 1_000_000),
-        ("claude-sonnet-4-6", 1_000_000),
-        ("claude-sonnet-5", 1_000_000),
-        ("claude-haiku-4-5", 200_000),
-        ("claude-opus-4-5", 200_000),
-        ("claude-sonnet-4-5-20250929", 200_000),  # date-pinned snapshot
-        ("claude-3-5-sonnet-20241022", 200_000),
-        # A family member newer than this table lands on the safe floor: an
-        # under-claim over-compacts but can never fail a request, and the
-        # /models probe corrects it before the first call.
-        ("claude-sonnet-6", 200_000),
-        # Nothing is guessed for names outside the line.
-        ("gpt-5.5", None),
-        ("claude-instant-1.2", None),
-    ],
-)
-def test_table_window_covers_the_whole_claude_line(
-    model: str, expected: int | None
-) -> None:
-    provider = AnthropicProvider(
-        model=model, api_key="x", base_url="https://api.anthropic.com/v1"
-    )
-    assert provider.context_window() == expected
-
-
 # --------------------------------------------------- endpoint self-report -
 
 
@@ -1353,10 +1321,9 @@ def test_table_window_covers_the_whole_claude_line(
 async def test_discover_reads_the_official_models_api() -> None:
     """api.anthropic.com publishes ``max_input_tokens`` per model (2026-03+).
 
-    The Models API describes the deployment as served to *this* org, so it
-    beats the bundled table — here a 500K cap on a model the table lists at 1M.
-    The probe retrieves the one model rather than paging the listing, so an
-    alias resolves too.
+    The Models API describes the deployment as served to *this* org. The probe
+    retrieves the one model rather than paging the listing, so an alias
+    resolves too.
     """
     seen: list[httpx.Request] = []
 
@@ -1379,7 +1346,7 @@ async def test_discover_reads_the_official_models_api() -> None:
         base_url="https://api.anthropic.com/v1",
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
-    assert provider.context_window() == 1_000_000  # the table, before the probe
+    assert provider.context_window() is None  # nothing guessed before the probe
     assert await provider.discover_context_window() == 500_000
     assert provider.context_window() == 500_000
     assert seen[0].url.path == "/v1/models/claude-opus-4-8"

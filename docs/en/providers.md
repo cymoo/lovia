@@ -255,23 +255,23 @@ chain, most trustworthy first:
 | --- | --- |
 | Explicit config | `Compaction(context_window=…)` — in `lovia web`, the model profile's context window. The **one** user-facing knob; everything below is automatic |
 | **The endpoint's own rejection** | after one overflow: providers name the limit ("maximum context length is 65536 tokens") |
-| **The endpoint's `/models` listing** | vLLM and SGLang publish `max_model_len`; the official Anthropic API publishes `max_input_tokens`; Groq, Together and OpenRouter publish theirs |
-| The bundled table | keyed by **host**: OpenAI's aliases on `api.openai.com`, the whole Claude line on `api.anthropic.com`, DeepSeek's on `api.deepseek.com` |
+| **The endpoint's `/models` listing** | vLLM and SGLang publish `max_model_len`; the official Anthropic API publishes `max_input_tokens`; DeepSeek, Groq, Together and OpenRouter publish theirs |
 | — | otherwise unknown: no proactive compaction, reactive overflow handling only |
 
 Only the second source may *override* an explicit setting, and only downward —
 it is the endpoint enforcing a limit, not a guess. Configure `100_000` on a 200K
 model and you keep 100K.
 
-The table is keyed by host because `gpt-4.1` is a fact about *OpenAI's*
-deployment. The `gpt-4.1` a vLLM box re-exposes at `--max-model-len 8192` is a
-different thing entirely, and this adapter serves both — so an unlisted host
-gets nothing from the table and relies on what the endpoint reports.
+There is no bundled name→window table. One goes stale with every model release,
+and a name is not a deployment: the `gpt-4.1` a vLLM box re-exposes at
+`--max-model-len 8192` is a different thing from OpenAI's.
 
-The practical upshot: an unlisted model costs **one** overflow per session. The
-window the endpoint named travels on the error into the policy's state and is
+The practical upshot: a model whose endpoint publishes no window — the official
+OpenAI API is the main one — costs **one** overflow per session. The rebuilt
+prompt is sized against the window the error names, so that one retry fits even
+a long history. The window then travels into the policy's state and is
 persisted with the session, so every later turn — and every later run on that
-session — sizes itself correctly.
+session — sizes itself correctly. Set `context_window` to skip even that one.
 
 Two consequences worth knowing:
 
@@ -280,15 +280,16 @@ Two consequences worth knowing:
   (`api.openai.com`), and when it was already asked. Answers — misses included
   — are memoized per `(endpoint, model)` for the life of the process, so an
   endpoint is asked at most once even though a `"vendor:model"` string is
-  resolved into a fresh provider on every run and every handoff. The probe runs
-  before the first model call with its own short timeout; a slow endpoint costs
-  a moment, never the run.
+  resolved into a fresh provider on every run and every handoff. A probe that
+  got no answer at all (unreachable, timed out, 429, 5xx) is retried after a
+  few minutes instead. The probe runs before the first model call with its own
+  short timeout; a slow endpoint costs a moment, never the run. A summarizer on
+  its own provider is probed the same way, on its first fold.
 - **Anthropic windows come from the endpoint.** The official Models API
   publishes `max_input_tokens` per model, so the probe reads the window as
   served to *your* org — 1M on the current generation, 200K on older models.
   It retrieves the one model (`GET /models/{model}`), so an alias resolves
   too.
-  The bundled table only bridges the gap when the probe cannot answer.
 
 ## Custom providers
 

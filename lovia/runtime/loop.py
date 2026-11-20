@@ -1572,10 +1572,7 @@ class RunLoop:
 
         The adapter decides whether that costs anything: it declines when the
         endpoint is known to publish none and when it already asked (memoized
-        per endpoint, for the process). What we must *not* do here is skip the
-        question because the bundled table has an answer — the endpoint
-        outranks the table, and a deployment that caps a familiar model would
-        otherwise be budgeted at the table's number.
+        per endpoint, for the process).
 
         The sentinel matters: a policy that does not *declare* ``context_window``
         (:class:`~lovia.context.NoopContextPolicy`, custom policies) never needs

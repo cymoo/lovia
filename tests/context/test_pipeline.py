@@ -616,6 +616,69 @@ async def test_reactive_ignores_refuted_window_claim():
     assert len(res.entries) < len(entries)
 
 
+async def test_reactive_budget_is_capped_by_the_reported_window():
+    """A prompt several times over the limit must come back under it, not
+    merely shrink against its own size — the runner retries only once."""
+    pipeline = _pipeline(reserve_output_tokens=1_000, summarizer=FakeSummarizer())
+    entries = [user(f"turn {i} " + "x" * 4_000) for i in range(200)]  # ~200K
+    res = await pipeline.compact(
+        req(entries, model="m", overflow=True, reported_window=8_192)
+    )
+    assert res.compacted is True
+    assert res.tokens_after is not None
+    assert res.tokens_after < 8_192 - 1_000
+
+
+async def test_offloading_the_turns_huge_result_keeps_the_live_request_verbatim():
+    """The turn's own huge tool result crowds the live user message out of the
+    protected tail; once it is offloaded the tail must take that message back,
+    or the summary that follows folds the user's exact words away. The history
+    is long enough that the summary must still run after the offload."""
+    history = []
+    for i in range(300):
+        history += [user(f"q{i} " + "h" * 2_000), _assistant(f"a{i} " + "h" * 2_000)]
+    live = user("LIVE: rename the column to exactly `cust_id_v2`")
+    entries = [*history, live, call("c1"), out("c1", "r" * 600_000)]
+    res = await Compaction(summarizer=FakeSummarizer()).compact(
+        req(entries, model="m", overflow=True, reported_window=128_000)
+    )
+    assert res.reason == "reactive_offload+summary"
+    assert live in res.entries
+
+
+async def test_an_overflow_the_estimate_explains_compacts_like_the_proactive_path():
+    """A cold start: the count was right, only the window was unknown. Shrink
+    to the normal target against the named window — not the overshoot meant
+    for a refuted count, which would fold away a pasted document that fits."""
+    history = []
+    for i in range(100):
+        history += [user(f"q{i} " + "h" * 9_000), _assistant(f"a{i} " + "h" * 9_000)]
+    live = user("LIVE " + "d" * 120_000)  # a ~30K-token paste
+    entries = [*history, live, call("c1"), out("c1", "ok")]
+    res = await Compaction(summarizer=FakeSummarizer()).compact(
+        req(entries, model="m", overflow=True, reported_window=128_000)
+    )
+    assert live in res.entries
+    assert res.tokens_after is not None
+    assert res.tokens_after < 128_000 - 16_384
+
+
+async def test_a_reported_window_never_loosens_the_reactive_budget():
+    """Under the default reserve an 8K window keeps half of itself (4K usable),
+    which is more than this ~2.4K failed prompt — it must not raise the target
+    above what the prompt alone would set."""
+    entries = [user(f"turn {i} " + "x" * 400) for i in range(24)]
+
+    async def after(**kw) -> int:
+        res = await Compaction(summarizer=FakeSummarizer()).compact(
+            req(entries, model="m", overflow=True, **kw)
+        )
+        assert res.tokens_after is not None
+        return res.tokens_after
+
+    assert await after(reported_window=8_192) <= await after()
+
+
 def _scratch_with_learned(window: int, key: str = "\x00m") -> dict:
     scratch: dict = {}
     CompactionState(learned_windows={key: window}).save(scratch)

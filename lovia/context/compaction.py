@@ -48,7 +48,7 @@ from .stages import (
     TruncateHistory,
 )
 from .summarizer import Summarizer
-from .tokens import TokenBudget, TokenCounter, _validate_watermark
+from .tokens import TokenBudget, TokenCounter, _validate_watermark, usable_tokens
 from ..providers._windows import plausible_window
 from ..providers.base import context_window as _provider_context_window
 from ..transcript import TranscriptEntry, split_system
@@ -273,22 +273,34 @@ class Compaction:
             return self._result(
                 req, state, view, raw + overhead, tokens, tokens_before, [], None
             )
+        # After an overflow, does the estimate explain it? If the prompt was
+        # over a window we now know (usually the one the error just named),
+        # the count was right and only the window was missing: compact exactly
+        # as the proactive path would have against that window. Otherwise the
+        # count itself is refuted — budget against the failed prompt and
+        # overshoot, so stages are sure to shrink below what was rejected.
+        # Usable input, not raw windows: a window under ``reserve_output``
+        # keeps half of itself as usable.
+        distrust = False
         if aggressive:
-            # An overflow proves the effective limit is at most the failed
-            # prompt itself — any configured/claimed window is now refuted,
-            # so budget against the actual prompt size to guarantee stages
-            # have room to shrink.
-            window = max(tokens, 1) + self.reserve_output_tokens
+            if (
+                model_window is not None
+                and usable_tokens(model_window, self.reserve_output_tokens) < tokens
+            ):
+                window = model_window
+            else:
+                window = max(tokens, 1) + self.reserve_output_tokens
+                distrust = True
         assert window is not None
 
-        budget = self._build_budget(window, aggressive)
+        budget = self._build_budget(window, distrust)
         if not aggressive and tokens < budget.trigger_tokens:
             return self._result(
                 req, state, view, raw + overhead, tokens, tokens_before, [], budget
             )
 
         tail_tokens = self.keep_recent_tokens or max(1, budget.usable // 5)
-        if aggressive:
+        if distrust:
             tail_tokens = min(tail_tokens, max(1, budget.usable // 10))
         # Measure the tail on *rendered* entries (1:1 index-aligned with the
         # body): already-cleared/offloaded results cost marker-size in the
@@ -332,6 +344,18 @@ class Compaction:
                     view = render_view(req.entries, state)
                     raw = counter.count(view)
                     tokens = int((raw + overhead) * state.ratio)
+                    # An offloaded or cleared result shrinks the tail, which can
+                    # now take in the live user message it crowded out — later
+                    # stages must not summarize that away. Only ever widened.
+                    protected_from = min(
+                        protected_from,
+                        protected_tail_start(
+                            render_entries(body, state),
+                            counter,
+                            state.ratio,
+                            tail_tokens,
+                        ),
+                    )
                 if tokens <= budget.target_tokens:
                     break
         except BaseException:
@@ -396,11 +420,12 @@ class Compaction:
             state.ratio,
         )
 
-    def _build_budget(self, window: int, aggressive: bool) -> TokenBudget:
+    def _build_budget(self, window: int, overshoot: bool) -> TokenBudget:
         """Watermark budget for this call.
 
-        The aggressive form tightens the target on *resolved* token counts so
-        fraction and absolute watermarks compare in the same units.
+        The overshoot form (after an overflow the estimate does not explain)
+        tightens the target on *resolved* token counts so fraction and
+        absolute watermarks compare in the same units.
         """
         budget = TokenBudget(
             window=window,
@@ -408,7 +433,7 @@ class Compaction:
             trigger=self.compact_at,
             target=self.compact_to,
         )
-        if aggressive:
+        if overshoot:
             budget = TokenBudget(
                 window=window,
                 reserve_output=self.reserve_output_tokens,

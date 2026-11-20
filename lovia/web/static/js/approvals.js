@@ -92,6 +92,63 @@ export function splitNote(args) {
 }
 
 /**
+ * A `shell` call's arguments (what splitNote left) as its card shows them:
+ * the command alone, plus the optional ones (workspace/tools.py `shell`) that
+ * differ from their default. Null when the call is not `shell` or carries
+ * anything else, so the generic rows show every argument instead.
+ * @param {string} name
+ * @param {string | undefined} args
+ * @returns {{ command: string, cwd: string | null, timeout: number | null, background: boolean } | null}
+ */
+export function shellArgs(name, args) {
+  if (name !== 'shell') return null;
+  let obj;
+  try {
+    obj = JSON.parse(args ?? '');
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  // A blank description is what splitNote leaves behind; it says nothing.
+  const { command, cwd = null, timeout = null, background = false, description, ...other } = obj;
+  if (typeof command !== 'string' || Object.keys(other).length) return null;
+  if (description != null && !(typeof description === 'string' && !description.trim())) return null;
+  if (cwd !== null && typeof cwd !== 'string') return null;
+  if (timeout !== null && typeof timeout !== 'number') return null;
+  if (typeof background !== 'boolean') return null;
+  return { command, cwd: cwd && cwd !== '.' ? cwd : null, timeout, background };
+}
+
+/**
+ * The line under a shell card's command: where, how long, whether in the
+ * background — only what differs from the default; empty when nothing does.
+ * @param {{ cwd: string | null, timeout: number | null, background: boolean }} shell
+ */
+export function shellMeta({ cwd, timeout, background }) {
+  const parts = [];
+  if (cwd) parts.push(t('approval.cwd', { cwd }));
+  if (timeout !== null) parts.push(t('approval.timeout', { n: timeout }));
+  if (background) parts.push(t('approval.background'));
+  return parts.join(' · ');
+}
+
+const FOLD_OVER = 20; // lines; a command this long shows whole
+const FOLD_KEEP = 15; // lines shown of a longer one, so a fold hides a few at least
+
+/**
+ * A command cut for the card: whole up to FOLD_OVER lines, else its first
+ * FOLD_KEEP and the count of the rest, which the card says out loud — it
+ * never hides part of what runs without saying so.
+ * @param {string} command
+ * @returns {{ shown: string, hidden: number }}
+ */
+export function foldCommand(command) {
+  const lines = command.replace(/\n+$/, '').split('\n');
+  if (lines.length <= FOLD_OVER) return { shown: command, hidden: 0 };
+  return { shown: lines.slice(0, FOLD_KEEP).join('\n'), hidden: lines.length - FOLD_KEEP };
+}
+
+/**
  * Scopes as a sentence's list, in the page language ("pwd、uname和git",
  * "pwd, uname, and git").
  * @param {string[]} scopes

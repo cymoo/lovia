@@ -2818,6 +2818,57 @@ body.lv-view-open #files-btn {
 .lv-approval-args .lv-param-val.lv-block {
   max-height: none; /* one scroll context — the container, not nested blocks */
 }
+/* A shell call: the command is the card's only frame, shown whole — a long
+   one folds behind .lv-approval-more, never behind a scrollbar. */
+.lv-approval-shell {
+  margin: 8px 0 12px;
+}
+.lv-approval-call > :first-child {
+  margin-top: 0;
+}
+.lv-approval-command {
+  background: color-mix(in srgb, var(--lv-surface-2) 50%, var(--lv-surface));
+  border: 1px solid var(--lv-border);
+  border-radius: var(--lv-radius-sm);
+  overflow: hidden;
+}
+.lv-approval-command pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--lv-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--lv-ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  outline: none;
+}
+.lv-approval-more {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  border-top: 1px solid var(--lv-border);
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--lv-muted);
+  text-align: left;
+  cursor: pointer;
+}
+.lv-approval-more:hover {
+  color: var(--lv-ink);
+  background: var(--lv-surface-2);
+}
+.lv-approval-more:focus-visible {
+  outline-offset: -2px; /* the frame clips anything outside */
+}
+.lv-approval-meta {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--lv-muted);
+  overflow-wrap: anywhere;
+}
 .lv-approval-actions {
   display: flex;
   flex-wrap: wrap;

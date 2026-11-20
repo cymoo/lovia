@@ -341,6 +341,18 @@ class Compaction:
                     view = render_view(req.entries, state)
                     raw = counter.count(view)
                     tokens = int((raw + overhead) * state.ratio)
+                    # An offloaded or cleared result shrinks the tail, which can
+                    # now take in the live user message it crowded out — later
+                    # stages must not summarize that away. Only ever widened.
+                    protected_from = min(
+                        protected_from,
+                        protected_tail_start(
+                            render_entries(body, state),
+                            counter,
+                            state.ratio,
+                            tail_tokens,
+                        ),
+                    )
                 if tokens <= budget.target_tokens:
                     break
         except BaseException:

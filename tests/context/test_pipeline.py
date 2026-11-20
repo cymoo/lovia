@@ -629,6 +629,22 @@ async def test_reactive_budget_is_capped_by_the_reported_window():
     assert res.tokens_after < 8_192 - 1_000
 
 
+async def test_offloading_the_turns_huge_result_keeps_the_live_request_verbatim():
+    """The turn's own huge tool result crowds the live user message out of the
+    protected tail; once it is offloaded the tail must take that message back,
+    or the summary that follows folds the user's exact words away."""
+    history = []
+    for i in range(30):
+        history += [user(f"q{i} " + "h" * 2_000), _assistant(f"a{i} " + "h" * 2_000)]
+    live = user("LIVE: rename the column to exactly `cust_id_v2`")
+    entries = [*history, live, call("c1"), out("c1", "r" * 600_000)]
+    res = await Compaction(summarizer=FakeSummarizer()).compact(
+        req(entries, model="m", overflow=True, reported_window=128_000)
+    )
+    assert res.compacted is True
+    assert live in res.entries
+
+
 async def test_a_reported_window_never_loosens_the_reactive_budget():
     """Under the default reserve an 8K window keeps half of itself (4K usable),
     which is more than this ~2.4K failed prompt — it must not raise the target

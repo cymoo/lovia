@@ -68,11 +68,6 @@ _CALIBRATION_ALPHA = 0.2
 
 # Aggressive (post-overflow) overrides.
 _REACTIVE_TARGET = 0.25
-# After a rejection the estimate explains, the overflow moves run until the
-# view is at most this fraction of the refused one. Must stay below the
-# runner's ``_RETRY_SHRINK_FACTOR`` (runtime/loop.py), or a landing between
-# the two would be compacted but never retried.
-_REACTIVE_FIT = 0.9
 
 
 def _plural(n: int, noun: str) -> str:
@@ -119,9 +114,10 @@ class Compaction:
 
         Args:
             context_window: The model's context window in tokens — a limit
-                enforced before sending: a view over its usable space is
-                compacted as after an overflow, so a value set below the real
-                window caps the prompt, not just the budget. When omitted, the
+                enforced before sending: a view still over it after an
+                ordinary pass is compacted as after an overflow, so a value
+                set below the real window caps the prompt, not just the
+                budget. When omitted, the
                 policy asks the provider; if the provider does not know
                 either, proactive compaction is skipped and only the reactive
                 overflow path runs.
@@ -364,44 +360,34 @@ class Compaction:
         # pass could not fit (what is left once the unprotected span is gone is
         # still over the window — this turn's own huge result, usually), skip
         # straight to the overflow pass rather than pay for a summary that
-        # cannot help.
-        # Where the overflow moves stop (``StageContext.overflowing``). A
-        # refuted estimate is held to the overshoot target (``None``). A
-        # trusted one fits under the usable window — after a real rejection,
-        # also clearly below what was refused: the estimate just missed once,
-        # and the runner retries only a prompt it sees shrink
-        # (``_RETRY_SHRINK_FACTOR`` in runtime/loop.py, which this stays under).
-        if distrust:
-            fit_tokens: int | None = None
-        elif req.overflow:
-            fit_tokens = min(budget.usable, int(tokens * _REACTIVE_FIT))
-        else:
-            fit_tokens = budget.usable
-
+        # cannot help. The overflow pass is exactly the one the refusal would
+        # have triggered — the same budget, down to the same target — so this
+        # path ends where sending first would have, minus the refused call.
         passes = [aggressive]
         if over_capacity:
+            assert model_window is not None
             covered = state.summary.covered if state.summary is not None else 0
             compactable = int(
                 counter.count(render_entries(body[covered:protected_from], state))
                 * state.ratio
             )
-            hopeless = tokens - compactable > budget.usable
+            hopeless = tokens - compactable > model_window
             passes = [True] if hopeless else [False, True]
             logger.info(
-                "context.compact: view (%d est. tokens) is over the usable "
-                "window (%d) before sending; %s",
+                "context.compact: view (%d est. tokens) is over the %d-token "
+                "window before sending; %s",
                 tokens,
-                budget.usable,
+                model_window,
                 "overflow moves at once"
                 if hopeless
-                else "overflow moves if the ordinary pass falls short",
+                else "overflow moves if an ordinary pass leaves it over",
             )
 
         reasons: list[str] = []
         try:
             for n, overflow_moves in enumerate(passes):
-                if n and fit_tokens is not None and tokens <= fit_tokens:
-                    break  # the ordinary pass made it fit
+                if n and model_window is not None and tokens <= model_window:
+                    break  # the ordinary pass got it under the window
                 for stage in self.stages:
                     ctx = StageContext(
                         request=req,
@@ -413,7 +399,6 @@ class Compaction:
                         aggressive=overflow_moves,
                         store=self.store,
                         model_window=model_window,
-                        fit_tokens=fit_tokens,
                     )
                     if await stage.plan(body, ctx):
                         if stage.name not in reasons:

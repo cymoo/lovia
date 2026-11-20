@@ -16,8 +16,8 @@ and Anthropic's context-editing primitives:
 3. :class:`SummarizeHistory` — fold the older prefix into a running LLM
    summary (the only stage that costs inference).
 4. :class:`TruncateHistory` — aggressive path only (after an overflow, or a
-   view already over the window): drop what the stages above could not
-   shrink, so no session is stuck overflowing forever.
+   view still over the window before sending): drop what the stages above
+   could not shrink, so no session is stuck overflowing forever.
 """
 
 from __future__ import annotations
@@ -62,15 +62,9 @@ class StageContext:
         current_tokens: Calibrated estimate of the current rendered view.
         protected_from: Body index of the first protected entry. Entries at
             or after it must stay verbatim for every stage.
-        aggressive: ``True`` after a provider overflow, or when the view is
-            already over the window before sending. It unlocks the
-            overflow-only moves (touching an oversized protected result,
-            clearing recent results, truncation) — but only while the view is
-            over ``fit_tokens``; see :meth:`overflowing`.
-        fit_tokens: The size the view must get under for the call to go
-            through: the usable window when the estimate is trusted, the
-            overshoot target after an overflow it cannot explain. ``None``
-            means the target.
+        aggressive: ``True`` after a provider overflow, or before sending a
+            view still over the window after an ordinary pass — compact
+            harder.
         store: Optional durable sink for offloaded result bodies. ``None`` does
             not disable :class:`OffloadToolResults` — it still emits preview
             markers and recall falls back to the transcript; a store keeps the
@@ -91,21 +85,10 @@ class StageContext:
     aggressive: bool
     store: "ResultStore | None" = None
     model_window: int | None = None
-    fit_tokens: int | None = None
 
     def calibrated(self, raw_tokens: int) -> int:
         """Apply the learned estimate→actual ratio to ``raw_tokens``."""
         return int(raw_tokens * self.state.ratio)
-
-    def overflowing(self, tokens: int) -> bool:
-        """Whether a view of ``tokens`` still needs the overflow-only moves.
-
-        Those moves cost what the ordinary ones don't — the newest result the
-        agent just fetched, or history with no summary — so they serve only
-        to make the call fit, never to reach the (lower) target.
-        """
-        fit = self.budget.target_tokens if self.fit_tokens is None else self.fit_tokens
-        return self.aggressive and tokens > fit
 
 
 class Stage(Protocol):
@@ -152,9 +135,9 @@ def _result_indices(body: list[TranscriptEntry], state: CompactionState) -> list
 def _oversized(entry: ToolResultEntry, ctx: StageContext) -> bool:
     """A result that single-handedly blows the target budget.
 
-    While the view does not fit (:meth:`StageContext.overflowing`) such a
-    result loses its keep-last/protected-tail immunity: keeping it verbatim
-    guarantees the call fails, while a marker (with recall fallback) lets the
+    On the aggressive (post-overflow) path such a result loses its
+    keep-last/protected-tail immunity: keeping it verbatim guarantees the
+    retry fails again, while a marker (with recall fallback) lets the
     run make progress.
     """
     return ctx.calibrated(ctx.counter.count_entry(entry)) > ctx.budget.target_tokens
@@ -210,7 +193,7 @@ class OffloadToolResults:
             entry = body[i]
             assert isinstance(entry, ToolResultEntry)
             protected = pos >= keep_from or i >= ctx.protected_from
-            if protected and not (ctx.overflowing(tokens) and _oversized(entry, ctx)):
+            if protected and not (ctx.aggressive and _oversized(entry, ctx)):
                 continue
             if len(entry.output) < self.min_chars or ctx.state.decided(entry.call_id):
                 continue
@@ -267,9 +250,9 @@ class ClearToolResults:
 
         Args:
             keep_last: The N most recent tool results are never cleared
-                (1 while the view does not fit).
+                (1 on the aggressive path).
             min_chars: Results at or below this length stay inline
-                (0 while the view does not fit).
+                (0 on the aggressive path).
             clear_at_least_tokens: When set, keep clearing until at least
                 this many (calibrated) tokens were freed even if the target
                 watermark was already reached — amortizes the prompt-cache
@@ -284,7 +267,10 @@ class ClearToolResults:
         self.clear_at_least_tokens = clear_at_least_tokens
 
     async def plan(self, body: list[TranscriptEntry], ctx: StageContext) -> bool:
+        keep_last = 1 if ctx.aggressive else self.keep_last
+        min_chars = 0 if ctx.aggressive else self.min_chars
         result_idxs = _result_indices(body, ctx.state)
+        keep_from = len(result_idxs) - keep_last
         tokens = ctx.current_tokens
         freed = 0
         decided = False
@@ -294,15 +280,10 @@ class ClearToolResults:
                 or freed >= self.clear_at_least_tokens
             ):
                 break
-            # Re-decided per result: the relaxed limits hold only while the
-            # view still does not fit.
-            overflowing = ctx.overflowing(tokens)
-            keep_last = 1 if overflowing else self.keep_last
-            min_chars = 0 if overflowing else self.min_chars
             entry = body[i]
             assert isinstance(entry, ToolResultEntry)
-            protected = pos >= len(result_idxs) - keep_last or i >= ctx.protected_from
-            if protected and not (overflowing and _oversized(entry, ctx)):
+            protected = pos >= keep_from or i >= ctx.protected_from
+            if protected and not (ctx.aggressive and _oversized(entry, ctx)):
                 continue
             # A parts-carrying result has a tiny textual projection but a
             # large flat cost (an image is ~image_tokens), so it is always
@@ -357,10 +338,10 @@ class SummarizeHistory:
                 using the run's own provider.
             min_savings_ratio: Skip the (expensive) summary call when the
                 projected saving is below this fraction of the current view —
-                anti-thrash. Ignored while the view does not fit.
+                anti-thrash. Ignored on the aggressive path.
             max_failures: Consecutive summarizer failures before the circuit
-                breaker stops trying proactively. A view that does not fit
-                still attempts — it is the half-open probe that lets a
+                breaker stops trying proactively. The aggressive (overflow)
+                path still attempts — it is the half-open probe that lets a
                 session recover once the summarizer works again.
             max_summary_chars: Reject a summary longer than this (treated as a
                 failure). The summary is replayed verbatim into every view, so
@@ -386,15 +367,12 @@ class SummarizeHistory:
 
     async def plan(self, body: list[TranscriptEntry], ctx: StageContext) -> bool:
         state = ctx.state
-        # Both relaxations below (breaker probe, no anti-thrash floor) are
-        # overflow moves: they hold only while the view does not fit.
-        overflowing = ctx.overflowing(ctx.current_tokens)
         # Circuit breaker with a half-open probe: proactive attempts stop
-        # after ``max_failures``, but a view that does not fit still tries — the
+        # after ``max_failures``, but the aggressive path still tries — the
         # failure counter is carried in the scratch across runs like every
         # other sticky decision, so without a probe a burst of transient
         # failures would disable summarization for the rest of the session.
-        if state.summary_failures >= self.max_failures and not overflowing:
+        if state.summary_failures >= self.max_failures and not ctx.aggressive:
             logger.warning(
                 "context.summary: circuit breaker tripped after %d failures",
                 state.summary_failures,
@@ -472,7 +450,7 @@ class SummarizeHistory:
         )
         projected_savings = span_tokens - growth
         if (
-            not overflowing
+            not ctx.aggressive
             and projected_savings < self.min_savings_ratio * ctx.current_tokens
         ):
             return False
@@ -625,16 +603,15 @@ class TruncateHistory:
     to the failed prompt, which a session moved to a smaller model can dwarf.
     The anchor is never dropped.
 
-    Runs only while the view still does not fit (:meth:`StageContext.overflowing`):
-    after an overflow, or when the view is already over the window before
-    sending. A view that fits keeps its history even when it is above
-    the target — dropping it then would buy margin with lost context.
+    Runs on the aggressive path only: after a provider overflow, or before
+    sending a view that is over the window even after an ordinary pass.
+    Below that the proactive path has headroom to spare.
     """
 
     name = "truncate"
 
     async def plan(self, body: list[TranscriptEntry], ctx: StageContext) -> bool:
-        if not ctx.overflowing(ctx.current_tokens) or not body:
+        if not ctx.aggressive or not body:
             return False
         state = ctx.state
         prior = state.summary

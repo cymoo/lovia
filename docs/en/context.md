@@ -93,7 +93,9 @@ Three guarantees shape the design:
   of that window; if not, the count itself was wrong, so it overshoots —
   tail 10%, target ~25% of the failed prompt. A view that is already over a
   known window before sending (typically this turn's own huge tool result)
-  gets the first form up front, so it is never sent just to be refused. With
+  gets an ordinary pass first and, if it is still over, the first form up
+  front — the same pass the refusal would have triggered, without sending
+  it just to be refused. With
   the default stages the error surfaces only when the latest user turn alone
   exceeds the window; its hint says what to do.
 
@@ -193,11 +195,10 @@ Stages *plan* (record sticky decisions); rendering is a pure function of
 transcript + state. Never make a stage undo a decision — monotonicity is
 what keeps the prefix cache-stable. A stage's `ctx` is a `StageContext`
 (the request, the sticky `CompactionState`, a `TokenCounter`, the
-`TokenBudget`, the protected-tail boundary, the aggressive flag). A stage
-with lossy moves of its own should gate them on `ctx.overflowing(tokens)`
-rather than on `ctx.aggressive` alone: the flag says the view did not fit
-when the pass began, and the moves should stop once it does. The
-pieces Compaction itself is built from are exported for reuse —
+`TokenBudget`, the protected-tail boundary, the aggressive flag — set after
+an overflow, and before sending a view still over the window after an
+ordinary pass). The pieces Compaction itself is built from are exported for
+reuse —
 `render_view`, the `clear_marker` / `offload_marker` / `summary_entry`
 builders, `transcript_to_text`, `OffloadRecord` / `SummaryState`, and the
 summarizer's `REQUIRED_SECTIONS` / `SUMMARY_SYSTEM_PROMPT` /

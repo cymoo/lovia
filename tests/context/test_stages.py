@@ -41,14 +41,9 @@ def make_ctx(
     budget: TokenBudget | None = None,
     protected_from: int | None = None,
     model_window: int | None = None,
-    fit_tokens: int | None = None,
 ):
-    """A stage context. ``aggressive=True`` means the view does not fit
-    (``fit_tokens=0``) unless a ``fit_tokens`` says where it would."""
     state = state if state is not None else CompactionState()
     counter = TokenCounter()
-    if aggressive and fit_tokens is None:
-        fit_tokens = 0
     return StageContext(
         request=CompactionRequest(entries=list(body)),
         state=state,
@@ -60,7 +55,6 @@ def make_ctx(
         aggressive=aggressive,
         store=store,
         model_window=model_window,
-        fit_tokens=fit_tokens,
     )
 
 
@@ -793,69 +787,6 @@ async def test_offload_aggressive_archives_oversized_protected_result():
     ctx = make_ctx(body, store=store, aggressive=True, budget=budget, protected_from=0)
     assert await OffloadToolResults(keep_last=2).plan(body, ctx) is True
     assert store.data[ctx.state.offloaded["giant"].digest] == "g" * 40_000
-
-
-async def test_overflow_moves_stop_once_the_view_fits():
-    """Two big results, the view over the window. Offloading the older one —
-    an ordinary move — makes it fit; the newest, protected one stays verbatim
-    even though the view is still above the target."""
-    big = "alpha beta " * 800  # ~2.2K tokens
-    body = [call("c1"), out("c1", big), call("c2"), out("c2", big)]
-    budget = TokenBudget(window=2_500, reserve_output=0, trigger=0.85, target=0.6)
-    ctx = make_ctx(body, aggressive=True, budget=budget, fit_tokens=budget.usable)
-    assert await OffloadToolResults(min_chars=1_000, keep_last=1).plan(body, ctx)
-    assert set(ctx.state.offloaded) == {"c1"}
-
-
-async def test_clear_keeps_its_recent_results_once_the_view_fits():
-    """The target is out of reach without clearing recent results; the view
-    already fits, so the relaxed ``keep_last=1`` must not kick in."""
-    body = _pairs(6, chars=2_000)  # ~3K tokens across six results
-    budget = TokenBudget(window=10_000, reserve_output=0, trigger=0.1, target=0.05)
-    ctx = make_ctx(body, aggressive=True, budget=budget, fit_tokens=budget.usable)
-    assert budget.target_tokens < ctx.current_tokens < budget.usable
-    assert await ClearToolResults(keep_last=3).plan(body, ctx)
-    assert ctx.state.cleared == {"c0", "c1", "c2"}  # the three most recent stay
-
-
-async def test_summary_relaxations_end_once_the_view_fits():
-    """The anti-thrash floor and the breaker hold again as soon as the view
-    fits — a pre-send pass must not buy a summary call it doesn't need."""
-    body = _chat(10) + [user("latest")]
-    budget = TokenBudget(window=10_000, reserve_output=0, trigger=0.2, target=0.1)
-
-    # A one-entry span saves less than the 10% floor.
-    summarizer = FakeSummarizer("S1")
-    ctx = make_ctx(
-        body, aggressive=True, protected_from=1, budget=budget, fit_tokens=budget.usable
-    )
-    assert budget.target_tokens < ctx.current_tokens < budget.usable
-    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is False
-    assert summarizer.calls == []
-
-    # A tripped breaker stays tripped.
-    tripped = CompactionState(summary_failures=3)
-    ctx = make_ctx(
-        body,
-        state=tripped,
-        aggressive=True,
-        protected_from=16,
-        budget=budget,
-        fit_tokens=budget.usable,
-    )
-    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is False
-    assert summarizer.calls == []
-
-
-async def test_truncate_leaves_a_view_that_fits():
-    """Above the target but under the usable window: no history dropped."""
-    body = _chat(6) + [user("latest")]
-    budget = TokenBudget(window=10_000, reserve_output=0, trigger=0.2, target=0.1)
-    ctx = make_ctx(
-        body, aggressive=True, protected_from=6, budget=budget, fit_tokens=budget.usable
-    )
-    assert budget.target_tokens < ctx.current_tokens < budget.usable
-    assert await TruncateHistory().plan(body, ctx) is False
 
 
 # ---------------------------------------------------------------------------

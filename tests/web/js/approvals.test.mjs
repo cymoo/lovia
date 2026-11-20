@@ -174,7 +174,9 @@ test('shell card: the command alone, with only the non-default options', () => {
   }
   assert.equal(shellArgs('read_file', args({ command: 'ls' })), null);
   assert.equal(shellMeta({ cwd: null, timeout: null, background: false }), '');
-  assert.equal(shellMeta({ cwd: 'src', timeout: 600, background: true }), 'in src · timeout 600s · in the background');
+  assert.equal(shellMeta({ cwd: 'src', timeout: 600, background: false }), 'in src · timeout 600s');
+  // The background path ignores timeout, so the card does not promise one.
+  assert.equal(shellMeta({ cwd: 'src', timeout: 600, background: true }), 'in src · in the background');
 });
 
 test('a long command folds, and says how much it hides', () => {

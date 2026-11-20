@@ -127,7 +127,8 @@ export function shellArgs(name, args) {
 export function shellMeta({ cwd, timeout, background }) {
   const parts = [];
   if (cwd) parts.push(t('approval.cwd', { cwd }));
-  if (timeout !== null) parts.push(t('approval.timeout', { n: timeout }));
+  // A background command is spawned without one: the timeout never applies.
+  if (timeout !== null && !background) parts.push(t('approval.timeout', { n: timeout }));
   if (background) parts.push(t('approval.background'));
   return parts.join(' · ');
 }

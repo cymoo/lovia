@@ -9,6 +9,8 @@ How a call flows:
 2. Over the watermark (or after a provider overflow), stages run in order —
    offload, clear, summarize, and after an overflow truncate — each recording
    new sticky decisions until the view is under the *compact_to* watermark.
+   A view already over the usable window is compacted as after an overflow
+   before it is sent, rather than sent to be refused.
    The gap between the two is hysteresis: compaction happens in rare bursts,
    not every turn.
 3. Token thresholds estimate the *whole* request: cheap per-entry estimates
@@ -267,6 +269,24 @@ class Compaction:
         # The real window (when known) survives the aggressive override below:
         # stages that make actual model calls (summarize) size against it.
         model_window = window
+        if (
+            not aggressive
+            and model_window is not None
+            and tokens > usable_tokens(model_window, self.reserve_output_tokens)
+        ):
+            # Already over the window before anything is sent — typically this
+            # turn's own huge tool result, which sits in the protected tail
+            # where only the overflow moves may touch it. Sending first would
+            # buy a certain rejection and spend the runner's one retry, so
+            # compact as after an overflow the estimate explains: same target,
+            # and the overflow moves only while the view still does not fit
+            # (``StageContext.overflowing``).
+            logger.info(
+                "context.compact: view (%d est. tokens) is over the usable "
+                "window before sending; compacting as after an overflow",
+                tokens,
+            )
+            aggressive = True
         if window is None and not aggressive:
             # No budget information: never compact proactively; the
             # reactive overflow path remains as the safety net.
@@ -346,6 +366,9 @@ class Compaction:
                     aggressive=aggressive,
                     store=self.store,
                     model_window=model_window,
+                    # A trusted estimate fits once under the usable window;
+                    # a refuted one is held to the overshoot target.
+                    fit_tokens=None if distrust else budget.usable,
                 )
                 if await stage.plan(body, ctx):
                     reasons.append(stage.name)

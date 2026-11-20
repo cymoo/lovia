@@ -663,6 +663,39 @@ async def test_an_overflow_the_estimate_explains_compacts_like_the_proactive_pat
     assert res.tokens_after < 128_000 - 16_384
 
 
+async def test_a_view_over_the_window_is_fixed_before_sending():
+    """The turn's own huge result sits in the protected tail, where only the
+    overflow moves reach. Offloading it is enough — no summary call is spent
+    on history that was never the problem, and the view fits."""
+    history = []
+    for i in range(20):
+        history += [user(f"q{i} " + "h" * 2_000), _assistant(f"a{i} " + "h" * 2_000)]
+    entries = [*history, user("read the log"), call("c1"), out("c1", "r" * 600_000)]
+    summarizer = FakeSummarizer()
+    res = await Compaction(context_window=128_000, summarizer=summarizer).compact(
+        req(entries, model="m")
+    )
+    assert res.reason == "offload"  # not reactive_: nothing was refused
+    assert summarizer.calls == []
+    assert res.tokens_after is not None
+    assert res.tokens_after < 128_000 - 16_384
+
+
+async def test_a_view_under_the_window_keeps_the_proactive_limits():
+    """Over the trigger but still under the usable window: an ordinary
+    proactive pass — a recent result is not offloaded however large."""
+    history = []
+    for i in range(20):
+        history += [user(f"q{i} " + "h" * 2_000), _assistant(f"a{i} " + "h" * 2_000)]
+    big = out("c1", "r" * 300_000)  # ~75K: over the target, under usable
+    entries = [*history, user("read the log"), call("c1"), big]
+    res = await Compaction(context_window=128_000, summarizer=FakeSummarizer()).compact(
+        req(entries, model="m")
+    )
+    assert res.compacted is True  # over the trigger
+    assert big in res.entries  # still verbatim
+
+
 async def test_a_reported_window_never_loosens_the_reactive_budget():
     """Under the default reserve an 8K window keeps half of itself (4K usable),
     which is more than this ~2.4K failed prompt — it must not raise the target
@@ -833,15 +866,16 @@ async def test_reactive_truncates_when_the_summarizer_keeps_failing():
 
 
 async def test_proactive_path_never_truncates():
-    """Truncation is the overflow floor, not a proactive stage: a tripped
-    summarizer on the proactive path leaves the view alone."""
+    """Truncation is the floor for a view that does not fit, not a proactive
+    stage: over the trigger but under the window, a tripped summarizer leaves
+    the view alone."""
     pipeline = _pipeline(
-        context_window=100,
+        context_window=10_000,
         compact_at=0.5,
         compact_to=0.25,
         summarizer=FailingSummarizer(),
     )
-    entries = [user("x" * 1_000) for _ in range(4)]
+    entries = [user("x" * 4_000) for _ in range(6)]  # ~6K: over 5K, under 10K
     scratch: dict = {}
     for _ in range(5):
         res = await pipeline.compact(req(entries, scratch=scratch))
@@ -849,12 +883,26 @@ async def test_proactive_path_never_truncates():
     assert CompactionState.load(scratch).summary is None
 
 
+async def test_a_view_over_the_window_truncates_before_sending():
+    """Over the window with the summarizer down: drop history now rather than
+    send a prompt the provider will refuse."""
+    pipeline = _pipeline(
+        context_window=10_000, compact_to=0.25, summarizer=FailingSummarizer()
+    )
+    entries = [user(f"q{i} " + "x" * 4_000) for i in range(12)]  # ~12K
+    res = await pipeline.compact(req(entries))
+    assert res.reason is not None and "truncate" in res.reason
+    assert not res.reason.startswith("reactive_")
+    assert entries[-1] in res.entries  # the latest user message survives
+    assert res.tokens_after is not None and res.tokens_after < 10_000
+
+
 async def test_proactive_circuit_breaker_stops_after_limit():
     failing = FailingSummarizer()
     pipeline = _pipeline(
-        context_window=100, compact_at=0.5, compact_to=0.25, summarizer=failing
+        context_window=10_000, compact_at=0.5, compact_to=0.25, summarizer=failing
     )
-    entries = [user("x" * 1_000) for _ in range(4)]
+    entries = [user("x" * 4_000) for _ in range(6)]
     scratch: dict = {}
     for _ in range(5):
         res = await pipeline.compact(req(entries, scratch=scratch))
@@ -985,6 +1033,44 @@ async def test_runner_recovers_a_cold_start_history_far_over_the_window():
     )
     assert result.output == "fits now"
     assert provider.stream_count == 2
+
+
+async def test_runner_never_sends_a_view_known_not_to_fit():
+    """This turn's tool returns more than the whole window. With the window
+    known, the view is fixed before sending — no rejected call, and the run's
+    one overflow retry stays unspent."""
+    from lovia import tool
+    from lovia.testing import call as tool_turn
+
+    @tool
+    def dump() -> str:
+        """Return a huge log."""
+        return "r" * 400_000  # ~100K tokens
+
+    class Enforcing(ScriptedProvider):
+        attempts = 0
+
+        async def stream(self, entries, **kw):
+            type(self).attempts += 1
+            size = sum(
+                len(str(getattr(e, "content", "") or ""))
+                + len(getattr(e, "output", "") or "")
+                for e in entries
+            )
+            if size // 4 > 32_000:
+                raise ContextOverflowError("too long", reported_window=32_000)
+            async for delta in super().stream(entries, **kw):
+                yield delta
+
+    provider = Enforcing([tool_turn("dump", {}), text("done")])
+    agent = Agent(name="t", instructions="x", model=provider, tools=[dump])
+    result = await Runner.run(
+        agent,
+        "read the log",
+        context_policy=Compaction(context_window=32_000, summarizer=FakeSummarizer()),
+    )
+    assert result.output == "done"
+    assert Enforcing.attempts == 2
 
 
 async def test_runner_emits_context_compacted_event():
@@ -1482,7 +1568,8 @@ async def test_warns_when_protected_tail_covers_the_entire_view(caplog):
     pipeline = _pipeline(
         context_window=1_000, keep_recent_tokens=100_000, summarizer=FakeSummarizer()
     )
-    entries = [user("x" * 400) for _ in range(20)]  # ~2.1k tokens > trigger 850
+    # ~950 tokens: over the 850 trigger, under the 1K window.
+    entries = [user("x" * 400) for _ in range(9)]
     with caplog.at_level(logging.WARNING, logger="lovia.context.compaction"):
         res = await pipeline.compact(req(entries))
     assert res.compacted is False

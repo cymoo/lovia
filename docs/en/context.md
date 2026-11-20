@@ -51,8 +51,9 @@ the window and — under pressure — renders a smaller view in
    summary replaces the oldest span — structured sections (session intent,
    current state, key facts, artifacts, constraints, next steps) rather
    than freeform prose.
-4. **Truncate** (`TruncateHistory`, overflow path only): when the provider
-   has rejected the prompt and the three stages above still leave it over
+4. **Truncate** (`TruncateHistory`, aggressive path only): when the
+   provider has rejected the prompt — or the view is already over the
+   window before sending — and the three stages above still leave it over
    the window — a summarizer that keeps failing, or a recent span too big
    to protect — the unsummarized span is dropped and a short note takes
    its place in the view. Lossy, but the alternative is a session that
@@ -90,9 +91,11 @@ Three guarantees shape the design:
   estimate explains the overflow: if the prompt was over a window now known
   (usually the one the error named), it compacts to the normal `compact_to`
   of that window; if not, the count itself was wrong, so it overshoots —
-  tail 10%, target ~25% of the failed prompt. With the default stages the error surfaces only
-  when the latest user turn alone exceeds the window; its hint says what to
-  do.
+  tail 10%, target ~25% of the failed prompt. A view that is already over a
+  known window before sending (typically this turn's own huge tool result)
+  gets the first form up front, so it is never sent just to be refused. With
+  the default stages the error surfaces only when the latest user turn alone
+  exceeds the window; its hint says what to do.
 
 Each compaction emits a
 [`ContextCompacted` event](streaming.md#transitions-and-context) with a

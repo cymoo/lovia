@@ -340,6 +340,43 @@ async def test_live_offload_archives_to_store():
     assert await store.get(result_digest(big)) == big
 
 
+async def test_live_huge_tool_result_is_fixed_before_sending():
+    """This turn's own tool returns several times the window. The view is
+    compacted before it is sent — no call is refused or retried, every real
+    prompt (the provider's own count) stays under the window, and the model
+    still answers from the offload preview."""
+    model = _live_model()
+
+    @tool
+    def read_log() -> str:
+        """Read the service log."""
+        noise = "noise line 0123456789 abcdefghij klmnopqrst uvwxyz\n" * 4_000
+        return "FIRST LINE: incident code ZQ-5521.\n" + noise  # ~200K chars
+
+    agent = _agent(
+        model, "You are a concise assistant. Use tools when asked.", tools=[read_log]
+    )
+    window = 32_000
+    result, seen = await _run_collect(
+        agent,
+        "Call read_log once, then reply with only the incident code from its "
+        "first line.",
+        context_policy=Compaction(context_window=window),
+    )
+
+    assert "ZQ-5521" in (result.output or "")
+    prompts = [
+        e.usage.input_tokens
+        for e in seen
+        if isinstance(e, events.MessageCompleted) and e.usage is not None
+    ]
+    assert len(prompts) >= 2  # the tool call, then the answer
+    assert max(prompts) < window
+    compacted = _compactions(seen)
+    assert compacted and all(not e.notice.reactive for e in compacted)
+    assert not any(isinstance(e, events.ModelRetrying) for e in seen)
+
+
 # ---------------------------------------------------------------------------
 # 6. Large history (tens of thousands of tokens) compacts within budget
 # ---------------------------------------------------------------------------

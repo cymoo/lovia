@@ -237,6 +237,7 @@ Provider 缓存能让长 agent 循环的成本变得可控。system prompt 和�
   端点慢只会耽误一瞬，不会拖住整个 run。
 - **Anthropic 的窗口来自端点本身。** 官方 Models API 按模型公布 `max_input_tokens`，
   探测读到的是**你的组织**实际拿到的窗口——当前一代是 1M，更早的模型是 200K。
+  探测直接查询单个模型（`GET /models/{model}`），所以别名也能解析。
   内置表只在探测答不上来时垫底。
 
 ## 自定义 Provider

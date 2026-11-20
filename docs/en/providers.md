@@ -286,6 +286,8 @@ Two consequences worth knowing:
 - **Anthropic windows come from the endpoint.** The official Models API
   publishes `max_input_tokens` per model, so the probe reads the window as
   served to *your* org — 1M on the current generation, 200K on older models.
+  It retrieves the one model (`GET /models/{model}`), so an alias resolves
+  too.
   The bundled table only bridges the gap when the probe cannot answer.
 
 ## Custom providers

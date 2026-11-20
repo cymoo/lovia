@@ -142,7 +142,10 @@ def _coerce_window(value: Any) -> int | None:
     return value if plausible_window(value) else None
 
 
-def _window_from_entry(entry: dict[str, Any]) -> int | None:
+def window_from_model_entry(entry: Any) -> int | None:
+    """Read the context window off one model object, if it carries one."""
+    if not isinstance(entry, dict):
+        return None
     top = entry.get("top_provider")
     if isinstance(top, dict):
         window = _coerce_window(top.get("context_length"))
@@ -177,7 +180,7 @@ def window_from_models_payload(payload: Any, model: str) -> int | None:
     for wanted in candidates:
         for entry in data:
             if isinstance(entry, dict) and entry.get("id") == wanted:
-                return _window_from_entry(entry)
+                return window_from_model_entry(entry)
     return None
 
 
@@ -194,29 +197,40 @@ async def fetch_reported_window(
     base_url: str,
     headers: dict[str, str],
     model: str,
-    params: Mapping[str, str | int] | None = None,
 ) -> int | None:
     """Ask ``GET {base_url}/models`` what ``model``'s context window is.
 
     Fails open: an unreachable endpoint, a slow one, an error status, a non-JSON
     body or a listing without window metadata all yield ``None``. The caller is
     trying to do better than "unknown", so nothing here is worth raising over.
-
-    ``params`` lets an adapter shape the listing for its dialect — Anthropic's
-    paginates at 20 entries by default, so its adapter asks for a page large
-    enough to hold the whole catalog.
     """
+    payload = await _get_json(client, f"{base_url}/models", headers)
+    return window_from_models_payload(payload, model)
+
+
+async def fetch_model_window(
+    client: httpx.AsyncClient, *, url: str, headers: dict[str, str]
+) -> int | None:
+    """Ask a single-model endpoint (``GET …/models/{id}``) for its window.
+
+    Fails open exactly like :func:`fetch_reported_window`.
+    """
+    return window_from_model_entry(await _get_json(client, url, headers))
+
+
+async def _get_json(
+    client: httpx.AsyncClient, url: str, headers: dict[str, str]
+) -> Any:
     try:
         response = await client.get(
-            f"{base_url}/models",
+            url,
             headers=headers,
-            params=params,
             follow_redirects=True,
             timeout=_PROBE_TIMEOUT,
         )
         if not response.is_success:
             return None
-        return window_from_models_payload(response.json(), model)
+        return response.json()
     except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         # InvalidURL is not an HTTPError: a malformed base_url must degrade to
         # "unknown" here and fail loudly on the model call itself.

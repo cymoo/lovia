@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any, AsyncIterator
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -60,6 +60,7 @@ from ._http import host_matches, raise_for_provider_status, raise_for_transport_
 from ._windows import (
     WindowResolver,
     WindowTable,
+    fetch_model_window,
     fetch_reported_window,
     window_from_error,
 )
@@ -164,27 +165,32 @@ class AnthropicProvider:
         return self._windows.window()
 
     async def discover_context_window(self) -> int | None:
-        """Read this deployment's window off ``GET {base_url}/models``.
+        """Read this deployment's window off the endpoint's Models API.
 
-        The official Models API publishes ``max_input_tokens`` per model
-        (since 2026-03) — the window as served to *this* org, which outranks
-        the bundled table. Anthropic-dialect gateways (DeepSeek's
-        ``/anthropic``, Kimi, GLM) may publish a window there too.
+        The official API publishes ``max_input_tokens`` on
+        ``GET /models/{model}`` (since 2026-03) — the window as served to
+        *this* org, which outranks the bundled table. Anthropic-dialect
+        gateways (DeepSeek's ``/anthropic``, Kimi, GLM) may publish one on
+        their ``GET /models`` listing.
         """
         return await self._windows.discover(self._fetch_window)
 
     async def _fetch_window(self) -> int | None:
+        if self._on_official_host():
+            # Retrieve, not list: it resolves aliases the listing may not
+            # carry as ids, and needs no pagination.
+            return await fetch_model_window(
+                self._http(),
+                url=f"{self.base_url}/models/{quote(self.model, safe='')}",
+                headers=self._headers(),
+            )
+        # Gateways rarely implement the single-model route; the listing is
+        # the common denominator.
         return await fetch_reported_window(
             self._http(),
             base_url=self.base_url,
             headers=self._headers(),
             model=self.model,
-            # The official listing paginates at 20 entries; the catalog is
-            # near that already, and the wanted model must be on the page.
-            # Gateways don't get the parameter at all: most ignore unknown
-            # params, but a strict one would 400 — and the probe memoizes
-            # that miss for the whole process.
-            params={"limit": 100} if self._on_official_host() else None,
         )
 
     @property

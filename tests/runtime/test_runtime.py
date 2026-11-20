@@ -422,6 +422,37 @@ async def test_reactive_overflow_forwards_the_reported_window(caplog) -> None:
     assert any("learned 8192 tokens" in rec.getMessage() for rec in caplog.records)
 
 
+async def test_message_completed_names_the_window_it_was_budgeted_against() -> None:
+    from lovia import events
+    from lovia.context import Compaction
+
+    @tool
+    async def dump() -> str:
+        """Return a huge payload."""
+        return "x" * 40_000
+
+    async def windows(agent: Agent) -> list[int | None]:
+        return [
+            ev.context_window
+            async for ev in Runner.stream(agent, "go")
+            if isinstance(ev, events.MessageCompleted)
+        ]
+
+    # No window known up front: the first call names none; the retry names
+    # the one the endpoint's overflow taught the policy.
+    agent = Agent(
+        name="t", instructions="x", model=_RecoveringOverflowProvider(), tools=[dump]
+    )
+    assert await windows(agent) == [None, 8_192]
+    # A configured window is the budget from the first call on.
+    agent = Agent(
+        name="t",
+        model=ScriptedProvider([text("hi")]),
+        context_policy=Compaction(context_window=100_000),
+    )
+    assert await windows(agent) == [100_000]
+
+
 async def test_overflow_after_a_transient_retry_still_compacts() -> None:
     # A retry notice is not output: an overflow on the retried attempt must
     # still take the reactive path, not "already streamed, give up".

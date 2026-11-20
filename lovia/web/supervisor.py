@@ -386,6 +386,8 @@ class RunController:
         # Final model call's prompt size (context fill), from the last leg that
         # reported one — rides in the run record next to the cumulative usage.
         self.last_input_tokens: int | None = None
+        # The window the last model call was budgeted against, for the ring.
+        self.context_window: int | None = None
         # snapshot mirror (task-private until read synchronously by attach)
         # The session history, by run: a snapshot names its user turns and
         # times its messages from it.
@@ -1045,6 +1047,8 @@ class RunController:
                         self._publish_refs(ev.result.entries)
                     if isinstance(ev, events.RunCompleted):
                         await self._publish_timing()
+                    if isinstance(ev, events.MessageCompleted) and ev.context_window:
+                        self.context_window = ev.context_window
                     self._publish(ev)
                     if isinstance(ev, events.RunCompleted):
                         succeeded = True
@@ -1186,7 +1190,9 @@ class RunController:
                         record_id,
                         status="waiting",
                         usage=usage_dict(
-                            self.usage, last_input_tokens=self.last_input_tokens
+                            self.usage,
+                            last_input_tokens=self.last_input_tokens,
+                            context_window=self.context_window,
                         )
                         if self.usage.total_tokens
                         else None,
@@ -1244,7 +1250,9 @@ class RunController:
                         status=status,
                         error=error,
                         usage=usage_dict(
-                            self.usage, last_input_tokens=self.last_input_tokens
+                            self.usage,
+                            last_input_tokens=self.last_input_tokens,
+                            context_window=self.context_window,
                         )
                         if self.usage.total_tokens
                         else None,

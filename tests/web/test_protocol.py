@@ -232,6 +232,13 @@ def test_message_completed_carries_its_calls_usage() -> None:
     )
 
 
+def test_message_completed_carries_the_window_the_call_was_budgeted_against() -> None:
+    """The ring's denominator: the run's effective window, when it knows one."""
+    ev = events.MessageCompleted(entries=[], context_window=8_192)
+    assert _data(ev)["usage"]["context_window"] == 8_192
+    assert "context_window" not in _data(events.MessageCompleted(entries=[]))["usage"]
+
+
 def test_error_event_carries_code_and_provider_facts() -> None:
     data = _data(
         events.RunFailed(

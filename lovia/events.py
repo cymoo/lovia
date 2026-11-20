@@ -130,11 +130,15 @@ class MessageCompleted(MessageEvent):
 
     ``usage`` is that model call's own token usage (the run's total arrives
     with :class:`RunCompleted`); its ``input_tokens`` is the prompt the call
-    sent — how full the context is right now.
+    sent — how full the context is right now. ``context_window`` is the window
+    the context policy budgeted that prompt against
+    (:attr:`~lovia.context.ContextResult.window`), or ``None`` when none is
+    known.
     """
 
     entries: list[TranscriptEntry]
     usage: Usage = field(default_factory=Usage)
+    context_window: int | None = None
 
 
 @dataclass

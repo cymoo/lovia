@@ -1675,8 +1675,12 @@ async def _wait_record(store, run_id, *, timeout=5.0):
 
 @pytest.mark.asyncio
 async def test_completed_run_leaves_a_completed_record() -> None:
+    from lovia.context import Compaction
+
     provider = ScriptedProvider([text("done")])
-    agent = Agent(name="bot", model=provider)
+    agent = Agent(
+        name="bot", model=provider, context_policy=Compaction(context_window=64_000)
+    )
     app = _app(agent)
     store = app.state.deps.store
     async with _client(app) as ac:
@@ -1705,6 +1709,9 @@ async def test_completed_run_leaves_a_completed_record() -> None:
     # restored ring measures fill with (scripted turns report input_tokens=1).
     assert stored.usage["input_tokens"] == 1
     assert stored.usage["last_input_tokens"] == 1
+    # …and the window that prompt was budgeted against: the restored ring's
+    # denominator, with no page-load lookup.
+    assert stored.usage["context_window"] == 64_000
 
 
 @pytest.mark.asyncio

@@ -58,7 +58,8 @@ class EmptyData(TypedDict):
 class MessageCompletedData(TypedDict):
     message: JsonObject
     # This model call's usage (``usage_dict``; ``last_input_tokens`` is its
-    # prompt), so the context ring moves during a run, not only at ``done``.
+    # prompt, ``context_window`` the window it was budgeted against), so the
+    # context ring moves during a run, not only at ``done``.
     usage: dict[str, int]
 
 
@@ -388,14 +389,20 @@ def _dumps(payload: object, default: Callable[[object], object] | None = None) -
     return json.dumps(payload, ensure_ascii=False, default=default)
 
 
-def usage_dict(usage: Usage, *, last_input_tokens: int | None = None) -> dict[str, int]:
+def usage_dict(
+    usage: Usage,
+    *,
+    last_input_tokens: int | None = None,
+    context_window: int | None = None,
+) -> dict[str, int]:
     """The token-usage shape shared by REST + SSE responses (and run records).
 
     Cache counts ride along for cost visibility (the context ring's detail
     view); ``input_tokens`` already includes them — see :class:`Usage`. Note
     ``input_tokens`` is *cumulative* across the run's model calls;
     ``last_input_tokens`` (when known) is the final call's prompt size — the
-    number that describes actual context fill.
+    number that describes actual context fill — and ``context_window`` (when
+    known) the window that call was budgeted against.
     """
     payload = {
         "input_tokens": usage.input_tokens,
@@ -406,6 +413,8 @@ def usage_dict(usage: Usage, *, last_input_tokens: int | None = None) -> dict[st
     }
     if last_input_tokens is not None:
         payload["last_input_tokens"] = last_input_tokens
+    if context_window is not None:
+        payload["context_window"] = context_window
     return payload
 
 
@@ -503,7 +512,9 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
             MessageCompletedData(
                 message=_entries_to_dict(ev.entries),
                 usage=usage_dict(
-                    ev.usage, last_input_tokens=ev.usage.input_tokens or None
+                    ev.usage,
+                    last_input_tokens=ev.usage.input_tokens or None,
+                    context_window=ev.context_window,
                 ),
             ),
         )

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .transcript import TranscriptEntry
-from .messages import ToolCall
+from .messages import ToolCall, Usage
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -127,9 +127,14 @@ class MessageCompleted(MessageEvent):
     turn — typically a :class:`ReasoningEntry`, an :class:`AssistantTextEntry`,
     and any :class:`ToolCallEntry`\\ s the model requested. Subscribers can
     pattern-match on the concrete entry types.
+
+    ``usage`` is that model call's own token usage (the run's total arrives
+    with :class:`RunCompleted`); its ``input_tokens`` is the prompt the call
+    sent — how full the context is right now.
     """
 
     entries: list[TranscriptEntry]
+    usage: Usage = field(default_factory=Usage)
 
 
 @dataclass

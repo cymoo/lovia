@@ -435,7 +435,10 @@ class RunLoop:
                     # snapshot's turn count aligned with its entries).
                     turn_durable = True
                     yield await self._emit(
-                        state, events.MessageCompleted(entries=turn.turn_entries)
+                        state,
+                        events.MessageCompleted(
+                            entries=turn.turn_entries, usage=assistant.usage.clone()
+                        ),
                     )
                     # Persist requested tool calls before executing them, so a
                     # crash mid-execution can resume by draining the calls

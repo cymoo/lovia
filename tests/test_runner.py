@@ -297,6 +297,27 @@ async def test_last_input_tokens_is_final_call_not_cumulative() -> None:
     assert result.last_input_tokens == 25  # the final prompt alone
 
 
+async def test_message_completed_carries_its_calls_usage() -> None:
+    from lovia.messages import Usage
+
+    turn1 = call("add", {"a": 1, "b": 2}, call_id="c1")
+    turn1.usage = Usage(input_tokens=10, output_tokens=2)
+    turn2 = text("3")
+    turn2.usage = Usage(input_tokens=25, output_tokens=3, cache_read_tokens=8)
+    agent = Agent(name="t", model=ScriptedProvider([turn1, turn2]), tools=[add])
+
+    seen = [
+        ev.usage
+        async for ev in Runner.stream(agent, "1+2?")
+        if isinstance(ev, events.MessageCompleted)
+    ]
+    # Each call's own, as it completes — not the run's running total.
+    assert seen == [
+        Usage(input_tokens=10, output_tokens=2),
+        Usage(input_tokens=25, output_tokens=3, cache_read_tokens=8),
+    ]
+
+
 # ------------------------------------------------------------------------- #
 # Provider lifecycle
 # ------------------------------------------------------------------------- #

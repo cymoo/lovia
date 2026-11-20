@@ -57,6 +57,9 @@ class EmptyData(TypedDict):
 
 class MessageCompletedData(TypedDict):
     message: JsonObject
+    # This model call's usage (``usage_dict``; ``last_input_tokens`` is its
+    # prompt), so the context ring moves during a run, not only at ``done``.
+    usage: dict[str, int]
 
 
 class UserInjectedData(TypedDict):
@@ -497,7 +500,12 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
     if isinstance(ev, events.MessageCompleted):
         return frame(
             "message_completed",
-            MessageCompletedData(message=_entries_to_dict(ev.entries)),
+            MessageCompletedData(
+                message=_entries_to_dict(ev.entries),
+                usage=usage_dict(
+                    ev.usage, last_input_tokens=ev.usage.input_tokens or None
+                ),
+            ),
         )
     if isinstance(ev, events.UserMessageInjected):
         return frame(

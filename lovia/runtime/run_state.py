@@ -103,8 +103,13 @@ class RunState:
 
     run_ctx: RunContext[Any]
     active: ActiveAgent
-    # Persisted to RunSnapshot and restored on resume.
+    # Persisted to RunSnapshot and restored on resume. The last count any call
+    # reported — the run's "how full is the context" figure.
     last_input_tokens: int | None = None
+    # What the context policy calibrates against: the *latest* call's own
+    # count, or None when that call reported none — pairing an older call's
+    # (another model's, after a handoff) with this view would mis-calibrate.
+    calibration_tokens: int | None = None
     # The context policy's carried state, opaque to the loop: sticky compaction
     # decisions + calibration. Round-tripped through the checkpoint (resume) and
     # the session-segment ``meta`` (next run) under the same name, ``context_state``.

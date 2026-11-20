@@ -694,6 +694,11 @@ class RunLoop:
             last_input_tokens=(
                 snapshot.last_input_tokens if snapshot is not None else None
             ),
+            # Not seeded on resume: the head keeps the last *reported* count,
+            # which need not belong to the view the carried estimate
+            # describes (a usage-less call, or one interrupted after its
+            # compaction). One skipped sample beats one mis-paired.
+            calibration_tokens=None,
             context_state=context_state,
             started_at=(
                 snapshot.started_at if snapshot is not None else self._invoked_at
@@ -869,7 +874,7 @@ class RunLoop:
             # The same tool set _call_model serializes into the request, so
             # the policy can count the schema payload it will actually pay for.
             tools=list(state.active.tools_by_name.values()),
-            last_input_tokens=state.last_input_tokens,
+            last_input_tokens=state.calibration_tokens,
             overflow=False,
             scratch=state.context_state,
         )
@@ -1352,9 +1357,13 @@ class RunLoop:
         state.run_ctx.usage.add(assistant.usage)
         # Remember the real input-token count so the next turn's ContextPolicy
         # can size compaction against actual usage rather than the chars/4
-        # heuristic.
-        if assistant.usage and assistant.usage.input_tokens:
-            state.last_input_tokens = assistant.usage.input_tokens
+        # heuristic. The policy pairs it with the estimate of *this* call's
+        # view, so a call that reports none leaves it no count to calibrate
+        # with; the run's last reported figure is kept separately.
+        reported = assistant.usage.input_tokens or None
+        state.calibration_tokens = reported
+        if reported is not None:
+            state.last_input_tokens = reported
         # Enforce the budget against this turn's tokens. The turn-start check
         # (``_check_limits``) ran before the model call, so on a final turn that
         # produces output without tool calls this is the only place an

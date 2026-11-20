@@ -6491,20 +6491,10 @@ body.lv-files-resizing {
   margin-bottom: 4px;
 }
 /* The card's summary line already names it (figure.js): the title shows in
-   full screen only, where that line is out of view. A chart left with no
-   subtitle floats its toolbar over its top corner instead of an empty row. */
+   full screen only, where that line is out of view. The toolbar keeps its
+   row — floated over a chart, it would cover a legend placed at the top. */
 .lv-tool .lv-figure--named:not(:fullscreen) .lv-figure-title {
   display: none;
-}
-.lv-tool .lv-chart.lv-figure--named:not(:fullscreen):not(:has(.lv-figure-subtitle)) {
-  position: relative;
-}
-.lv-tool .lv-chart.lv-figure--named:not(:fullscreen):not(:has(.lv-figure-subtitle)) .lv-figure-head {
-  position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 1;
-  margin: 0;
 }
 .lv-tool .lv-figure-heading {
   flex: 1;

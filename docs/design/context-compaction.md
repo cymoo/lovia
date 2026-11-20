@@ -1,6 +1,6 @@
 # 上下文压缩：设计与不变量
 
-> 状态：描述现状（含 #497–#499 之后的行为），并列出候选优化 · 2026-11-21 · 范围：`lovia/context/`（`compaction.py`、`stages.py`、`render.py`、`state.py`、`tokens.py`、`summarizer.py`、`policy.py`）、`lovia/runtime/loop.py`（压缩调用与溢出重试）、`lovia/providers/_windows.py`（窗口来源）。
+> 状态：描述现状（截至 v0.9.255：#497–#499、O1 #504、O2 #505、O3 #506），并列出候选优化（O4 #503、O6 #507 未做） · 2026-11-21 · 范围：`lovia/context/`（`compaction.py`、`stages.py`、`render.py`、`state.py`、`tokens.py`、`summarizer.py`、`policy.py`）、`lovia/runtime/loop.py`（压缩调用与溢出重试）、`lovia/providers/_windows.py`（窗口来源）。
 >
 > 用户文档是 `docs/{en,zh}/context.md`，讲"怎么用"。本文讲"为什么这样设计、哪些性质不能破坏、还能往哪里改"。改 `lovia/context/` 之前先读 §8 的不变量。
 
@@ -146,9 +146,11 @@ runner 只重试一次，并且只在重建的视图明显更小时重试（同�
 
 **O3　校准倍率按模型分开 —— 已完成。** 以前 `learned_windows` 按 `(endpoint, model)` 分开存，`ratio` 却是整个 session 共用一个：同一会话里换模型（web 的按对话切换模型、handoff 到别的 provider）后，前几轮用的是另一个 tokenizer 的倍率，偏低时可能导致一次溢出，偏高时过早压缩。现在 `CompactionState` 记下 `ratio` 属于哪个 `window_key`（`ratio_key`），换模型时把旧的存进 `ratios`、取回这个模型自己的（没见过就从 1.0 开始），并丢掉这一次的校准配对——它的真实 token 数来自另一个模型。没有 `ratio_key` 的旧状态直接认定属于当前模型，和以前一样；不升状态版本（升版本会丢掉所有会话的摘要和决策）。最多保留 8 个其他模型的倍率。
 
-**O4　利用 prompt cache 做摘要（潜在高收益，大改动，先测量）。** 现在的摘要调用把要折叠的一段转成纯文本，放进一个全新的对话发出去，不命中任何缓存。在昂贵模型上折叠几十万 token 时，这是压缩的主要成本。另一种做法：沿用当前视图的前缀（system + tools + 视图到覆盖边界），后面追加一句"请总结"，就能命中上一轮写下的缓存。难点：分块（一段比窗口还大时没法沿用前缀）、tools 要逐字一致才算同一前缀、各 provider 的缓存规则不同、摘要模型单独配置时用不上。先在真实会话里量一下摘要调用占总成本的比例，再决定。
+**O4　利用 prompt cache 做摘要（潜在高收益，大改动，先测量）—— 暂缓，见 #503。** 现在的摘要调用把要折叠的一段转成纯文本，放进一个全新的对话发出去，不命中任何缓存。在昂贵模型上折叠几十万 token 时，这是压缩的主要成本。另一种做法：沿用当前视图的前缀（system + tools + 视图到覆盖边界），后面追加一句"请总结"，就能命中上一轮写下的缓存。难点：分块（一段比窗口还大时没法沿用前缀）、tools 要逐字一致才算同一前缀、各 provider 的缓存规则不同、摘要模型单独配置时用不上。先在真实会话里量一下摘要调用占总成本的比例，再决定。
 
-**O5　文档与注释的漂移（必做，零风险）。** #497 之后，`stages.py` 里有几处注释仍说"溢出预算按失败 prompt 算"（现在只有估算不可信时才这样）；`architecture.md` 说熔断是"每个 run"的（实际随 scratch 跨 run 保留），阶段列表里也没有 `TruncateHistory`。随本文一起修正。
+**O5　文档与注释的漂移（必做，零风险）。** #497 之后，`stages.py` 里有几处注释仍说"溢出预算按失败 prompt 算"（现在只有估算不可信时才这样）；`architecture.md` 说熔断是"每个 run"的（实际随 scratch 跨 run 保留），阶段列表里也没有 `TruncateHistory`。随本文一起修正（#502）。
+
+**O6　跨 run 校准（中收益，小到中等改动）—— 未做，见 #507。** 实测 O3 时发现：新 run 的 `last_input_tokens` 从 `None` 开始，一个 run 最后一次调用的真实 token 数在 run 边界丢了，所以倍率只在 run 内部（工具循环的多次调用之间）校准；纯聊天每轮只有一次调用，倍率一直是 1.0。对 DeepSeek 这类被 bytes/4 高估的 tokenizer，压缩会早触发（约实际 60% 时）；对被低估的内容则晚触发、多一次被拒。改法：把最后一次调用的真实数和 context state 一起带到下一个 run（存进 segment meta），配对依然有效——带过来的 `last_view_estimate` 描述的正是那次调用的视图；换模型已由 O3 处理。
 
 ## 10. 已知限制与不做
 

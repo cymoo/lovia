@@ -929,6 +929,40 @@ async def test_a_view_over_the_window_truncates_before_sending():
     assert res.tokens_after is not None and res.tokens_after < 10_000
 
 
+async def test_a_ratio_raised_by_dense_content_does_not_condemn_a_prose_view():
+    """The ratio learned on digit-dense output (1.6) would put this prose
+    result past 1.4x the window, though it really fits: the pre-send verdict
+    uses the ratio only to lower the estimate, so the result stays verbatim."""
+    scratch: dict = {}
+    CompactionState(ratio=1.6).save(scratch)
+    newest = out("big", "W" * 140_000)
+    entries = [user("task"), *(_assistant("h" * 2_000) for _ in range(4))]
+    entries += [user("read the doc"), call("big"), newest]
+    res = await Compaction(context_window=32_000, summarizer=FakeSummarizer()).compact(
+        req(entries, model="m", scratch=scratch)
+    )
+    assert newest in res.entries
+
+
+async def test_a_carried_summary_too_big_for_the_window_is_not_hopeless():
+    """A 50K-token summary carried from a larger window can be re-folded, so
+    it is sheddable: an ordinary pass runs first and this turn's 12K result,
+    which fits, stays verbatim."""
+    body = [user("task"), _assistant("h" * 400)]
+    summary = SummaryState(
+        text="S" * 200_000, covered=2, fingerprint=fingerprint(body[:2])
+    )
+    body += [_assistant("m" * 4_000) for _ in range(10)]
+    newest = out("big", "W" * 48_000)
+    body += [user("read the log"), call("big"), newest]
+    scratch: dict = {}
+    CompactionState(summary=summary).save(scratch)
+    res = await Compaction(context_window=32_000, summarizer=FakeSummarizer()).compact(
+        req(body, model="m", scratch=scratch)
+    )
+    assert newest in res.entries
+
+
 async def test_a_view_only_slightly_over_the_window_is_left_to_the_provider():
     """~1.2x the window is within what an uncalibrated estimate over-counts:
     no lossy move on the estimate alone — the provider decides, and a real

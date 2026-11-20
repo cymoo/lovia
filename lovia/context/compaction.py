@@ -291,12 +291,22 @@ class Compaction:
         # estimate explains this "overflow", so the budget below is the
         # trusted one; the stages get a second, overflow-moves pass if the
         # ordinary one leaves the view still certainly over (the stage loop).
+        # The margin was sized for the raw bytes/4 over-count, so the ratio may
+        # only lower the estimate here: a ratio raised by dense content (logs,
+        # hashes) would otherwise over-count the prose that follows past it.
+        # Content that truly under-counts just falls back to send-and-recover.
         certain_limit = (
             int(model_window * _CERTAINLY_OVER) if model_window is not None else None
         )
-        over_capacity = (
-            not aggressive and certain_limit is not None and tokens > certain_limit
-        )
+        certain_ratio = min(state.ratio, 1.0)
+
+        def certainly_over(raw_total: int) -> bool:
+            return (
+                certain_limit is not None
+                and int(raw_total * certain_ratio) > certain_limit
+            )
+
+        over_capacity = not aggressive and certainly_over(raw + overhead)
         if window is None and not aggressive:
             # No budget information: never compact proactively; the
             # reactive overflow path remains as the safety net.
@@ -369,22 +379,22 @@ class Compaction:
         # cost the newest tool result or unsummarized history, so they must
         # not pre-empt an ordinary move that would make the view fit — and the
         # overflow pass only if it is still certainly over. When even an ideal
-        # ordinary pass could not get it under (what is left once the
-        # unprotected span is gone is still certainly over — this turn's own
-        # huge result, usually), skip straight to the overflow pass rather
-        # than pay for a summary that cannot help. The overflow pass is
-        # exactly the one the refusal would have triggered — the same budget,
-        # down to the same target — so this path ends where sending first
-        # would have, minus the refused call.
+        # ordinary pass could not get it under — the system message, the tool
+        # schemas and the protected tail alone are certainly over (this turn's
+        # own huge result, usually); everything before the tail, a carried-in
+        # summary included, counts as sheddable — skip straight to the
+        # overflow pass rather than pay for a summary that cannot help. The
+        # overflow pass is exactly the one the refusal would have triggered —
+        # the same budget, down to the same target — so this path ends where
+        # sending first would have, minus the refused call.
         passes = [aggressive]
         if over_capacity:
-            assert certain_limit is not None
-            covered = state.summary.covered if state.summary is not None else 0
-            compactable = int(
-                counter.count(render_entries(body[covered:protected_from], state))
-                * state.ratio
+            systems, _ = split_system(req.entries)
+            floor = (
+                counter.count([*systems, *render_entries(body[protected_from:], state)])
+                + overhead
             )
-            hopeless = tokens - compactable > certain_limit
+            hopeless = certainly_over(floor)
             passes = [True] if hopeless else [False, True]
             logger.info(
                 "context.compact: view (%d est. tokens) is certainly over the "
@@ -399,7 +409,7 @@ class Compaction:
         reasons: list[str] = []
         try:
             for n, overflow_moves in enumerate(passes):
-                if n and certain_limit is not None and tokens <= certain_limit:
+                if n and not certainly_over(raw + overhead):
                     break  # the ordinary pass got it out of certain refusal
                 for stage in self.stages:
                     ctx = StageContext(

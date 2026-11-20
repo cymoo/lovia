@@ -32,7 +32,7 @@ def _seed(root: Path) -> None:
     (root / "notes").mkdir()
     (root / "notes" / "plan.md").write_text("# Plan\n\nhello **world**\n")
     (root / "report.csv").write_text("name,score\nada,99\ngrace,97\n")
-    (root / ".secret").write_text("dotfile — hidden from listings")
+    (root / ".secret").write_text("a dotfile, not a denied one")
     (root / "secrets.env").write_text("API_KEY=nope")
     (root / "blob.bin").write_bytes(b"\x00\x01\x02 junk")
     (root / "pic.png").write_bytes(PNG_BYTES)
@@ -133,16 +133,22 @@ def test_feature_flag_false_without_any_workspace() -> None:
 # --------------------------------------------------------------- listing -
 
 
-def test_files_lists_one_level_dirs_first_dotfiles_hidden(
-    client: TestClient,
+def test_files_lists_one_level_dirs_first_dotfiles_shown(
+    client: TestClient, tmp_path: Path
 ) -> None:
+    """Dotfiles list (the change list names them, and reveals them here);
+    denied paths and ``.git`` don't."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".agents" / "skills").mkdir(parents=True)
     listing = client.get("/api/workspace/files", params={"agent": "bot"}).json()
     assert listing["truncated"] is False
     entries = listing["files"]
     paths = [e["path"] for e in entries]
-    assert paths[0] == "__pycache__"  # dirs first
+    assert paths[0] == ".agents"  # dirs first
     assert "notes/plan.md" not in paths  # one level only
-    assert ".secret" not in paths  # dotfiles hidden
+    assert ".secret" in paths
+    assert ".git" not in paths
+    assert "secrets.env" not in paths  # denied_paths
     sizes = {e["path"]: e["size"] for e in entries}
     assert sizes["report.csv"] > 0
 

@@ -247,7 +247,8 @@ API 路由抛出的错误都使用同一种响应体：
   或报错。
 - Workspace 的浏览和读取路由始终以只读方式访问工作区，不受 Agent 自身模式影响，并沿用
   Agent 的 `denied_paths`；附件上传写入的是对话自己的附件目录，不是工作区。文件列表会过滤 `__pycache__`、
-  `*.pyc`、`venv`、`node_modules` 等可重新生成的内容，也不会显示隐藏文件。
+  `*.pyc`、`venv`、`node_modules` 等可重新生成的内容。目录列表（`/api/workspace/files`）
+  会显示点开头的文件，但不含 `.git`，也不含读取规则不允许的（`.env`、凭据文件）。
 
 ### 阻塞式 Turn
 

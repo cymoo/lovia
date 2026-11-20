@@ -319,12 +319,18 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         path: str = Query(".", max_length=4096),
     ) -> WorkspaceListing:
         """One directory level, dirs first; ``truncated`` when the workspace's
-        listing cap (``max_list_results``) left entries out."""
+        listing cap (``max_list_results``) left entries out.
+
+        Dotfiles included: the change list (git) names them, and a click there
+        reveals the path in this tree. What the read rules don't allow (a
+        ``.env``, a credential store) stays out as ever, and ``.git`` too."""
         cfg = await require_cfg(agent, chat, root)
         async with _view(cfg) as session:
-            entries = await session.list_files(path)
+            entries = await session.list_files(path, include_hidden=True)
         return WorkspaceListing(
-            files=[entry_out(e) for e in entries],
+            files=[
+                entry_out(e) for e in entries if PurePosixPath(e.path).name != ".git"
+            ],
             truncated=getattr(entries, "truncated", False),
         )
 

@@ -269,8 +269,9 @@ To find Runs that finished while disconnected, query `/api/runs/history` with
   instead of starting a second one or failing.
 - Workspace routes always access the workspace in read-only mode, regardless
   of the Agent's mode, and preserve its `denied_paths`. They hide regenerable
-  files such as `__pycache__`, `*.pyc`, `venv`, and `node_modules`; dotfiles
-  stay hidden too.
+  files such as `__pycache__`, `*.pyc`, `venv`, and `node_modules`. The
+  folder listing (`/api/workspace/files`) shows dotfiles, except `.git` and
+  any the read rules don't allow (`.env`, credential stores).
 
 ### Blocking turns
 

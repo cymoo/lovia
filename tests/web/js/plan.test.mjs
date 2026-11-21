@@ -7,7 +7,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  PLAN_TOOL,
   currentStep,
   isPlanResult,
   notePlan,
@@ -17,6 +16,7 @@ import {
   planSummary,
   planText,
   resetPlans,
+  usePlanView,
 } from '../../../lovia/web/static/js/plan.js';
 import { toolLabel, toolViewChain } from '../../../lovia/web/static/js/tool-views.js';
 
@@ -110,12 +110,15 @@ test('each update diffs against the one before it; failed ones are skipped', () 
   assert.equal(planBefore('c3'), null);
 });
 
-test('the plan tool reads through its default view', () => {
+test('a plan row is a noted update, whatever its tool is called', () => {
   resetPlans();
-  assert.equal(toolLabel(PLAN_TOOL), 'Plan');
-  const [summary] = toolViewChain(PLAN_TOOL, 'summary');
-  const tool = (args, isError = false) => ({ id: 'x', name: PLAN_TOOL, args, status: 'done', isError });
-  assert.equal(summary(tool({ todos: [{ content: 'a' }] })), '0/1 · Made a plan');
-  assert.equal(summary(tool({ todos: [] }, true)), 'Plan update failed');
-  assert.equal(summary(tool({ path: 'x' })), null);
+  usePlanView('set_plan');
+  assert.equal(toolLabel('set_plan'), 'Plan');
+  const [summary] = toolViewChain('set_plan', 'summary');
+  const tool = (id, args) => ({ id, name: 'set_plan', args, status: 'done', isError: false });
+  const args = { todos: [{ content: 'a' }] };
+  // Not noted (still running, failed, or another tool of that name): its own line.
+  assert.equal(summary(tool('c1', args)), null);
+  notePlan('c1', parsePlan(args));
+  assert.equal(summary(tool('c1', args)), '0/1 · Made a plan');
 });

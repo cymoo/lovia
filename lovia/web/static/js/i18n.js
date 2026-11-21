@@ -240,7 +240,6 @@ const MESSAGES = {
     'plan.added': '新增 {n} 项',
     'plan.removed': '移除 {n} 项',
     'plan.revised': '调整计划',
-    'plan.failed': '计划更新失败',
     // ---- approvals
     'approval.ask': '允许{label}吗？',
     'approval.askTool': '允许调用 {name} 吗？',
@@ -1120,7 +1119,6 @@ const EN = {
   'plan.added': '{n} added',
   'plan.removed': '{n} removed',
   'plan.revised': 'Revised the plan',
-  'plan.failed': 'Plan update failed',
   'approval.ask': '{label}?',
   'approval.askTool': 'Allow {name}?',
   'approval.approve': 'Approve',

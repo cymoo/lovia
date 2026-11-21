@@ -65,7 +65,6 @@ import { findCommand, runCommand } from './commands.js';
 import { initFileMenu } from './file-menu.js';
 import { isStep, placeStep, removeStep } from './activity.js';
 import {
-  PLAN_TOOL,
   fillPlanRow,
   initPlan,
   isPlanResult,
@@ -762,32 +761,20 @@ const STICKY_SCROLL_PX = 160;
 const USER_SCROLL_PAUSE_MS = 900;
 
 // ---- The plan (Todo plugin): drawn by plan.js ------------------------------
-// Tool names whose calls are plan updates: the default, plus a renamed one
-// learned from a `todo` event (or, replayed, from its result).
-const planTools = new Set([PLAN_TOOL]);
-// Calls of other tools whose arguments read as a plan update: a renamed plan
-// tool whose first update clears the list gets no `todo` event to teach its
-// name, so its result decides (as a replay does).
+// A call is a plan update by its own outcome, never by its tool's name (the
+// plugin may be renamed, and another tool may own `todo_write`): live, the
+// `todo` event — or, for a clear, the plugin's own result text; replayed, that
+// text. Calls whose arguments could be one wait here for their outcome.
 /** @type {Set<string>} */
 const maybePlanCalls = new Set();
 
-/** @param {string | undefined} name */
-function learnPlanTool(name) {
-  if (!name || planTools.has(name)) return;
-  planTools.add(name);
-  usePlanView(name);
-}
-
 /**
- * Whether a replayed call is a plan update; learns a renamed tool.
- * @param {{ name: string, arguments?: string }} call
- * @param {{ text: string } | undefined} result
+ * Whether a replayed call is a successful plan update.
+ * @param {{ arguments?: string }} call
+ * @param {{ text: string, isError: boolean } | undefined} result
  */
 function isPlanCall(call, result) {
-  if (planTools.has(call.name)) return true;
-  if (!parsePlan(call.arguments) || !isPlanResult(result?.text)) return false;
-  learnPlanTool(call.name);
-  return true;
+  return !!result && !result.isError && isPlanResult(result.text) && !!parsePlan(call.arguments);
 }
 
 function clearPlanView() {
@@ -2687,8 +2674,8 @@ function renderHistoryWindow({ stickBottom }) {
       const result = pendingResults.get(call.id);
       if (!isPlanCall(call, result)) continue;
       planCalls.add(call.id);
-      const items = parsePlan(call.arguments);
-      if (!items || !result || result.isError) continue;
+      usePlanView(call.name);
+      const items = parsePlan(call.arguments) ?? [];
       notePlan(call.id, items);
       plan = items;
       lastTurn = true;
@@ -2778,8 +2765,7 @@ function renderHistoryWindow({ stickBottom }) {
           // running (its empty <pre> is hidden by CSS).
           if (result) setToolResult(node, result.text, result.isError, result.images);
           else refreshTool(node);
-          const items = planCalls.has(call.id) ? parsePlan(call.arguments) : null;
-          if (items && result && !result.isError) fillPlanRow(node, call.id, items);
+          if (planCalls.has(call.id)) fillPlanRow(node, call.id, parsePlan(call.arguments) ?? []);
           // A result-less ask_human call is still parked server-side: rebuild
           // its interactive card so a reloaded or re-attached tab can answer
           // (the live path can't — this render replaced the transcript).
@@ -2881,19 +2867,14 @@ transcriptEl?.addEventListener('wheel', (e) => {
     });
   }
 }, { passive: true });
-let _lastClientHeight = transcriptEl?.clientHeight ?? 0;
 transcriptEl?.addEventListener('scroll', () => {
   if (_programmaticScroll) return;
   const current = transcriptEl.scrollTop;
-  // The view resized (the composer grew or shrank: a tray, the plan line or
-  // its list) and the browser refit scrollTop to it: the reader didn't move.
-  if (transcriptEl.clientHeight !== _lastClientHeight) {
-    _lastClientHeight = transcriptEl.clientHeight;
-    _lastScrollTop = current;
-    updateScrollButton();
-    return;
-  }
-  const movedUp = current < _lastScrollTop;
+  // Up, yet still at the very end: the view grew (the composer shrank — a
+  // tray, the plan line or its list) and the browser refit scrollTop to it.
+  // A reader scrolling up always leaves the end.
+  const atEnd = transcriptEl.scrollHeight - current - transcriptEl.clientHeight < 1;
+  const movedUp = current < _lastScrollTop && !atEnd;
   const movedDown = current > _lastScrollTop;
   _lastScrollTop = current;
 
@@ -3182,13 +3163,12 @@ async function applyEvent({ event, data }) {
     case 'tool_call':
       finalizeReasoning();
       appendTool(data);
-      if (planTools.has(data.name)) store.toolNodes.get(data.id)?.classList.add('lv-tool--plan');
-      else if (parsePlan(data.arguments)) maybePlanCalls.add(data.id);
+      if (parsePlan(data.arguments)) maybePlanCalls.add(data.id);
       // ask_human parks the run on the user: draw the interactive card too.
       if (data.name === QUESTION_TOOL) appendQuestion(data);
       break;
 
-    case 'tool_result':
+    case 'tool_result': {
       // A finished shell command — or a background process observed via a
       // poll/kill — may have created/edited files we can't see individually;
       // let the Files panel mark its listing as maybe stale.
@@ -3201,17 +3181,17 @@ async function applyEvent({ event, data }) {
           data.is_error ? null : String(data.result ?? ''),
         );
       }
-      updateToolResult(data.id, data.result, data.is_error, data.images);
-      // A plan cleared to nothing lands as a plain result: sse.py sends the
-      // `todo` event only for a list with items.
-      const maybePlan = maybePlanCalls.delete(data.id);
-      if (
-        (planTools.has(data.name) || maybePlan) &&
-        !data.is_error &&
-        isPlanResult(data.result)
-      ) {
-        learnPlanTool(data.name);
+      // A plan cleared to nothing lands as a plain result (sse.py sends the
+      // `todo` event only for a list with items): the plugin's text says so.
+      // Noted before the row settles, so it draws as a plan update at once.
+      const cleared =
+        maybePlanCalls.delete(data.id) && !data.is_error && isPlanResult(data.result);
+      if (cleared) {
+        usePlanView(data.name);
         notePlan(data.id, []);
+      }
+      updateToolResult(data.id, data.result, data.is_error, data.images);
+      if (cleared) {
         const node = store.toolNodes.get(data.id);
         if (node) fillPlanRow(node, data.id, []);
         showPlan([]);
@@ -3222,12 +3202,13 @@ async function applyEvent({ event, data }) {
         emitWorkspaceTouch(data.name, store.toolNodes.get(data.id)?.dataset.toolPath);
       }
       break;
+    }
 
     case 'todo': {
       // A plan update that landed: it stands in for the call's tool_result.
       finalizeReasoning();
-      learnPlanTool(data.name);
       maybePlanCalls.delete(data.call_id);
+      if (data.name) usePlanView(data.name);
       const items = parsePlan({ todos: data.todos || [] }) ?? [];
       notePlan(data.call_id, items);
       const node = store.toolNodes.get(data.call_id);

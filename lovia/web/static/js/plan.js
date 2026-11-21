@@ -8,14 +8,12 @@
 //   says what changed; opened, it shows the whole list as of that update.
 //
 // Rows diff against the plan before them, so chat.js notes each successful
-// update here in transcript order (live and replay alike).
+// update here in transcript order (live and replay alike). Noting is also
+// what makes a call a plan row: by its outcome, never by its tool's name.
 
 import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { setDefaultView } from './tool-views.js';
-
-/** The Todo plugin's default tool name; a renamed one is learned at run time. */
-export const PLAN_TOOL = 'todo_write';
 
 /**
  * @typedef {{ content: string, status: 'pending' | 'in_progress' | 'completed',
@@ -190,20 +188,20 @@ export function resetPlans() {
 
 /** @type {import('./tool-views.js').ToolView['summary']} */
 function rowSummary(tool) {
-  if (tool.isError) return t('plan.failed');
+  // Only a noted update: another tool of the same name keeps its own line.
+  if (!before.has(tool.id)) return null;
   const items = parsePlan(tool.args);
   return items && planSummary(planBefore(tool.id), items);
 }
 
 /**
- * Read calls of tool `name` as plan updates (the default name is registered
- * below; chat.js adds a renamed one when it meets it).
+ * Let calls of tool `name` read as plan updates — the ones noted as such
+ * (chat.js calls it for each tool it has seen land one).
  * @param {string} name
  */
 export function usePlanView(name) {
   setDefaultView(name, { summary: rowSummary, label: () => t('toolview.plan') });
 }
-usePlanView(PLAN_TOOL);
 
 // ---- DOM -------------------------------------------------------------------
 

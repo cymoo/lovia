@@ -70,7 +70,7 @@ Two examples run fully offline, no key needed: `10_custom_provider.py` and
 | --- | --- |
 | `19_workspace.py` | the workspace as a plain library (no agent) |
 | `20_workspace_agent.py` | coding agent with file/shell tools + command policy |
-| `21_todos.py` | `Todo` plugin: externalized plan, per-turn reminders |
+| `21_todos.py` | `Todo` plugin: externalized plan, reminders when it goes stale |
 | `22_skills.py` | reusable skill bundles with progressive disclosure |
 | `23_memory.py` | long-term memory across runs (`Memory` plugin) |
 | `24_mcp.py` | tools from an MCP server |

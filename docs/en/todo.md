@@ -1,8 +1,8 @@
 # Todo
 
 `Todo` gives multi-step work an external checklist. The model updates it through
-a Tool and sees the current state every Turn, without repeatedly appending the
-reminder to the Transcript.
+a Tool and sees each update in that Tool's result; a list left unfinished and
+untouched for a while is re-shown to it.
 
 ```python
 from lovia import Agent, Runner, Todo
@@ -26,9 +26,14 @@ The plugin contributes two pieces:
 
 - `todo_write`, a full-replacement Tool. Every call contains the complete
   list, so the latest valid result is authoritative.
-- A View injector that renders the current list as a `<system-reminder>` on
-  every Turn. The reminder is transient: it does not enter the Transcript,
-  invalidate the stable prompt prefix, or accumulate over time.
+- A staleness reminder. When the list still has unfinished items and
+  `remind_every` model calls have passed since the last valid write, a View
+  injector re-shows it as a `<system-reminder>` — and again every
+  `remind_every` calls while it stays untouched. A write, or a list with
+  everything completed, stops it. The count comes from the Transcript, so
+  it spans Runs: in plain chat, one call per Run, the Runs add up. The
+  reminder is transient: it does not enter the Transcript, invalidate the
+  stable prompt prefix, or accumulate over time.
 
 Each `TodoItem` contains `content`, a status (`pending`, `in_progress`, or
 `completed`), and an optional `active_form`. At most one item remains
@@ -39,12 +44,13 @@ Each `TodoItem` contains `content`, a status (`pending`, `in_progress`, or
 ```python
 Todo(
     tool_name="todo_write",
-    inject=True,
+    remind_every=8,
     instructions=None,  # None removes the built-in usage guidance
 )
 ```
 
-Set `inject=False` to keep the Tool without the per-Turn reminder. Use a custom
+Set `remind_every=None` to keep the Tool without the reminder, or `1` to
+re-show the list on every call after a write. Use a custom
 `tool_name` only when another Tool already owns `todo_write`.
 
 ## Recovery and observation
@@ -65,6 +71,10 @@ function.
   [scheduling](web-server.md#scheduling) for future work.
 - Transient reminders are intentionally absent from Sessions and Checkpoints;
   audit the `todo_write` Tool calls instead.
+- The reminder counts model calls from the Transcript, which has no marker
+  between a text-only reply and a Run started with no new input
+  (`Runner.run(agent, [], session=...)`). When that Run's reply opens with
+  text (no reasoning first), the two count as one call.
 - A vague task may cause noisy plan churn. Instructions should reserve Todo for
   genuinely multi-step work.
 

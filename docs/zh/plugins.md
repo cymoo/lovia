@@ -212,7 +212,7 @@ agent = Agent(name="builder", model="<model>", plugins=[LoopGuard()])
 
 | 插件 | 一句话 | 指南 |
 | --- | --- | --- |
-| `Todo()` | 外置 Checklist，每轮重新展示 | [Todo](todo.md) |
+| `Todo()` | 外置 Checklist，久未更新时重新展示 | [Todo](todo.md) |
 | `Skills(...)` | 带渐进披露的指令包 | [Skills](skills.md) |
 | `MCP(...)` | Model Context Protocol 服务器提供的工具 | [MCP](mcp.md) |
 | `Memory(...)` | 跨会话长期记忆 | [记忆](memory.md) |

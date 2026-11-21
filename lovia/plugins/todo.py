@@ -1,4 +1,4 @@
-"""Todo plugin: an externalized, per-turn-visible checklist for long tasks.
+"""Todo plugin: an externalized checklist for long tasks.
 
 ``Todo`` is the plugin (a :class:`~lovia.plugins.Plugin`). Attach it to an agent::
 
@@ -20,9 +20,17 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from ..exceptions import UserError
 from ..run_context import RunContext
 from ..tools import Tool, tool
-from ..transcript import InputEntry, ToolCallEntry, TranscriptEntry
+from ..transcript import (
+    AssistantTextEntry,
+    InputEntry,
+    ReasoningEntry,
+    ToolCallEntry,
+    ToolResultEntry,
+    TranscriptEntry,
+)
 from .base import PluginInstance, ViewInjector
 
 TodoStatus = Literal["pending", "in_progress", "completed"]
@@ -114,19 +122,16 @@ class TodoList:
         return list(self.items)
 
     def rehydrate_from(self, entries: list[TranscriptEntry], *, tool_name: str) -> None:
-        """Rebuild from the most recent parseable ``todo_write`` call in ``entries``.
+        """Rebuild from the newest valid ``todo_write`` call in ``entries``.
 
         Used after a resume (fresh empty store) or a handoff (the new agent's
         store starts empty but the prior agent's writes are in the transcript).
-        A call whose arguments don't parse never mutated the store, so the scan
-        skips it and keeps looking for the newest valid write.
+        A call whose arguments don't parse, or whose result is an error, never
+        mutated the store, so the scan skips it and keeps looking.
         """
-        for entry in reversed(entries):
-            if isinstance(entry, ToolCallEntry) and entry.name == tool_name:
-                inputs = _parse_todo_items(entry.arguments)
-                if inputs is not None:
-                    self.replace(inputs)
-                    return
+        found = _newest_write(entries, tool_name)
+        if found is not None:
+            self.replace(found[1])
 
 
 def todos_from_entries(
@@ -135,7 +140,8 @@ def todos_from_entries(
     """Reconstruct the latest todo list from a transcript.
 
     Scans backward for the most recent ``tool_name`` call whose arguments parse
-    as a todo-write payload. Returns an empty list when none is found. Used by
+    as a todo-write payload and whose result is not an error. Returns an empty
+    list when none is found. Used by
     the web layer to surface current todos on session reload.
     """
     store = TodoList()
@@ -159,8 +165,7 @@ _INSTRUCTIONS = (
     "several things. Use your judgment: skip it for simple, single-step, or "
     "trivial requests, where a checklist only adds noise. When you do use it, "
     "capture the plan before starting, keep exactly one item in_progress at a "
-    "time, and mark each item completed as soon as it is done. Your current "
-    "list is shown back to you each turn."
+    "time, and mark each item completed as soon as it is done."
 )
 
 
@@ -184,7 +189,51 @@ def _make_tool(store: TodoList, tool_name: str) -> Tool:
     return todo_write
 
 
-def _make_injector(store: TodoList, tool_name: str) -> ViewInjector:
+# One call's output always comes in this order (``assemble_turn_entries`` in
+# runtime/model_turn.py), so a step back in it starts a new call.
+_OUTPUT_RANK = {ReasoningEntry: 0, AssistantTextEntry: 1, ToolCallEntry: 2}
+
+
+def _newest_write(
+    entries: list[TranscriptEntry], tool_name: str
+) -> tuple[int, list[TodoItem]] | None:
+    """The newest valid write in ``entries``: the model calls made after the
+    one that wrote it, and its items. ``None`` when there is none.
+
+    Valid means the arguments parse and the result is not an error (one still
+    pending counts: the tool may have run). The transcript has no turn
+    markers: a call's output is a run of reasoning, then text, then tool-call
+    entries, so a new call starts after any other entry or where that order
+    steps back. Derived from the transcript alone, the count spans runs,
+    resumes and handoffs, and an overflow retry of the same call gets the
+    same answer. One blind spot: a text-only reply followed by a run started
+    with no new input whose reply opens with text — a call can itself carry
+    several text entries, so those two count as one.
+    """
+    calls = 0
+    later: int | None = None  # rank of the entry just after this one
+    # Scanning backward, this holds each id's nearest result after the
+    # current position (a provider may reuse call ids).
+    failed: dict[str, bool] = {}
+    for entry in reversed(entries):
+        if isinstance(entry, ToolResultEntry):
+            failed[entry.call_id] = entry.is_error
+        rank = _OUTPUT_RANK.get(type(entry))
+        if rank is not None and (later is None or later < rank):
+            calls += 1  # this entry ends a call
+        later = rank
+        if (
+            isinstance(entry, ToolCallEntry)
+            and entry.name == tool_name
+            and not failed.get(entry.call_id, False)
+        ):
+            items = _parse_todo_items(entry.arguments)
+            if items is not None:
+                return calls - 1, items  # minus the writing call itself
+    return None
+
+
+def _make_injector(store: TodoList, tool_name: str, every: int) -> ViewInjector:
     reconciled = False
 
     def inject(ctx: RunContext[Any]) -> list[TranscriptEntry] | None:
@@ -193,12 +242,21 @@ def _make_injector(store: TodoList, tool_name: str) -> ViewInjector:
             reconciled = True
             if not store.items:
                 store.rehydrate_from(ctx.entries, tool_name=tool_name)
-        if not store.items:
+        if all(t.status == "completed" for t in store.items):
+            return None
+        found = _newest_write(ctx.entries, tool_name)
+        if found is None:
+            return None
+        since = found[0]
+        if since < every or since % every:
             return None
         text = (
             "<system-reminder>\n"
-            "Your current todo list (keep it updated; exactly one item should "
-            "be in_progress):\n"
+            "The todo list hasn't been updated in a while. If you are still "
+            "working through it, keep it current: exactly one item "
+            "in_progress, finished items marked completed. If it no longer "
+            "matches the work, rewrite or clear it. Don't mention this "
+            "reminder to the user. Current list:\n"
             f"{render_todos(store.items)}\n"
             "</system-reminder>"
         )
@@ -209,24 +267,41 @@ def _make_injector(store: TodoList, tool_name: str) -> ViewInjector:
 
 @dataclass
 class Todo:
-    """The todo plugin: a ``todo_write`` tool + a per-turn reminder injector.
+    """The todo plugin: a ``todo_write`` tool + a staleness reminder.
 
     Each run, ``setup`` builds a fresh :class:`TodoList` and closes both the
-    tool (which replaces the list) and the injector (which re-shows it every
-    turn) over it.
+    tool (which replaces the list) and the injector over it. The model sees
+    its list in each write's tool result; the injector re-shows it only when
+    unfinished items have gone ``remind_every`` model calls without a write
+    (and again every ``remind_every`` calls after that).
     """
 
     tool_name: str = "todo_write"
-    inject: bool = True
+    remind_every: int | None = 8
+    """Model calls without a write before the list is re-shown; ``None``
+    turns the reminder off."""
     instructions: str | None = _INSTRUCTIONS
     name: str = "todos"
 
+    def __post_init__(self) -> None:
+        every = self.remind_every
+        if every is not None and (
+            not isinstance(every, int) or isinstance(every, bool) or every < 1
+        ):
+            raise UserError(
+                f"Todo(remind_every={every!r}) must be a positive int or None",
+                hint="Use None to turn the reminder off.",
+            )
+
     async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         store = TodoList()
+        every = self.remind_every
         return PluginInstance(
             tools=[_make_tool(store, self.tool_name)],
             view_injectors=(
-                [_make_injector(store, self.tool_name)] if self.inject else []
+                [_make_injector(store, self.tool_name, every)]
+                if every is not None
+                else []
             ),
             instructions=self.instructions,
         )

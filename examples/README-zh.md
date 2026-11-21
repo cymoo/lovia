@@ -69,7 +69,7 @@ OpenAI-compatible 服务
 | --- | --- |
 | `19_workspace.py` | 把工作区当作普通库使用（无 Agent） |
 | `20_workspace_agent.py` | 带文件和 Shell 工具及命令策略的编码 Agent |
-| `21_todos.py` | `Todo` 插件：外化计划、每轮提醒 |
+| `21_todos.py` | `Todo` 插件：外化计划、久未更新时提醒 |
 | `22_skills.py` | 可复用的 Skill 指令包与渐进式披露 |
 | `23_memory.py` | 跨 Run 的长期记忆（`Memory` 插件） |
 | `24_mcp.py` | 来自 MCP server 的工具 |

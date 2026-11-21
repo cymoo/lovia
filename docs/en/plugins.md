@@ -233,7 +233,7 @@ agent = Agent(name="builder", model="<model>", plugins=[LoopGuard()])
 
 | Plugin | One line | Guide |
 | --- | --- | --- |
-| `Todo()` | externalized checklist, re-shown every turn | [Todo](todo.md) |
+| `Todo()` | externalized checklist, re-shown when it goes stale | [Todo](todo.md) |
 | `Skills(...)` | instruction bundles with progressive disclosure | [Skills](skills.md) |
 | `MCP(...)` | tools from Model Context Protocol servers | [MCP](mcp.md) |
 | `Memory(...)` | long-term, cross-session memory | [Memory](memory.md) |

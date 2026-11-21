@@ -41,11 +41,21 @@ export function parsePlan(args) {
   }
   const todos = /** @type {any} */ (obj)?.todos;
   if (!Array.isArray(todos)) return null;
-  return todos.map((todo) => ({
-    content: typeof todo?.content === 'string' ? todo.content : '',
-    status: STATUSES.includes(todo?.status) ? todo.status : 'pending',
-    active_form: typeof todo?.active_form === 'string' ? todo.active_form : null,
-  }));
+  let active = false;
+  return todos.map((todo) => {
+    let status = STATUSES.includes(todo?.status) ? todo.status : 'pending';
+    // The plugin keeps one item in progress and demotes the rest
+    // (`_normalize` in lovia/plugins/todo.py): read arguments as it stored them.
+    if (status === 'in_progress') {
+      if (active) status = 'pending';
+      active = true;
+    }
+    return {
+      content: typeof todo?.content === 'string' ? todo.content : '',
+      status,
+      active_form: typeof todo?.active_form === 'string' ? todo.active_form : null,
+    };
+  });
 }
 
 /**
@@ -58,7 +68,8 @@ export function planLabel(item) {
 
 /**
  * What one update changed. Items have no ids (each update replaces the whole
- * list), so they match by text.
+ * list), so they match by text — in order, one for one, as two items may
+ * share a text.
  * @param {PlanItem[] | null} prev
  * @param {PlanItem[]} next
  * @returns {{ done: PlanItem[], started: PlanItem[], added: number, removed: number,
@@ -66,18 +77,23 @@ export function planLabel(item) {
  *   items whose status moved; empty for a first plan.
  */
 export function planDiff(prev, next) {
-  const was = new Map((prev ?? []).map((item) => [item.content, item.status]));
-  const now = new Set(next.map((item) => item.content));
+  /** @type {Map<string, string[]>} each text's statuses, still unmatched */
+  const was = new Map();
+  for (const item of prev ?? []) {
+    const queue = was.get(item.content);
+    if (queue) queue.push(item.status);
+    else was.set(item.content, [item.status]);
+  }
   const out = { done: [], started: [], added: 0, removed: 0, changed: new Set() };
   next.forEach((item, i) => {
-    const before = was.get(item.content);
+    const before = was.get(item.content)?.shift();
     if (before === undefined) out.added += 1;
     if (before === item.status) return;
     if (prev) out.changed.add(i);
     if (item.status === 'completed' && before !== undefined) out.done.push(item);
     if (item.status === 'in_progress') out.started.push(item);
   });
-  for (const content of was.keys()) if (!now.has(content)) out.removed += 1;
+  for (const queue of was.values()) out.removed += queue.length;
   if (!prev) out.added = 0; // a first plan adds nothing: it is the plan
   return /** @type {any} */ (out);
 }

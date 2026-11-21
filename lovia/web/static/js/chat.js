@@ -765,6 +765,11 @@ const USER_SCROLL_PAUSE_MS = 900;
 // Tool names whose calls are plan updates: the default, plus a renamed one
 // learned from a `todo` event (or, replayed, from its result).
 const planTools = new Set([PLAN_TOOL]);
+// Calls of other tools whose arguments read as a plan update: a renamed plan
+// tool whose first update clears the list gets no `todo` event to teach its
+// name, so its result decides (as a replay does).
+/** @type {Set<string>} */
+const maybePlanCalls = new Set();
 
 /** @param {string | undefined} name */
 function learnPlanTool(name) {
@@ -787,6 +792,7 @@ function isPlanCall(call, result) {
 
 function clearPlanView() {
   resetPlans();
+  maybePlanCalls.clear();
   showPlan([]);
 }
 
@@ -2875,9 +2881,18 @@ transcriptEl?.addEventListener('wheel', (e) => {
     });
   }
 }, { passive: true });
+let _lastClientHeight = transcriptEl?.clientHeight ?? 0;
 transcriptEl?.addEventListener('scroll', () => {
   if (_programmaticScroll) return;
   const current = transcriptEl.scrollTop;
+  // The view resized (the composer grew or shrank: a tray, the plan line or
+  // its list) and the browser refit scrollTop to it: the reader didn't move.
+  if (transcriptEl.clientHeight !== _lastClientHeight) {
+    _lastClientHeight = transcriptEl.clientHeight;
+    _lastScrollTop = current;
+    updateScrollButton();
+    return;
+  }
   const movedUp = current < _lastScrollTop;
   const movedDown = current > _lastScrollTop;
   _lastScrollTop = current;
@@ -3168,6 +3183,7 @@ async function applyEvent({ event, data }) {
       finalizeReasoning();
       appendTool(data);
       if (planTools.has(data.name)) store.toolNodes.get(data.id)?.classList.add('lv-tool--plan');
+      else if (parsePlan(data.arguments)) maybePlanCalls.add(data.id);
       // ask_human parks the run on the user: draw the interactive card too.
       if (data.name === QUESTION_TOOL) appendQuestion(data);
       break;
@@ -3188,7 +3204,13 @@ async function applyEvent({ event, data }) {
       updateToolResult(data.id, data.result, data.is_error, data.images);
       // A plan cleared to nothing lands as a plain result: sse.py sends the
       // `todo` event only for a list with items.
-      if (planTools.has(data.name) && !data.is_error && isPlanResult(data.result)) {
+      const maybePlan = maybePlanCalls.delete(data.id);
+      if (
+        (planTools.has(data.name) || maybePlan) &&
+        !data.is_error &&
+        isPlanResult(data.result)
+      ) {
+        learnPlanTool(data.name);
         notePlan(data.id, []);
         const node = store.toolNodes.get(data.id);
         if (node) fillPlanRow(node, data.id, []);
@@ -3205,6 +3227,7 @@ async function applyEvent({ event, data }) {
       // A plan update that landed: it stands in for the call's tool_result.
       finalizeReasoning();
       learnPlanTool(data.name);
+      maybePlanCalls.delete(data.call_id);
       const items = parsePlan({ todos: data.todos || [] }) ?? [];
       notePlan(data.call_id, items);
       const node = store.toolNodes.get(data.call_id);

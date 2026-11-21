@@ -41,6 +41,25 @@ test('parses a call or its arguments object, and nothing else', () => {
   assert.equal(parsePlan({ todos: [{ content: 'a', status: 'blocked' }] })[0].status, 'pending');
 });
 
+test('arguments read as the plugin stored them: one item in progress', () => {
+  const args = { todos: [{ content: 'a', status: 'in_progress' }, { content: 'b', status: 'in_progress' }] };
+  assert.deepEqual(parsePlan(args).map((i) => i.status), ['in_progress', 'pending']);
+  // So a later update that starts b reports it, as the live list showed it.
+  const next = parsePlan({ todos: [{ content: 'a', status: 'completed' }, { content: 'b', status: 'in_progress' }] });
+  assert.equal(planSummary(parsePlan(args), next), '1/2 · Done “a” · Now “b”');
+});
+
+test('items sharing a text match one for one', () => {
+  const prev = [
+    { content: 'test', status: 'pending', active_form: null },
+    { content: 'test', status: 'completed', active_form: null },
+  ];
+  const next = [{ content: 'test', status: 'completed', active_form: null }];
+  // The first prev "test" pairs with it (now done); the second is gone.
+  assert.equal(planSummary(prev, next), '1/1 · Done “test” · 1 removed');
+  assert.equal(planSummary(prev, prev), '1/2 · Revised the plan');
+});
+
 test('a row line says progress, then what changed', () => {
   assert.equal(planSummary(null, items('~..')), '0/3 · Made a plan');
   assert.equal(planSummary(items('~..'), []), 'Cleared the plan');

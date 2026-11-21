@@ -453,8 +453,7 @@ class Compaction:
             # the failure counters).
             state.last_view_estimate = raw + overhead
             # No view goes out under this estimate: an id never handed out,
-            # so no count can pair with it (``None`` would read as pre-id
-            # state, which pairs unchecked).
+            # so no count can pair with it.
             state.last_view_id = secrets.token_hex(8)
             self._save(req, state)
             raise
@@ -503,20 +502,21 @@ class Compaction:
         """
         if not req.last_input_tokens or not state.last_view_estimate:
             return
-        if req.last_view_id != state.last_view_id:
+        if req.last_view_id is None or req.last_view_id != state.last_view_id:
             # The count measured a view this estimate doesn't describe —
             # another policy's, after a switch between runs on the session —
             # or its id was lost on the way. A wrong sample can peg the ratio,
-            # so it is skipped; only state from before ids (no id on either
-            # side) pairs unchecked.
+            # so it is skipped. (The runner always sends the id with a count
+            # for a view this policy returned, so an id-less count never is.)
             if req.last_view_id is None and not self._warned_lost_id:
-                # Not a one-off: a wrapper that rebuilds the request without
-                # ``last_view_id`` drops every sample, for good.
+                # Usually a one-off (a wrapper's own view for one turn); but a
+                # wrapper rebuilding every request without ``last_view_id``
+                # loses every sample, so say it once.
                 self._warned_lost_id = True
                 logger.info(
-                    "context.calibrate: a count arrived without last_view_id; "
-                    "calibration stays off until requests carry it (a wrapper "
-                    "rebuilding CompactionRequest must pass it on)"
+                    "context.calibrate: a count arrived without last_view_id "
+                    "(skipped); if every request lacks it, a wrapper building "
+                    "CompactionRequest is dropping it and calibration is off"
                 )
             else:
                 logger.debug("context.calibrate: count is for another view; skipped")

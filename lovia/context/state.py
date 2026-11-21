@@ -109,9 +109,9 @@ class CompactionState:
             by the previous ``compact()`` call, tool-schema overhead
             included; compared against the next real ``last_input_tokens``
             to update :attr:`ratio`.
-        last_view_id: The ``view_id`` that view was returned under; a count
-            pairs with :attr:`last_view_estimate` only when its request
-            names this id.
+        last_view_id: The ``view_id`` that view was returned under (after a
+            raised ``compact()``, one never handed out); a count pairs with
+            :attr:`last_view_estimate` only when its request names this id.
         summary_failures: Consecutive summarizer failures, carried in the
             scratch like every other decision. Past the summarize stage's
             limit the proactive path stops trying (circuit breaker); the

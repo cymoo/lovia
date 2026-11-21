@@ -1784,7 +1784,7 @@ async def test_decisions_persist_when_a_stage_raises_unexpectedly():
 
     # No view went out under that estimate: a count that comes next — say a
     # fail-open wrapper sent the raw transcript instead, id-less — must not
-    # pair with it (it would read as pre-id state, which pairs unchecked).
+    # pair with it, and no id handed out can match the stored one.
     assert state.last_view_id is not None
     pipeline.stages = []
     await pipeline.compact(

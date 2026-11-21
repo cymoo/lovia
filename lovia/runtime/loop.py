@@ -1737,7 +1737,7 @@ class RunLoop:
             # so a custom policy's scratch can't round-trip through the
             # checkpoint yet crash the session store here.
             meta[STATE_META_KEY] = to_json_safe(context_state)
-            if calibration is not None:
+            if calibration is not None and meta[STATE_META_KEY] is not None:
                 tokens, view_id = calibration
                 meta[CALIBRATION_META_KEY] = {
                     "input_tokens": tokens,

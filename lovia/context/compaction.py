@@ -188,6 +188,7 @@ class Compaction:
         # have its id() reused by a different provider (which would hand back the
         # wrong tokenizer). At most one provider is pinned at a time.
         self._counter: tuple[object | None, TokenCounter] | None = None
+        self._warned_lost_id = False
 
     async def compact(self, req: CompactionRequest) -> ContextResult:
         """Replay sticky decisions; make new ones only under token pressure."""
@@ -505,11 +506,20 @@ class Compaction:
         if req.last_view_id != state.last_view_id:
             # The count measured a view this estimate doesn't describe —
             # another policy's, after a switch between runs on the session —
-            # or its id was lost on the way (a wrapper rebuilding the
-            # request). A skipped sample is cheap; a wrong one can peg the
-            # ratio. Only state from before ids (no id on either side) pairs
-            # unchecked.
-            logger.debug("context.calibrate: count is for another view; skipped")
+            # or its id was lost on the way. A wrong sample can peg the ratio,
+            # so it is skipped; only state from before ids (no id on either
+            # side) pairs unchecked.
+            if req.last_view_id is None and not self._warned_lost_id:
+                # Not a one-off: a wrapper that rebuilds the request without
+                # ``last_view_id`` drops every sample, for good.
+                self._warned_lost_id = True
+                logger.info(
+                    "context.calibrate: a count arrived without last_view_id; "
+                    "calibration stays off until requests carry it (a wrapper "
+                    "rebuilding CompactionRequest must pass it on)"
+                )
+            else:
+                logger.debug("context.calibrate: count is for another view; skipped")
             return
         observed = req.last_input_tokens / max(1, state.last_view_estimate)
         prev_ratio = state.ratio

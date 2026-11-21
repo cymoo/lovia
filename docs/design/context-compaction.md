@@ -19,15 +19,15 @@
 
 ```text
 RunLoop（runtime/loop.py）
-  │ 每个 turn：CompactionRequest(entries=transcript 快照, provider, tools, last_input_tokens, scratch)
+  │ 每个 turn：CompactionRequest(entries=transcript 快照, provider, tools, last_input_tokens, last_view_id, scratch)
   ▼
 Compaction.compact（compaction.py）
   1. CompactionState.load(scratch)；校验摘要指纹；修正切在工具对中间的覆盖边界；GC 失效的决定
-  2. 校准：用上一次真实 input_tokens 更新估算倍率
+  2. 校准：用上一次真实 input_tokens 更新估算倍率（last_view_id 与 state 里的一致才算）
   3. 渲染 + 估算；确定窗口（配置 / provider / 报错学到的）
   4. 没超 trigger → 原样重放决定，结束
   5. 否则依次跑阶段，每个阶段改了状态就重新渲染、重新估算、重算受保护尾部；到 target 就停
-  6. state.save(scratch)，返回 ContextResult(view, compacted, reason, tokens_before/after, detail)
+  6. state.save(scratch)，返回 ContextResult(view, compacted, reason, tokens_before/after, detail, view_id)
   │
   ▼ provider 拒绝（ContextOverflowError，可能带 reported_window）
 RunLoop：overflow=True 再 compact 一次；视图明显变小（< 失败时的 95%）才重试一次，否则带 hint 抛出
@@ -54,7 +54,7 @@ RunLoop：overflow=True 再 compact 一次；视图明显变小（< 失败时的
 - 校准滞后一次调用。溢出重试时把 `last_input_tokens` 置空，避免拿上一轮的真实值去配这一轮更大的估算。
 - **配对只用一次**：runner 把真实数交给一次 `compact()` 后立刻清空（`RunState.calibration_tokens`），只有这次视图真正发出去的那次调用能重新写入。所以手上的真实数总是对应最近一次压缩交出的视图；这个视图的估算是否在 state 里，只有 policy 自己知道（见下一条）。
 - **跨 run**（O6）：run 正常结束时，最后一次调用的真实数和 `context_state` 一起写进同一个 segment 的 meta（`calibration`：`{"input_tokens", "view_id"}`）；下一个 run 从**同一个** segment 取出这两样，所以纯聊天（每轮一次调用）也会校准。
-- **配对由 policy 核对**：`Compaction` 每交出一个视图，就生成一个随机 `view_id`，和估算一起存进 state，并通过 `ContextResult.view_id` 交给 runner。runner 把真实数和"发出的那个视图的 id"一起记下（跨 run 时写进 segment），通过 `CompactionRequest.last_input_tokens` / `last_view_id` 交回。`Compaction` 只有在 id 和自己 state 里的一致时才校准。请求里没有 id 也算不一致（比如 wrapper 重建请求时把 id 丢了），只少一个样本；如果照旧信任，第 5 轮 review 复现出同样的配错（倍率 2.5）。只有引入 id 之前的旧 state（两边都没有 id）不做核对。
+- **配对由 policy 核对**：`Compaction` 每交出一个视图，就生成一个随机 `view_id`，和估算一起存进 state，并通过 `ContextResult.view_id` 交给 runner。runner 把真实数和"发出的那个视图的 id"一起记下（跨 run 时写进 segment），通过 `CompactionRequest.last_input_tokens` / `last_view_id` 交回。`Compaction` 只有在 id 和自己 state 里的一致时才校准。请求里没有 id 也算不一致；如果照旧信任，第 5 轮 review 复现出同样的配错（倍率 2.5）。代价是：wrapper 按字段重建 `CompactionRequest` 时如果不把 `last_view_id` 传下去，每个样本都会被跳过，整个会话都不校准（倍率停在 1.0，和 main 上的纯聊天一样）。所以第一次出现时会打一条 INFO 日志，文档也要求 wrapper 把它传下去（或用 `dataclasses.replace`）。只有引入 id 之前的旧 state（两边都没有 id）不做核对。
   - 为什么不让 runner 判断：同一个会话在两个 run 之间可以换 policy，这时 state 里的估算描述的是更早的视图。#509 的 review 先后试了三种由 runner 判断的办法，每种都被复现出配错，倍率顶到 2.4–2.5：
     1. "最后那次压缩写过 state"：挡不住只写自己 key 的自定义 policy；
     2. "policy 声明 `calibrates`"：两个都声明的 policy 来回切换照样配错；

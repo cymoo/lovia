@@ -175,7 +175,8 @@ required_sections=...)`，不要 fork 这段实现。
 所依据的窗口，runner 转发为 `MessageCompleted.context_window`，web 的上下文圆环据此显示）。
 要用真实 token 数校准，就返回一个新的 `view_id`，并把它和估算一起存进 `scratch`。runner 会把它作为 `last_view_id`，
 连同发送这个视图的那次调用的真实数一起交回（也会带到同一 session 的下一次运行）；只有 id 对得上，这个配对才属于你。
-包装别的 policy 并改动其 `entries` 的 wrapper 必须清掉 `view_id`。可选 `tools()` 方法可以贡献工具；
+包装别的 policy 并改动其 `entries` 的 wrapper 必须清掉 `view_id`；自己构造 `CompactionRequest` 的 wrapper 必须把
+`last_view_id` 传下去（或者用 `dataclasses.replace`），否则 `Compaction` 会跳过每一个样本，永远不校准。可选 `tools()` 方法可以贡献工具；
 `lovia.tools` 里的 `recall_tool_result(store)` 是 `Compaction` 用来提供 recall 的工厂，
 任何会丢内容的策略都可以复用。`lovia/context/policy.py` 很短，一屏就能读完。
 

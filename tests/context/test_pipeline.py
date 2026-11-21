@@ -362,6 +362,23 @@ async def test_a_count_pairs_only_with_the_view_it_names(named: str):
     assert CompactionState.load(scratch).ratio == expected
 
 
+async def test_a_request_that_lost_its_view_id_says_so_once(caplog):
+    """A wrapper rebuilding the request without ``last_view_id`` turns
+    calibration off for good — worth one line at INFO, not silence."""
+    pipeline = _pipeline(context_window=1_000_000)
+    scratch: dict = {}
+    entries = [user("x" * 400) for _ in range(10)]
+    await pipeline.compact(req(entries, scratch=scratch))
+    with caplog.at_level("INFO", logger="lovia.context.compaction"):
+        for _ in range(3):
+            await pipeline.compact(
+                req(entries, scratch=scratch, last_input_tokens=5_000)
+            )
+    lost = [r for r in caplog.records if "without last_view_id" in r.getMessage()]
+    assert len(lost) == 1
+    assert CompactionState.load(scratch).ratio == 1.0
+
+
 async def test_tool_schema_overhead_enters_the_estimate():
     """A big tool-schema payload triggers proactive compaction even though
     the rendered view alone sits far below the watermark (the small-transcript

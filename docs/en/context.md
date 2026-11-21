@@ -226,7 +226,9 @@ return a fresh `view_id` and keep it beside your estimate in `scratch`: the
 runner hands it back as `last_view_id` with the count of the call that sent
 that view — also into the next run on the session — and the pair is yours
 only when the ids match. A wrapper that changes a delegate's `entries` must
-clear `view_id`. An optional `tools()` method contributes tools —
+clear `view_id`; one that builds its own `CompactionRequest` must pass
+`last_view_id` on (or use `dataclasses.replace`) — without it, `Compaction`
+skips every sample and never calibrates. An optional `tools()` method contributes tools —
 `recall_tool_result(store)` from `lovia.tools` is the factory
 `Compaction` uses to ship recall, reusable by any policy that drops
 content. `lovia/context/policy.py` is a one-screen read.

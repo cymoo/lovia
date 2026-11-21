@@ -994,11 +994,21 @@ class RunLoop:
         main call goes out. ``last_input_tokens`` is left alone: it calibrates
         the main call's estimate and a summary call would skew it.
         """
+        # Values held, not ids: identity below can't match a recycled object.
+        before = dict(state.context_state)
+        state.calibration_carries = False
         try:
             result = await self.context_policy.compact(request)
         finally:
             state.run_ctx.usage.add(request.usage)
             request.usage = Usage()
+        # A policy that wrote nothing (``NoopContextPolicy``, a custom one on a
+        # session another policy used) hands back a state whose estimate is of
+        # some older view — the next call's count must not travel with it.
+        after = state.context_state
+        state.calibration_carries = after.keys() != before.keys() or any(
+            after[key] is not value for key, value in before.items()
+        )
         if self.budget is not None:
             self.budget.check(state.run_ctx.usage)
         return result
@@ -1669,7 +1679,9 @@ class RunLoop:
         await self._append_session_segment(
             state.run_entries,
             context_state=state.context_state,
-            calibration_tokens=state.calibration_tokens,
+            calibration_tokens=(
+                state.calibration_tokens if state.calibration_carries else None
+            ),
             notice=state.context_notice,
             timing=(state.started_at, time.time()),
         )

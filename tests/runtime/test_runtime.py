@@ -385,6 +385,36 @@ async def test_the_carried_count_comes_from_the_segment_whose_state_is_carried()
     assert policy.seen == [None, 120]
 
 
+async def test_a_run_whose_policy_left_the_state_alone_carries_no_count() -> None:
+    """A run under a policy that writes no state (here ``NoopContextPolicy``)
+    hands the previous run's state on unchanged: its estimate is of an older
+    view, so this run's final count must not be stored beside it."""
+    from lovia.context import NoopContextPolicy
+
+    policy = _CarryingPolicy()
+    session = InMemorySession()
+    agent = Agent(
+        name="t",
+        model=ScriptedProvider(
+            [_counted("a", 30), _counted("b", 10_050), _counted("c", 1)]
+        ),
+    )
+    await Runner.run(
+        agent, "one", context_policy=policy, session=session, session_id="s"
+    )
+    await Runner.run(
+        agent,
+        "two",
+        context_policy=NoopContextPolicy(),
+        session=session,
+        session_id="s",
+    )
+    await Runner.run(
+        agent, "three", context_policy=policy, session=session, session_id="s"
+    )
+    assert policy.seen == [None, None]
+
+
 async def test_a_final_call_without_a_count_carries_none() -> None:
     policy = _CarryingPolicy()
     session = InMemorySession()

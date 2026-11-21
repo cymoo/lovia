@@ -52,8 +52,8 @@ RunLoop：overflow=True 再 compact 一次；视图明显变小（< 失败时的
 - **校准**：`ratio` 是钳在 `[0.5, 2.5]` 的 EMA（α=0.2），用 `last_input_tokens / last_view_estimate` 更新，两边都含 schema。实测各类文本收敛到 0.72–0.87，稳态误差约 1%（`docs/ratio-calibration.md`）。倍率按模型（`window_key`）分开：会话中途换模型时各用各的，刚换过来的那次不做校准（O3）。
 - 各 adapter 把 `Usage.input_tokens` 归一成**完整** prompt 大小（Anthropic 的缓存读写量会加回去），否则开了 prompt cache 后倍率会塌到下限。
 - 校准滞后一次调用。溢出重试时把 `last_input_tokens` 置空，避免拿上一轮的真实值去配这一轮更大的估算。
-- **配对只用一次**：runner 把真实数交给一次 `compact()` 后立刻清空（`RunState.calibration_tokens`），只有这次视图真正发出去的那次调用能重新写入。所以任何时刻手上的真实数，都对应 state 里最新的那个估算。
-- **跨 run**（O6）：run 正常结束时，最后一次调用的真实数和 `context_state` 一起写进同一个 segment 的 meta（`calibration_tokens`）；下一个 run 从**同一个** segment 取出这两样，所以纯聊天（每轮一次调用）也会校准。checkpoint 恢复、web 停止或挂起时写入的 segment 不带这个数，下一个 run 只是少一个样本。
+- **配对只用一次**：runner 把真实数交给一次 `compact()` 后立刻清空（`RunState.calibration_tokens`），只有这次视图真正发出去的那次调用能重新写入。所以手上的真实数总是对应最近一次压缩交出的视图；这个视图的估算是否在 state 里，取决于那次压缩有没有写 state（见下一条）。
+- **跨 run**（O6）：run 正常结束时，最后一次调用的真实数和 `context_state` 一起写进同一个 segment 的 meta（`calibration_tokens`）；下一个 run 从**同一个** segment 取出这两样，所以纯聊天（每轮一次调用）也会校准。只有最后那次压缩真的写了 state 才带：换成不写 state 的 policy（`NoopContextPolicy`、自定义 policy）跑的 run，会把上一个 run 的 state 原样传下去，里面的估算描述的是更早的视图（#509 第 1 轮 review 复现：配错后倍率直接顶到 2.5）。判断方式是比较压缩前后 state 顶层值的对象身份，不需要 policy 配合。checkpoint 恢复、web 停止或挂起时写入的 segment 不带这个数，下一个 run 只是少一个样本。
 
 ## 4. 水位与预算
 
@@ -152,7 +152,7 @@ runner 只重试一次，并且只在重建的视图明显更小时重试（同�
 
 **O5　文档与注释的漂移（必做，零风险）。** #497 之后，`stages.py` 里有几处注释仍说"溢出预算按失败 prompt 算"（现在只有估算不可信时才这样）；`architecture.md` 说熔断是"每个 run"的（实际随 scratch 跨 run 保留），阶段列表里也没有 `TruncateHistory`。随本文一起修正（#502）。
 
-**O6　跨 run 校准 —— 已完成（#507）。** 实测 O3 时发现：新 run 的 `last_input_tokens` 从 `None` 开始，一个 run 最后一次调用的真实 token 数在 run 边界丢了，所以倍率只在 run 内部（工具循环的多次调用之间）校准；纯聊天每轮只有一次调用，倍率一直是 1.0。对 DeepSeek 这类被 bytes/4 高估的 tokenizer，压缩会早触发（约实际 60% 时）；对被低估的内容则晚触发、多一次被拒。现在 run 正常结束时把最后一次调用的真实数写进 segment meta，和 `context_state` 放在一起，下一个 run 从同一个 segment 取出：带过来的 `last_view_estimate` 描述的正是那次调用的视图，配对有效；换模型由 O3 处理。为了让"手上的真实数一定对应最新估算"在 run 边界也成立，runner 在把真实数交给 `compact()` 之后立刻清空它。只覆盖正常完成的 run：恢复、停止、挂起的 segment 由 checkpoint snapshot 写成，snapshot 不带这个数，为一个样本改 snapshot 结构不值得。
+**O6　跨 run 校准 —— 已完成（#507）。** 实测 O3 时发现：新 run 的 `last_input_tokens` 从 `None` 开始，一个 run 最后一次调用的真实 token 数在 run 边界丢了，所以倍率只在 run 内部（工具循环的多次调用之间）校准；纯聊天每轮只有一次调用，倍率一直是 1.0。对 DeepSeek 这类被 bytes/4 高估的 tokenizer，压缩会早触发（约实际 60% 时）；对被低估的内容则晚触发、多一次被拒。现在 run 正常结束时把最后一次调用的真实数写进 segment meta，和 `context_state` 放在一起，下一个 run 从同一个 segment 取出：带过来的 `last_view_estimate` 描述的正是那次调用的视图，配对有效；换模型由 O3 处理。为了让"手上的真实数一定对应最新估算"在 run 边界也成立，runner 在把真实数交给 `compact()` 之后立刻清空它，并且只在最后那次压缩写过 state 时才把它带出 run。只覆盖正常完成的 run：恢复、停止、挂起的 segment 由 checkpoint snapshot 写成，snapshot 不带这个数，为一个样本改 snapshot 结构不值得。
 
 ## 10. 已知限制与不做
 

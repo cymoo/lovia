@@ -5925,9 +5925,10 @@ body.lv-files-resizing {
 }
 
 /* A plan row's body is the list: the raw arguments and the plugin's text
-   rendering of the same list would only repeat it (copy still copies it). */
+   rendering of the same list would only repeat it (copy still copies it). A
+   row without a list — a failed or clearing update — keeps its text. */
 .lv-tool--plan .lv-tool-params,
-.lv-tool--plan .lv-tool-result {
+.lv-tool--plan .lv-tool-result-box:has(> .lv-plan-list) :is(.lv-tool-result, .lv-tool-expand) {
   display: none;
 }
 .lv-tool--plan .lv-tool-result-box > .lv-plan-list {

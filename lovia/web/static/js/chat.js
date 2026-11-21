@@ -2684,7 +2684,7 @@ function renderHistoryWindow({ stickBottom }) {
       plan = items;
     }
   }
-  showPlan(plan);
+  showPlan(plan, { update: false });
 
   // Absolute user-turn numbering spans the FULL history — the rendered
   // window may start mid-transcript.
@@ -3181,6 +3181,14 @@ async function applyEvent({ event, data }) {
         );
       }
       updateToolResult(data.id, data.result, data.is_error, data.images);
+      // A plan cleared to nothing lands as a plain result: sse.py sends the
+      // `todo` event only for a list with items.
+      if (planTools.has(data.name) && !data.is_error && isPlanResult(data.result)) {
+        notePlan(data.id, []);
+        const node = store.toolNodes.get(data.id);
+        if (node) fillPlanRow(node, data.id, []);
+        showPlan([]);
+      }
       // A write counts as "touched" once it landed — not at the call, which
       // a denied approval or a failing tool may never turn into a file.
       if (!data.is_error) {

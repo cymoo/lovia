@@ -589,6 +589,7 @@ export function setToolResult(node, result, isError, images, live = false) {
 
   if (text.length > 1500 || text.split('\n').length > RESULT_EXPANDABLE_LINES) {
     const expand = toolActionBtn('maximize-2', t('tool.expand'));
+    expand.classList.add('lv-tool-expand');
     expand.addEventListener('click', () => {
       const on = pre.classList.toggle('lv-expanded');
       expand.title = on ? t('tool.collapse') : t('tool.expand');

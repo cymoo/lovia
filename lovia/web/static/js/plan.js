@@ -233,12 +233,23 @@ export function fillPlanRow(node, callId, items) {
   const box = node.querySelector('.lv-tool-result-box');
   if (!box) return;
   box.querySelector(':scope > .lv-plan-list')?.remove();
+  // A cleared plan has no list: its result text says so (styles.css shows
+  // the text unless a list stands in for it).
+  if (!items.length) return;
   const prev = planBefore(callId);
   box.append(planList(items, prev ? planDiff(prev, items).changed : new Set()));
 }
 
 const OPEN_KEY = 'lovia.plan.open';
-const plan = { items: /** @type {PlanItem[]} */ ([]), live: false, open: readOpen() };
+const plan = {
+  items: /** @type {PlanItem[]} */ ([]),
+  live: false,
+  open: readOpen(),
+  // The run going now finished the plan: its line stays until the run ends.
+  finished: false,
+  // The step last announced, so a run starting or ending doesn't re-announce it.
+  spoken: '',
+};
 
 function readOpen() {
   try {
@@ -251,9 +262,19 @@ function readOpen() {
 /**
  * Show `items` as the chat's current plan (an empty list hides the line).
  * @param {PlanItem[]} items
+ * @param {{ update?: boolean }} [opts] `update`: an update that just landed —
+ *   false for a plan read back from history, which is no news.
  */
-export function showPlan(items) {
+export function showPlan(items, { update = true } = {}) {
   plan.items = items;
+  const step = currentStep(items);
+  plan.finished = update && plan.live && items.length > 0 && !step;
+  // Say a new step out loud as a run works through the plan — not when a
+  // chat opens on one (the line itself is no live region: a run starting or
+  // ending rewords it without the plan changing).
+  const spoken = !items.length ? '' : step ? planLabel(step.item) : t('plan.allDone');
+  if (update && plan.live && spoken && spoken !== plan.spoken) announce(spoken);
+  plan.spoken = spoken;
   drawPlan();
 }
 
@@ -263,7 +284,18 @@ export function showPlan(items) {
  */
 export function setPlanLive(live) {
   plan.live = live;
+  if (live) plan.finished = false; // a plan finished earlier is no news now
   drawPlan();
+}
+
+/** @param {string} text */
+function announce(text) {
+  const el = document.getElementById('sr-status'); // outside the busy transcript
+  if (!el) return;
+  el.textContent = '';
+  setTimeout(() => {
+    el.textContent = text;
+  }, 30);
 }
 
 function drawPlan() {
@@ -273,7 +305,7 @@ function drawPlan() {
   if (!root || !line || !body) return;
   const { items, live } = plan;
   const step = currentStep(items);
-  if (!items.length || (!step && !live)) {
+  if (!items.length || (!step && !(live && plan.finished))) {
     root.hidden = true;
     body.replaceChildren();
     return;

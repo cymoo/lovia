@@ -45,9 +45,11 @@ class CompactionRequest:
 
     last_input_tokens: int | None = None
     """The previous call's real provider input-token count — the call that
-    sent the view this policy returned last time (on a run's first call, the
-    previous run's final call, carried in the session). ``None`` when that
-    call reported none or nothing pairs (a resumed run, an overflow retry).
+    sent the view the policy returned last time. On a run's first call, the
+    previous run's final call, carried in the session when that run's policy
+    was of the same class and set :attr:`ContextResult.calibrates`. ``None``
+    when that call reported none or nothing pairs (a resumed run's first
+    call, an overflow retry, a different policy before).
     Lags the current transcript by one call; the default pipeline uses it to
     *calibrate* its estimates rather than trusting it directly."""
 
@@ -124,9 +126,10 @@ class ContextResult:
     """Set when ``scratch`` now holds the policy's estimate of exactly this
     view, to be paired with the real input-token count of the call that sends
     it. The runner then carries that count with the scratch into the next run
-    on the session, as its first call's ``last_input_tokens``. Leave it unset
-    otherwise: a count stored beside an estimate of another view would
-    mis-calibrate whichever policy reads the scratch next."""
+    on the session, as its first call's ``last_input_tokens`` — when that
+    run's policy is of the same class. Leave it unset otherwise; a wrapper
+    that returns a delegate's result with ``entries`` changed must clear it,
+    since the count would measure a view the estimate does not describe."""
 
 
 class ContextPolicy(Protocol):

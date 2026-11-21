@@ -307,7 +307,7 @@ async def test_live_plain_chat_calibrates_across_runs():
     ratios = [s.ratio for s in states]
     assert ratios[0] == 1.0 and ratios[-1] != 1.0, ratios
     last = segments[-1].meta or {}
-    real = last[CALIBRATION_META_KEY]
+    real = last[CALIBRATION_META_KEY]["input_tokens"]
     estimate = states[-1].last_view_estimate
     assert estimate is not None
     # Calibrated estimate vs the endpoint's real count of the same view.

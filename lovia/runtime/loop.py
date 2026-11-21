@@ -140,11 +140,24 @@ def _log_once(*key: object) -> bool:
     return True
 
 
-def _positive_int(value: object) -> int | None:
-    """``value`` when it is a positive int (not a bool), else None — for a
-    count read back from a store that persists ``meta`` verbatim."""
-    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-        return value
+def _policy_id(policy: object) -> str:
+    """Which kind of policy owns a carried count: the scratch layout (where
+    its estimate lives) is a property of the policy's class."""
+    kind = type(policy)
+    return f"{kind.__module__}.{kind.__qualname__}"
+
+
+def _carried_count(meta: dict[str, Any], policy: object) -> int | None:
+    """The previous run's final count, when the policy that paired it with
+    its estimate is the same kind as ``policy`` — a different policy keeps
+    its estimate elsewhere in the scratch, or none. Tolerant of whatever a
+    store persisted (``meta`` is stored verbatim)."""
+    carried = meta.get(CALIBRATION_META_KEY)
+    if not isinstance(carried, dict) or carried.get("policy") != _policy_id(policy):
+        return None
+    tokens = carried.get("input_tokens")
+    if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
+        return tokens
     return None
 
 
@@ -697,8 +710,8 @@ class RunLoop:
                     context_state = dict(prior)
                     # The count from the *same* segment: it is the real size
                     # of the view whose estimate this state carries.
-                    calibration_tokens = _positive_int(
-                        (seg.meta or {}).get(CALIBRATION_META_KEY)
+                    calibration_tokens = _carried_count(
+                        seg.meta or {}, self.context_policy
                     )
                     break
 
@@ -1701,8 +1714,8 @@ class RunLoop:
         * the policy's carried state — the same opaque scratch the checkpoint
           stores — so the next run on this session resumes its decisions
           without re-deriving them — and beside it the final call's real
-          input count, which pairs with the estimate that state carries (only
-          with it: a segment without the state gets no count);
+          input count with the kind of policy whose estimate it pairs with
+          (only with the state: a segment without it gets no count);
         * the run's last compaction notice, for the web UI to replay on
           reload (the replay path passes ``None``: not persisted in snapshots);
         * its ``timing`` — ``(started_at, finished_at)``, untimed when the
@@ -1719,7 +1732,10 @@ class RunLoop:
             # checkpoint yet crash the session store here.
             meta[STATE_META_KEY] = to_json_safe(context_state)
             if calibration_tokens is not None:
-                meta[CALIBRATION_META_KEY] = calibration_tokens
+                meta[CALIBRATION_META_KEY] = {
+                    "input_tokens": calibration_tokens,
+                    "policy": _policy_id(self.context_policy),
+                }
         if notice is not None:
             meta[NOTICE_META_KEY] = asdict(notice)
         started_at, finished_at = timing

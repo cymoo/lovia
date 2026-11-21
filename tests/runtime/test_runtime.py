@@ -342,6 +342,12 @@ class _CarryingPolicy:
         return ContextResult(entries=list(req.entries), calibrates=self.calibrates)
 
 
+def _owned(tokens: object) -> dict[str, object]:
+    """A carried count as ``_CarryingPolicy`` would have stored it."""
+    owner = f"{_CarryingPolicy.__module__}.{_CarryingPolicy.__qualname__}"
+    return {"input_tokens": tokens, "policy": owner}
+
+
 def _counted(reply: str, tokens: int) -> AssistantTurn:
     turn = text(reply)
     turn.usage = Usage(input_tokens=tokens, output_tokens=1)
@@ -379,7 +385,7 @@ async def test_the_carried_count_comes_from_the_segment_whose_state_is_carried()
     await session.append(
         "s",
         [InputEntry(role="user", content="appended")],
-        meta={"calibration_tokens": 999},
+        meta={"calibration": _owned(999)},
     )
     await Runner.run(
         agent, "two", context_policy=policy, session=session, session_id="s"
@@ -387,19 +393,27 @@ async def test_the_carried_count_comes_from_the_segment_whose_state_is_carried()
     assert policy.seen == [None, 120]
 
 
-@pytest.mark.parametrize("between", ["noop", "own-key"])
+class _OtherCarryingPolicy(_CarryingPolicy):
+    """Also calibrates, but is another class: its estimate isn't the one the
+    first policy's scratch key holds."""
+
+
+@pytest.mark.parametrize("between", ["noop", "own-key", "other-calibrating"])
 async def test_a_run_whose_policy_does_not_calibrate_carries_no_count(
     between: str,
 ) -> None:
     """A run under a policy that doesn't declare ``calibrates`` hands the
     previous run's estimate on — of an older view — whether it writes nothing
     (``NoopContextPolicy``) or keys of its own. Its final count must not be
-    stored beside that estimate."""
+    stored beside that estimate. One that does declare it, but is another
+    class, keeps its estimate elsewhere: its count goes to no other class."""
     from lovia.context import NoopContextPolicy
 
-    other: Any = (
-        NoopContextPolicy() if between == "noop" else _CarryingPolicy(calibrates=False)
-    )
+    other: Any = {
+        "noop": NoopContextPolicy(),
+        "own-key": _CarryingPolicy(calibrates=False),
+        "other-calibrating": _OtherCarryingPolicy(),
+    }[between]
     policy = _CarryingPolicy()
     session = InMemorySession()
     agent = Agent(
@@ -436,7 +450,7 @@ async def test_a_final_call_without_a_count_carries_none() -> None:
         )
     assert policy.seen == [None, None]
     segments = await session.segments("s")
-    assert "calibration_tokens" not in (segments[0].meta or {})
+    assert "calibration" not in (segments[0].meta or {})
 
 
 async def test_single_call_runs_move_the_default_policys_ratio() -> None:
@@ -456,25 +470,43 @@ async def test_single_call_runs_move_the_default_policys_ratio() -> None:
             agent, prompt, context_policy=policy, session=session, session_id="s"
         )
     first, second = await session.segments("s")
-    assert (first.meta or {})["calibration_tokens"] == 30
+    assert (first.meta or {})["calibration"] == {
+        "input_tokens": 30,
+        "policy": "lovia.context.compaction.Compaction",
+    }
     assert CompactionState.load(first.meta["context_state"]).ratio == 1.0
     assert CompactionState.load(second.meta["context_state"]).ratio < 1.0
 
 
-@pytest.mark.parametrize("stored", ["120", True, -5, 0, 1.5])
-async def test_a_malformed_carried_count_is_ignored(stored: object) -> None:
+@pytest.mark.parametrize(
+    ("stored", "handed"),
+    [
+        (_owned(120), 120),  # control: well-formed and ours
+        (_owned("120"), None),
+        (_owned(True), None),
+        (_owned(-5), None),
+        (_owned(0), None),
+        (_owned(1.5), None),
+        (120, None),
+        ({"input_tokens": 120}, None),
+        ({"input_tokens": 120, "policy": "elsewhere.Policy"}, None),
+    ],
+)
+async def test_a_malformed_or_foreign_carried_count_is_ignored(
+    stored: object, handed: int | None
+) -> None:
     policy = _CarryingPolicy()
     session = InMemorySession()
     await session.append(
         "s",
         [InputEntry(role="user", content="earlier")],
-        meta={"context_state": {"calls": 1}, "calibration_tokens": stored},
+        meta={"context_state": {"calls": 1}, "calibration": stored},
     )
     agent = Agent(name="t", model=ScriptedProvider([_counted("a", 1)]))
     await Runner.run(
         agent, "two", context_policy=policy, session=session, session_id="s"
     )
-    assert policy.seen == [None]
+    assert policy.seen == [handed]
 
 
 async def test_policy_usage_counts_against_the_budget_before_the_model_call() -> None:

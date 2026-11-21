@@ -108,7 +108,7 @@ Session 的后续运行中复用。只有所有来源都无法确定窗口时，
 
 **估算 token。** 默认估算器以 UTF-8 字节数为基础，单独计算图片、文件和工具 schema 的固定成本，
 再用 Provider 返回的实际 input token 数做 EMA 校准（每个模型一个校准倍率，会话中途换模型不会沿用另一个
-tokenizer 的修正）。真实端点测试中，英文、中文、中英混合和代码
+tokenizer 的修正）。一次运行最后一次调用的真实数会带到同一 session 的下一次运行，所以纯聊天（每次运行只调用一次模型）也会校准。真实端点测试中，英文、中文、中英混合和代码
 混合文本的稳态误差约为 0.7–1.3%；测试范围和原始结果见
 [校准报告](https://github.com/cymoo/lovia/blob/main/docs/ratio-calibration.md)。Provider 也可以实现
 `TokenEstimator`，提供更精确的计数。
@@ -172,7 +172,11 @@ required_sections=...)`，不要 fork 这段实现。
 `scratch` dict，以及一个 `usage` 累加器：策略自己发起的模型调用把开销加进去，runner 会并入
 本次运行的 usage 和预算。
 返回 view，加上 `changed`/`compacted` 标志、可选 token 数，以及可选的 `window`（这次预算
-所依据的窗口，runner 转发为 `MessageCompleted.context_window`，web 的上下文圆环据此显示）。可选 `tools()` 方法可以贡献工具；
+所依据的窗口，runner 转发为 `MessageCompleted.context_window`，web 的上下文圆环据此显示）。
+要用真实 token 数校准，就返回一个新的 `view_id`，并把它和估算一起存进 `scratch`。runner 会把它作为 `last_view_id`，
+连同发送这个视图的那次调用的真实数一起交回（也会带到同一 session 的下一次运行）；只有 id 对得上，这个配对才属于你。
+包装别的 policy 并改动其 `entries` 的 wrapper 必须清掉 `view_id`；自己构造 `CompactionRequest` 的 wrapper 必须把
+`last_view_id` 传下去（或者用 `dataclasses.replace`），否则 `Compaction` 会跳过每一个样本，永远不校准。可选 `tools()` 方法可以贡献工具；
 `lovia.tools` 里的 `recall_tool_result(store)` 是 `Compaction` 用来提供 recall 的工厂，
 任何会丢内容的策略都可以复用。`lovia/context/policy.py` 很短，一屏就能读完。
 

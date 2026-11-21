@@ -28,6 +28,7 @@ How a call flows:
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import TYPE_CHECKING, Sequence
 
 from .policy import CompactionRequest, ContextResult
@@ -187,6 +188,7 @@ class Compaction:
         # have its id() reused by a different provider (which would hand back the
         # wrong tokenizer). At most one provider is pinned at a time.
         self._counter: tuple[object | None, TokenCounter] | None = None
+        self._warned_lost_id = False
 
     async def compact(self, req: CompactionRequest) -> ContextResult:
         """Replay sticky decisions; make new ones only under token pressure."""
@@ -450,6 +452,9 @@ class Compaction:
             # unexpected raise must still keep what was already decided (and
             # the failure counters).
             state.last_view_estimate = raw + overhead
+            # No view goes out under this estimate: an id never handed out,
+            # so no count can pair with it.
+            state.last_view_id = secrets.token_hex(8)
             self._save(req, state)
             raise
 
@@ -496,6 +501,25 @@ class Compaction:
         until both sides of a pair exist.
         """
         if not req.last_input_tokens or not state.last_view_estimate:
+            return
+        if req.last_view_id is None or req.last_view_id != state.last_view_id:
+            # The count measured a view this estimate doesn't describe —
+            # another policy's, after a switch between runs on the session —
+            # or its id was lost on the way. A wrong sample can peg the ratio,
+            # so it is skipped. (The runner always sends the id with a count
+            # for a view this policy returned, so an id-less count never is.)
+            if req.last_view_id is None and not self._warned_lost_id:
+                # Usually a one-off (a wrapper's own view for one turn); but a
+                # wrapper rebuilding every request without ``last_view_id``
+                # loses every sample, so say it once.
+                self._warned_lost_id = True
+                logger.info(
+                    "context.calibrate: a count arrived without last_view_id "
+                    "(skipped); if every request lacks it, a wrapper building "
+                    "CompactionRequest is dropping it and calibration is off"
+                )
+            else:
+                logger.debug("context.calibrate: count is for another view; skipped")
             return
         observed = req.last_input_tokens / max(1, state.last_view_estimate)
         prev_ratio = state.ratio
@@ -555,6 +579,7 @@ class Compaction:
         # ``estimate`` includes the tool-schema overhead, so the next call's
         # calibration pairs the provider's real count against the same total.
         state.last_view_estimate = estimate
+        state.last_view_id = secrets.token_hex(8)
         self._save(req, state)
 
         changed = _differs(view, req.entries)
@@ -599,6 +624,7 @@ class Compaction:
             tokens_after=tokens,
             detail=detail,
             window=window,
+            view_id=state.last_view_id,
         )
 
     def _learn_window(

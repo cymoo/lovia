@@ -109,6 +109,9 @@ class CompactionState:
             by the previous ``compact()`` call, tool-schema overhead
             included; compared against the next real ``last_input_tokens``
             to update :attr:`ratio`.
+        last_view_id: The ``view_id`` that view was returned under (after a
+            raised ``compact()``, one never handed out); a count pairs with
+            :attr:`last_view_estimate` only when its request names this id.
         summary_failures: Consecutive summarizer failures, carried in the
             scratch like every other decision. Past the summarize stage's
             limit the proactive path stops trying (circuit breaker); the
@@ -128,6 +131,7 @@ class CompactionState:
     summary: SummaryState | None = None
     ratio: float = 1.0
     last_view_estimate: int | None = None
+    last_view_id: str | None = None
     summary_failures: int = 0
     learned_windows: dict[str, int] = field(default_factory=dict)
     ratio_key: str | None = None
@@ -231,6 +235,10 @@ class CompactionState:
         if isinstance(estimate, int) and not isinstance(estimate, bool):
             state.last_view_estimate = estimate
 
+        view_id = raw.get("last_view_id")
+        if isinstance(view_id, str):
+            state.last_view_id = view_id
+
         failures = raw.get("summary_failures")
         if isinstance(failures, int) and not isinstance(failures, bool):
             state.summary_failures = failures
@@ -278,6 +286,7 @@ class CompactionState:
             ),
             "ratio": self.ratio,
             "last_view_estimate": self.last_view_estimate,
+            "last_view_id": self.last_view_id,
             "summary_failures": self.summary_failures,
             "learned_windows": dict(self.learned_windows),
             "ratio_key": self.ratio_key,

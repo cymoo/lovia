@@ -315,15 +315,68 @@ async def test_ratio_calibrates_against_real_usage():
     pipeline = _pipeline(context_window=1_000_000)
     scratch: dict = {}
     entries = [user("x" * 400) for _ in range(10)]
-    await pipeline.compact(req(entries, scratch=scratch))
+    first = await pipeline.compact(req(entries, scratch=scratch))
     estimate = CompactionState.load(scratch).last_view_estimate
     assert estimate is not None
 
     await pipeline.compact(
-        req(entries, scratch=scratch, last_input_tokens=2 * estimate)
+        req(
+            entries,
+            scratch=scratch,
+            last_input_tokens=2 * estimate,
+            last_view_id=first.view_id,
+        )
     )
     state = CompactionState.load(scratch)
     assert state.ratio == pytest.approx(0.8 * 1.0 + 0.2 * 2.0)
+
+
+@pytest.mark.parametrize("named", ["ours", "other", "none"])
+async def test_a_count_pairs_only_with_the_view_it_names(named: str):
+    """Each returned view gets a fresh id; a count naming another view (one a
+    different policy built, after a switch between runs) is not a sample of
+    this estimate's error — nor one whose id was lost on the way."""
+    pipeline = _pipeline(context_window=1_000_000)
+    scratch: dict = {}
+    entries = [user("x" * 400) for _ in range(10)]
+    first = await pipeline.compact(req(entries, scratch=scratch))
+    state = CompactionState.load(scratch)
+    assert first.view_id and first.view_id == state.last_view_id
+    estimate = state.last_view_estimate
+    assert estimate is not None
+
+    second = await pipeline.compact(
+        req(
+            entries,
+            scratch=scratch,
+            last_input_tokens=2 * estimate,
+            last_view_id={
+                "ours": first.view_id,
+                "other": "someone-else",
+                "none": None,
+            }[named],
+        )
+    )
+    assert second.view_id not in (None, first.view_id)
+    expected = pytest.approx(1.2) if named == "ours" else 1.0
+    assert CompactionState.load(scratch).ratio == expected
+
+
+async def test_a_request_that_lost_its_view_id_says_so_once(caplog):
+    """A wrapper rebuilding the request without ``last_view_id`` turns
+    calibration off for good — worth one line at INFO, not silence."""
+    pipeline = _pipeline(context_window=1_000_000)
+    scratch: dict = {}
+    entries = [user("x" * 400) for _ in range(10)]
+    await pipeline.compact(req(entries, scratch=scratch))
+    with caplog.at_level("INFO", logger="lovia.context.compaction"):
+        for _ in range(3):
+            await pipeline.compact(
+                req(entries, scratch=scratch, last_input_tokens=5_000)
+            )
+    lost = [r for r in caplog.records if "without last_view_id" in r.getMessage()]
+    assert len(lost) == 1
+    assert CompactionState.load(scratch).ratio == 1.0
 
 
 async def test_tool_schema_overhead_enters_the_estimate():
@@ -370,6 +423,7 @@ async def test_calibration_pairs_real_usage_with_schema_inclusive_estimate():
             scratch=scratch,
             tools=tools,
             last_input_tokens=first.tokens_after,
+            last_view_id=first.view_id,
         )
     )
     assert CompactionState.load(scratch).ratio == pytest.approx(1.0)
@@ -385,7 +439,13 @@ async def test_ratio_learned_small_stays_valid_as_the_view_grows():
     small = [user("x" * 4_000)]  # ~1k tokens of view
     first = await pipeline.compact(req(small, scratch=scratch, tools=tools))
     await pipeline.compact(
-        req(small, scratch=scratch, tools=tools, last_input_tokens=first.tokens_after)
+        req(
+            small,
+            scratch=scratch,
+            tools=tools,
+            last_input_tokens=first.tokens_after,
+            last_view_id=first.view_id,
+        )
     )
     assert CompactionState.load(scratch).ratio == pytest.approx(1.0)
 
@@ -600,7 +660,8 @@ async def test_a_model_switch_keeps_each_models_calibration():
     scratch: dict = {}
 
     async def call_with(provider, real_factor: float | None) -> float:
-        est = CompactionState.load(scratch).last_view_estimate
+        state = CompactionState.load(scratch)
+        est = state.last_view_estimate
         real = int(est * real_factor) if est and real_factor else None
         await pipeline.compact(
             req(
@@ -609,6 +670,7 @@ async def test_a_model_switch_keeps_each_models_calibration():
                 model="m",
                 scratch=scratch,
                 last_input_tokens=real,
+                last_view_id=state.last_view_id,
             )
         )
         return CompactionState.load(scratch).ratio
@@ -1719,6 +1781,16 @@ async def test_decisions_persist_when_a_stage_raises_unexpectedly():
     state = CompactionState.load(scratch)
     assert state.cleared == {"c0"}  # the decision survived the crash
     assert state.last_view_estimate is not None  # calibration input too
+
+    # No view went out under that estimate: a count that comes next — say a
+    # fail-open wrapper sent the raw transcript instead, id-less — must not
+    # pair with it, and no id handed out can match the stored one.
+    assert state.last_view_id is not None
+    pipeline.stages = []
+    await pipeline.compact(
+        req(entries, scratch=scratch, last_input_tokens=50 * state.last_view_estimate)
+    )
+    assert CompactionState.load(scratch).ratio == 1.0
 
 
 async def test_warns_when_protected_tail_covers_the_entire_view(caplog):

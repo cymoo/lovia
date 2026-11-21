@@ -1,6 +1,6 @@
 # 上下文压缩：设计与不变量
 
-> 状态：描述现状（截至 v0.9.255：#497–#499、O1 #504、O2 #505、O3 #506），并列出候选优化（O4 #503、O6 #507 未做） · 2026-11-21 · 范围：`lovia/context/`（`compaction.py`、`stages.py`、`render.py`、`state.py`、`tokens.py`、`summarizer.py`、`policy.py`）、`lovia/runtime/loop.py`（压缩调用与溢出重试）、`lovia/providers/_windows.py`（窗口来源）。
+> 状态：描述现状（截至 v0.9.256：#497–#499、O1 #504、O2 #505、O3 #506、O6 #507），并列出候选优化（O4 #503 未做） · 2026-11-21 · 范围：`lovia/context/`（`compaction.py`、`stages.py`、`render.py`、`state.py`、`tokens.py`、`summarizer.py`、`policy.py`）、`lovia/runtime/loop.py`（压缩调用与溢出重试）、`lovia/providers/_windows.py`（窗口来源）。
 >
 > 用户文档是 `docs/{en,zh}/context.md`，讲"怎么用"。本文讲"为什么这样设计、哪些性质不能破坏、还能往哪里改"。改 `lovia/context/` 之前先读 §8 的不变量。
 
@@ -19,15 +19,15 @@
 
 ```text
 RunLoop（runtime/loop.py）
-  │ 每个 turn：CompactionRequest(entries=transcript 快照, provider, tools, last_input_tokens, scratch)
+  │ 每个 turn：CompactionRequest(entries=transcript 快照, provider, tools, last_input_tokens, last_view_id, scratch)
   ▼
 Compaction.compact（compaction.py）
   1. CompactionState.load(scratch)；校验摘要指纹；修正切在工具对中间的覆盖边界；GC 失效的决定
-  2. 校准：用上一次真实 input_tokens 更新估算倍率
+  2. 校准：用上一次真实 input_tokens 更新估算倍率（last_view_id 与 state 里的一致才算）
   3. 渲染 + 估算；确定窗口（配置 / provider / 报错学到的）
   4. 没超 trigger → 原样重放决定，结束
   5. 否则依次跑阶段，每个阶段改了状态就重新渲染、重新估算、重算受保护尾部；到 target 就停
-  6. state.save(scratch)，返回 ContextResult(view, compacted, reason, tokens_before/after, detail)
+  6. state.save(scratch)，返回 ContextResult(view, compacted, reason, tokens_before/after, detail, view_id)
   │
   ▼ provider 拒绝（ContextOverflowError，可能带 reported_window）
 RunLoop：overflow=True 再 compact 一次；视图明显变小（< 失败时的 95%）才重试一次，否则带 hint 抛出
@@ -52,6 +52,15 @@ RunLoop：overflow=True 再 compact 一次；视图明显变小（< 失败时的
 - **校准**：`ratio` 是钳在 `[0.5, 2.5]` 的 EMA（α=0.2），用 `last_input_tokens / last_view_estimate` 更新，两边都含 schema。实测各类文本收敛到 0.72–0.87，稳态误差约 1%（`docs/ratio-calibration.md`）。倍率按模型（`window_key`）分开：会话中途换模型时各用各的，刚换过来的那次不做校准（O3）。
 - 各 adapter 把 `Usage.input_tokens` 归一成**完整** prompt 大小（Anthropic 的缓存读写量会加回去），否则开了 prompt cache 后倍率会塌到下限。
 - 校准滞后一次调用。溢出重试时把 `last_input_tokens` 置空，避免拿上一轮的真实值去配这一轮更大的估算。
+- **配对只用一次**：runner 把真实数交给一次 `compact()` 后立刻清空（`RunState.calibration_tokens`），只有这次视图真正发出去的那次调用能重新写入。所以手上的真实数总是对应最近一次压缩交出的视图；这个视图的估算是否在 state 里，只有 policy 自己知道（见下一条）。
+- **跨 run**（O6）：run 正常结束时，最后一次调用的真实数和 `context_state` 一起写进同一个 segment 的 meta（`calibration`：`{"input_tokens", "view_id"}`）；下一个 run 从**同一个** segment 取出这两样，所以纯聊天（每轮一次调用）也会校准。
+- **配对由 policy 核对**：`Compaction` 每交出一个视图，就生成一个随机 `view_id`，和估算一起存进 state，并通过 `ContextResult.view_id` 交给 runner。runner 把真实数和"发出的那个视图的 id"一起记下（跨 run 时写进 segment），通过 `CompactionRequest.last_input_tokens` / `last_view_id` 交回。`Compaction` 只有在请求带着 id、并且和自己 state 里的一致时才校准。请求里没有 id 一律跳过：如果照旧信任，第 5 轮 review 复现出同样的配错（倍率 2.5）；连"引入 id 之前的旧 state"也不例外，因为 runner 交出的真实数总是带着 id，没有 id 的数一定不是这个 policy 的视图（第 8 轮复现：升级后会配错一次）。代价是：wrapper 按字段重建 `CompactionRequest` 时如果不把 `last_view_id` 传下去，每个样本都会被跳过，整个会话都不校准（倍率停在 1.0，和 main 上的纯聊天一样）。所以第一次出现时会打一条 INFO 日志，文档也要求 wrapper 把它传下去（或用 `dataclasses.replace`）。
+  - 为什么不让 runner 判断：同一个会话在两个 run 之间可以换 policy，这时 state 里的估算描述的是更早的视图。#509 的 review 先后试了三种由 runner 判断的办法，每种都被复现出配错，倍率顶到 2.4–2.5：
+    1. "最后那次压缩写过 state"：挡不住只写自己 key 的自定义 policy；
+    2. "policy 声明 `calibrates`"：两个都声明的 policy 来回切换照样配错；
+    3. "同一个 policy 类才交"：挡不住包着不同内层 policy 的透传 wrapper。
+  - 估算是谁写的、配哪次调用，只有 policy 自己知道，所以由它核对 id。
+- 由 checkpoint snapshot 写成的 segment（已完成 run 的补写、web 停止、等待审批时停止）不带这个数，下一个 run 只是少一个样本；恢复后跑完的 run 走正常路径写 segment，照常带。
 
 ## 4. 水位与预算
 
@@ -136,6 +145,7 @@ runner 只重试一次，并且只在重建的视图明显更小时重试（同�
 7. **阶段不抛异常**：失败就记日志、返回 False。溢出路径上一个逃出来的异常会顶替原本的 `ContextOverflowError`，误导用户。
 8. **窗口只往下压**：报错学到的窗口只能把配置/公布值压低，不能抬高。
 9. **发送前的激进压缩不比"发出去被拒"更差**：只有估算超过窗口本身的 1.4 倍才算"一定被拒"；先跑普通一遍，仍一定被拒才跑溢出那一遍，而那一遍和被拒后的那一遍完全相同。
+10. **校准样本必须是同一个视图的两面**：真实数和估算只有在 `view_id` 一致时才配对。宁可少一个样本，也不能配错：配错一次就可能把倍率顶到上限，之后每次估算都偏大，导致过早压缩，而压缩的决定是粘性的，不会撤销。
 
 ## 9. 候选优化
 
@@ -150,7 +160,7 @@ runner 只重试一次，并且只在重建的视图明显更小时重试（同�
 
 **O5　文档与注释的漂移（必做，零风险）。** #497 之后，`stages.py` 里有几处注释仍说"溢出预算按失败 prompt 算"（现在只有估算不可信时才这样）；`architecture.md` 说熔断是"每个 run"的（实际随 scratch 跨 run 保留），阶段列表里也没有 `TruncateHistory`。随本文一起修正（#502）。
 
-**O6　跨 run 校准（中收益，小到中等改动）—— 未做，见 #507。** 实测 O3 时发现：新 run 的 `last_input_tokens` 从 `None` 开始，一个 run 最后一次调用的真实 token 数在 run 边界丢了，所以倍率只在 run 内部（工具循环的多次调用之间）校准；纯聊天每轮只有一次调用，倍率一直是 1.0。对 DeepSeek 这类被 bytes/4 高估的 tokenizer，压缩会早触发（约实际 60% 时）；对被低估的内容则晚触发、多一次被拒。改法：把最后一次调用的真实数和 context state 一起带到下一个 run（存进 segment meta），配对依然有效——带过来的 `last_view_estimate` 描述的正是那次调用的视图；换模型已由 O3 处理。
+**O6　跨 run 校准 —— 已完成（#507）。** 实测 O3 时发现：新 run 的 `last_input_tokens` 从 `None` 开始，一个 run 最后一次调用的真实 token 数在 run 边界丢了，所以倍率只在 run 内部（工具循环的多次调用之间）校准；纯聊天每轮只有一次调用，倍率一直是 1.0。对 DeepSeek 这类被 bytes/4 高估的 tokenizer，压缩会早触发（约实际 60% 时）；对被低估的内容则晚触发、多一次被拒。现在 run 正常结束时把最后一次调用的真实数写进 segment meta，和 `context_state` 放在一起，下一个 run 从同一个 segment 取出：带过来的 `last_view_estimate` 描述的正是那次调用的视图，配对有效；换模型由 O3 处理。配对的有效性由 `view_id` 保证：真实数总是和它测量的那个视图的 id 一起传递，`Compaction` 只在 id 与自己 state 里的一致时才校准，所以换 policy、wrapper 换内层 policy 都只会少一个样本（runner 侧的几种判断办法为什么不行，见 §3）。runner 在把真实数交给 `compact()` 之后立刻清空它，最后一次调用的视图没有 id 就不带出 run。只覆盖走正常路径写 segment 的 run（包括恢复后跑完的）：恢复后的第一次调用拿不到数（checkpoint 里的数不一定对应 state 里的估算）；已完成 run 的补写、web 停止、等待审批时停止，这几种 segment 由 checkpoint snapshot 写成，snapshot 不带这个数。为一个样本改 snapshot 结构不值得。
 
 ## 10. 已知限制与不做
 

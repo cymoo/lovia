@@ -109,7 +109,14 @@ class RunState:
     # What the context policy calibrates against: the *latest* call's own
     # count, or None when that call reported none — pairing an older call's
     # (another model's, after a handoff) with this view would mis-calibrate.
+    # Cleared once handed to a compaction; a fresh run seeds it from the
+    # session segment whose context_state it inherits.
     calibration_tokens: int | None = None
+    # ``ContextResult.view_id`` of the latest compaction's view — the view the
+    # next ``calibration_tokens`` will measure. Handed back with it as
+    # ``last_view_id``, and carried with it in the session segment, so the
+    # policy can tell whether the count is of a view it estimated.
+    calibration_view: str | None = None
     # The context policy's carried state, opaque to the loop: sticky compaction
     # decisions + calibration. Round-tripped through the checkpoint (resume) and
     # the session-segment ``meta`` (next run) under the same name, ``context_state``.

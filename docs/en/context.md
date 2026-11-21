@@ -142,7 +142,8 @@ Compaction(
   otherwise poison the multiplier), corrected by an EMA against the
   provider's *real* input-token counts as turns complete — one ratio per
   model, so a mid-session model switch doesn't inherit another tokenizer's
-  correction. Providers can
+  correction. A run's final count carries into the next run on the session,
+  so plain chat (one call per run) calibrates too. Providers can
   supply exact counting by implementing `TokenEstimator`. In live calibration
   across English, Chinese, mixed-language, and code-heavy transcripts, the
   calibrated estimate reached roughly **99% accuracy** (about 0.7–1.3% steady
@@ -220,7 +221,14 @@ makes itself and the runner folds it into the run's usage and budget.
 Return the view plus `changed`/`compacted` flags, optional token
 counts, and an optional `window` — the window the call was budgeted
 against, which the runner forwards as `MessageCompleted.context_window`
-(the web UI's context ring reads it). An optional `tools()` method contributes tools —
+(the web UI's context ring reads it). To calibrate against real counts,
+return a fresh `view_id` and keep it beside your estimate in `scratch`: the
+runner hands it back as `last_view_id` with the count of the call that sent
+that view — also into the next run on the session — and the pair is yours
+only when the ids match. A wrapper that changes a delegate's `entries` must
+clear `view_id`; one that builds its own `CompactionRequest` must pass
+`last_view_id` on (or use `dataclasses.replace`) — without it, `Compaction`
+skips every sample and never calibrates. An optional `tools()` method contributes tools —
 `recall_tool_result(store)` from `lovia.tools` is the factory
 `Compaction` uses to ship recall, reusable by any policy that drops
 content. `lovia/context/policy.py` is a one-screen read.

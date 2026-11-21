@@ -98,6 +98,7 @@ from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
 from ..session import (
+    CALIBRATION_META_KEY,
     NOTICE_META_KEY,
     STATE_META_KEY,
     TIMING_META_KEY,
@@ -137,6 +138,24 @@ def _log_once(*key: object) -> bool:
         return False
     _logged_once.add(key)
     return True
+
+
+def _carried_count(meta: dict[str, Any]) -> tuple[int | None, str | None]:
+    """The previous run's final count and the id of the view it measured,
+    from a segment's ``meta`` — both or neither. Tolerant of whatever a store
+    persisted (``meta`` is stored verbatim)."""
+    carried = meta.get(CALIBRATION_META_KEY)
+    if not isinstance(carried, dict):
+        return None, None
+    tokens, view_id = carried.get("input_tokens"), carried.get("view_id")
+    if (
+        isinstance(tokens, int)
+        and not isinstance(tokens, bool)
+        and tokens > 0
+        and isinstance(view_id, str)
+    ):
+        return tokens, view_id
+    return None, None
 
 
 class RunLoop:
@@ -302,6 +321,9 @@ class RunLoop:
                     await self._append_session_segment(
                         normalize_replayed_entries(list(completed.entries)),
                         context_state=dict(completed.context_state),
+                        # Not in snapshots either: the next run skips one
+                        # calibration sample.
+                        calibration=None,
                         notice=None,  # not persisted in snapshots
                         # It finished when its completion was checkpointed.
                         timing=(completed.started_at, completed.updated_at),
@@ -675,6 +697,8 @@ class RunLoop:
         # stopped run saved before its first checkpoint, an appended message)
         # must not reset calibration and sticky decisions; else empty.
         context_state: dict[str, Any] = {}
+        calibration_tokens: int | None = None
+        calibration_view: str | None = None
         if snapshot is not None:
             context_state = dict(snapshot.context_state)
         else:
@@ -682,6 +706,12 @@ class RunLoop:
                 prior = (seg.meta or {}).get(STATE_META_KEY)
                 if isinstance(prior, dict):
                     context_state = dict(prior)
+                    # The count from the *same* segment, with the id of the
+                    # view it measured: the policy checks that id against the
+                    # one its state holds before pairing.
+                    calibration_tokens, calibration_view = _carried_count(
+                        seg.meta or {}
+                    )
                     break
 
         return RunState(
@@ -694,11 +724,13 @@ class RunLoop:
             last_input_tokens=(
                 snapshot.last_input_tokens if snapshot is not None else None
             ),
-            # Not seeded on resume: the head keeps the last *reported* count,
+            # A fresh run takes its predecessor's final count (above). Not
+            # seeded on resume: the head keeps the last *reported* count,
             # which need not belong to the view the carried estimate
             # describes (a usage-less call, or one interrupted after its
             # compaction). One skipped sample beats one mis-paired.
-            calibration_tokens=None,
+            calibration_tokens=calibration_tokens,
+            calibration_view=calibration_view,
             context_state=context_state,
             started_at=(
                 snapshot.started_at if snapshot is not None else self._invoked_at
@@ -875,9 +907,16 @@ class RunLoop:
             # the policy can count the schema payload it will actually pay for.
             tools=list(state.active.tools_by_name.values()),
             last_input_tokens=state.calibration_tokens,
+            last_view_id=state.calibration_view,
             overflow=False,
             scratch=state.context_state,
         )
+        # Consumed: the policy is about to estimate a new view, so this count
+        # no longer pairs with anything. Only the call that view goes out in
+        # may set it again — a turn that ends without one (a raise, a hook)
+        # can't leave a stale count to be paired with a later estimate, in
+        # this run or, via the segment, the next.
+        state.calibration_tokens = None
         ctx_result = await self._compact(state, request)
         turn.context_window = ctx_result.window
         view = await self._build_view(state, ctx_result)
@@ -917,6 +956,7 @@ class RunLoop:
             # exactly when the estimate must stay conservative.
             failed_tokens = ctx_result.tokens_after
             request.last_input_tokens = None
+            request.last_view_id = None
             request.overflow = True
             request.reported_window = overflow.reported_window
             ctx_result = await self._compact(state, request)
@@ -969,11 +1009,17 @@ class RunLoop:
         main call goes out. ``last_input_tokens`` is left alone: it calibrates
         the main call's estimate and a summary call would skew it.
         """
+        state.calibration_view = None
         try:
             result = await self.context_policy.compact(request)
         finally:
             state.run_ctx.usage.add(request.usage)
             request.usage = Usage()
+        # The view the next recorded count will measure. A non-str id (a type
+        # slip in a custom policy) is dropped: it would not survive the
+        # session store, and a lost sample is the safe failure.
+        view_id = result.view_id
+        state.calibration_view = view_id if isinstance(view_id, str) else None
         if self.budget is not None:
             self.budget.check(state.run_ctx.usage)
         return result
@@ -1644,6 +1690,12 @@ class RunLoop:
         await self._append_session_segment(
             state.run_entries,
             context_state=state.context_state,
+            calibration=(
+                (state.calibration_tokens, state.calibration_view)
+                if state.calibration_tokens is not None
+                and state.calibration_view is not None
+                else None
+            ),
             notice=state.context_notice,
             timing=(state.started_at, time.time()),
         )
@@ -1653,6 +1705,7 @@ class RunLoop:
         entries: list[TranscriptEntry],
         *,
         context_state: dict[str, Any],
+        calibration: tuple[int, str] | None,
         notice: events.CompactionNotice | None,
         timing: tuple[float | None, float],
     ) -> None:
@@ -1666,7 +1719,9 @@ class RunLoop:
 
         * the policy's carried state — the same opaque scratch the checkpoint
           stores — so the next run on this session resumes its decisions
-          without re-deriving them;
+          without re-deriving them — and beside it the final call's real
+          input count with the id of the view it measured (only with the
+          state: a segment without it gets no count);
         * the run's last compaction notice, for the web UI to replay on
           reload (the replay path passes ``None``: not persisted in snapshots);
         * its ``timing`` — ``(started_at, finished_at)``, untimed when the
@@ -1682,6 +1737,12 @@ class RunLoop:
             # so a custom policy's scratch can't round-trip through the
             # checkpoint yet crash the session store here.
             meta[STATE_META_KEY] = to_json_safe(context_state)
+            if calibration is not None and meta[STATE_META_KEY] is not None:
+                tokens, view_id = calibration
+                meta[CALIBRATION_META_KEY] = {
+                    "input_tokens": tokens,
+                    "view_id": view_id,
+                }
         if notice is not None:
             meta[NOTICE_META_KEY] = asdict(notice)
         started_at, finished_at = timing

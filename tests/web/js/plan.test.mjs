@@ -135,6 +135,10 @@ test('a replay knows a plan update by its result, whole or truncated', () => {
   assert.ok(!isPlanOutput(CUT.replace('of 103', 'of 99'), plan));
   assert.ok(!isPlanOutput(CUT.replace('Ship it', 'Ship that'), plan));
   assert.ok(!isPlanOutput('Updated todo list:\n[ ] something else', plan));
+  // A clear's confirmation, cut by a tiny limit (truncate_tool_output(…, 10)).
+  const cutClear = 'Todo lis\n\n[... tool output truncated: kept 10 of 18 chars ...]\n\nd.';
+  assert.ok(isPlanOutput(cutClear, []));
+  assert.ok(!isPlanOutput(cutClear, plan));
 });
 
 test('a plan view layers over a built-in tool of the same name', async () => {

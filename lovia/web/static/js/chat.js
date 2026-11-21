@@ -3208,12 +3208,13 @@ async function applyEvent({ event, data }) {
       }
       // A plan cleared to nothing lands as a plain result (sse.py sends the
       // `todo` event only for a list with items): an empty list, and the
-      // plugin's text for it. Noted before the row settles, so it draws as a
+      // plugin's text for it (whole or truncated, as a replay reads it). Noted
+      // before the row settles, so it draws as a
       // plan update at once.
       const asked = maybePlanCalls.get(data.id);
       maybePlanCalls.delete(data.id);
       const cleared =
-        asked?.length === 0 && !data.is_error && data.result === planText([]);
+        asked?.length === 0 && !data.is_error && isPlanOutput(String(data.result ?? ''), []);
       const card = store.toolNodes.get(data.id);
       if (cleared) {
         usePlanView(data.name);

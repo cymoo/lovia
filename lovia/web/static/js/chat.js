@@ -37,10 +37,12 @@ import {
   STALE_TOOLS,
   buildToolNode,
   fillParams,
+  findPendingToolNode,
   findToolNode,
   refreshTool,
   setToolResult,
   setToolStatus,
+  toolKey,
   toolPath,
 } from './tools.js';
 import {
@@ -67,8 +69,10 @@ import { isStep, placeStep, removeStep } from './activity.js';
 import {
   fillPlanRow,
   initPlan,
+  isPlanOutput,
   notePlan,
   parsePlan,
+  placePlan,
   planText,
   planUserTurn,
   resetPlans,
@@ -734,7 +738,9 @@ function appendTool(call) {
   // instead of drawing a second one, which left the replayed copy stranded
   // without a result forever. Rightly the run's job to re-announce: a consumer
   // attaching fresh has no prior state, so reconciling is this client's job.
-  const existing = call.id ? findToolNode(call.id) : null;
+  // Only a card still waiting for its result: a settled one with this id is
+  // an earlier call (some providers reuse ids, e.g. `call_0` every turn).
+  const existing = call.id ? findPendingToolNode(call.id) : null;
   const node = existing || buildToolNode(call);
   if (!existing) {
     appendBubbleContent(store.bubble, node);
@@ -763,8 +769,9 @@ const USER_SCROLL_PAUSE_MS = 900;
 // A call is a plan update by its own outcome, never by its tool's name (the
 // plugin may be renamed, and another tool may own `todo_write`): live, the
 // `todo` event — or, for a clear, the plugin's result for an empty list;
-// replayed, a result that is exactly the plugin's rendering of the call's own
-// arguments. Calls whose arguments could be one wait here (with their items)
+// replayed, a result that is the plugin's rendering of the call's own
+// arguments, whole or truncated (isPlanOutput). Calls whose arguments could be
+// one wait here (with their items)
 // for their outcome.
 /** @type {Map<string, import('./plan.js').PlanItem[]>} */
 const maybePlanCalls = new Map();
@@ -776,7 +783,7 @@ const maybePlanCalls = new Map();
  */
 function isPlanCall(call, result) {
   const items = parsePlan(call.arguments);
-  return !!items && !!result && !result.isError && result.text === planText(items);
+  return !!items && !!result && !result.isError && isPlanOutput(result.text, items);
 }
 
 function clearPlanView() {
@@ -2678,25 +2685,24 @@ function renderHistoryWindow({ stickBottom }) {
   // The plan, also from the full history: the latest update may sit above the
   // window, and each row diffs against the one before it. A failed update
   // never changed the plan; one still pending shows once it lands (live).
-  resetPlans();
-  /** @type {Set<object>} the calls themselves, as their ids may repeat */
-  const planCalls = new Set();
-  let plan = [];
+  /** Each plan update (the call itself, as ids may repeat) → the plan it replaced. */
+  /** @type {Map<object, import('./plan.js').PlanItem[] | null>} */
+  const planCalls = new Map();
+  /** @type {import('./plan.js').PlanItem[] | null} */
+  let plan = null;
   let lastTurn = false; // the plan came after the last user message
   for (const it of entries) {
     if (it.role === 'user') lastTurn = false;
     for (const call of (it.role === 'assistant' && it.tool_calls) || []) {
-      const result = pendingResults.get(call);
-      if (!isPlanCall(call, result)) continue;
-      planCalls.add(call);
+      if (!isPlanCall(call, pendingResults.get(call))) continue;
+      planCalls.set(call, plan);
       usePlanView(call.name);
-      const items = parsePlan(call.arguments) ?? [];
-      notePlan(call.id, items);
-      plan = items;
+      plan = parsePlan(call.arguments) ?? [];
       lastTurn = true;
     }
   }
-  showPlan(plan, { update: false, lastTurn });
+  resetPlans(plan);
+  showPlan(plan ?? [], { update: false, lastTurn });
 
   // Absolute user-turn numbering spans the FULL history — the rendered
   // window may start mid-transcript.
@@ -2772,7 +2778,8 @@ function renderHistoryWindow({ stickBottom }) {
         for (const call of it.tool_calls) {
           const result = pendingResults.get(call);
           const node = buildToolNode(call);
-          if (planCalls.has(call)) node.classList.add('lv-tool--plan');
+          // A plan update's row, noted before it settles so it reads as one.
+          if (planCalls.has(call)) placePlan(toolKey(node), planCalls.get(call) ?? null);
           // Attached first, so a UI component renders into a laid-out card.
           appendBubbleContent(currentBubble, node);
           // Same renderer as the live path: highlighting, error styling, and
@@ -2780,7 +2787,7 @@ function renderHistoryWindow({ stickBottom }) {
           // running (its empty <pre> is hidden by CSS).
           if (result) setToolResult(node, result.text, result.isError, result.images);
           else refreshTool(node);
-          if (planCalls.has(call)) fillPlanRow(node, call.id, parsePlan(call.arguments) ?? []);
+          if (planCalls.has(call)) fillPlanRow(node, toolKey(node), parsePlan(call.arguments) ?? []);
           // A result-less ask_human call is still parked server-side: rebuild
           // its interactive card so a reloaded or re-attached tab can answer
           // (the live path can't — this render replaced the transcript).
@@ -3207,14 +3214,14 @@ async function applyEvent({ event, data }) {
       maybePlanCalls.delete(data.id);
       const cleared =
         asked?.length === 0 && !data.is_error && data.result === planText([]);
+      const card = store.toolNodes.get(data.id);
       if (cleared) {
         usePlanView(data.name);
-        notePlan(data.id, []);
+        notePlan(card && toolKey(card), []);
       }
       updateToolResult(data.id, data.result, data.is_error, data.images);
       if (cleared) {
-        const node = store.toolNodes.get(data.id);
-        if (node) fillPlanRow(node, data.id, []);
+        if (card) fillPlanRow(card, toolKey(card), []);
         showPlan([]);
       }
       // A write counts as "touched" once it landed — not at the call, which
@@ -3231,11 +3238,11 @@ async function applyEvent({ event, data }) {
       maybePlanCalls.delete(data.call_id);
       if (data.name) usePlanView(data.name);
       const items = parsePlan({ todos: data.todos || [] }) ?? [];
-      notePlan(data.call_id, items);
       const node = store.toolNodes.get(data.call_id);
+      notePlan(node && toolKey(node), items);
       if (node) {
         updateToolResult(data.call_id, planText(items), false);
-        fillPlanRow(node, data.call_id, items);
+        fillPlanRow(node, toolKey(node), items);
       }
       showPlan(items);
       break;

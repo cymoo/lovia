@@ -431,7 +431,7 @@ lovia.registerToolView('web_search', {
 | `render(el, tool, ctx)` | 把卡片主体画进 `el`。约定和[组件渲染器](#ui-组件)相同（`ctx`、可选的清理函数），原始结果仍可通过 "Source" 开关查看 |
 | `snapshot(tool, ctx)` | 用于对话 HTML 导出的静态 HTML |
 
-- `tool` 是这次调用的冻结快照：`id`、`name`、`args`（已解析；超过 256 KB 或无法解析时没有）、
+- `tool` 是这次调用的冻结快照：`id`、`key`（这张卡片自己的编号，在页面内唯一——有的服务商会复用 `id`）、`name`、`args`（已解析；超过 256 KB 或无法解析时没有）、
   `status`（`running`、`awaiting` 等待用户、`done`、`error`）、`result`（结束后的输出文本）、
   `isError`、`images`。它每次变化，视图的函数都会重新调用。
 - 工具名的专属视图优先于 `'*'` 视图，而且逐个字段回退：只有 `summary` 的视图仍会用 `'*'` 视图的

@@ -477,7 +477,8 @@ lovia.registerToolView('web_search', {
 | `render(el, tool, ctx)` | Draw the card's body into `el`. Same contract as a [component renderer](#ui-components) (`ctx`, an optional cleanup function), and the raw result stays one "Source" toggle away |
 | `snapshot(tool, ctx)` | Static HTML for the chat's HTML export |
 
-- `tool` is a frozen snapshot of the call: `id`, `name`, `args` (parsed; absent
+- `tool` is a frozen snapshot of the call: `id`, `key` (the card's own number,
+  unique in the page — some providers reuse `id`s), `name`, `args` (parsed; absent
   when over 256 KB or unparsable), `status` (`running`, `awaiting` the user,
   `done`, `error`), `result` (the output text, once settled), `isError`,
   `images`. A view's functions run again whenever it changes.

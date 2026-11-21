@@ -66,7 +66,7 @@ async function snapshotComponents(messages, toolArgs, toolNames, sessionId) {
   if (typeof DOMPurify === 'undefined') return out;
   const purify = DOMPurify;
   await Promise.all(
-    messages.map(async (m) => {
+    messages.map(async (m, i) => {
       if (m.role !== 'tool' || !m.tool_call_id) return;
       const id = m.tool_call_id;
       const text = contentText(m.content);
@@ -77,6 +77,7 @@ async function snapshotComponents(messages, toolArgs, toolNames, sessionId) {
           kind: TOOL_VIEW_KIND,
           props: toolInfo({
             id,
+            key: i, // no card here: the message's place is as unique
             name,
             arguments: toolArgs[id],
             status: m.is_error ? 'error' : 'done',

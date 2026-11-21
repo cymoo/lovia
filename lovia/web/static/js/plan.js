@@ -11,6 +11,7 @@
 // update here in transcript order (live and replay alike). Noting is also
 // what makes a call a plan row: by its outcome, never by its tool's name.
 
+import { relabelStep } from './activity.js';
 import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { defaultView, setDefaultView } from './tool-views.js';
@@ -144,47 +145,80 @@ export function planText(items) {
   return `Updated todo list:\n${items.map((i) => `${box[i.status]} ${planLabel(i)}`).join('\n')}`;
 }
 
+// The marker `truncate_tool_output` (lovia/tools/base.py) puts where it cut a
+// long result, naming the full length.
+const TRUNCATED = /\n\n\[\.\.\. tool output truncated: kept [\d,]+ of ([\d,]+) chars \.\.\.\]\n\n/;
+
+/**
+ * Whether a stored result is the plugin's rendering of `items` — whole, or as
+ * the agent's `max_tool_output_chars` cut it (head, marker, tail): what a
+ * replay knows a plan update by.
+ * @param {string} text
+ * @param {PlanItem[]} items
+ */
+export function isPlanOutput(text, items) {
+  const full = planText(items);
+  if (text === full) return true;
+  const cut = TRUNCATED.exec(text);
+  // Python counts code points, not UTF-16 units.
+  if (!cut || Number(cut[1].replace(/,/g, '')) !== [...full].length) return false;
+  return full.startsWith(text.slice(0, cut.index)) && full.endsWith(text.slice(cut.index + cut[0].length));
+}
+
 // ---- The chat's plan history: each update's predecessor --------------------
 
-/** @type {Map<string, PlanItem[] | null>} */
+// Keyed by tool card (tools.js toolKey), not call id: a provider may reuse ids.
+/** @type {Map<number, PlanItem[] | null>} */
 const before = new Map();
 /** @type {PlanItem[] | null} */
 let latest = null;
 
 /**
- * Record a successful update, in transcript order. A failed one never changed
- * the plan, so it is never noted.
- * @param {string} callId
+ * Record a successful update as it lands. A failed one never changed the
+ * plan, so it is never noted. Without a card (none drawn), only the plan.
+ * @param {number | undefined} key The update's tool card.
  * @param {PlanItem[]} items
  */
-export function notePlan(callId, items) {
-  if (!before.has(callId)) before.set(callId, latest);
+export function notePlan(key, items) {
+  if (key !== undefined && !before.has(key)) before.set(key, latest);
   latest = items;
 }
 
 /**
- * The plan an update replaced: as noted, else (an update still running) the
- * latest one so far.
- * @param {string} callId
+ * Record a replayed update's card with the plan it replaced (the replay
+ * worked that out over the whole history; the current plan is resetPlans').
+ * @param {number | undefined} key
+ * @param {PlanItem[] | null} prev
  */
-export function planBefore(callId) {
-  return before.has(callId) ? before.get(callId) ?? null : latest;
+export function placePlan(key, prev) {
+  if (key !== undefined) before.set(key, prev);
 }
 
-/** Forget the chat's plans (another chat opened, or the chat redrawn). */
-export function resetPlans() {
+/**
+ * The plan the update on card `key` replaced; null for a first plan.
+ * @param {number | undefined} key
+ */
+export function planBefore(key) {
+  return (key !== undefined && before.get(key)) || null;
+}
+
+/**
+ * Forget the chat's plan rows (another chat opened, or the chat redrawn).
+ * @param {PlanItem[] | null} [current] The plan as of the redraw.
+ */
+export function resetPlans(current = null) {
   before.clear();
-  latest = null;
+  latest = current;
 }
 
 // ---- The row view ----------------------------------------------------------
 
 /** @type {import('./tool-views.js').ToolView['summary']} */
 function rowSummary(tool) {
-  // Only a noted update: another tool of the same name keeps its own line.
-  if (!before.has(tool.id)) return null;
+  // Only a noted update: another call of the same tool keeps its own line.
+  if (!before.has(tool.key)) return null;
   const items = parsePlan(tool.args);
-  return items && planSummary(planBefore(tool.id), items);
+  return items && planSummary(planBefore(tool.key), items);
 }
 
 /** @type {Set<string>} tools whose default view already reads plan updates */
@@ -195,6 +229,8 @@ const layered = new Set();
  * (chat.js calls it for each tool it has seen land one). Layered over the
  * tool's own default view, which every other call of it keeps: a plan tool
  * may share its name with a built-in one (`start_session` keeps its card).
+ * The short label an activity digest uses is the card's own (fillPlanRow),
+ * as a name says nothing about a single call.
  * @param {string} name
  */
 export function usePlanView(name) {
@@ -204,7 +240,6 @@ export function usePlanView(name) {
   setDefaultView(name, {
     ...base,
     summary: (tool) => rowSummary(tool) ?? base?.summary?.(tool) ?? null,
-    label: base?.label ?? (() => t('toolview.plan')),
   });
 }
 
@@ -250,20 +285,23 @@ export function planList(items, changed = new Set(), { idle = false } = {}) {
 
 /**
  * Draw a settled update's row body: the whole list as of that update, with
- * what it changed marked. Idempotent.
+ * what it changed marked — and label the row "Plan" in its activity digest,
+ * whatever its tool is called. Idempotent.
  * @param {HTMLElement} node The tool card.
- * @param {string} callId
+ * @param {number | undefined} key Its toolKey.
  * @param {PlanItem[]} items
  */
-export function fillPlanRow(node, callId, items) {
+export function fillPlanRow(node, key, items) {
   node.classList.add('lv-tool--plan');
+  node.dataset.label = t('toolview.plan');
+  relabelStep(node);
   const box = node.querySelector('.lv-tool-result-box');
   if (!box) return;
   box.querySelector(':scope > .lv-plan-list')?.remove();
   // A cleared plan has no list: its result text says so (styles.css shows
   // the text unless a list stands in for it).
   if (!items.length) return;
-  const prev = planBefore(callId);
+  const prev = planBefore(key);
   box.append(planList(items, prev ? planDiff(prev, items).changed : new Set()));
 }
 

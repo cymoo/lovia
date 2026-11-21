@@ -92,8 +92,9 @@ function stepLine(node) {
 function relabel(group) {
   const kids = [...stepsOf(group).children];
   const steps = kids.map((n) => {
-    const tool = /** @type {HTMLElement} */ (n).dataset.tool;
-    return { reasoning: n.classList.contains('lv-reasoning'), tool: tool && toolLabel(tool) };
+    const { tool, label } = /** @type {HTMLElement} */ (n).dataset;
+    // A card may carry its own label (a plan update, whatever its tool's name).
+    return { reasoning: n.classList.contains('lv-reasoning'), tool: tool && (label || toolLabel(tool)) };
   });
   const label = group.querySelector('.lv-activity-label');
   // One tool call reads as itself, not as a digest of one.

@@ -128,6 +128,29 @@ def test_result_text_is_pinned() -> None:
     assert _render_result([], None) == "Todo list cleared."  # type: ignore[arg-type]
 
 
+def test_truncated_result_is_pinned() -> None:
+    """A long result cut by max_tool_output_chars: the web UI still knows it
+    for this plan (`isPlanOutput`, pinned by plan.test.mjs as `CUT`)."""
+    from lovia.plugins.todo import _render_result
+    from lovia.tools.base import truncate_tool_output
+
+    items = _inputs(
+        {"content": "Read the failing test", "status": "completed"},
+        {
+            "content": "Fix the key",
+            "status": "in_progress",
+            "active_form": "Fixing the key 🔑",
+        },
+        {"content": "Add a regression test"},
+        {"content": "Ship it"},
+    )
+    full = _render_result(items, None)  # type: ignore[arg-type]
+    assert truncate_tool_output(full, 40) == (
+        "Updated todo list:\n[x] Read the \n\n"
+        "[... tool output truncated: kept 40 of 103 chars ...]\n\n Ship it"
+    )
+
+
 def test_rehydrate_skips_malformed_latest_write() -> None:
     # A malformed call never mutated the store, so the newest *valid* write is
     # still the current state — the scan must not stop at the malformed one.

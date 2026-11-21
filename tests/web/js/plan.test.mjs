@@ -8,6 +8,8 @@ import { test } from 'node:test';
 
 import {
   currentStep,
+  isPlanOutput,
+  placePlan,
   notePlan,
   parsePlan,
   planBefore,
@@ -94,19 +96,45 @@ test('the text mirrors the plugin’s own result', () => {
   assert.equal(planText([]), 'Todo list cleared.');
 });
 
-test('each update diffs against the one before it; failed ones are skipped', () => {
+test('each update diffs against the one before it, card by card', () => {
   resetPlans();
-  notePlan('c1', items('~.'));
-  // c2 failed: never noted. A running update reads against the latest.
-  assert.deepEqual(planBefore('c2'), items('~.'));
-  notePlan('c3', items('x~'));
-  assert.deepEqual(planBefore('c3'), items('~.'));
-  assert.equal(planBefore('c1'), null);
+  notePlan(1, items('~.'));
+  // Card 2 failed: never noted. Card 3 — even under a reused call id — is its own row.
+  notePlan(3, items('x~'));
+  assert.deepEqual(planBefore(3), items('~.'));
+  assert.equal(planBefore(1), null);
+  assert.equal(planBefore(2), null);
   // Noted again (a redraw), it keeps what it replaced.
-  notePlan('c3', items('x~'));
-  assert.deepEqual(planBefore('c3'), items('~.'));
-  resetPlans();
-  assert.equal(planBefore('c3'), null);
+  notePlan(3, items('x~'));
+  assert.deepEqual(planBefore(3), items('~.'));
+  // Replayed: the card is placed with the plan the replay worked out; the
+  // current plan is what the next live update replaces.
+  resetPlans(items('xx'));
+  placePlan(7, items('x~'));
+  assert.deepEqual(planBefore(7), items('x~'));
+  notePlan(8, items('xxx', 'abc'));
+  assert.deepEqual(planBefore(8), items('xx'));
+});
+
+// Pinned on the Python side too (tests/plugins/test_todos.py): the agent's
+// max_tool_output_chars cuts a long result this way.
+const CUT =
+  'Updated todo list:\n[x] Read the \n\n[... tool output truncated: kept 40 of 103 chars ...]\n\n Ship it';
+
+test('a replay knows a plan update by its result, whole or truncated', () => {
+  const plan = parsePlan({
+    todos: [
+      { content: 'Read the failing test', status: 'completed' },
+      { content: 'Fix the key', status: 'in_progress', active_form: 'Fixing the key 🔑' },
+      { content: 'Add a regression test' },
+      { content: 'Ship it' },
+    ],
+  });
+  assert.ok(isPlanOutput(planText(plan), plan));
+  assert.ok(isPlanOutput(CUT, plan)); // 103 code points, though 104 UTF-16 units
+  assert.ok(!isPlanOutput(CUT.replace('of 103', 'of 99'), plan));
+  assert.ok(!isPlanOutput(CUT.replace('Ship it', 'Ship that'), plan));
+  assert.ok(!isPlanOutput('Updated todo list:\n[ ] something else', plan));
 });
 
 test('a plan view layers over a built-in tool of the same name', async () => {
@@ -125,12 +153,14 @@ test('a plan view layers over a built-in tool of the same name', async () => {
 test('a plan row is a noted update, whatever its tool is called', () => {
   resetPlans();
   usePlanView('set_plan');
-  assert.equal(toolLabel('set_plan'), 'Plan');
+  // The name says nothing about one call: the digest label is the card's own.
+  assert.equal(toolLabel('set_plan'), 'set_plan');
   const [summary] = toolViewChain('set_plan', 'summary');
-  const tool = (id, args) => ({ id, name: 'set_plan', args, status: 'done', isError: false });
+  const tool = (key, args) => ({ id: 'call_0', key, name: 'set_plan', args, status: 'done', isError: false });
   const args = { todos: [{ content: 'a' }] };
   // Not noted (still running, failed, or another tool of that name): its own line.
-  assert.equal(summary(tool('c1', args)), null);
-  notePlan('c1', parsePlan(args));
-  assert.equal(summary(tool('c1', args)), '0/1 · Made a plan');
+  assert.equal(summary(tool(11, args)), null);
+  notePlan(11, parsePlan(args));
+  assert.equal(summary(tool(11, args)), '0/1 · Made a plan');
+  assert.equal(summary(tool(12, args)), null); // same id, another card
 });

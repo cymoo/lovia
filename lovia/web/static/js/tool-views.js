@@ -8,6 +8,8 @@ import { Registry } from './registry.js';
  * What a view sees of one call: a frozen copy, rebuilt on every change.
  * @typedef {object} ToolInfo
  * @property {string} id
+ * @property {number} key This card's own key, unique in the page: tells apart
+ *   calls that share an `id` (some providers reuse them).
  * @property {string} name
  * @property {unknown} args The parsed arguments; undefined when unparsable or
  *   too large to keep (over 256 KB).
@@ -139,7 +141,7 @@ export function watchToolViews(fn) {
 
 /**
  * The frozen view of a call that a tool view gets.
- * @param {{ id: string, name: string, arguments?: string, status: ToolInfo['status'],
+ * @param {{ id: string, key: number, name: string, arguments?: string, status: ToolInfo['status'],
  *   result?: string, isError: boolean, images?: any[] }} state
  * @returns {Readonly<ToolInfo>}
  */
@@ -152,6 +154,7 @@ export function toolInfo(state) {
   }
   return Object.freeze({
     id: state.id,
+    key: state.key,
     name: state.name,
     args,
     status: state.status,

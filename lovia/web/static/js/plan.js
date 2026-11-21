@@ -209,12 +209,17 @@ export function planList(items, changed = new Set(), { idle = false } = {}) {
   const ul = document.createElement('ul');
   ul.className = 'lv-plan-list';
   items.forEach((item, i) => {
+    // Idle, the step in progress waits like the line says: the ring, not a
+    // spinner nobody turns — still the current one (lv-current).
+    const waiting = idle && item.status === 'in_progress';
+    const status = waiting ? 'pending' : item.status;
     const li = document.createElement('li');
-    li.className = `lv-plan-item lv-${item.status}`;
+    li.className = `lv-plan-item lv-${status}`;
+    if (waiting) li.classList.add('lv-current');
     if (changed.has(i)) li.classList.add('lv-changed');
     const mark = document.createElement('span');
     mark.className = 'lv-plan-mark';
-    mark.innerHTML = MARK[item.status]();
+    mark.innerHTML = MARK[status]();
     const text = document.createElement('span');
     text.className = 'lv-plan-text';
     text.textContent = idle ? item.content : planLabel(item);
@@ -293,6 +298,13 @@ export function setPlanLive(live) {
   drawPlan();
 }
 
+/** A user message reached the running run (steered in): as at a run's start,
+ *  a plan finished before it is no news — renderHistory reads it so too. */
+export function planUserTurn() {
+  plan.finished = false;
+  drawPlan();
+}
+
 /** @param {string} text */
 function announce(text) {
   const el = document.getElementById('sr-status'); // outside the busy transcript
@@ -319,7 +331,9 @@ function drawPlan() {
   root.classList.toggle('lv-idle', !live);
   root.classList.toggle('lv-done', !step);
   const done = items.filter((item) => item.status === 'completed').length;
-  const status = !step ? 'completed' : step.next ? 'pending' : 'in_progress';
+  // A still spinner reads as stalled: with no run going, the step waits, so
+  // it gets the waiting ring (the open list draws it the same).
+  const status = !step ? 'completed' : live && !step.next ? 'in_progress' : 'pending';
   /** @type {HTMLElement} */ (line.querySelector('.lv-plan-mark')).innerHTML = MARK[status]();
   // The present-tense form only while a run is at it: an idle plan's step
   // reads as the task it is.
@@ -335,7 +349,7 @@ function drawPlan() {
   line.title = plan.open ? t('plan.hide') : t('plan.show');
   body.hidden = !plan.open;
   body.replaceChildren(planList(items, new Set(), { idle: !live }));
-  const now = /** @type {HTMLElement | null} */ (body.querySelector('.lv-in_progress'));
+  const now = /** @type {HTMLElement | null} */ (body.querySelector('.lv-in_progress, .lv-current'));
   if (plan.open && now) {
     // A long list scrolls itself (never the page) to the step in progress.
     body.scrollTop = now.offsetTop - (body.clientHeight - now.offsetHeight) / 2;

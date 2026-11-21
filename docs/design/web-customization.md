@@ -226,8 +226,8 @@ class ChatUI:
 侧栏    sidebar · sidebar-header · agent-switcher · sidebar-nav · new-chat · memory · schedules
         settings · sessions-label · sessions-search · sessions
 顶栏    topbar · chat-title · topbar-actions · tasks · export · files-toggle
-对话区  transcript · welcome · todo-panel · turn[data-role=user|assistant] · tool[data-tool=<name>]
-输入框  composer · attach · context-ring
+对话区  transcript · welcome · turn[data-role=user|assistant] · tool[data-tool=<name>]
+输入框  composer · todo-panel · attach · context-ring
 其他    files-panel · language（设置面板里的语言那一行）
 ```
 

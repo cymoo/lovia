@@ -5899,6 +5899,9 @@ body.lv-files-resizing {
 .lv-plan-item.lv-pending .lv-plan-text {
   color: var(--lv-muted);
 }
+.lv-plan-item.lv-current .lv-plan-text {
+  color: var(--lv-ink);
+}
 .lv-plan-item.lv-in_progress .lv-plan-text {
   color: var(--lv-ink);
   font-weight: 600;

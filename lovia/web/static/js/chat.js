@@ -72,6 +72,7 @@ import {
   notePlan,
   parsePlan,
   planText,
+  planUserTurn,
   resetPlans,
   setPlanLive,
   showPlan,
@@ -3140,6 +3141,7 @@ async function applyEvent({ event, data }) {
       break;
 
     case 'user_injected': {
+      planUserTurn();
       // A queued message was consumed at this turn's start. Close out the
       // assistant work that preceded it (once per batch — only when the current
       // bubble has content) so the response opens a fresh bubble below the

@@ -330,22 +330,24 @@ async def test_a_call_without_a_token_count_gives_calibration_nothing() -> None:
 
 class _CarryingPolicy:
     """Records what it is handed; keeps a carried state so segments get one,
-    and declares (or not) that the state describes the returned view."""
+    and ids its views (or not)."""
 
-    def __init__(self, *, calibrates: bool = True) -> None:
-        self.seen: list[int | None] = []
-        self.calibrates = calibrates
+    def __init__(self, *, ids: bool = True) -> None:
+        self.seen: list[tuple[int | None, str | None]] = []
+        self.ids = ids
+        self.returned: list[str | None] = []
 
     async def compact(self, req: CompactionRequest) -> ContextResult:
-        self.seen.append(req.last_input_tokens)
-        req.scratch["calls"] = req.scratch.get("calls", 0) + 1
-        return ContextResult(entries=list(req.entries), calibrates=self.calibrates)
+        self.seen.append((req.last_input_tokens, req.last_view_id))
+        calls = req.scratch.get("calls", 0) + 1
+        req.scratch["calls"] = calls
+        view_id = f"{id(self)}-{calls}" if self.ids else None
+        self.returned.append(view_id)
+        return ContextResult(entries=list(req.entries), view_id=view_id)
 
 
-def _owned(tokens: object) -> dict[str, object]:
-    """A carried count as ``_CarryingPolicy`` would have stored it."""
-    owner = f"{_CarryingPolicy.__module__}.{_CarryingPolicy.__qualname__}"
-    return {"input_tokens": tokens, "policy": owner}
+def _carried(tokens: object, view_id: object = "v1") -> dict[str, object]:
+    return {"input_tokens": tokens, "view_id": view_id}
 
 
 def _counted(reply: str, tokens: int) -> AssistantTurn:
@@ -356,7 +358,8 @@ def _counted(reply: str, tokens: int) -> AssistantTurn:
 
 async def test_a_new_run_calibrates_against_the_previous_runs_final_call() -> None:
     """Plain chat — one call per run — still feeds calibration: the next run's
-    first compaction gets the final call's count from the segment."""
+    first compaction gets the final call's count from the segment, with the
+    id of the view that call sent."""
     policy = _CarryingPolicy()
     session = InMemorySession()
     agent = Agent(
@@ -366,7 +369,18 @@ async def test_a_new_run_calibrates_against_the_previous_runs_final_call() -> No
         await Runner.run(
             agent, prompt, context_policy=policy, session=session, session_id="s"
         )
-    assert policy.seen == [None, 120]
+    assert policy.seen == [(None, None), (120, policy.returned[0])]
+
+
+async def test_within_a_run_each_count_comes_with_its_views_id() -> None:
+    policy = _CarryingPolicy()
+    first = call("ping", {}, call_id="c1")
+    first.usage = Usage(input_tokens=40, output_tokens=1)
+    agent = Agent(
+        name="t", model=ScriptedProvider([first, _counted("b", 1)]), tools=[ping]
+    )
+    await Runner.run(agent, "hi", context_policy=policy)
+    assert policy.seen == [(None, None), (40, policy.returned[0])]
 
 
 async def test_the_carried_count_comes_from_the_segment_whose_state_is_carried() -> (
@@ -385,35 +399,24 @@ async def test_the_carried_count_comes_from_the_segment_whose_state_is_carried()
     await session.append(
         "s",
         [InputEntry(role="user", content="appended")],
-        meta={"calibration": _owned(999)},
+        meta={"calibration": _carried(999)},
     )
     await Runner.run(
         agent, "two", context_policy=policy, session=session, session_id="s"
     )
-    assert policy.seen == [None, 120]
+    assert policy.seen == [(None, None), (120, policy.returned[0])]
 
 
-class _OtherCarryingPolicy(_CarryingPolicy):
-    """Also calibrates, but is another class: its estimate isn't the one the
-    first policy's scratch key holds."""
-
-
-@pytest.mark.parametrize("between", ["noop", "own-key", "other-calibrating"])
-async def test_a_run_whose_policy_does_not_calibrate_carries_no_count(
-    between: str,
-) -> None:
-    """A run under a policy that doesn't declare ``calibrates`` hands the
-    previous run's estimate on — of an older view — whether it writes nothing
-    (``NoopContextPolicy``) or keys of its own. Its final count must not be
-    stored beside that estimate. One that does declare it, but is another
-    class, keeps its estimate elsewhere: its count goes to no other class."""
+@pytest.mark.parametrize("between", ["noop", "no-ids"])
+async def test_a_final_view_without_an_id_carries_no_count(between: str) -> None:
+    """A run under a policy that ids no view (``NoopContextPolicy``, or one
+    that keeps keys of its own) hands the previous run's state on — with an
+    estimate of an older view. Its final count has no id to travel with."""
     from lovia.context import NoopContextPolicy
 
-    other: Any = {
-        "noop": NoopContextPolicy(),
-        "own-key": _CarryingPolicy(calibrates=False),
-        "other-calibrating": _OtherCarryingPolicy(),
-    }[between]
+    other: Any = (
+        NoopContextPolicy() if between == "noop" else _CarryingPolicy(ids=False)
+    )
     policy = _CarryingPolicy()
     session = InMemorySession()
     agent = Agent(
@@ -435,7 +438,7 @@ async def test_a_run_whose_policy_does_not_calibrate_carries_no_count(
     await Runner.run(
         agent, "three", context_policy=policy, session=session, session_id="s"
     )
-    assert policy.seen == [None, None]
+    assert policy.seen == [(None, None), (None, None)]
 
 
 async def test_a_final_call_without_a_count_carries_none() -> None:
@@ -448,7 +451,7 @@ async def test_a_final_call_without_a_count_carries_none() -> None:
         await Runner.run(
             agent, prompt, context_policy=policy, session=session, session_id="s"
         )
-    assert policy.seen == [None, None]
+    assert policy.seen == [(None, None), (None, None)]
     segments = await session.segments("s")
     assert "calibration" not in (segments[0].meta or {})
 
@@ -470,30 +473,81 @@ async def test_single_call_runs_move_the_default_policys_ratio() -> None:
             agent, prompt, context_policy=policy, session=session, session_id="s"
         )
     first, second = await session.segments("s")
+    state = CompactionState.load(first.meta["context_state"])
     assert (first.meta or {})["calibration"] == {
         "input_tokens": 30,
-        "policy": "lovia.context.compaction.Compaction",
+        "view_id": state.last_view_id,
     }
-    assert CompactionState.load(first.meta["context_state"]).ratio == 1.0
+    assert state.ratio == 1.0
     assert CompactionState.load(second.meta["context_state"]).ratio < 1.0
+
+
+class _Traced:
+    """A pass-through wrapper: returns its delegate's result unchanged."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    async def compact(self, req: CompactionRequest) -> ContextResult:
+        return await self.inner.compact(req)
+
+
+@pytest.mark.parametrize("wrap", [False, True])
+async def test_a_policy_switch_between_runs_never_mis_calibrates(wrap: bool) -> None:
+    """Compaction → another policy that ids its views (keeping its estimate
+    under its own key) → Compaction: the count run 3 is handed measured the
+    other policy's view, not the one Compaction's carried estimate describes.
+    The id tells them apart — also through a wrapper whose class never
+    changes while its delegate does."""
+    from lovia.context import Compaction, CompactionState
+
+    def policy(inner: Any) -> Any:
+        return _Traced(inner) if wrap else inner
+
+    compaction = Compaction(context_window=128_000)
+    session = InMemorySession()
+    agent = Agent(
+        name="t",
+        instructions="x" * 2000,
+        model=ScriptedProvider(
+            [_counted("a", 400), _counted("b", 50_000), _counted("c", 400)]
+        ),
+    )
+    for prompt, active in (
+        ("one", compaction),
+        ("two", _CarryingPolicy()),
+        ("three", compaction),
+    ):
+        await Runner.run(
+            agent,
+            prompt,
+            context_policy=policy(active),
+            session=session,
+            session_id="s",
+        )
+    segments = await session.segments("s")
+    assert segments[1].meta["calibration"]["input_tokens"] == 50_000
+    ratio = CompactionState.load(segments[2].meta["context_state"]).ratio
+    assert ratio == 1.0  # the 50K sample (for another view) was skipped
 
 
 @pytest.mark.parametrize(
     ("stored", "handed"),
     [
-        (_owned(120), 120),  # control: well-formed and ours
-        (_owned("120"), None),
-        (_owned(True), None),
-        (_owned(-5), None),
-        (_owned(0), None),
-        (_owned(1.5), None),
-        (120, None),
-        ({"input_tokens": 120}, None),
-        ({"input_tokens": 120, "policy": "elsewhere.Policy"}, None),
+        (_carried(120), (120, "v1")),  # control: well-formed
+        (_carried("120"), (None, None)),
+        (_carried(True), (None, None)),
+        (_carried(-5), (None, None)),
+        (_carried(0), (None, None)),
+        (_carried(1.5), (None, None)),
+        (_carried(120, None), (None, None)),
+        (_carried(120, 7), (None, None)),
+        (120, (None, None)),
+        ({"input_tokens": 120, "policy": "older.Format"}, (None, None)),
     ],
 )
-async def test_a_malformed_or_foreign_carried_count_is_ignored(
-    stored: object, handed: int | None
+async def test_a_malformed_carried_count_is_ignored(
+    stored: object, handed: tuple[int | None, str | None]
 ) -> None:
     policy = _CarryingPolicy()
     session = InMemorySession()

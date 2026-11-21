@@ -16,6 +16,7 @@ def _full_state() -> CompactionState:
         summary=SummaryState(text="S", covered=4, fingerprint="ab" * 8),
         ratio=1.5,
         last_view_estimate=1234,
+        last_view_id="ab12cd34ef56ab78",
         summary_failures=1,
         learned_windows={"https://api.deepseek.com/v1\x00deepseek-chat": 65_536},
         ratio_key="https://api.deepseek.com/v1\x00deepseek-chat",

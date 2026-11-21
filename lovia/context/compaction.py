@@ -28,6 +28,7 @@ How a call flows:
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import TYPE_CHECKING, Sequence
 
 from .policy import CompactionRequest, ContextResult
@@ -450,6 +451,7 @@ class Compaction:
             # unexpected raise must still keep what was already decided (and
             # the failure counters).
             state.last_view_estimate = raw + overhead
+            state.last_view_id = None  # no view goes out, so no count pairs
             self._save(req, state)
             raise
 
@@ -496,6 +498,12 @@ class Compaction:
         until both sides of a pair exist.
         """
         if not req.last_input_tokens or not state.last_view_estimate:
+            return
+        if req.last_view_id is not None and req.last_view_id != state.last_view_id:
+            # The count measured a view this state didn't estimate: another
+            # policy's, after a switch between runs on the session. (No id at
+            # all is a caller that tracks none — trusted, as before ids.)
+            logger.debug("context.calibrate: count is for another view; skipped")
             return
         observed = req.last_input_tokens / max(1, state.last_view_estimate)
         prev_ratio = state.ratio
@@ -555,6 +563,7 @@ class Compaction:
         # ``estimate`` includes the tool-schema overhead, so the next call's
         # calibration pairs the provider's real count against the same total.
         state.last_view_estimate = estimate
+        state.last_view_id = secrets.token_hex(8)
         self._save(req, state)
 
         changed = _differs(view, req.entries)
@@ -599,7 +608,7 @@ class Compaction:
             tokens_after=tokens,
             detail=detail,
             window=window,
-            calibrates=True,  # ``estimate`` of this view was saved above
+            view_id=state.last_view_id,
         )
 
     def _learn_window(

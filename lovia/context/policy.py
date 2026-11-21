@@ -44,14 +44,20 @@ class CompactionRequest:
     can dwarf a small transcript."""
 
     last_input_tokens: int | None = None
-    """The previous call's real provider input-token count — the call that
-    sent the view the policy returned last time. On a run's first call, the
-    previous run's final call, carried in the session when that run's policy
-    was of the same class and set :attr:`ContextResult.calibrates`. ``None``
-    when that call reported none or nothing pairs (a resumed run's first
-    call, an overflow retry, a different policy before).
-    Lags the current transcript by one call; the default pipeline uses it to
-    *calibrate* its estimates rather than trusting it directly."""
+    """The previous call's real provider input-token count — of the view
+    :attr:`last_view_id` names. On a run's first call, the previous run's
+    final call, carried in the session when its view had an id. ``None`` when
+    that call reported none or nothing pairs (a resumed run's first call, an
+    overflow retry). Lags the current transcript by one call; the default
+    pipeline uses it to *calibrate* its estimates rather than trusting it
+    directly."""
+
+    last_view_id: str | None = None
+    """:attr:`ContextResult.view_id` of the view :attr:`last_input_tokens`
+    measured, or ``None`` when that view had none. A policy that keeps an
+    estimate per view pairs the count with it only when this matches the id
+    it stored: a session can switch policies between runs, so the count may
+    measure a view some other policy built."""
 
     overflow: bool = False
     """``True`` when the provider already raised
@@ -122,14 +128,14 @@ class ContextResult:
     (e.g. ``["2 tool results offloaded"]``), surfaced verbatim in the
     compaction notice and the web UI. Empty for a no-op or a replay."""
 
-    calibrates: bool = False
-    """Set when ``scratch`` now holds the policy's estimate of exactly this
-    view, to be paired with the real input-token count of the call that sends
-    it. The runner then carries that count with the scratch into the next run
-    on the session, as its first call's ``last_input_tokens`` — when that
-    run's policy is of the same class. Leave it unset otherwise; a wrapper
-    that returns a delegate's result with ``entries`` changed must clear it,
-    since the count would measure a view the estimate does not describe."""
+    view_id: str | None = None
+    """An opaque id for this view, unique per call, when the policy keeps
+    state about it (the default pipeline: its estimate, to calibrate
+    against). The runner hands it back with the real input-token count of the
+    call that sends the view — :attr:`CompactionRequest.last_view_id` — and
+    carries both into the next run on the session. A wrapper that returns a
+    delegate's result with ``entries`` changed must clear it: the count would
+    then measure a view the id doesn't describe."""
 
 
 class ContextPolicy(Protocol):

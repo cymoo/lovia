@@ -53,7 +53,14 @@ RunLoop：overflow=True 再 compact 一次；视图明显变小（< 失败时的
 - 各 adapter 把 `Usage.input_tokens` 归一成**完整** prompt 大小（Anthropic 的缓存读写量会加回去），否则开了 prompt cache 后倍率会塌到下限。
 - 校准滞后一次调用。溢出重试时把 `last_input_tokens` 置空，避免拿上一轮的真实值去配这一轮更大的估算。
 - **配对只用一次**：runner 把真实数交给一次 `compact()` 后立刻清空（`RunState.calibration_tokens`），只有这次视图真正发出去的那次调用能重新写入。所以手上的真实数总是对应最近一次压缩交出的视图；这个视图的估算是否在 state 里，只有 policy 自己知道（见下一条）。
-- **跨 run**（O6）：run 正常结束时，最后一次调用的真实数和 `context_state` 一起写进同一个 segment 的 meta（`calibration`：`{"input_tokens", "policy"}`）；下一个 run 从**同一个** segment 取出这两样，所以纯聊天（每轮一次调用）也会校准。只有最后那次压缩的 policy 声明了 `ContextResult.calibrates`（"scratch 里存的就是这个视图的估算"）才带；`Compaction` 每次都声明，自定义 policy 默认不声明。换成别的 policy 跑的 run，会把上一个 run 的估算原样传下去，那是更早视图的估算（#509 第 1 轮 review 复现：配错后倍率直接顶到 2.5）。runner 自己判断不了：比较 state 前后是否被改过，挡得住什么都不写的 `NoopContextPolicy`，挡不住只写自己 key 的自定义 policy（第 2 轮 review 复现：倍率 1.0 → 2.43），所以改由 policy 声明。声明只说明"有没有"，不说明"是谁的"：两个都声明的 policy 把估算存在 scratch 的不同位置，来回切换照样配错（第 3 轮复现：倍率顶到 2.5）。所以 segment 里同时记下声明它的 policy 类（模块名 + 类名），下一个 run 的 policy 是同一个类才交给它，类不同就少一个样本。由 checkpoint snapshot 写成的 segment（已完成 run 的补写、web 停止、等待审批时停止）不带这个数，下一个 run 只是少一个样本；恢复后跑完的 run 走正常路径写 segment，照常带。
+- **跨 run**（O6）：run 正常结束时，最后一次调用的真实数和 `context_state` 一起写进同一个 segment 的 meta（`calibration`：`{"input_tokens", "view_id"}`）；下一个 run 从**同一个** segment 取出这两样，所以纯聊天（每轮一次调用）也会校准。
+- **配对由 policy 核对**：`Compaction` 每交出一个视图，就生成一个随机 `view_id`，和估算一起存进 state，并通过 `ContextResult.view_id` 交给 runner。runner 把真实数和"发出的那个视图的 id"一起记下（跨 run 时写进 segment），通过 `CompactionRequest.last_input_tokens` / `last_view_id` 交回。`Compaction` 只有在 id 和自己 state 里的一致时才校准；请求里没有 id（直接调用 `compact` 的代码、丢了 id 的 wrapper）时照旧信任。
+  - 为什么不让 runner 判断：同一个会话在两个 run 之间可以换 policy，这时 state 里的估算描述的是更早的视图。#509 的 review 先后试了三种由 runner 判断的办法，每种都被复现出配错，倍率顶到 2.4–2.5：
+    1. "最后那次压缩写过 state"：挡不住只写自己 key 的自定义 policy；
+    2. "policy 声明 `calibrates`"：两个都声明的 policy 来回切换照样配错；
+    3. "同一个 policy 类才交"：挡不住包着不同内层 policy 的透传 wrapper。
+  - 估算是谁写的、配哪次调用，只有 policy 自己知道，所以由它核对 id。
+- 由 checkpoint snapshot 写成的 segment（已完成 run 的补写、web 停止、等待审批时停止）不带这个数，下一个 run 只是少一个样本；恢复后跑完的 run 走正常路径写 segment，照常带。
 
 ## 4. 水位与预算
 
@@ -138,6 +145,7 @@ runner 只重试一次，并且只在重建的视图明显更小时重试（同�
 7. **阶段不抛异常**：失败就记日志、返回 False。溢出路径上一个逃出来的异常会顶替原本的 `ContextOverflowError`，误导用户。
 8. **窗口只往下压**：报错学到的窗口只能把配置/公布值压低，不能抬高。
 9. **发送前的激进压缩不比"发出去被拒"更差**：只有估算超过窗口本身的 1.4 倍才算"一定被拒"；先跑普通一遍，仍一定被拒才跑溢出那一遍，而那一遍和被拒后的那一遍完全相同。
+10. **校准样本必须是同一个视图的两面**：真实数和估算只有在 `view_id` 一致时才配对。宁可少一个样本，也不能配错：配错一次就可能把倍率顶到上限，之后每次估算都偏大，导致过早压缩，而压缩的决定是粘性的，不会撤销。
 
 ## 9. 候选优化
 
@@ -152,7 +160,7 @@ runner 只重试一次，并且只在重建的视图明显更小时重试（同�
 
 **O5　文档与注释的漂移（必做，零风险）。** #497 之后，`stages.py` 里有几处注释仍说"溢出预算按失败 prompt 算"（现在只有估算不可信时才这样）；`architecture.md` 说熔断是"每个 run"的（实际随 scratch 跨 run 保留），阶段列表里也没有 `TruncateHistory`。随本文一起修正（#502）。
 
-**O6　跨 run 校准 —— 已完成（#507）。** 实测 O3 时发现：新 run 的 `last_input_tokens` 从 `None` 开始，一个 run 最后一次调用的真实 token 数在 run 边界丢了，所以倍率只在 run 内部（工具循环的多次调用之间）校准；纯聊天每轮只有一次调用，倍率一直是 1.0。对 DeepSeek 这类被 bytes/4 高估的 tokenizer，压缩会早触发（约实际 60% 时）；对被低估的内容则晚触发、多一次被拒。现在 run 正常结束时把最后一次调用的真实数写进 segment meta，和 `context_state` 放在一起，下一个 run 从同一个 segment 取出：带过来的 `last_view_estimate` 描述的正是那次调用的视图，配对有效；换模型由 O3 处理。为了让"手上的真实数一定对应最新估算"在 run 边界也成立，runner 在把真实数交给 `compact()` 之后立刻清空它，并且只在最后那次压缩的 policy 声明 `ContextResult.calibrates` 时才把它带出 run，只交给同一个类的 policy。只覆盖走正常路径写 segment 的 run（包括恢复后跑完的）：恢复后的第一次调用拿不到数（checkpoint 里的数不一定对应 state 里的估算）；已完成 run 的补写、web 停止、等待审批时停止，这几种 segment 由 checkpoint snapshot 写成，snapshot 不带这个数。为一个样本改 snapshot 结构不值得。
+**O6　跨 run 校准 —— 已完成（#507）。** 实测 O3 时发现：新 run 的 `last_input_tokens` 从 `None` 开始，一个 run 最后一次调用的真实 token 数在 run 边界丢了，所以倍率只在 run 内部（工具循环的多次调用之间）校准；纯聊天每轮只有一次调用，倍率一直是 1.0。对 DeepSeek 这类被 bytes/4 高估的 tokenizer，压缩会早触发（约实际 60% 时）；对被低估的内容则晚触发、多一次被拒。现在 run 正常结束时把最后一次调用的真实数写进 segment meta，和 `context_state` 放在一起，下一个 run 从同一个 segment 取出：带过来的 `last_view_estimate` 描述的正是那次调用的视图，配对有效；换模型由 O3 处理。配对的有效性由 `view_id` 保证：真实数总是和它测量的那个视图的 id 一起传递，`Compaction` 只在 id 与自己 state 里的一致时才校准，所以换 policy、wrapper 换内层 policy 都只会少一个样本（runner 侧的几种判断办法为什么不行，见 §3）。runner 在把真实数交给 `compact()` 之后立刻清空它，最后一次调用的视图没有 id 就不带出 run。只覆盖走正常路径写 segment 的 run（包括恢复后跑完的）：恢复后的第一次调用拿不到数（checkpoint 里的数不一定对应 state 里的估算）；已完成 run 的补写、web 停止、等待审批时停止，这几种 segment 由 checkpoint snapshot 写成，snapshot 不带这个数。为一个样本改 snapshot 结构不值得。
 
 ## 10. 已知限制与不做
 

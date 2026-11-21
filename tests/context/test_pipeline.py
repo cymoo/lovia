@@ -326,6 +326,33 @@ async def test_ratio_calibrates_against_real_usage():
     assert state.ratio == pytest.approx(0.8 * 1.0 + 0.2 * 2.0)
 
 
+@pytest.mark.parametrize("named", ["ours", "other"])
+async def test_a_count_pairs_only_with_the_view_it_names(named: str):
+    """Each returned view gets a fresh id; a count naming another view (one a
+    different policy built, after a switch between runs) is not a sample of
+    this estimate's error."""
+    pipeline = _pipeline(context_window=1_000_000)
+    scratch: dict = {}
+    entries = [user("x" * 400) for _ in range(10)]
+    first = await pipeline.compact(req(entries, scratch=scratch))
+    state = CompactionState.load(scratch)
+    assert first.view_id and first.view_id == state.last_view_id
+    estimate = state.last_view_estimate
+    assert estimate is not None
+
+    second = await pipeline.compact(
+        req(
+            entries,
+            scratch=scratch,
+            last_input_tokens=2 * estimate,
+            last_view_id=first.view_id if named == "ours" else "someone-else",
+        )
+    )
+    assert second.view_id not in (None, first.view_id)
+    expected = pytest.approx(1.2) if named == "ours" else 1.0
+    assert CompactionState.load(scratch).ratio == expected
+
+
 async def test_tool_schema_overhead_enters_the_estimate():
     """A big tool-schema payload triggers proactive compaction even though
     the rendered view alone sits far below the watermark (the small-transcript

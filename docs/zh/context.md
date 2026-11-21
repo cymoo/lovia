@@ -173,9 +173,9 @@ required_sections=...)`，不要 fork 这段实现。
 本次运行的 usage 和预算。
 返回 view，加上 `changed`/`compacted` 标志、可选 token 数，以及可选的 `window`（这次预算
 所依据的窗口，runner 转发为 `MessageCompleted.context_window`，web 的上下文圆环据此显示）。
-只有当 `scratch` 里存的正是这次返回视图的估算时，才设置 `calibrates=True`：runner 会把发送这个视图的那次调用的真实 token 数
-带到同一 session 的下一次运行，作为它第一次调用的 `last_input_tokens`（前提是那次运行的 policy 是同一个类）。
-包装别的 policy 并改动其 `entries` 的 wrapper 必须清掉这个标志。可选 `tools()` 方法可以贡献工具；
+要用真实 token 数校准，就返回一个新的 `view_id`，并把它和估算一起存进 `scratch`。runner 会把它作为 `last_view_id`，
+连同发送这个视图的那次调用的真实数一起交回（也会带到同一 session 的下一次运行）；只有 id 对得上，这个配对才属于你。
+包装别的 policy 并改动其 `entries` 的 wrapper 必须清掉 `view_id`。可选 `tools()` 方法可以贡献工具；
 `lovia.tools` 里的 `recall_tool_result(store)` 是 `Compaction` 用来提供 recall 的工厂，
 任何会丢内容的策略都可以复用。`lovia/context/policy.py` 很短，一屏就能读完。
 

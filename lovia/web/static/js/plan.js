@@ -66,34 +66,59 @@ export function planLabel(item) {
 }
 
 /**
+ * Whether `next` starts a plan of its own rather than revising `prev`: there
+ * was none, or it was all done and `next` keeps none of its items.
+ * @param {PlanItem[] | null} prev
+ * @param {PlanItem[]} next
+ */
+export function isFreshPlan(prev, next) {
+  if (!prev?.length) return true;
+  if (!prev.every((item) => item.status === 'completed')) return false;
+  const texts = new Set(prev.map((item) => item.content));
+  return !next.some((item) => texts.has(item.content));
+}
+
+/**
  * What one update changed. Items have no ids (each update replaces the whole
- * list), so they match by text — in order, one for one, as two items may
- * share a text.
+ * list), so they match by text first — in order, one for one, as two items may
+ * share a text — then what is left pairs up by order: a model that reworded
+ * an item (often to say its status) still moved that item, not swapped it
+ * for a new one. Only a change in count is an addition or a removal.
  * @param {PlanItem[] | null} prev
  * @param {PlanItem[]} next
  * @returns {{ done: PlanItem[], started: PlanItem[], added: number, removed: number,
- *   changed: Set<number> }} `changed`: indexes into `next` of new items and
- *   items whose status moved; empty for a first plan.
+ *   changed: Set<number> }} `changed`: indexes into `next` of new, reworded
+ *   and moved items; empty for a fresh plan (isFreshPlan).
  */
 export function planDiff(prev, next) {
-  /** @type {Map<string, string[]>} each text's statuses, still unmatched */
-  const was = new Map();
-  for (const item of prev ?? []) {
-    const queue = was.get(item.content);
-    if (queue) queue.push(item.status);
-    else was.set(item.content, [item.status]);
-  }
   const out = { done: [], started: [], added: 0, removed: 0, changed: new Set() };
+  if (isFreshPlan(prev, next)) return /** @type {any} */ (out);
+  const old = /** @type {PlanItem[]} */ (prev);
+  /** @type {Map<string, number[]>} each text's prev indexes, still unmatched */
+  const byText = new Map();
+  old.forEach((item, j) => {
+    const queue = byText.get(item.content);
+    if (queue) queue.push(j);
+    else byText.set(item.content, [j]);
+  });
+  /** @type {(number | undefined)[]} each next item's prev index */
+  const match = next.map((item) => byText.get(item.content)?.shift());
+  const used = new Set(match);
+  const leftOld = old.map((_, j) => j).filter((j) => !used.has(j));
+  next.forEach((_, i) => {
+    if (match[i] === undefined) match[i] = leftOld.shift();
+  });
+  out.removed = leftOld.length;
   next.forEach((item, i) => {
-    const before = was.get(item.content)?.shift();
-    if (before === undefined) out.added += 1;
-    if (before === item.status) return;
-    if (prev) out.changed.add(i);
-    if (item.status === 'completed' && before !== undefined) out.done.push(item);
+    const j = match[i];
+    const before = j === undefined ? undefined : old[j];
+    if (!before) out.added += 1;
+    if (before?.status === item.status && before.content === item.content) return;
+    out.changed.add(i);
+    if (before?.status === item.status) return; // reworded only
+    if (item.status === 'completed' && before) out.done.push(item);
     if (item.status === 'in_progress') out.started.push(item);
   });
-  for (const queue of was.values()) out.removed += queue.length;
-  if (!prev) out.added = 0; // a first plan adds nothing: it is the plan
   return /** @type {any} */ (out);
 }
 
@@ -107,7 +132,7 @@ export function planSummary(prev, next) {
   if (!next.length) return t('plan.cleared');
   const done = next.filter((item) => item.status === 'completed').length;
   const count = `${done}/${next.length}`;
-  if (!prev?.length) return `${count} · ${t('plan.created')}`;
+  if (isFreshPlan(prev, next)) return `${count} · ${t('plan.created')}`;
   const d = planDiff(prev, next);
   const parts = [];
   if (d.done.length === 1) parts.push(t('plan.doneOne', { text: d.done[0].content }));
@@ -247,33 +272,38 @@ export function usePlanView(name) {
 
 const MARK = {
   completed: () => icon('check', { size: 13 }),
-  in_progress: () => icon('loader-circle', { size: 13 }),
+  in_progress: () => icon('loader-circle', { size: 13 }), // spun by CSS while live
   pending: () => '', // its ring is drawn in CSS
 };
 
 /**
  * The list, each item with its status mark; `changed` items are marked too.
- * `idle`: no run is at it, so the step in progress reads as its task, as the
- * plan line says it.
+ * `mode` says what the list shows:
+ * - `live`: the plan a run is working through — the step in progress spins,
+ *   as the plan line's does;
+ * - `idle`: the plan with no run at it — that step waits like the line says
+ *   (the ring, its task's words), still the current one (lv-current);
+ * - `snapshot`: the plan as of one update in a reply — that step was the
+ *   current one then, so a still dot, not a spinner frozen mid-turn.
  * @param {PlanItem[]} items
  * @param {Set<number>} [changed]
- * @param {{ idle?: boolean }} [opts]
+ * @param {'live' | 'idle' | 'snapshot'} [mode]
  */
-export function planList(items, changed = new Set(), { idle = false } = {}) {
+export function planList(items, changed = new Set(), mode = 'snapshot') {
   const ul = document.createElement('ul');
-  ul.className = 'lv-plan-list';
+  ul.className = `lv-plan-list lv-${mode}`;
+  const idle = mode === 'idle';
   items.forEach((item, i) => {
-    // Idle, the step in progress waits like the line says: the ring, not a
-    // spinner nobody turns — still the current one (lv-current).
-    const waiting = idle && item.status === 'in_progress';
-    const status = waiting ? 'pending' : item.status;
+    const current = item.status === 'in_progress';
+    const status = idle && current ? 'pending' : item.status;
     const li = document.createElement('li');
     li.className = `lv-plan-item lv-${status}`;
-    if (waiting) li.classList.add('lv-current');
+    if (idle && current) li.classList.add('lv-current');
     if (changed.has(i)) li.classList.add('lv-changed');
     const mark = document.createElement('span');
     mark.className = 'lv-plan-mark';
-    mark.innerHTML = MARK[status]();
+    mark.innerHTML =
+      mode === 'snapshot' && current ? icon('circle-dot', { size: 13 }) : MARK[status]();
     const text = document.createElement('span');
     text.className = 'lv-plan-text';
     text.textContent = idle ? item.content : planLabel(item);
@@ -302,7 +332,7 @@ export function fillPlanRow(node, key, items) {
   // the text unless a list stands in for it).
   if (!items.length) return;
   const prev = planBefore(key);
-  box.append(planList(items, prev ? planDiff(prev, items).changed : new Set()));
+  box.append(planList(items, planDiff(prev, items).changed, 'snapshot'));
 }
 
 const OPEN_KEY = 'lovia.plan.open';
@@ -405,7 +435,7 @@ function drawPlan() {
   line.setAttribute('aria-expanded', String(plan.open));
   line.title = plan.open ? t('plan.hide') : t('plan.show');
   body.hidden = !plan.open;
-  body.replaceChildren(planList(items, new Set(), { idle: !live }));
+  body.replaceChildren(planList(items, new Set(), live ? 'live' : 'idle'));
   const now = /** @type {HTMLElement | null} */ (body.querySelector('.lv-in_progress, .lv-current'));
   if (plan.open && now) {
     // A long list scrolls itself (never the page) to the step in progress.

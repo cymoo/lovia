@@ -5910,7 +5910,10 @@ body.lv-files-resizing {
 .lv-plan:not(.lv-idle):not(.lv-done) .lv-plan-line .lv-plan-mark svg {
   color: var(--lv-accent);
 }
-.lv-plan:not(.lv-idle):not(.lv-done) .lv-plan-line .lv-plan-mark svg {
+/* The step a run is working on turns, in the line and its open list alike;
+   a reply's snapshot of the plan draws it as a still dot (plan.js). */
+.lv-plan:not(.lv-idle):not(.lv-done) .lv-plan-line .lv-plan-mark svg,
+.lv-plan-list.lv-live .lv-plan-item.lv-in_progress .lv-plan-mark svg {
   animation: lv-spin 1.2s linear infinite;
 }
 .lv-plan-item.lv-completed .lv-plan-mark,

@@ -50,6 +50,36 @@ test('arguments read as the plugin stored them: one item in progress', () => {
   assert.equal(planSummary(parsePlan(args), next), '1/2 · Done “a” · Now “b”');
 });
 
+test('a new plan after a finished one reads as made, not swapped', () => {
+  const old = items('xxxx', 'wxyz');
+  assert.equal(planSummary(old, items('~..')), '0/3 · Made a plan');
+  assert.deepEqual([...planDiff(old, items('~..')).changed], []);
+  // Extending a finished plan keeps its items: a revision.
+  assert.equal(planSummary(items('xx'), items('xx~')), '2/3 · Now “c” · 1 added');
+  // An unfinished plan is always revised, whatever its new words.
+  assert.equal(planSummary(items('x~', 'ab'), items('x~', 'cd')), '1/2 · Revised the plan');
+});
+
+test('a reworded item is the same item: its status moved, nothing swapped', () => {
+  // A model that writes the status into the text, as in a live demo.
+  const plan = (a, b, c) => [
+    { content: `Task one (${a})`, status: a, active_form: null },
+    { content: `Task two (${b})`, status: b, active_form: 'Running task two' },
+    { content: 'Task three', status: c, active_form: null },
+  ];
+  const prev = plan('in_progress', 'pending', 'pending');
+  const next = plan('completed', 'in_progress', 'pending');
+  assert.equal(
+    planSummary(prev, next),
+    '1/3 · Done “Task one (completed)” · Now “Running task two”',
+  );
+  assert.deepEqual([...planDiff(prev, next).changed], [0, 1]);
+  // A reword alone marks the item but reports no status change.
+  const renamed = [{ ...prev[0], content: 'Task 1' }, prev[1], prev[2]];
+  assert.equal(planSummary(prev, renamed), '0/3 · Revised the plan');
+  assert.deepEqual([...planDiff(prev, renamed).changed], [0]);
+});
+
 test('items sharing a text match one for one', () => {
   const prev = [
     { content: 'test', status: 'pending', active_form: null },

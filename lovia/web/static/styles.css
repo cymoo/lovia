@@ -1444,10 +1444,6 @@ body.lv-view-open #files-btn {
   overflow: hidden;
 }
 
-/* The plan (todo) panel floats as frosted glass OVER the transcript at every
-   width — the content column never shifts or shrinks for it. Readability
-   comes from the card's blur + tint (see .lv-todo-card). */
-
 /* Floating "jump to latest" affordance, shown only when scrolled up. */
 .lv-scroll-bottom-btn {
   position: absolute;
@@ -4000,7 +3996,6 @@ button.lv-question-option:hover {
 .lv-session-more svg,
 .lv-popup-menu-item svg,
 .lv-mermaid-lightbox-btn svg,
-.lv-todo-mark svg,
 .lv-withdraw-btn svg,
 .lv-btn-send svg {
   display: block;
@@ -5788,176 +5783,155 @@ body.lv-files-resizing {
 }
 
 /* ---- Todo plugin card --------------------------------------------------------------------- */
-.lv-todo-panel {
-  position: absolute;
-  top: calc(var(--lv-topbar-h) + 14px);
-  right: 20px;
-  z-index: 8;
-  width: min(320px, calc(100% - 40px));
-  max-height: calc(100% - var(--lv-topbar-h) - 28px);
-  pointer-events: none;
+/* ---- Plan (todo list) ------------------------------------------------------------------------
+   One line above the composer naming the current step; its list opens above
+   it. A plan row in a reply reuses the list for its body (plan.js). */
+.lv-plan {
+  max-width: var(--lv-content-w);
+  margin: 0 auto 6px;
 }
-
-.lv-todo-card {
-  margin: 0;
-  max-height: inherit;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--lv-surface) 78%, transparent);
-  border: 1px solid color-mix(in srgb, var(--lv-border) 75%, transparent);
-  border-radius: var(--lv-radius);
-  box-shadow: var(--lv-shadow-md);
-  pointer-events: auto;
-  backdrop-filter: blur(16px) saturate(1.1);
-  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+.lv-plan[hidden] {
+  display: none;
 }
-.lv-todo-toggle {
-  display: flex;
+.lv-plan-line {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 12px;
-  text-align: left;
-  border-bottom: 1px solid color-mix(in srgb, var(--lv-border) 75%, transparent);
+  gap: 7px;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid var(--lv-border);
+  border-radius: 999px;
+  background: var(--lv-surface);
+  font: inherit;
+  font-size: 13px;
+  color: var(--lv-ink-2);
+  cursor: pointer;
   transition:
     background var(--lv-t-fast),
-    color var(--lv-t-fast);
+    border-color var(--lv-t-fast);
 }
-.lv-todo-toggle:hover {
-  background: color-mix(in srgb, var(--lv-surface-2) 65%, transparent);
+.lv-plan-line:hover {
+  background: var(--lv-surface-2);
+  border-color: var(--lv-border-strong);
 }
-.lv-todo-title {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--lv-ink-2);
+.lv-plan-step {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.lv-todo-count {
-  margin-left: auto;
-  font-family: var(--lv-mono);
-  font-size: 11px;
+.lv-plan-count {
+  flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   color: var(--lv-muted);
 }
-.lv-todo-toggle-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: var(--lv-radius-xs);
-  background: color-mix(in srgb, var(--lv-surface-3) 80%, transparent);
+.lv-plan-chevron {
+  flex-shrink: 0;
   color: var(--lv-muted);
-  font-family: var(--lv-mono);
-  font-size: 13px;
-  line-height: 1;
+  transition: transform var(--lv-t-fast);
 }
-.lv-todo-content {
-  min-height: 0;
+.lv-plan-line[aria-expanded="true"] .lv-plan-chevron {
+  transform: rotate(180deg);
+}
+/* No run going: the plan waits, so the line steps back. */
+.lv-plan.lv-idle .lv-plan-line {
+  color: var(--lv-muted);
+}
+.lv-plan-body {
+  position: relative; /* offsetTop of its items: plan.js scrolls to the active one */
+  max-height: min(40vh, 320px);
+  margin-bottom: 6px;
+  padding: 8px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 12px 12px 12px;
+  border: 1px solid var(--lv-border);
+  border-radius: var(--lv-radius);
+  background: var(--lv-surface);
 }
-.lv-todo-bar {
-  height: 3px;
-  border-radius: 999px;
-  background: var(--lv-surface-3);
-  overflow: hidden;
-  margin-bottom: 10px;
+.lv-plan-body[hidden] {
+  display: none;
 }
-.lv-todo-bar-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--lv-accent);
-  transition: width var(--lv-t-slow) var(--lv-ease);
-}
-.lv-todo-card.lv-complete .lv-todo-bar-fill {
-  background: var(--lv-ok);
-}
-.lv-todo-list {
+
+.lv-plan-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
 }
-.lv-todo-item {
+.lv-plan-item {
   display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 13px;
-  line-height: 1.45;
+  align-items: flex-start;
+  gap: 8px;
   padding: 3px 6px;
   border-radius: var(--lv-radius-xs);
+  font-size: 13px;
+  line-height: 1.45;
 }
-.lv-todo-mark {
+.lv-plan-mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 18px;
-  min-width: 18px;
-  height: 18px;
-  line-height: 1;
-}
-.lv-todo-text {
-  flex: 1;
-  word-break: break-word;
-}
-
-.lv-todo-item.lv-pending .lv-todo-text {
+  height: 19px; /* one line of 13px text, so the mark sits on the first line */
   color: var(--lv-muted);
 }
-.lv-todo-item.lv-pending .lv-todo-mark::before {
+.lv-plan-mark svg {
+  display: block;
+}
+.lv-plan-text {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+/* Pending: an empty ring (the line's mark too, when it names the next step). */
+.lv-plan-item.lv-pending .lv-plan-mark::before,
+.lv-plan-mark:empty::before {
   content: "";
   width: 11px;
   height: 11px;
   border-radius: 50%;
   border: 1.6px solid var(--lv-muted-2);
 }
-
-.lv-todo-item.lv-in_progress {
-  background: color-mix(in srgb, var(--lv-accent-soft) 80%, transparent);
+.lv-plan-item.lv-pending .lv-plan-text {
+  color: var(--lv-muted);
 }
-.lv-todo-item.lv-in_progress .lv-todo-text {
-  color: var(--lv-accent-text);
+.lv-plan-item.lv-in_progress .lv-plan-text {
+  color: var(--lv-ink);
   font-weight: 600;
 }
-.lv-todo-item.lv-in_progress .lv-todo-mark {
+.lv-plan-item.lv-in_progress .lv-plan-mark,
+.lv-plan:not(.lv-idle):not(.lv-done) .lv-plan-line .lv-plan-mark svg {
   color: var(--lv-accent);
-  animation: lv-todo-pulse 1.4s var(--lv-ease) infinite;
 }
-@keyframes lv-todo-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
+.lv-plan:not(.lv-idle):not(.lv-done) .lv-plan-line .lv-plan-mark svg {
+  animation: lv-spin 1.2s linear infinite;
 }
-
-.lv-todo-item.lv-completed .lv-todo-mark {
+.lv-plan-item.lv-completed .lv-plan-mark,
+.lv-plan.lv-done .lv-plan-line .lv-plan-mark {
   color: var(--lv-ok);
 }
-.lv-todo-item.lv-completed .lv-todo-text {
+.lv-plan-item.lv-completed .lv-plan-text {
   color: var(--lv-muted-2);
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--lv-muted-2) 55%, transparent);
 }
-.lv-todo-panel.lv-collapsed {
-  width: auto;
+/* In a plan row: what this update changed. */
+.lv-plan-item.lv-changed {
+  background: var(--lv-surface-2);
 }
-.lv-todo-panel.lv-collapsed .lv-todo-card {
-  min-width: 132px;
-}
-.lv-todo-panel.lv-collapsed .lv-todo-toggle {
-  border-bottom: 0;
-}
-.lv-todo-panel.lv-collapsed .lv-todo-content {
+
+/* A plan row's body is the list: the raw arguments and the plugin's text
+   rendering of the same list would only repeat it (copy still copies it). */
+.lv-tool--plan .lv-tool-params,
+.lv-tool--plan .lv-tool-result {
   display: none;
+}
+.lv-tool--plan .lv-tool-result-box > .lv-plan-list {
+  padding: 6px 4px;
 }
 
 /* ---- Toasts ----------------------------------------------------------------------------------
@@ -6144,19 +6118,6 @@ body.lv-files-resizing {
   .lv-btn-copy {
     opacity: 1;
     pointer-events: auto;
-  }
-
-  .lv-todo-panel {
-    top: auto;
-    left: 16px;
-    right: 16px;
-    bottom: 12px;
-    width: auto;
-    max-height: min(42vh, 300px);
-  }
-  .lv-todo-panel.lv-collapsed {
-    left: auto;
-    width: auto;
   }
 }
 

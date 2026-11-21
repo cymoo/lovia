@@ -64,6 +64,19 @@ import { initSkillMenu } from './skill-menu.js';
 import { findCommand, runCommand } from './commands.js';
 import { initFileMenu } from './file-menu.js';
 import { isStep, placeStep, removeStep } from './activity.js';
+import {
+  PLAN_TOOL,
+  fillPlanRow,
+  initPlan,
+  isPlanResult,
+  notePlan,
+  parsePlan,
+  planText,
+  resetPlans,
+  setPlanLive,
+  showPlan,
+  usePlanView,
+} from './plan.js';
 import { collectContext } from './lovia.js';
 import { messageActionButtons, watchMessageActions } from './message-actions.js';
 import {
@@ -744,109 +757,36 @@ function updateToolResult(id, result, isError, images) {
   if (node.classList.contains('lv-tool--ui')) scrollDown(); // a component adds height
 }
 
-function removeToolNode(id) {
-  const node = store.toolNodes.get(id);
-  if (node) { removeStep(node); store.toolNodes.delete(id); }
-}
-
-// ---- Todo plugin: a live checklist card --------------------------------
-// Tool names whose calls render as a todo card instead of a tool bubble.
-// Seeded with the default; renamed tools are learned from `todo` events.
-const todoNames = new Set(['todo_write']);
-// pending stays empty — its ring is drawn by `.lv-todo-mark::before` in CSS.
-const TODO_MARK = {
-  completed: icon('check', { size: 13 }),
-  in_progress: icon('loader-circle', { size: 13 }),
-  pending: '',
-};
 const STICKY_SCROLL_PX = 160;
 const USER_SCROLL_PAUSE_MS = 900;
 
-// Parse a todo_write call's arguments into a todos array, or null.
-function parseTodos(args) {
-  try {
-    const obj = JSON.parse(args);
-    if (obj && Array.isArray(obj.todos)) {
-      return obj.todos.map((todo) => ({
-        content: todo.content ?? '',
-        status: todo.status ?? 'pending',
-        active_form: todo.active_form ?? null,
-      }));
-    }
-  } catch { /* not a todo payload */ }
-  return null;
+// ---- The plan (Todo plugin): drawn by plan.js ------------------------------
+// Tool names whose calls are plan updates: the default, plus a renamed one
+// learned from a `todo` event (or, replayed, from its result).
+const planTools = new Set([PLAN_TOOL]);
+
+/** @param {string | undefined} name */
+function learnPlanTool(name) {
+  if (!name || planTools.has(name)) return;
+  planTools.add(name);
+  usePlanView(name);
 }
 
-function fillTodoCard(card, todos) {
-  const total = todos.length;
-  const done = todos.filter((todo) => todo.status === 'completed').length;
-  const pct = total ? Math.round((done / total) * 100) : 0;
-  const expanded = !store.todoCollapsed;
-  card.classList.toggle('lv-complete', total > 0 && done === total);
-  card.innerHTML =
-    `<button class="lv-todo-toggle" type="button" aria-expanded="${expanded}" title="${expanded ? t('todo.hide') : t('todo.show')}">` +
-    `<span class="lv-todo-title">${t('todo.plan')}</span>` +
-    `<span class="lv-todo-count">${done}/${total}</span>` +
-    `<span class="lv-todo-toggle-icon" aria-hidden="true">${expanded ? '-' : '+'}</span>` +
-    '</button>' +
-    '<div class="lv-todo-content">' +
-    `<div class="lv-todo-bar"><div class="lv-todo-bar-fill" style="width:${pct}%"></div></div>` +
-    '<ul class="lv-todo-list"></ul>' +
-    '</div>';
-  const toggle = card.querySelector('.lv-todo-toggle');
-  toggle?.addEventListener('click', () => setTodoCollapsed(!store.todoCollapsed));
-  const ul = card.querySelector('.lv-todo-list');
-  for (const todo of todos) {
-    const status = ['pending', 'in_progress', 'completed'].includes(todo.status)
-      ? todo.status
-      : 'pending';
-    const li = document.createElement('li');
-    li.className = `lv-todo-item lv-${status}`;
-    const label =
-      status === 'in_progress' && todo.active_form ? todo.active_form : todo.content;
-    const mark = document.createElement('span');
-    mark.className = 'lv-todo-mark';
-    mark.innerHTML = TODO_MARK[status];
-    const text = document.createElement('span');
-    text.className = 'lv-todo-text';
-    text.textContent = label;
-    li.append(mark, text);
-    ul.appendChild(li);
-  }
-  return card;
+/**
+ * Whether a replayed call is a plan update; learns a renamed tool.
+ * @param {{ name: string, arguments?: string }} call
+ * @param {{ text: string } | undefined} result
+ */
+function isPlanCall(call, result) {
+  if (planTools.has(call.name)) return true;
+  if (!parsePlan(call.arguments) || !isPlanResult(result?.text)) return false;
+  learnPlanTool(call.name);
+  return true;
 }
 
-function buildTodoCard(todos) {
-  const card = document.createElement('div');
-  card.className = 'lv-todo-card';
-  return fillTodoCard(card, todos);
-}
-
-function setTodoCollapsed(collapsed) {
-  const panel = document.getElementById('todo-panel');
-  store.todoCollapsed = collapsed;
-  panel?.classList.toggle('lv-collapsed', collapsed);
-  const toggle = /** @type {HTMLElement | null} */ (panel?.querySelector('.lv-todo-toggle'));
-  const icon = panel?.querySelector('.lv-todo-toggle-icon');
-  toggle?.setAttribute('aria-expanded', String(!collapsed));
-  if (toggle) toggle.title = collapsed ? t('todo.show') : t('todo.hide');
-  if (icon) icon.textContent = collapsed ? '+' : '-';
-}
-
-function clearTodoPanel() {
-  const panel = document.getElementById('todo-panel');
-  if (panel) {
-    panel.replaceChildren();
-    panel.classList.add('lv-hidden');
-    panel.classList.remove('lv-collapsed');
-  }
-  store.todoNode = null;
-  // Same default as store.js: collapsed on phones, where the bottom-anchored
-  // panel would otherwise cover the conversation (and approval buttons).
-  store.todoCollapsed = !!(
-    window.matchMedia && window.matchMedia('(max-width: 720px)').matches
-  );
-  store.todos = [];
+function clearPlanView() {
+  resetPlans();
+  showPlan([]);
 }
 
 function resetChatView() {
@@ -864,29 +804,7 @@ function resetChatView() {
   store.reasoningEnd = 0;
   _queuedTurns = [];
   _pendingResend = [];
-  clearTodoPanel();
-}
-
-// Create the session's todo panel on first sight, update it in place after.
-function upsertTodoCard(todos) {
-  const panel = document.getElementById('todo-panel');
-  if (!panel) return;
-
-  store.todos = todos;
-  if (!todos.length) {
-    clearTodoPanel();
-    return;
-  }
-
-  panel.classList.remove('lv-hidden');
-  panel.classList.toggle('lv-collapsed', store.todoCollapsed);
-  if (store.todoNode && panel.contains(store.todoNode)) {
-    fillTodoCard(store.todoNode, todos);
-  } else {
-    store.todoNode = buildTodoCard(todos);
-    panel.replaceChildren(store.todoNode);
-  }
-  scrollDown();
+  clearPlanView();
 }
 
 // A call that needs approval shows a card only while the decision is open.
@@ -2748,6 +2666,25 @@ function renderHistoryWindow({ stickBottom }) {
         images: it.images,
       });
   }
+  // The plan, also from the full history: the latest update may sit above the
+  // window, and each row diffs against the one before it. A failed update
+  // never changed the plan; one still pending shows once it lands (live).
+  resetPlans();
+  /** @type {Set<string>} */
+  const planCalls = new Set();
+  let plan = [];
+  for (const it of entries) {
+    for (const call of (it.role === 'assistant' && it.tool_calls) || []) {
+      const result = pendingResults.get(call.id);
+      if (!isPlanCall(call, result)) continue;
+      planCalls.add(call.id);
+      const items = parsePlan(call.arguments);
+      if (!items || !result || result.isError) continue;
+      notePlan(call.id, items);
+      plan = items;
+    }
+  }
+  showPlan(plan);
 
   // Absolute user-turn numbering spans the FULL history — the rendered
   // window may start mid-transcript.
@@ -2822,12 +2759,8 @@ function renderHistoryWindow({ stickBottom }) {
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
           const result = pendingResults.get(call.id);
-          const todos = parseTodos(call.arguments);
-          if (todos) {
-            upsertTodoCard(todos); // render/update the session's checklist panel
-            continue;
-          }
           const node = buildToolNode(call);
+          if (planCalls.has(call.id)) node.classList.add('lv-tool--plan');
           // Attached first, so a UI component renders into a laid-out card.
           appendBubbleContent(currentBubble, node);
           // Same renderer as the live path: highlighting, error styling, and
@@ -2835,6 +2768,8 @@ function renderHistoryWindow({ stickBottom }) {
           // running (its empty <pre> is hidden by CSS).
           if (result) setToolResult(node, result.text, result.isError, result.images);
           else refreshTool(node);
+          const items = planCalls.has(call.id) ? parsePlan(call.arguments) : null;
+          if (items && result && !result.isError) fillPlanRow(node, call.id, items);
           // A result-less ask_human call is still parked server-side: rebuild
           // its interactive card so a reloaded or re-attached tab can answer
           // (the live path can't — this render replaced the transcript).
@@ -3225,18 +3160,9 @@ async function applyEvent({ event, data }) {
     }
 
     case 'tool_call':
-      {
-        const todos = parseTodos(data.arguments);
-        if (todoNames.has(data.name) || todos) {
-          if (todos) {
-            todoNames.add(data.name);
-            upsertTodoCard(todos);
-          }
-          break; // rendered as a todo panel instead
-        }
-      }
       finalizeReasoning();
       appendTool(data);
+      if (planTools.has(data.name)) store.toolNodes.get(data.id)?.classList.add('lv-tool--plan');
       // ask_human parks the run on the user: draw the interactive card too.
       if (data.name === QUESTION_TOOL) appendQuestion(data);
       break;
@@ -3262,12 +3188,20 @@ async function applyEvent({ event, data }) {
       }
       break;
 
-    case 'todo':
+    case 'todo': {
+      // A plan update that landed: it stands in for the call's tool_result.
       finalizeReasoning();
-      if (data.name) todoNames.add(data.name);
-      removeToolNode(data.call_id); // drop the bubble if it slipped through
-      upsertTodoCard(data.todos || []);
+      learnPlanTool(data.name);
+      const items = parsePlan({ todos: data.todos || [] }) ?? [];
+      notePlan(data.call_id, items);
+      const node = store.toolNodes.get(data.call_id);
+      if (node) {
+        updateToolResult(data.call_id, planText(items), false);
+        fillPlanRow(node, data.call_id, items);
+      }
+      showPlan(items);
       break;
+    }
 
     case 'approval_required':
       appendApproval(data);
@@ -3746,6 +3680,7 @@ function enterStreamingUI() {
   document.getElementById('transcript')?.setAttribute('aria-busy', 'true');
   updateRegenButton(); // streaming: no regen affordance until the run settles
   updateEditButton(); // …and no edit either: rewind is refused during a live run
+  setPlanLive(true);
 }
 
 /** @param {'done' | 'error' | 'cancelled' | 'detached' | 'waiting'} [status] How the run shown went. */
@@ -3768,6 +3703,7 @@ function exitStreamingUI(status = 'detached') {
   document.getElementById('transcript')?.setAttribute('aria-busy', 'false');
   updateRegenButton();
   updateEditButton();
+  setPlanLive(false);
   runEnded(status); // last: listeners see the composer idle again
 }
 
@@ -4063,14 +3999,14 @@ export function detachStream() {
   //  - queued/pending buffers, else a later run's finally flushes stale bubbles
   //    or resends a raced message into the wrong chat (accepted injects still
   //    replay from the server mailbox on reconnect; an un-accepted one is dropped);
-  //  - the todo panel (only renderHistory rebuilds it — a failed switch won't);
+  //  - the plan line (only renderHistory rebuilds it — a failed switch won't);
   //  - any in-flight follow-up request, whose chips would land in the new view;
   //  - a stop waiting for the run's admission: leaving isn't stopping.
   _queuedTurns = [];
   _pendingResend = [];
   _admitting = false;
   _stopOnceAdmitted = false;
-  clearTodoPanel();
+  clearPlanView();
   clearFollowups();
   if (store.streaming) exitStreamingUI();
 }
@@ -5027,6 +4963,7 @@ store.on('theme-changed', rerenderComponents);
 
 export function initComposer() {
   initContextRing();
+  initPlan();
   initSkillMenu(promptEl);
   initFileMenu(promptEl);
 

@@ -56,7 +56,10 @@ Todo Store 本身属于 Run，但列表可以跨中断和 Handoff 恢复：插�
 
 宿主应用可以观察 `event.call.name == "todo_write"` 的 `ToolCallCompleted` 事件；
 `event.result` 是结构化的 `list[TodoItem]`。对于已经保存的对话，可调用
-`lovia.plugins.todos_from_entries(entries)` 重建列表。内置 Web UI 使用的也是这个函数。
+`lovia.plugins.todos_from_entries(entries)` 重建列表。
+
+内置 Web UI 在输入框上方用一行显示当前步骤，点开是完整列表；只要列表还有未完成项，这一行就一直在
+（没有运行时变淡）。每次更新也会作为回复里的一个步骤显示：那一行写明改了什么，展开就是更新后的完整列表。
 
 ## 使用建议
 

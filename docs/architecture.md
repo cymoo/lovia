@@ -60,7 +60,7 @@ lovia/
   plugins/          # Declarative capability plugins — the one extension axis
     base.py         #   Plugin protocol (async setup + aclose) + PluginInstance
                     #   (tools/instructions/view_injectors/hooks/guardrails)
-    todo.py         #   Todo plugin: todo_write + per-turn reminder injector
+    todo.py         #   Todo plugin: todo_write + staleness reminder injector
     subagents.py    #   Subagents plugin: background children (spawn/wait/cancel);
                     #   reports re-enter via mailbox or a deliver callback
     skills/         #   Skills plugin + SkillCatalog/SkillSource (SKILL.md disclosure;

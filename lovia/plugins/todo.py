@@ -1,4 +1,4 @@
-"""Todo plugin: an externalized, per-turn-visible checklist for long tasks.
+"""Todo plugin: an externalized checklist for long tasks.
 
 ``Todo`` is the plugin (a :class:`~lovia.plugins.Plugin`). Attach it to an agent::
 
@@ -20,9 +20,16 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from ..exceptions import UserError
 from ..run_context import RunContext
 from ..tools import Tool, tool
-from ..transcript import InputEntry, ToolCallEntry, TranscriptEntry
+from ..transcript import (
+    AssistantTextEntry,
+    InputEntry,
+    ReasoningEntry,
+    ToolCallEntry,
+    TranscriptEntry,
+)
 from .base import PluginInstance, ViewInjector
 
 TodoStatus = Literal["pending", "in_progress", "completed"]
@@ -159,8 +166,7 @@ _INSTRUCTIONS = (
     "several things. Use your judgment: skip it for simple, single-step, or "
     "trivial requests, where a checklist only adds noise. When you do use it, "
     "capture the plan before starting, keep exactly one item in_progress at a "
-    "time, and mark each item completed as soon as it is done. Your current "
-    "list is shown back to you each turn."
+    "time, and mark each item completed as soon as it is done."
 )
 
 
@@ -184,7 +190,35 @@ def _make_tool(store: TodoList, tool_name: str) -> Tool:
     return todo_write
 
 
-def _make_injector(store: TodoList, tool_name: str) -> ViewInjector:
+_MODEL_OUTPUT = (AssistantTextEntry, ReasoningEntry, ToolCallEntry)
+
+
+def _calls_since_write(entries: list[TranscriptEntry], tool_name: str) -> int | None:
+    """Model calls in ``entries`` after the one that made the newest valid
+    write, or ``None`` when there is no such write.
+
+    The transcript has no turn markers: one call's output is a run of
+    reasoning / text / tool-call entries, so calls are counted as those runs.
+    Derived from the transcript alone, the count spans runs, resumes and
+    handoffs, and an overflow retry of the same call gets the same answer.
+    """
+    calls = 0
+    in_output = False
+    for entry in reversed(entries):
+        output = isinstance(entry, _MODEL_OUTPUT)
+        if output and not in_output:
+            calls += 1
+        in_output = output
+        if (
+            isinstance(entry, ToolCallEntry)
+            and entry.name == tool_name
+            and _parse_todo_items(entry.arguments) is not None
+        ):
+            return calls - 1  # the writing call itself
+    return None
+
+
+def _make_injector(store: TodoList, tool_name: str, every: int) -> ViewInjector:
     reconciled = False
 
     def inject(ctx: RunContext[Any]) -> list[TranscriptEntry] | None:
@@ -193,12 +227,18 @@ def _make_injector(store: TodoList, tool_name: str) -> ViewInjector:
             reconciled = True
             if not store.items:
                 store.rehydrate_from(ctx.entries, tool_name=tool_name)
-        if not store.items:
+        if all(t.status == "completed" for t in store.items):
+            return None
+        since = _calls_since_write(ctx.entries, tool_name)
+        if since is None or since < every or since % every:
             return None
         text = (
             "<system-reminder>\n"
-            "Your current todo list (keep it updated; exactly one item should "
-            "be in_progress):\n"
+            "The todo list hasn't been updated in a while. If you are still "
+            "working through it, keep it current: exactly one item "
+            "in_progress, finished items marked completed. If it no longer "
+            "matches the work, rewrite or clear it. Don't mention this "
+            "reminder to the user. Current list:\n"
             f"{render_todos(store.items)}\n"
             "</system-reminder>"
         )
@@ -209,24 +249,41 @@ def _make_injector(store: TodoList, tool_name: str) -> ViewInjector:
 
 @dataclass
 class Todo:
-    """The todo plugin: a ``todo_write`` tool + a per-turn reminder injector.
+    """The todo plugin: a ``todo_write`` tool + a staleness reminder.
 
     Each run, ``setup`` builds a fresh :class:`TodoList` and closes both the
-    tool (which replaces the list) and the injector (which re-shows it every
-    turn) over it.
+    tool (which replaces the list) and the injector over it. The model sees
+    its list in each write's tool result; the injector re-shows it only when
+    unfinished items have gone ``remind_every`` model calls without a write
+    (and again every ``remind_every`` calls after that).
     """
 
     tool_name: str = "todo_write"
-    inject: bool = True
+    remind_every: int | None = 8
+    """Model calls without a write before the list is re-shown; ``None``
+    turns the reminder off."""
     instructions: str | None = _INSTRUCTIONS
     name: str = "todos"
 
+    def __post_init__(self) -> None:
+        every = self.remind_every
+        if every is not None and (
+            not isinstance(every, int) or isinstance(every, bool) or every < 1
+        ):
+            raise UserError(
+                f"Todo(remind_every={every!r}) must be a positive int or None",
+                hint="Use None to turn the reminder off.",
+            )
+
     async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         store = TodoList()
+        every = self.remind_every
         return PluginInstance(
             tools=[_make_tool(store, self.tool_name)],
             view_injectors=(
-                [_make_injector(store, self.tool_name)] if self.inject else []
+                [_make_injector(store, self.tool_name, every)]
+                if every is not None
+                else []
             ),
             instructions=self.instructions,
         )

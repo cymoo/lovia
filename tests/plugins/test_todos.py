@@ -1,4 +1,4 @@
-"""Tests for the todo plugin: store semantics, rendering, end-to-end re-injection."""
+"""Tests for the todo plugin: store semantics, rendering, the staleness reminder."""
 
 from __future__ import annotations
 
@@ -6,9 +6,23 @@ import json
 
 import pytest
 
-from lovia import Agent, Runner, Todo
-from lovia.plugins.todo import TodoItem, TodoList, render_todos, todos_from_entries
-from lovia.transcript import InputEntry, ToolCallEntry
+from lovia import Agent, Runner, Todo, tool
+from lovia.exceptions import UserError
+from lovia.plugins.todo import (
+    TodoItem,
+    TodoList,
+    _calls_since_write,
+    render_todos,
+    todos_from_entries,
+)
+from lovia.stores import InMemorySession
+from lovia.transcript import (
+    AssistantTextEntry,
+    InputEntry,
+    ReasoningEntry,
+    ToolCallEntry,
+    ToolResultEntry,
+)
 
 from ..scripted_provider import ScriptedProvider, call, text
 
@@ -118,41 +132,151 @@ def test_rehydrate_skips_malformed_latest_write() -> None:
     assert [t.content for t in todos_from_entries(transcript)] == ["keep me"]
 
 
+def _has_reminder(turn) -> bool:
+    return any(
+        m.role == "user" and "system-reminder" in (m.content or "") for m in turn
+    )
+
+
+@tool(name="work")
+async def _work() -> str:
+    return "ok"
+
+
+_OPEN = {
+    "todos": [
+        {"content": "Plan", "status": "completed"},
+        {"content": "Build", "status": "in_progress", "active_form": "Building"},
+    ]
+}
+
+
 @pytest.mark.asyncio
-async def test_end_to_end_reinjection_and_audit_trail() -> None:
+async def test_reminder_waits_until_the_list_goes_stale() -> None:
+    """The write's own result shows the list; the reminder comes back only
+    after ``remind_every`` calls without a write, then every as many again."""
+    provider = ScriptedProvider(
+        [
+            call("todo_write", _OPEN, call_id="c1"),
+            *[call("work", {}, call_id=f"w{i}") for i in range(5)],
+            text("done"),
+        ]
+    )
+    agent = Agent(
+        name="t", model=provider, tools=[_work], plugins=[Todo(remind_every=2)]
+    )
+    await Runner.run(agent, "go")
+
+    # Calls since the write: -, 0, 1, 2, 3, 4, 5.
+    assert [_has_reminder(c) for c in provider.calls] == [
+        False, False, False, True, False, True, False,
+    ]  # fmt: skip
+    assert any("Building" in (m.content or "") for m in provider.calls[3])
+
+
+@pytest.mark.asyncio
+async def test_a_write_restarts_the_count() -> None:
+    provider = ScriptedProvider(
+        [
+            call("todo_write", _OPEN, call_id="c1"),
+            call("work", {}, call_id="w1"),
+            call("todo_write", _OPEN, call_id="c2"),
+            call("work", {}, call_id="w2"),
+            text("done"),
+        ]
+    )
+    agent = Agent(
+        name="t", model=provider, tools=[_work], plugins=[Todo(remind_every=2)]
+    )
+    await Runner.run(agent, "go")
+    assert not any(_has_reminder(c) for c in provider.calls)
+
+
+@pytest.mark.asyncio
+async def test_a_finished_list_is_not_re_shown() -> None:
+    done = {"todos": [{"content": "Plan", "status": "completed"}]}
+    provider = ScriptedProvider(
+        [
+            call("todo_write", done, call_id="c1"),
+            *[call("work", {}, call_id=f"w{i}") for i in range(3)],
+            text("done"),
+        ]
+    )
+    agent = Agent(
+        name="t", model=provider, tools=[_work], plugins=[Todo(remind_every=1)]
+    )
+    await Runner.run(agent, "go")
+    assert not any(_has_reminder(c) for c in provider.calls)
+
+
+@pytest.mark.asyncio
+async def test_staleness_spans_runs() -> None:
+    """Plain chat, one call per run: the count comes from the transcript, so
+    the runs since the write add up."""
+    provider = ScriptedProvider(
+        [call("todo_write", _OPEN, call_id="c1"), text("a"), text("b"), text("c")]
+    )
+    agent = Agent(name="t", model=provider, plugins=[Todo(remind_every=2)])
+    session = InMemorySession()
+    for prompt in ("one", "two", "three"):
+        await Runner.run(agent, prompt, session=session, session_id="s")
+    # Calls since the write: -, 0 | 1 | 2.
+    assert [_has_reminder(c) for c in provider.calls] == [False, False, False, True]
+
+
+def test_calls_since_write_counts_model_calls_not_entries() -> None:
+    write = ToolCallEntry(call_id="c", name="todo_write", arguments=json.dumps(_OPEN))
+    bad = ToolCallEntry(call_id="b", name="todo_write", arguments='{"todos": 1}')
+    other = ToolCallEntry(call_id="o", name="work", arguments="{}")
+
+    def res(call_id: str) -> ToolResultEntry:
+        return ToolResultEntry(call_id=call_id, output="ok")
+
+    assert (
+        _calls_since_write([InputEntry(role="user", content="hi")], "todo_write")
+        is None
+    )
+    # The write shares its call with another tool call: that call is not counted.
+    assert _calls_since_write([write, other, res("c"), res("o")], "todo_write") == 0
+    # One later call with reasoning, text and two parallel tool calls.
+    later = [
+        ReasoningEntry(content="r"),
+        AssistantTextEntry(content="t"),
+        other,
+        other,
+        res("o"),
+        res("o"),
+    ]
+    assert _calls_since_write([write, res("c"), *later], "todo_write") == 1
+    # A malformed newer write changed nothing: count from the valid one.
+    entries = [write, res("c"), bad, res("b"), AssistantTextEntry(content="t")]
+    assert _calls_since_write(entries, "todo_write") == 2
+
+
+@pytest.mark.parametrize("every", [0, -1, 1.5, True, "8"])
+def test_remind_every_must_be_a_positive_int(every) -> None:
+    with pytest.raises(UserError):
+        Todo(remind_every=every)
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_audit_trail() -> None:
     first = {
         "todos": [
             {"content": "Plan", "status": "in_progress", "active_form": "Planning"},
             {"content": "Build"},
         ]
     }
-    second = {
-        "todos": [
-            {"content": "Plan", "status": "completed"},
-            {"content": "Build", "status": "in_progress", "active_form": "Building"},
-        ]
-    }
     provider = ScriptedProvider(
         [
             call("todo_write", first, call_id="c1"),
-            call("todo_write", second, call_id="c2"),
+            call("todo_write", _OPEN, call_id="c2"),
             text("all done"),
         ]
     )
-    agent = Agent(name="t", model=provider, plugins=[Todo()])
+    agent = Agent(name="t", model=provider, plugins=[Todo(remind_every=1)])
     result = await Runner.run(agent, "do the thing")
-
-    # Turn 1's view has no reminder (store still empty); turns 2 and 3 do.
-    def has_reminder(turn) -> bool:
-        return any(
-            m.role == "user" and "system-reminder" in (m.content or "") for m in turn
-        )
-
-    assert not has_reminder(provider.calls[0])
-    assert has_reminder(provider.calls[1])
-    assert has_reminder(provider.calls[2])
-    # The reminder reflects the latest write (Building shown via active_form).
-    assert any("Building" in (m.content or "") for m in provider.calls[2])
+    assert not any(_has_reminder(c) for c in provider.calls[:2])
 
     # Reminders are never persisted...
     assert not any(
@@ -181,7 +305,8 @@ async def test_system_prompt_carries_todo_instructions() -> None:
 async def test_todos_carry_across_handoff() -> None:
     # Agent A writes todos, then hands off to B (also has the plugin). B's
     # injector rehydrates A's todos from the transcript, so B's model call sees
-    # the reminder even though B's store started empty.
+    # the reminder even though B's store started empty. (``remind_every=1``:
+    # B's first call is one call after A's write.)
     args = {
         "todos": [
             {
@@ -191,7 +316,11 @@ async def test_todos_carry_across_handoff() -> None:
             }
         ]
     }
-    b = Agent(name="B", model=ScriptedProvider([text("done by B")]), plugins=[Todo()])
+    b = Agent(
+        name="B",
+        model=ScriptedProvider([text("done by B")]),
+        plugins=[Todo(remind_every=1)],
+    )
     a = Agent(
         name="A",
         model=ScriptedProvider(
@@ -208,15 +337,23 @@ async def test_todos_carry_across_handoff() -> None:
     b_calls = b.model.calls  # type: ignore[attr-defined]
     assert b_calls, "B never ran"
     assert any(
-        "Doing shared task" in (m.content or "") for turn in b_calls for m in turn
+        m.role == "user"
+        and "system-reminder" in (m.content or "")
+        and "Doing shared task" in (m.content or "")
+        for turn in b_calls
+        for m in turn
     )
 
 
 @pytest.mark.asyncio
-async def test_inject_false_omits_reminder() -> None:
+async def test_remind_every_none_omits_reminder() -> None:
     args = {"todos": [{"content": "x"}]}
-    provider = ScriptedProvider([call("todo_write", args, call_id="c1"), text("done")])
-    agent = Agent(name="t", model=provider, plugins=[Todo(inject=False)])
+    provider = ScriptedProvider(
+        [call("todo_write", args, call_id="c1"), call("work", {}), text("done")]
+    )
+    agent = Agent(
+        name="t", model=provider, tools=[_work], plugins=[Todo(remind_every=None)]
+    )
     await Runner.run(agent, "go")
     assert not any(
         m.role == "user" and "system-reminder" in (m.content or "")

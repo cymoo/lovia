@@ -1,8 +1,9 @@
-"""Todo plugin: the agent externalizes a plan and keeps it visible every turn.
+"""Todo plugin: the agent externalizes a plan and keeps it current.
 
 ``Todo`` is the first :class:`~lovia.plugins.Plugin`. Attaching it adds a
-``todo_write`` tool plus a per-turn ``<system-reminder>`` that re-shows the
-current list to the model — without ever bloating the persisted transcript.
+``todo_write`` tool plus a ``<system-reminder>`` that re-shows the list when
+it goes unfinished and untouched for a while — without ever bloating the
+persisted transcript.
 
 Observability: the structured list rides on each ``todo_write`` result, so a UI
 can render progress by filtering ``ToolCallCompleted`` for the tool.

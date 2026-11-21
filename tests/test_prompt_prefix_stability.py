@@ -152,7 +152,7 @@ async def _drive(root: Path) -> _Recording:
         ),
         plugins=[
             Memory(root / "memory", auto_curate=False),
-            Todo(),
+            Todo(remind_every=1),  # fires on most calls: the tail must vary
             Skills(root / "skills"),
             MCP(stub("calc", defer=False), stub("stub", defer=True)),
         ],
@@ -235,7 +235,7 @@ def test_each_request_extends_the_previous_one_verbatim(
         if isinstance(e, InputEntry)
     ]
     # The tail stripping is not vacuous: both injectors fired.
-    assert any("Your current todo list" in str(c) for c in tails)
+    assert any("The todo list hasn't been updated" in str(c) for c in tails)
     assert any("Background processes" in str(c) for c in tails)
 
     for i in range(len(recording.requests) - 1):

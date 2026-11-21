@@ -464,8 +464,9 @@ agent = Agent(
 )
 ```
 
-- **`Todo()`** — gives the model a checklist for multi-step work; the current
-  list is re-shown every turn without growing the transcript.
+- **`Todo()`** — gives the model a checklist for multi-step work; a list left
+  unfinished and untouched for a while is re-shown, without growing the
+  transcript.
 - **`Skills(dir)`** — reusable instruction bundles (`SKILL.md` + files): a
   one-line index stays in the prompt, full content loads on demand. A
   message that starts with `/name` asks for that skill by name; the web

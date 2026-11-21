@@ -1,7 +1,7 @@
 # Todo
 
-`Todo` 为多步骤任务提供一份外置清单。模型通过 Tool 更新它；每个 Turn 都能看到最新状态，
-但提醒不会反复写入 Transcript。
+`Todo` 为多步骤任务提供一份外置清单。模型通过 Tool 更新它，并在该 Tool 的结果里看到
+每次更新；清单还有未完成项、又有一段时间没更新时，会再展示给模型。
 
 ```python
 from lovia import Agent, Runner, Todo
@@ -25,8 +25,11 @@ result = await Runner.run(
 
 - `todo_write`：采用全量替换语义的 Tool。每次调用都携带完整列表，因此最新一次有效结果
   就是权威状态。
-- View Injector：每个 Turn 都把当前列表渲染为 `<system-reminder>`。提醒不会进入
-  Transcript，不会破坏稳定的提示词前缀，也不会随着运行不断累积。
+- 过期提醒：列表还有未完成项，且距上次有效写入已过 `remind_every` 次模型调用时，
+  View Injector 把当前列表渲染为 `<system-reminder>` 再展示一次；之后只要一直没更新，
+  每隔 `remind_every` 次调用再提醒一次。重新写入、或全部项目完成，提醒就停止。计数取自
+  Transcript，所以跨 Run 累计：纯聊天每个 Run 只调用一次模型，多个 Run 会累加。提醒不会
+  进入 Transcript，不会破坏稳定的提示词前缀，也不会随着运行不断累积。
 
 每个 `TodoItem` 包含 `content`、状态（`pending`、`in_progress` 或 `completed`），以及
 可选的 `active_form`。列表最多保留一个 `in_progress` 项，多余的项目会被降级，而不是让
@@ -37,12 +40,13 @@ result = await Runner.run(
 ```python
 Todo(
     tool_name="todo_write",
-    inject=True,
+    remind_every=8,
     instructions=None,  # None 表示移除内置使用指导
 )
 ```
 
-设置 `inject=False` 可以保留 Tool，但不在每个 Turn 注入提醒。只有当其他 Tool 已占用
+设置 `remind_every=None` 可以保留 Tool 但关闭提醒；设为 `1` 则写入之后每次调用都重新展示。
+只有当其他 Tool 已占用
 `todo_write` 时，才需要修改 `tool_name`。
 
 ## 恢复与观察

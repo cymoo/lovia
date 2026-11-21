@@ -5916,6 +5916,12 @@ body.lv-files-resizing {
 .lv-plan-list.lv-live .lv-plan-item.lv-in_progress .lv-plan-mark svg {
   animation: lv-spin 1.2s linear infinite;
 }
+@media (prefers-reduced-motion: reduce) {
+  .lv-plan-line .lv-plan-mark svg,
+  .lv-plan-list .lv-plan-mark svg {
+    animation: none;
+  }
+}
 .lv-plan-item.lv-completed .lv-plan-mark,
 .lv-plan.lv-done .lv-plan-line .lv-plan-mark {
   color: var(--lv-ok);

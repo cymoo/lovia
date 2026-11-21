@@ -115,9 +115,12 @@ export function planDiff(prev, next) {
     if (!before) out.added += 1;
     if (before?.status === item.status && before.content === item.content) return;
     out.changed.add(i);
+    // Order pairing is a guess where an item came in beside a reworded one;
+    // the step in progress is what the line must not lose, so any in
+    // progress that isn't exactly as before is named ("Now").
+    if (item.status === 'in_progress') out.started.push(item);
     if (before?.status === item.status) return; // reworded only
     if (item.status === 'completed' && before) out.done.push(item);
-    if (item.status === 'in_progress') out.started.push(item);
   });
   return /** @type {any} */ (out);
 }

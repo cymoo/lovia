@@ -329,15 +329,17 @@ async def test_a_call_without_a_token_count_gives_calibration_nothing() -> None:
 
 
 class _CarryingPolicy:
-    """Records what it is handed; keeps a carried state so segments get one."""
+    """Records what it is handed; keeps a carried state so segments get one,
+    and declares (or not) that the state describes the returned view."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, calibrates: bool = True) -> None:
         self.seen: list[int | None] = []
+        self.calibrates = calibrates
 
     async def compact(self, req: CompactionRequest) -> ContextResult:
         self.seen.append(req.last_input_tokens)
         req.scratch["calls"] = req.scratch.get("calls", 0) + 1
-        return ContextResult(entries=list(req.entries))
+        return ContextResult(entries=list(req.entries), calibrates=self.calibrates)
 
 
 def _counted(reply: str, tokens: int) -> AssistantTurn:
@@ -385,12 +387,19 @@ async def test_the_carried_count_comes_from_the_segment_whose_state_is_carried()
     assert policy.seen == [None, 120]
 
 
-async def test_a_run_whose_policy_left_the_state_alone_carries_no_count() -> None:
-    """A run under a policy that writes no state (here ``NoopContextPolicy``)
-    hands the previous run's state on unchanged: its estimate is of an older
-    view, so this run's final count must not be stored beside it."""
+@pytest.mark.parametrize("between", ["noop", "own-key"])
+async def test_a_run_whose_policy_does_not_calibrate_carries_no_count(
+    between: str,
+) -> None:
+    """A run under a policy that doesn't declare ``calibrates`` hands the
+    previous run's estimate on — of an older view — whether it writes nothing
+    (``NoopContextPolicy``) or keys of its own. Its final count must not be
+    stored beside that estimate."""
     from lovia.context import NoopContextPolicy
 
+    other: Any = (
+        NoopContextPolicy() if between == "noop" else _CarryingPolicy(calibrates=False)
+    )
     policy = _CarryingPolicy()
     session = InMemorySession()
     agent = Agent(
@@ -405,7 +414,7 @@ async def test_a_run_whose_policy_left_the_state_alone_carries_no_count() -> Non
     await Runner.run(
         agent,
         "two",
-        context_policy=NoopContextPolicy(),
+        context_policy=other,
         session=session,
         session_id="s",
     )

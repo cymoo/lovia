@@ -599,6 +599,7 @@ class Compaction:
             tokens_after=tokens,
             detail=detail,
             window=window,
+            calibrates=True,  # ``estimate`` of this view was saved above
         )
 
     def _learn_window(

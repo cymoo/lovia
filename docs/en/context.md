@@ -221,7 +221,10 @@ makes itself and the runner folds it into the run's usage and budget.
 Return the view plus `changed`/`compacted` flags, optional token
 counts, and an optional `window` — the window the call was budgeted
 against, which the runner forwards as `MessageCompleted.context_window`
-(the web UI's context ring reads it). An optional `tools()` method contributes tools —
+(the web UI's context ring reads it). Set `calibrates=True` only when
+`scratch` now holds your estimate of exactly the returned view: the runner
+then carries the real count of the call that sends it into the next run on
+the session, as that run's first `last_input_tokens`. An optional `tools()` method contributes tools —
 `recall_tool_result(store)` from `lovia.tools` is the factory
 `Compaction` uses to ship recall, reusable by any policy that drops
 content. `lovia/context/policy.py` is a one-screen read.

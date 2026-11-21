@@ -110,9 +110,10 @@ class RunState:
     # count, or None when that call reported none — pairing an older call's
     # (another model's, after a handoff) with this view would mis-calibrate.
     calibration_tokens: int | None = None
-    # Whether the latest compaction wrote the carried state: only then can that
-    # state describe the view the latest call sent, so only then does the
-    # session segment carry ``calibration_tokens`` beside it to the next run.
+    # Whether the latest compaction's policy declared (``ContextResult.
+    # calibrates``) that the carried state holds its estimate of the view the
+    # latest call sent: only then does the session segment carry
+    # ``calibration_tokens`` beside it to the next run.
     calibration_carries: bool = False
     # The context policy's carried state, opaque to the loop: sticky compaction
     # decisions + calibration. Round-tripped through the checkpoint (resume) and

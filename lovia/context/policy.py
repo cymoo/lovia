@@ -120,6 +120,14 @@ class ContextResult:
     (e.g. ``["2 tool results offloaded"]``), surfaced verbatim in the
     compaction notice and the web UI. Empty for a no-op or a replay."""
 
+    calibrates: bool = False
+    """Set when ``scratch`` now holds the policy's estimate of exactly this
+    view, to be paired with the real input-token count of the call that sends
+    it. The runner then carries that count with the scratch into the next run
+    on the session, as its first call's ``last_input_tokens``. Leave it unset
+    otherwise: a count stored beside an estimate of another view would
+    mis-calibrate whichever policy reads the scratch next."""
+
 
 class ContextPolicy(Protocol):
     """Strategy that produces the per-call view of the transcript.

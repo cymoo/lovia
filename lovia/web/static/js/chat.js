@@ -67,7 +67,6 @@ import { isStep, placeStep, removeStep } from './activity.js';
 import {
   fillPlanRow,
   initPlan,
-  isPlanResult,
   notePlan,
   parsePlan,
   planText,
@@ -763,10 +762,12 @@ const USER_SCROLL_PAUSE_MS = 900;
 // ---- The plan (Todo plugin): drawn by plan.js ------------------------------
 // A call is a plan update by its own outcome, never by its tool's name (the
 // plugin may be renamed, and another tool may own `todo_write`): live, the
-// `todo` event — or, for a clear, the plugin's own result text; replayed, that
-// text. Calls whose arguments could be one wait here for their outcome.
-/** @type {Set<string>} */
-const maybePlanCalls = new Set();
+// `todo` event — or, for a clear, the plugin's result for an empty list;
+// replayed, a result that is exactly the plugin's rendering of the call's own
+// arguments. Calls whose arguments could be one wait here (with their items)
+// for their outcome.
+/** @type {Map<string, import('./plan.js').PlanItem[]>} */
+const maybePlanCalls = new Map();
 
 /**
  * Whether a replayed call is a successful plan update.
@@ -774,7 +775,8 @@ const maybePlanCalls = new Set();
  * @param {{ text: string, isError: boolean } | undefined} result
  */
 function isPlanCall(call, result) {
-  return !!result && !result.isError && isPlanResult(result.text) && !!parsePlan(call.arguments);
+  const items = parsePlan(call.arguments);
+  return !!items && !!result && !result.isError && result.text === planText(items);
 }
 
 function clearPlanView() {
@@ -2647,33 +2649,46 @@ function renderHistoryWindow({ stickBottom }) {
   store.toolNodes.clear();
   store.approvals.clear();
 
-  // Results are looked up from the FULL history — a window boundary must not
-  // orphan a call from its result.
+  // Results are paired from the FULL history — a window boundary must not
+  // orphan a call from its result. Each goes to the earliest call before it
+  // with its id still unanswered, not to the id alone: a provider may reuse
+  // ids, and a later call's result must not stand in for an earlier one's.
+  /** @type {Map<object, { text: string, isError: boolean, images: any }>} */
   const pendingResults = new Map();
+  /** @type {Map<string, object[]>} */
+  const unanswered = new Map();
   for (const it of entries) {
+    for (const call of (it.role === 'assistant' && it.tool_calls) || []) {
+      const queue = unanswered.get(call.id);
+      if (queue) queue.push(call);
+      else unanswered.set(call.id, [call]);
+    }
     // History entries are MessageOut (role + tool_call_id), with no `type`
     // field — gating on `it.type` here left every result unmatched and hidden.
-    if (it.role === 'tool' && it.tool_call_id)
-      pendingResults.set(it.tool_call_id, {
-        text: contentText(it.content),
-        isError: !!it.is_error,
-        images: it.images,
-      });
+    if (it.role === 'tool' && it.tool_call_id) {
+      const call = unanswered.get(it.tool_call_id)?.shift();
+      if (call)
+        pendingResults.set(call, {
+          text: contentText(it.content),
+          isError: !!it.is_error,
+          images: it.images,
+        });
+    }
   }
   // The plan, also from the full history: the latest update may sit above the
   // window, and each row diffs against the one before it. A failed update
   // never changed the plan; one still pending shows once it lands (live).
   resetPlans();
-  /** @type {Set<string>} */
+  /** @type {Set<object>} the calls themselves, as their ids may repeat */
   const planCalls = new Set();
   let plan = [];
   let lastTurn = false; // the plan came after the last user message
   for (const it of entries) {
     if (it.role === 'user') lastTurn = false;
     for (const call of (it.role === 'assistant' && it.tool_calls) || []) {
-      const result = pendingResults.get(call.id);
+      const result = pendingResults.get(call);
       if (!isPlanCall(call, result)) continue;
-      planCalls.add(call.id);
+      planCalls.add(call);
       usePlanView(call.name);
       const items = parsePlan(call.arguments) ?? [];
       notePlan(call.id, items);
@@ -2755,9 +2770,9 @@ function renderHistoryWindow({ stickBottom }) {
       }
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
-          const result = pendingResults.get(call.id);
+          const result = pendingResults.get(call);
           const node = buildToolNode(call);
-          if (planCalls.has(call.id)) node.classList.add('lv-tool--plan');
+          if (planCalls.has(call)) node.classList.add('lv-tool--plan');
           // Attached first, so a UI component renders into a laid-out card.
           appendBubbleContent(currentBubble, node);
           // Same renderer as the live path: highlighting, error styling, and
@@ -2765,7 +2780,7 @@ function renderHistoryWindow({ stickBottom }) {
           // running (its empty <pre> is hidden by CSS).
           if (result) setToolResult(node, result.text, result.isError, result.images);
           else refreshTool(node);
-          if (planCalls.has(call.id)) fillPlanRow(node, call.id, parsePlan(call.arguments) ?? []);
+          if (planCalls.has(call)) fillPlanRow(node, call.id, parsePlan(call.arguments) ?? []);
           // A result-less ask_human call is still parked server-side: rebuild
           // its interactive card so a reloaded or re-attached tab can answer
           // (the live path can't — this render replaced the transcript).
@@ -3163,7 +3178,10 @@ async function applyEvent({ event, data }) {
     case 'tool_call':
       finalizeReasoning();
       appendTool(data);
-      if (parsePlan(data.arguments)) maybePlanCalls.add(data.id);
+      {
+        const items = parsePlan(data.arguments);
+        if (items) maybePlanCalls.set(data.id, items);
+      }
       // ask_human parks the run on the user: draw the interactive card too.
       if (data.name === QUESTION_TOOL) appendQuestion(data);
       break;
@@ -3182,10 +3200,13 @@ async function applyEvent({ event, data }) {
         );
       }
       // A plan cleared to nothing lands as a plain result (sse.py sends the
-      // `todo` event only for a list with items): the plugin's text says so.
-      // Noted before the row settles, so it draws as a plan update at once.
+      // `todo` event only for a list with items): an empty list, and the
+      // plugin's text for it. Noted before the row settles, so it draws as a
+      // plan update at once.
+      const asked = maybePlanCalls.get(data.id);
+      maybePlanCalls.delete(data.id);
       const cleared =
-        maybePlanCalls.delete(data.id) && !data.is_error && isPlanResult(data.result);
+        asked?.length === 0 && !data.is_error && data.result === planText([]);
       if (cleared) {
         usePlanView(data.name);
         notePlan(data.id, []);

@@ -8,7 +8,6 @@ import { test } from 'node:test';
 
 import {
   currentStep,
-  isPlanResult,
   notePlan,
   parsePlan,
   planBefore,
@@ -86,13 +85,13 @@ test('the current step: in progress, else the next pending, else none', () => {
   assert.equal(currentStep(items('xx')), null);
 });
 
-test('the copy text and its recognition mirror the plugin', () => {
-  const text = planText(items('x~.'));
-  assert.equal(text, 'Updated todo list:\n[x] a\n[~] b\n[ ] c');
-  assert.ok(isPlanResult(text));
-  assert.ok(isPlanResult(planText([])));
-  assert.ok(!isPlanResult('Read 3 lines'));
-  assert.ok(!isPlanResult(undefined));
+// Pinned on the Python side too (tests/plugins/test_todos.py): a replayed
+// call is a plan update only when its result is exactly this text.
+test('the text mirrors the plugin’s own result', () => {
+  assert.equal(planText(items('x~.')), 'Updated todo list:\n[x] a\n[~] b\n[ ] c');
+  const doing = [{ content: 'b', status: 'in_progress', active_form: 'Doing b' }];
+  assert.equal(planText(doing), 'Updated todo list:\n[~] Doing b');
+  assert.equal(planText([]), 'Todo list cleared.');
 });
 
 test('each update diffs against the one before it; failed ones are skipped', () => {
@@ -108,6 +107,19 @@ test('each update diffs against the one before it; failed ones are skipped', () 
   assert.deepEqual(planBefore('c3'), items('~.'));
   resetPlans();
   assert.equal(planBefore('c3'), null);
+});
+
+test('a plan view layers over a built-in tool of the same name', async () => {
+  await import('../../../lovia/web/static/js/builtin-views.js');
+  resetPlans();
+  const before = toolViewChain('start_session', 'render')[0];
+  usePlanView('start_session');
+  // Its other calls keep their own line, label and card.
+  assert.equal(toolViewChain('start_session', 'render')[0], before);
+  assert.equal(toolLabel('start_session'), 'Start a chat');
+  const [summary] = toolViewChain('start_session', 'summary');
+  const call = { id: 's1', name: 'start_session', args: { title: 'x' }, status: 'done', isError: false };
+  assert.equal(summary(call), 'Start a chat “x”');
 });
 
 test('a plan row is a noted update, whatever its tool is called', () => {

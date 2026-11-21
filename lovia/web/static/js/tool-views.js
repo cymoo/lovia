@@ -111,6 +111,15 @@ export function setDefaultView(name, view) {
 }
 
 /**
+ * lovia's default view of tool `name`, if it has one.
+ * @param {string} name
+ * @returns {(ToolView & { label?: () => string }) | undefined}
+ */
+export function defaultView(name) {
+  return defaults.get(name);
+}
+
+/**
  * A tool's short display name: its default label, else the name itself.
  * @param {string} name
  */

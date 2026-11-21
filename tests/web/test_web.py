@@ -1129,6 +1129,32 @@ async def test_export_json_keeps_tool_errors_and_image_stubs() -> None:
     assert results["pic"]["images"] == [{"index": 0, "mime_type": "image/png"}]
 
 
+async def test_tool_flags_pair_by_position_when_a_provider_reuses_ids() -> None:
+    """One call's failure must not mark another result with the same id —
+    in the session view (what a reopened chat replays) and the JSON export."""
+    from lovia.transcript import AssistantTextEntry, ToolCallEntry, ToolResultEntry
+
+    store = ChatStore.in_memory()
+    await store.session.append(
+        "s1",
+        [
+            ToolCallEntry(call_id="call_0", name="todo_write", arguments="{}"),
+            ToolResultEntry(call_id="call_0", output="Updated todo list:\n[ ] a"),
+            ToolCallEntry(call_id="call_0", name="fetch", arguments="{}"),
+            ToolResultEntry(call_id="call_0", output="boom", is_error=True),
+            AssistantTextEntry(content="done"),
+        ],
+    )
+    await store.upsert("s1", agent="bot")
+    c = TestClient(_app(_make_agent([text("hi")]), store=store))
+    view = c.get("/api/sessions/s1").json()
+    flags = [m["is_error"] for m in view["entries"] if m["role"] == "tool"]
+    assert flags == [False, True]
+    data = c.get("/api/sessions/s1/export?format=json").json()
+    flags = [m["is_error"] for m in data["messages"] if m["role"] == "tool"]
+    assert flags == [False, True]
+
+
 def test_export_md_does_not_misattribute_tool_result_with_empty_id() -> None:
     """Empty tool-call ids must not collide and mislabel an unrelated result."""
     from lovia.messages import Message, ToolCall

@@ -13,7 +13,7 @@
 
 import { t } from './i18n.js';
 import { icon } from './icons.js';
-import { setDefaultView } from './tool-views.js';
+import { defaultView, setDefaultView } from './tool-views.js';
 
 /**
  * @typedef {{ content: string, status: 'pending' | 'in_progress' | 'completed',
@@ -132,23 +132,16 @@ export function currentStep(items) {
 }
 
 /**
- * The list as the plugin's own result renders it (what a row's copy copies).
+ * The list as the plugin's own result renders it, byte for byte — mirrors
+ * `_render_result` / `render_todos` in lovia/plugins/todo.py. What a row's
+ * copy copies, and how a replayed call is known for a plan update: its result
+ * is exactly this rendering of its own arguments.
  * @param {PlanItem[]} items
  */
 export function planText(items) {
   if (!items.length) return 'Todo list cleared.';
   const box = { pending: '[ ]', in_progress: '[~]', completed: '[x]' };
   return `Updated todo list:\n${items.map((i) => `${box[i.status]} ${planLabel(i)}`).join('\n')}`;
-}
-
-/**
- * Whether a result is the plugin's own rendering of a plan update — how a
- * replayed chat recognises a renamed plan tool. Mirrors `_render_result` in
- * lovia/plugins/todo.py.
- * @param {string | undefined} text
- */
-export function isPlanResult(text) {
-  return typeof text === 'string' && (text.startsWith('Updated todo list:') || text === 'Todo list cleared.');
 }
 
 // ---- The chat's plan history: each update's predecessor --------------------
@@ -194,13 +187,25 @@ function rowSummary(tool) {
   return items && planSummary(planBefore(tool.id), items);
 }
 
+/** @type {Set<string>} tools whose default view already reads plan updates */
+const layered = new Set();
+
 /**
  * Let calls of tool `name` read as plan updates — the ones noted as such
- * (chat.js calls it for each tool it has seen land one).
+ * (chat.js calls it for each tool it has seen land one). Layered over the
+ * tool's own default view, which every other call of it keeps: a plan tool
+ * may share its name with a built-in one (`start_session` keeps its card).
  * @param {string} name
  */
 export function usePlanView(name) {
-  setDefaultView(name, { summary: rowSummary, label: () => t('toolview.plan') });
+  if (layered.has(name)) return;
+  layered.add(name);
+  const base = defaultView(name);
+  setDefaultView(name, {
+    ...base,
+    summary: (tool) => rowSummary(tool) ?? base?.summary?.(tool) ?? null,
+    label: base?.label ?? (() => t('toolview.plan')),
+  });
 }
 
 // ---- DOM -------------------------------------------------------------------

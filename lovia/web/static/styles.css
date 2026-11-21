@@ -1501,7 +1501,17 @@ body.lv-view-open #files-btn {
   overflow-y: auto;
   overscroll-behavior: contain;
   /* content starts below the glass topbar and clears the composer pill */
-  padding: calc(var(--lv-topbar-h) + 28px) 24px 24px;
+  padding: calc(var(--lv-topbar-h) + 28px) 24px 16px;
+}
+/* The last reply needs no room for a turn after it: with the transcript's own
+   bottom padding it just clears the composer's fade (.lv-composer::before),
+   so the last line reads in full without a gap above the composer. A user
+   turn keeps its room for the action row under its bubble. */
+.lv-transcript > .lv-turn:not(.lv-user):last-child {
+  margin-bottom: 16px;
+}
+.lv-transcript > .lv-turn:last-child .lv-bubble > .lv-activity:last-child {
+  margin-bottom: 0;
 }
 
 /* ---- Empty state --------------------------------------------------------- */
@@ -3277,8 +3287,8 @@ button.lv-question-option:hover {
   position: absolute;
   left: 0;
   right: 0;
-  top: -40px;
-  height: 40px;
+  top: -32px; /* no taller than the room under the last turn (.lv-transcript) */
+  height: 32px;
   pointer-events: none;
   background: linear-gradient(to bottom, transparent, var(--lv-bg));
 }

@@ -71,6 +71,10 @@ function.
   [scheduling](web-server.md#scheduling) for future work.
 - Transient reminders are intentionally absent from Sessions and Checkpoints;
   audit the `todo_write` Tool calls instead.
+- The reminder counts model calls from the Transcript, which has no marker
+  between a text-only reply and a Run started with no new input
+  (`Runner.run(agent, [], session=...)`). When that Run's reply opens with
+  text (no reasoning first), the two count as one call.
 - A vague task may cause noisy plan churn. Instructions should reserve Todo for
   genuinely multi-step work.
 

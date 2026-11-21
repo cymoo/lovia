@@ -28,6 +28,7 @@ from ..transcript import (
     InputEntry,
     ReasoningEntry,
     ToolCallEntry,
+    ToolResultEntry,
     TranscriptEntry,
 )
 from .base import PluginInstance, ViewInjector
@@ -121,19 +122,16 @@ class TodoList:
         return list(self.items)
 
     def rehydrate_from(self, entries: list[TranscriptEntry], *, tool_name: str) -> None:
-        """Rebuild from the most recent parseable ``todo_write`` call in ``entries``.
+        """Rebuild from the newest valid ``todo_write`` call in ``entries``.
 
         Used after a resume (fresh empty store) or a handoff (the new agent's
         store starts empty but the prior agent's writes are in the transcript).
-        A call whose arguments don't parse never mutated the store, so the scan
-        skips it and keeps looking for the newest valid write.
+        A call whose arguments don't parse, or whose result is an error, never
+        mutated the store, so the scan skips it and keeps looking.
         """
-        for entry in reversed(entries):
-            if isinstance(entry, ToolCallEntry) and entry.name == tool_name:
-                inputs = _parse_todo_items(entry.arguments)
-                if inputs is not None:
-                    self.replace(inputs)
-                    return
+        found = _newest_write(entries, tool_name)
+        if found is not None:
+            self.replace(found[1])
 
 
 def todos_from_entries(
@@ -142,7 +140,8 @@ def todos_from_entries(
     """Reconstruct the latest todo list from a transcript.
 
     Scans backward for the most recent ``tool_name`` call whose arguments parse
-    as a todo-write payload. Returns an empty list when none is found. Used by
+    as a todo-write payload and whose result is not an error. Returns an empty
+    list when none is found. Used by
     the web layer to surface current todos on session reload.
     """
     store = TodoList()
@@ -190,31 +189,47 @@ def _make_tool(store: TodoList, tool_name: str) -> Tool:
     return todo_write
 
 
-_MODEL_OUTPUT = (AssistantTextEntry, ReasoningEntry, ToolCallEntry)
+# One call's output always comes in this order (``assemble_turn_entries`` in
+# runtime/model_turn.py), so a step back in it starts a new call.
+_OUTPUT_RANK = {ReasoningEntry: 0, AssistantTextEntry: 1, ToolCallEntry: 2}
 
 
-def _calls_since_write(entries: list[TranscriptEntry], tool_name: str) -> int | None:
-    """Model calls in ``entries`` after the one that made the newest valid
-    write, or ``None`` when there is no such write.
+def _newest_write(
+    entries: list[TranscriptEntry], tool_name: str
+) -> tuple[int, list[TodoItem]] | None:
+    """The newest valid write in ``entries``: the model calls made after the
+    one that wrote it, and its items. ``None`` when there is none.
 
-    The transcript has no turn markers: one call's output is a run of
-    reasoning / text / tool-call entries, so calls are counted as those runs.
-    Derived from the transcript alone, the count spans runs, resumes and
-    handoffs, and an overflow retry of the same call gets the same answer.
+    Valid means the arguments parse and the result is not an error (one still
+    pending counts: the tool may have run). The transcript has no turn
+    markers: a call's output is a run of reasoning, then text, then tool-call
+    entries, so a new call starts after any other entry or where that order
+    steps back. Derived from the transcript alone, the count spans runs,
+    resumes and handoffs, and an overflow retry of the same call gets the
+    same answer. One blind spot: a text-only reply followed by a run started
+    with no new input whose reply opens with text — a call can itself carry
+    several text entries, so those two count as one.
     """
     calls = 0
-    in_output = False
+    later: int | None = None  # rank of the entry just after this one
+    # Scanning backward, this holds each id's nearest result after the
+    # current position (a provider may reuse call ids).
+    failed: dict[str, bool] = {}
     for entry in reversed(entries):
-        output = isinstance(entry, _MODEL_OUTPUT)
-        if output and not in_output:
-            calls += 1
-        in_output = output
+        if isinstance(entry, ToolResultEntry):
+            failed[entry.call_id] = entry.is_error
+        rank = _OUTPUT_RANK.get(type(entry))
+        if rank is not None and (later is None or later < rank):
+            calls += 1  # this entry ends a call
+        later = rank
         if (
             isinstance(entry, ToolCallEntry)
             and entry.name == tool_name
-            and _parse_todo_items(entry.arguments) is not None
+            and not failed.get(entry.call_id, False)
         ):
-            return calls - 1  # the writing call itself
+            items = _parse_todo_items(entry.arguments)
+            if items is not None:
+                return calls - 1, items  # minus the writing call itself
     return None
 
 
@@ -229,8 +244,11 @@ def _make_injector(store: TodoList, tool_name: str, every: int) -> ViewInjector:
                 store.rehydrate_from(ctx.entries, tool_name=tool_name)
         if all(t.status == "completed" for t in store.items):
             return None
-        since = _calls_since_write(ctx.entries, tool_name)
-        if since is None or since < every or since % every:
+        found = _newest_write(ctx.entries, tool_name)
+        if found is None:
+            return None
+        since = found[0]
+        if since < every or since % every:
             return None
         text = (
             "<system-reminder>\n"

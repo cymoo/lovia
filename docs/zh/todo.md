@@ -62,6 +62,9 @@ Todo Store 本身属于 Run，但列表可以跨中断和 Handoff 恢复：插�
 
 - Todo 是规划辅助工具，不是定时器或持久化任务队列。未来任务应使用[定时运行](web-server.md#定时任务)。
 - 临时提醒有意不进入 Session 和 Checkpoint；需要审计时应查看 `todo_write` Tool 调用。
+- 提醒按 Transcript 里的模型调用计数，而纯文本回复与紧接着的无新输入 Run
+  （`Runner.run(agent, [], session=...)`）之间没有分隔。这个 Run 的回复如果直接以
+  文本开头（前面没有推理），两者会算作一次调用。
 - 任务过于简单或模糊时，模型可能频繁改写计划。建议在 Instructions 中明确只为真正的
   多步骤工作使用 Todo。
 

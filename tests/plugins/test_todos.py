@@ -11,7 +11,7 @@ from lovia.exceptions import UserError
 from lovia.plugins.todo import (
     TodoItem,
     TodoList,
-    _calls_since_write,
+    _newest_write,
     render_todos,
     todos_from_entries,
 )
@@ -224,33 +224,73 @@ async def test_staleness_spans_runs() -> None:
     assert [_has_reminder(c) for c in provider.calls] == [False, False, False, True]
 
 
-def test_calls_since_write_counts_model_calls_not_entries() -> None:
-    write = ToolCallEntry(call_id="c", name="todo_write", arguments=json.dumps(_OPEN))
+def _write(call_id: str, todos: dict = _OPEN) -> ToolCallEntry:
+    return ToolCallEntry(
+        call_id=call_id, name="todo_write", arguments=json.dumps(todos)
+    )
+
+
+def _res(call_id: str, *, error: bool = False) -> ToolResultEntry:
+    return ToolResultEntry(call_id=call_id, output="x", is_error=error)
+
+
+def _since(entries: list) -> int | None:
+    found = _newest_write(entries, "todo_write")
+    return None if found is None else found[0]
+
+
+def test_newest_write_counts_model_calls_not_entries() -> None:
     bad = ToolCallEntry(call_id="b", name="todo_write", arguments='{"todos": 1}')
     other = ToolCallEntry(call_id="o", name="work", arguments="{}")
 
-    def res(call_id: str) -> ToolResultEntry:
-        return ToolResultEntry(call_id=call_id, output="ok")
-
-    assert (
-        _calls_since_write([InputEntry(role="user", content="hi")], "todo_write")
-        is None
-    )
+    assert _since([InputEntry(role="user", content="hi")]) is None
     # The write shares its call with another tool call: that call is not counted.
-    assert _calls_since_write([write, other, res("c"), res("o")], "todo_write") == 0
+    assert _since([_write("c"), other, _res("c"), _res("o")]) == 0
     # One later call with reasoning, text and two parallel tool calls.
     later = [
         ReasoningEntry(content="r"),
         AssistantTextEntry(content="t"),
         other,
         other,
-        res("o"),
-        res("o"),
+        _res("o"),
+        _res("o"),
     ]
-    assert _calls_since_write([write, res("c"), *later], "todo_write") == 1
+    assert _since([_write("c"), _res("c"), *later]) == 1
     # A malformed newer write changed nothing: count from the valid one.
-    entries = [write, res("c"), bad, res("b"), AssistantTextEntry(content="t")]
-    assert _calls_since_write(entries, "todo_write") == 2
+    entries = [_write("c"), _res("c"), bad, _res("b"), AssistantTextEntry(content="t")]
+    assert _since(entries) == 2
+    # A write whose result is still pending may have run: it counts.
+    assert _since([_write("c"), _res("c"), _write("p")]) == 0
+
+
+def test_back_to_back_calls_split_where_the_output_order_steps_back() -> None:
+    """Runs started with no new input leave one reply right after another."""
+    r, t = ReasoningEntry(content="r"), AssistantTextEntry(content="t")
+    other = ToolCallEntry(call_id="o", name="work", arguments="{}")
+    head = [_write("c"), _res("c")]
+    # One call may carry several text entries (Anthropic: one per block).
+    assert _since([*head, r, t, t, other, _res("o")]) == 1
+    # text → reasoning and tool call → text both start a new call.
+    assert _since([*head, t, r, t, r, t]) == 3
+    assert _since([*head, r, t, other, t]) == 2
+    # The documented blind spot: text → text stays one call.
+    assert _since([*head, t, t]) == 1
+
+
+def test_a_failed_write_is_not_a_write() -> None:
+    """A parseable call whose result is an error (a timeout, a hook veto)
+    never replaced the list: it neither restarts the count nor rehydrates."""
+    first = {"todos": [{"content": "first", "status": "in_progress"}]}
+    second = {"todos": [{"content": "second", "status": "in_progress"}]}
+    entries = [_write("c1", first), _res("c1"), _write("c2", second)]
+    entries.append(_res("c2", error=True))
+    assert _since(entries) == 1
+    assert [t.content for t in todos_from_entries(entries)] == ["first"]
+    # A reused call id pairs each call with its nearest result after it.
+    reused = [_write("c", first), _res("c"), _write("c", second)]
+    reused.append(_res("c", error=True))
+    assert _since(reused) == 1
+    assert [t.content for t in todos_from_entries(reused)] == ["first"]
 
 
 @pytest.mark.parametrize("every", [0, -1, 1.5, True, "8"])

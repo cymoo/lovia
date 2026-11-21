@@ -5931,10 +5931,6 @@ body.lv-files-resizing {
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--lv-muted-2) 55%, transparent);
 }
-/* In a plan row: what this update changed. */
-.lv-plan-item.lv-changed {
-  background: var(--lv-surface-2);
-}
 
 /* A plan row's body is the list: the raw arguments and the plugin's text
    rendering of the same list would only repeat it (copy still copies it). A

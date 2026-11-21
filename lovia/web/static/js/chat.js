@@ -70,9 +70,8 @@ import {
   fillPlanRow,
   initPlan,
   isPlanOutput,
-  notePlan,
+  markPlanRow,
   parsePlan,
-  placePlan,
   planText,
   planUserTurn,
   resetPlans,
@@ -2683,26 +2682,25 @@ function renderHistoryWindow({ stickBottom }) {
     }
   }
   // The plan, also from the full history: the latest update may sit above the
-  // window, and each row diffs against the one before it. A failed update
-  // never changed the plan; one still pending shows once it lands (live).
-  /** Each plan update (the call itself, as ids may repeat) → the plan it replaced. */
-  /** @type {Map<object, import('./plan.js').PlanItem[] | null>} */
-  const planCalls = new Map();
-  /** @type {import('./plan.js').PlanItem[] | null} */
-  let plan = null;
+  // window. A failed update never changed the plan; one still pending shows
+  // once it lands (live).
+  resetPlans();
+  /** @type {Set<object>} the plan updates (the calls themselves, as ids may repeat) */
+  const planCalls = new Set();
+  /** @type {import('./plan.js').PlanItem[]} */
+  let plan = [];
   let lastTurn = false; // the plan came after the last user message
   for (const it of entries) {
     if (it.role === 'user') lastTurn = false;
     for (const call of (it.role === 'assistant' && it.tool_calls) || []) {
       if (!isPlanCall(call, pendingResults.get(call))) continue;
-      planCalls.set(call, plan);
+      planCalls.add(call);
       usePlanView(call.name);
       plan = parsePlan(call.arguments) ?? [];
       lastTurn = true;
     }
   }
-  resetPlans(plan);
-  showPlan(plan ?? [], { update: false, lastTurn });
+  showPlan(plan, { update: false, lastTurn });
 
   // Absolute user-turn numbering spans the FULL history — the rendered
   // window may start mid-transcript.
@@ -2779,7 +2777,7 @@ function renderHistoryWindow({ stickBottom }) {
           const result = pendingResults.get(call);
           const node = buildToolNode(call);
           // A plan update's row, noted before it settles so it reads as one.
-          if (planCalls.has(call)) placePlan(toolKey(node), planCalls.get(call) ?? null);
+          if (planCalls.has(call)) markPlanRow(toolKey(node));
           // Attached first, so a UI component renders into a laid-out card.
           appendBubbleContent(currentBubble, node);
           // Same renderer as the live path: highlighting, error styling, and
@@ -2787,7 +2785,7 @@ function renderHistoryWindow({ stickBottom }) {
           // running (its empty <pre> is hidden by CSS).
           if (result) setToolResult(node, result.text, result.isError, result.images);
           else refreshTool(node);
-          if (planCalls.has(call)) fillPlanRow(node, toolKey(node), parsePlan(call.arguments) ?? []);
+          if (planCalls.has(call)) fillPlanRow(node, parsePlan(call.arguments) ?? []);
           // A result-less ask_human call is still parked server-side: rebuild
           // its interactive card so a reloaded or re-attached tab can answer
           // (the live path can't — this render replaced the transcript).
@@ -3218,11 +3216,11 @@ async function applyEvent({ event, data }) {
       const card = store.toolNodes.get(data.id);
       if (cleared) {
         usePlanView(data.name);
-        notePlan(card && toolKey(card), []);
+        if (card) markPlanRow(toolKey(card));
       }
       updateToolResult(data.id, data.result, data.is_error, data.images);
       if (cleared) {
-        if (card) fillPlanRow(card, toolKey(card), []);
+        if (card) fillPlanRow(card, []);
         showPlan([]);
       }
       // A write counts as "touched" once it landed — not at the call, which
@@ -3240,10 +3238,10 @@ async function applyEvent({ event, data }) {
       if (data.name) usePlanView(data.name);
       const items = parsePlan({ todos: data.todos || [] }) ?? [];
       const node = store.toolNodes.get(data.call_id);
-      notePlan(node && toolKey(node), items);
       if (node) {
+        markPlanRow(toolKey(node));
         updateToolResult(data.call_id, planText(items), false);
-        fillPlanRow(node, toolKey(node), items);
+        fillPlanRow(node, items);
       }
       showPlan(items);
       break;

@@ -32,6 +32,7 @@ import { cloneTemplate, escapeHtml, highlightIn } from './util.js';
 /** @typedef {'running' | 'awaiting' | 'done' | 'error'} ToolStatus */
 /**
  * @typedef {object} ToolState
+ * @property {number} key The card's own key (see toolKey).
  * @property {string} id
  * @property {string} name
  * @property {string | undefined} arguments The raw JSON the model emitted;
@@ -58,6 +59,32 @@ const ARGS_KEEP_MAX = 256 * 1024;
 
 /** @type {WeakMap<HTMLElement, ToolState>} */
 const states = new WeakMap();
+let cardSeq = 0;
+
+/**
+ * A card's own key, unique in this page: tells apart calls that share an id
+ * (a provider may reuse them). Undefined for a node that is no tool card.
+ * @param {HTMLElement} node
+ */
+export function toolKey(node) {
+  return states.get(node)?.key;
+}
+
+/**
+ * The card still waiting on call `id`'s result, if any — the one a resumed
+ * run re-announces. A settled card with that id is another call.
+ * @param {string} id
+ * @returns {HTMLElement | null}
+ */
+export function findPendingToolNode(id) {
+  const escaped = window.CSS?.escape ? CSS.escape(id) : id.replace(/["\\]/g, '\\$&');
+  const cards = document.querySelectorAll(`#transcript .lv-tool[data-call-id="${escaped}"]`);
+  for (let i = cards.length - 1; i >= 0; i--) {
+    const card = /** @type {HTMLElement} */ (cards[i]);
+    if (states.get(card)?.result === undefined) return card;
+  }
+  return null;
+}
 
 // A tool view's `render` draws through the component machinery (errors
 // contained, async cleanup, theme re-renders), under a kind of lovia's own.
@@ -254,6 +281,7 @@ export function buildToolNode(call) {
   // twice — see chat.js appendTool.
   if (call.id) node.dataset.callId = call.id;
   states.set(node, {
+    key: ++cardSeq,
     id: call.id ?? '',
     name: call.name,
     arguments:
@@ -589,6 +617,7 @@ export function setToolResult(node, result, isError, images, live = false) {
 
   if (text.length > 1500 || text.split('\n').length > RESULT_EXPANDABLE_LINES) {
     const expand = toolActionBtn('maximize-2', t('tool.expand'));
+    expand.classList.add('lv-tool-expand');
     expand.addEventListener('click', () => {
       const on = pre.classList.toggle('lv-expanded');
       expand.title = on ? t('tool.collapse') : t('tool.expand');

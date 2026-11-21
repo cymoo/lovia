@@ -56,14 +56,6 @@ export const store = {
   reasoningNode: null,
   reasoningStart: 0,
   reasoningEnd: 0,
-  todoNode: null,
-  // On phones the panel is bottom-anchored and would cover the conversation
-  // (and approval buttons) — start it collapsed there; the toggle still works.
-  // Guarded like the theme detection below.
-  todoCollapsed: !!(
-    window.matchMedia && window.matchMedia("(max-width: 720px)").matches
-  ),
-  todos: [],
   lastMessage: null,
   // Set when the current run created a brand-new session whose title is being
   // generated server-side, so the chat view knows to poll for it.

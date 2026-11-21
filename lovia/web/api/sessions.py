@@ -792,14 +792,17 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         msgs = entries_to_messages(entries)
 
         if format == "json":
-            errors, images = tool_result_flags(entries)
+            # One per tool message, in order (see tool_result_flags).
+            flags = iter(tool_result_flags(entries))
             return JSONResponse(
                 content={
                     "session_id": session_id,
                     "title": meta.title if meta else None,
                     "agent": meta.agent if meta else None,
                     "messages": [
-                        message_to_json_dict(m, errors=errors, images=images)
+                        message_to_json_dict(
+                            m, flags=next(flags, None) if m.role == "tool" else None
+                        )
                         for m in msgs
                     ],
                 }

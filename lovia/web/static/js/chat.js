@@ -37,10 +37,12 @@ import {
   STALE_TOOLS,
   buildToolNode,
   fillParams,
+  findPendingToolNode,
   findToolNode,
   refreshTool,
   setToolResult,
   setToolStatus,
+  toolKey,
   toolPath,
 } from './tools.js';
 import {
@@ -64,6 +66,20 @@ import { initSkillMenu } from './skill-menu.js';
 import { findCommand, runCommand } from './commands.js';
 import { initFileMenu } from './file-menu.js';
 import { isStep, placeStep, removeStep } from './activity.js';
+import {
+  fillPlanRow,
+  initPlan,
+  isPlanOutput,
+  notePlan,
+  parsePlan,
+  placePlan,
+  planText,
+  planUserTurn,
+  resetPlans,
+  setPlanLive,
+  showPlan,
+  usePlanView,
+} from './plan.js';
 import { collectContext } from './lovia.js';
 import { messageActionButtons, watchMessageActions } from './message-actions.js';
 import {
@@ -722,7 +738,9 @@ function appendTool(call) {
   // instead of drawing a second one, which left the replayed copy stranded
   // without a result forever. Rightly the run's job to re-announce: a consumer
   // attaching fresh has no prior state, so reconciling is this client's job.
-  const existing = call.id ? findToolNode(call.id) : null;
+  // Only a card still waiting for its result: a settled one with this id is
+  // an earlier call (some providers reuse ids, e.g. `call_0` every turn).
+  const existing = call.id ? findPendingToolNode(call.id) : null;
   const node = existing || buildToolNode(call);
   if (!existing) {
     appendBubbleContent(store.bubble, node);
@@ -744,109 +762,34 @@ function updateToolResult(id, result, isError, images) {
   if (node.classList.contains('lv-tool--ui')) scrollDown(); // a component adds height
 }
 
-function removeToolNode(id) {
-  const node = store.toolNodes.get(id);
-  if (node) { removeStep(node); store.toolNodes.delete(id); }
-}
-
-// ---- Todo plugin: a live checklist card --------------------------------
-// Tool names whose calls render as a todo card instead of a tool bubble.
-// Seeded with the default; renamed tools are learned from `todo` events.
-const todoNames = new Set(['todo_write']);
-// pending stays empty — its ring is drawn by `.lv-todo-mark::before` in CSS.
-const TODO_MARK = {
-  completed: icon('check', { size: 13 }),
-  in_progress: icon('loader-circle', { size: 13 }),
-  pending: '',
-};
 const STICKY_SCROLL_PX = 160;
 const USER_SCROLL_PAUSE_MS = 900;
 
-// Parse a todo_write call's arguments into a todos array, or null.
-function parseTodos(args) {
-  try {
-    const obj = JSON.parse(args);
-    if (obj && Array.isArray(obj.todos)) {
-      return obj.todos.map((todo) => ({
-        content: todo.content ?? '',
-        status: todo.status ?? 'pending',
-        active_form: todo.active_form ?? null,
-      }));
-    }
-  } catch { /* not a todo payload */ }
-  return null;
+// ---- The plan (Todo plugin): drawn by plan.js ------------------------------
+// A call is a plan update by its own outcome, never by its tool's name (the
+// plugin may be renamed, and another tool may own `todo_write`): live, the
+// `todo` event — or, for a clear, the plugin's result for an empty list;
+// replayed, a result that is the plugin's rendering of the call's own
+// arguments, whole or truncated (isPlanOutput). Calls whose arguments could be
+// one wait here (with their items)
+// for their outcome.
+/** @type {Map<string, import('./plan.js').PlanItem[]>} */
+const maybePlanCalls = new Map();
+
+/**
+ * Whether a replayed call is a successful plan update.
+ * @param {{ arguments?: string }} call
+ * @param {{ text: string, isError: boolean } | undefined} result
+ */
+function isPlanCall(call, result) {
+  const items = parsePlan(call.arguments);
+  return !!items && !!result && !result.isError && isPlanOutput(result.text, items);
 }
 
-function fillTodoCard(card, todos) {
-  const total = todos.length;
-  const done = todos.filter((todo) => todo.status === 'completed').length;
-  const pct = total ? Math.round((done / total) * 100) : 0;
-  const expanded = !store.todoCollapsed;
-  card.classList.toggle('lv-complete', total > 0 && done === total);
-  card.innerHTML =
-    `<button class="lv-todo-toggle" type="button" aria-expanded="${expanded}" title="${expanded ? t('todo.hide') : t('todo.show')}">` +
-    `<span class="lv-todo-title">${t('todo.plan')}</span>` +
-    `<span class="lv-todo-count">${done}/${total}</span>` +
-    `<span class="lv-todo-toggle-icon" aria-hidden="true">${expanded ? '-' : '+'}</span>` +
-    '</button>' +
-    '<div class="lv-todo-content">' +
-    `<div class="lv-todo-bar"><div class="lv-todo-bar-fill" style="width:${pct}%"></div></div>` +
-    '<ul class="lv-todo-list"></ul>' +
-    '</div>';
-  const toggle = card.querySelector('.lv-todo-toggle');
-  toggle?.addEventListener('click', () => setTodoCollapsed(!store.todoCollapsed));
-  const ul = card.querySelector('.lv-todo-list');
-  for (const todo of todos) {
-    const status = ['pending', 'in_progress', 'completed'].includes(todo.status)
-      ? todo.status
-      : 'pending';
-    const li = document.createElement('li');
-    li.className = `lv-todo-item lv-${status}`;
-    const label =
-      status === 'in_progress' && todo.active_form ? todo.active_form : todo.content;
-    const mark = document.createElement('span');
-    mark.className = 'lv-todo-mark';
-    mark.innerHTML = TODO_MARK[status];
-    const text = document.createElement('span');
-    text.className = 'lv-todo-text';
-    text.textContent = label;
-    li.append(mark, text);
-    ul.appendChild(li);
-  }
-  return card;
-}
-
-function buildTodoCard(todos) {
-  const card = document.createElement('div');
-  card.className = 'lv-todo-card';
-  return fillTodoCard(card, todos);
-}
-
-function setTodoCollapsed(collapsed) {
-  const panel = document.getElementById('todo-panel');
-  store.todoCollapsed = collapsed;
-  panel?.classList.toggle('lv-collapsed', collapsed);
-  const toggle = /** @type {HTMLElement | null} */ (panel?.querySelector('.lv-todo-toggle'));
-  const icon = panel?.querySelector('.lv-todo-toggle-icon');
-  toggle?.setAttribute('aria-expanded', String(!collapsed));
-  if (toggle) toggle.title = collapsed ? t('todo.show') : t('todo.hide');
-  if (icon) icon.textContent = collapsed ? '+' : '-';
-}
-
-function clearTodoPanel() {
-  const panel = document.getElementById('todo-panel');
-  if (panel) {
-    panel.replaceChildren();
-    panel.classList.add('lv-hidden');
-    panel.classList.remove('lv-collapsed');
-  }
-  store.todoNode = null;
-  // Same default as store.js: collapsed on phones, where the bottom-anchored
-  // panel would otherwise cover the conversation (and approval buttons).
-  store.todoCollapsed = !!(
-    window.matchMedia && window.matchMedia('(max-width: 720px)').matches
-  );
-  store.todos = [];
+function clearPlanView() {
+  resetPlans();
+  maybePlanCalls.clear();
+  showPlan([]);
 }
 
 function resetChatView() {
@@ -864,29 +807,7 @@ function resetChatView() {
   store.reasoningEnd = 0;
   _queuedTurns = [];
   _pendingResend = [];
-  clearTodoPanel();
-}
-
-// Create the session's todo panel on first sight, update it in place after.
-function upsertTodoCard(todos) {
-  const panel = document.getElementById('todo-panel');
-  if (!panel) return;
-
-  store.todos = todos;
-  if (!todos.length) {
-    clearTodoPanel();
-    return;
-  }
-
-  panel.classList.remove('lv-hidden');
-  panel.classList.toggle('lv-collapsed', store.todoCollapsed);
-  if (store.todoNode && panel.contains(store.todoNode)) {
-    fillTodoCard(store.todoNode, todos);
-  } else {
-    store.todoNode = buildTodoCard(todos);
-    panel.replaceChildren(store.todoNode);
-  }
-  scrollDown();
+  clearPlanView();
 }
 
 // A call that needs approval shows a card only while the decision is open.
@@ -2735,19 +2656,53 @@ function renderHistoryWindow({ stickBottom }) {
   store.toolNodes.clear();
   store.approvals.clear();
 
-  // Results are looked up from the FULL history — a window boundary must not
-  // orphan a call from its result.
+  // Results are paired from the FULL history — a window boundary must not
+  // orphan a call from its result. Each goes to the earliest call before it
+  // with its id still unanswered, not to the id alone: a provider may reuse
+  // ids, and a later call's result must not stand in for an earlier one's.
+  /** @type {Map<object, { text: string, isError: boolean, images: any }>} */
   const pendingResults = new Map();
+  /** @type {Map<string, object[]>} */
+  const unanswered = new Map();
   for (const it of entries) {
+    for (const call of (it.role === 'assistant' && it.tool_calls) || []) {
+      const queue = unanswered.get(call.id);
+      if (queue) queue.push(call);
+      else unanswered.set(call.id, [call]);
+    }
     // History entries are MessageOut (role + tool_call_id), with no `type`
     // field — gating on `it.type` here left every result unmatched and hidden.
-    if (it.role === 'tool' && it.tool_call_id)
-      pendingResults.set(it.tool_call_id, {
-        text: contentText(it.content),
-        isError: !!it.is_error,
-        images: it.images,
-      });
+    if (it.role === 'tool' && it.tool_call_id) {
+      const call = unanswered.get(it.tool_call_id)?.shift();
+      if (call)
+        pendingResults.set(call, {
+          text: contentText(it.content),
+          isError: !!it.is_error,
+          images: it.images,
+        });
+    }
   }
+  // The plan, also from the full history: the latest update may sit above the
+  // window, and each row diffs against the one before it. A failed update
+  // never changed the plan; one still pending shows once it lands (live).
+  /** Each plan update (the call itself, as ids may repeat) → the plan it replaced. */
+  /** @type {Map<object, import('./plan.js').PlanItem[] | null>} */
+  const planCalls = new Map();
+  /** @type {import('./plan.js').PlanItem[] | null} */
+  let plan = null;
+  let lastTurn = false; // the plan came after the last user message
+  for (const it of entries) {
+    if (it.role === 'user') lastTurn = false;
+    for (const call of (it.role === 'assistant' && it.tool_calls) || []) {
+      if (!isPlanCall(call, pendingResults.get(call))) continue;
+      planCalls.set(call, plan);
+      usePlanView(call.name);
+      plan = parsePlan(call.arguments) ?? [];
+      lastTurn = true;
+    }
+  }
+  resetPlans(plan);
+  showPlan(plan ?? [], { update: false, lastTurn });
 
   // Absolute user-turn numbering spans the FULL history — the rendered
   // window may start mid-transcript.
@@ -2821,13 +2776,10 @@ function renderHistoryWindow({ stickBottom }) {
       }
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
-          const result = pendingResults.get(call.id);
-          const todos = parseTodos(call.arguments);
-          if (todos) {
-            upsertTodoCard(todos); // render/update the session's checklist panel
-            continue;
-          }
+          const result = pendingResults.get(call);
           const node = buildToolNode(call);
+          // A plan update's row, noted before it settles so it reads as one.
+          if (planCalls.has(call)) placePlan(toolKey(node), planCalls.get(call) ?? null);
           // Attached first, so a UI component renders into a laid-out card.
           appendBubbleContent(currentBubble, node);
           // Same renderer as the live path: highlighting, error styling, and
@@ -2835,6 +2787,7 @@ function renderHistoryWindow({ stickBottom }) {
           // running (its empty <pre> is hidden by CSS).
           if (result) setToolResult(node, result.text, result.isError, result.images);
           else refreshTool(node);
+          if (planCalls.has(call)) fillPlanRow(node, toolKey(node), parsePlan(call.arguments) ?? []);
           // A result-less ask_human call is still parked server-side: rebuild
           // its interactive card so a reloaded or re-attached tab can answer
           // (the live path can't — this render replaced the transcript).
@@ -2939,7 +2892,11 @@ transcriptEl?.addEventListener('wheel', (e) => {
 transcriptEl?.addEventListener('scroll', () => {
   if (_programmaticScroll) return;
   const current = transcriptEl.scrollTop;
-  const movedUp = current < _lastScrollTop;
+  // Up, yet still at the very end: the view grew (the composer shrank — a
+  // tray, the plan line or its list) and the browser refit scrollTop to it.
+  // A reader scrolling up always leaves the end.
+  const atEnd = transcriptEl.scrollHeight - current - transcriptEl.clientHeight < 1;
+  const movedUp = current < _lastScrollTop && !atEnd;
   const movedDown = current > _lastScrollTop;
   _lastScrollTop = current;
 
@@ -3202,6 +3159,7 @@ async function applyEvent({ event, data }) {
       break;
 
     case 'user_injected': {
+      planUserTurn();
       // A queued message was consumed at this turn's start. Close out the
       // assistant work that preceded it (once per batch — only when the current
       // bubble has content) so the response opens a fresh bubble below the
@@ -3225,23 +3183,17 @@ async function applyEvent({ event, data }) {
     }
 
     case 'tool_call':
-      {
-        const todos = parseTodos(data.arguments);
-        if (todoNames.has(data.name) || todos) {
-          if (todos) {
-            todoNames.add(data.name);
-            upsertTodoCard(todos);
-          }
-          break; // rendered as a todo panel instead
-        }
-      }
       finalizeReasoning();
       appendTool(data);
+      {
+        const items = parsePlan(data.arguments);
+        if (items) maybePlanCalls.set(data.id, items);
+      }
       // ask_human parks the run on the user: draw the interactive card too.
       if (data.name === QUESTION_TOOL) appendQuestion(data);
       break;
 
-    case 'tool_result':
+    case 'tool_result': {
       // A finished shell command — or a background process observed via a
       // poll/kill — may have created/edited files we can't see individually;
       // let the Files panel mark its listing as maybe stale.
@@ -3254,20 +3206,48 @@ async function applyEvent({ event, data }) {
           data.is_error ? null : String(data.result ?? ''),
         );
       }
+      // A plan cleared to nothing lands as a plain result (sse.py sends the
+      // `todo` event only for a list with items): an empty list, and the
+      // plugin's text for it (whole or truncated, as a replay reads it). Noted
+      // before the row settles, so it draws as a
+      // plan update at once.
+      const asked = maybePlanCalls.get(data.id);
+      maybePlanCalls.delete(data.id);
+      const cleared =
+        asked?.length === 0 && !data.is_error && isPlanOutput(String(data.result ?? ''), []);
+      const card = store.toolNodes.get(data.id);
+      if (cleared) {
+        usePlanView(data.name);
+        notePlan(card && toolKey(card), []);
+      }
       updateToolResult(data.id, data.result, data.is_error, data.images);
+      if (cleared) {
+        if (card) fillPlanRow(card, toolKey(card), []);
+        showPlan([]);
+      }
       // A write counts as "touched" once it landed — not at the call, which
       // a denied approval or a failing tool may never turn into a file.
       if (!data.is_error) {
         emitWorkspaceTouch(data.name, store.toolNodes.get(data.id)?.dataset.toolPath);
       }
       break;
+    }
 
-    case 'todo':
+    case 'todo': {
+      // A plan update that landed: it stands in for the call's tool_result.
       finalizeReasoning();
-      if (data.name) todoNames.add(data.name);
-      removeToolNode(data.call_id); // drop the bubble if it slipped through
-      upsertTodoCard(data.todos || []);
+      maybePlanCalls.delete(data.call_id);
+      if (data.name) usePlanView(data.name);
+      const items = parsePlan({ todos: data.todos || [] }) ?? [];
+      const node = store.toolNodes.get(data.call_id);
+      notePlan(node && toolKey(node), items);
+      if (node) {
+        updateToolResult(data.call_id, planText(items), false);
+        fillPlanRow(node, toolKey(node), items);
+      }
+      showPlan(items);
       break;
+    }
 
     case 'approval_required':
       appendApproval(data);
@@ -3746,6 +3726,7 @@ function enterStreamingUI() {
   document.getElementById('transcript')?.setAttribute('aria-busy', 'true');
   updateRegenButton(); // streaming: no regen affordance until the run settles
   updateEditButton(); // …and no edit either: rewind is refused during a live run
+  setPlanLive(true);
 }
 
 /** @param {'done' | 'error' | 'cancelled' | 'detached' | 'waiting'} [status] How the run shown went. */
@@ -3768,6 +3749,7 @@ function exitStreamingUI(status = 'detached') {
   document.getElementById('transcript')?.setAttribute('aria-busy', 'false');
   updateRegenButton();
   updateEditButton();
+  setPlanLive(false);
   runEnded(status); // last: listeners see the composer idle again
 }
 
@@ -4063,14 +4045,14 @@ export function detachStream() {
   //  - queued/pending buffers, else a later run's finally flushes stale bubbles
   //    or resends a raced message into the wrong chat (accepted injects still
   //    replay from the server mailbox on reconnect; an un-accepted one is dropped);
-  //  - the todo panel (only renderHistory rebuilds it — a failed switch won't);
+  //  - the plan line (only renderHistory rebuilds it — a failed switch won't);
   //  - any in-flight follow-up request, whose chips would land in the new view;
   //  - a stop waiting for the run's admission: leaving isn't stopping.
   _queuedTurns = [];
   _pendingResend = [];
   _admitting = false;
   _stopOnceAdmitted = false;
-  clearTodoPanel();
+  clearPlanView();
   clearFollowups();
   if (store.streaming) exitStreamingUI();
 }
@@ -5027,6 +5009,7 @@ store.on('theme-changed', rerenderComponents);
 
 export function initComposer() {
   initContextRing();
+  initPlan();
   initSkillMenu(promptEl);
   initFileMenu(promptEl);
 

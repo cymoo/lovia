@@ -62,8 +62,12 @@ Handoff: on activation, the plugin reconstructs state from the newest valid
 Host applications can observe `ToolCallCompleted` events where
 `event.call.name == "todo_write"`; `event.result` is the structured
 `list[TodoItem]`. For stored conversations, call
-`lovia.plugins.todos_from_entries(entries)`. The bundled Web UI uses this same
-function.
+`lovia.plugins.todos_from_entries(entries)`.
+
+The bundled Web UI shows the current step on a line above the input, which
+opens to the whole list; it stays while the list has unfinished items (muted
+when no run is going). Each update is also a row among the reply's steps:
+its line says what changed, and opened it shows the list as of that update.
 
 ## Sharp edges
 

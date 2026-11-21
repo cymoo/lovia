@@ -131,35 +131,35 @@ def tool_image_stubs(parts: list[Any] | None) -> list[ToolImageOut]:
     ]
 
 
-def tool_result_flags(
-    entries: list[TranscriptEntry],
-) -> tuple[set[str], dict[str, list[ToolImageOut]]]:
-    """Per call id, what ``entries_to_messages`` drops when it flattens a
-    :class:`ToolResultEntry` to a plain ``tool`` message: the ids whose call
-    failed, and each result's image stubs (no bytes — the client fetches them
+ToolFlags = tuple[bool, list[ToolImageOut]]
+
+
+def tool_result_flags(entries: list[TranscriptEntry]) -> list[ToolFlags]:
+    """What ``entries_to_messages`` drops when it flattens a
+    :class:`ToolResultEntry` to a plain ``tool`` message: whether the call
+    failed, and the result's image stubs (no bytes — the client fetches them
     from the tool-images route). Replays and exports re-derive them here so
-    they match what the live SSE stream carried."""
-    errors: set[str] = set()
-    images: dict[str, list[ToolImageOut]] = {}
-    for e in entries:
-        if isinstance(e, ToolResultEntry) and e.call_id:
-            if e.is_error:
-                errors.add(e.call_id)
-            if stubs := tool_image_stubs(e.parts):
-                images[e.call_id] = stubs
-    return errors, images
+    they match what the live SSE stream carried.
+
+    One per result, in order — as ``entries_to_messages`` makes one ``tool``
+    message per result — so they pair by position, not by call id: a
+    provider may reuse ids, and one call's failure must not mark another's."""
+    return [
+        (e.is_error, tool_image_stubs(e.parts))
+        for e in entries
+        if isinstance(e, ToolResultEntry)
+    ]
 
 
 def _apply_tool_flags(
     outs: list[MessageOut], entries: list[TranscriptEntry]
 ) -> list[MessageOut]:
     """Stamp ``is_error`` and image stubs onto tool-result messages."""
-    errors, images = tool_result_flags(entries)
-    for o in outs:
-        if o.role == "tool" and o.tool_call_id:
-            o.is_error = o.is_error or o.tool_call_id in errors
-            if o.tool_call_id in images:
-                o.images = images[o.tool_call_id]
+    tools = (o for o in outs if o.role == "tool")
+    for o, (failed, stubs) in zip(tools, tool_result_flags(entries)):
+        o.is_error = o.is_error or failed
+        if stubs:
+            o.images = stubs
     return outs
 
 
@@ -344,17 +344,14 @@ def view_messages(
 
 
 def message_to_json_dict(
-    m: Message,
-    *,
-    errors: set[str] | None = None,
-    images: dict[str, list[ToolImageOut]] | None = None,
+    m: Message, *, flags: ToolFlags | None = None
 ) -> dict[str, Any]:
     """One message in the JSON-export envelope.
 
     ``tool_call_id``/``name`` are included so a consumer can attribute a tool
     *result* message back to the call it answers (results don't carry the tool
     name themselves). A result also carries ``is_error`` and its ``images``
-    (from :func:`tool_result_flags`), as the session view does.
+    (its ``flags`` from :func:`tool_result_flags`), as the session view does.
     """
     out: dict[str, Any] = {
         "role": m.role,
@@ -365,8 +362,9 @@ def message_to_json_dict(
         "name": m.name,
     }
     if m.role == "tool" and m.tool_call_id:
-        out["is_error"] = m.tool_call_id in (errors or ())
-        out["images"] = [i.model_dump() for i in (images or {}).get(m.tool_call_id, [])]
+        failed, stubs = flags or (False, [])
+        out["is_error"] = failed
+        out["images"] = [i.model_dump() for i in stubs]
     return out
 
 

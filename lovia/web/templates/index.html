@@ -166,13 +166,23 @@
         {% endblock %}
       </div>
     </section>
-    <aside id="todo-panel" class="lv-todo-panel lv-hidden" aria-label="Current plan" aria-live="polite" data-part="todo-panel"></aside>
     <button id="scroll-bottom" class="lv-scroll-bottom-btn" type="button" aria-label="Scroll to latest" title="Scroll to latest">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
     </button>
   </div>
 
   <form id="composer" class="lv-composer" autocomplete="off" data-part="composer">
+    <!-- The agent's plan: its current step, opening to the whole list (plan.js).
+         The list sits above the line, so opening it never moves the line. -->
+    <section id="plan" class="lv-plan" aria-label="Plan" data-i18n-aria="plan.label" data-part="todo-panel" hidden>
+      <div id="plan-list" class="lv-plan-body" hidden></div>
+      <button id="plan-toggle" class="lv-plan-line" type="button" aria-expanded="false" aria-controls="plan-list">
+        <span class="lv-plan-mark" aria-hidden="true"></span>
+        <span class="lv-plan-step"></span>
+        <span class="lv-plan-count"></span>
+        <svg class="lv-plan-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>
+      </button>
+    </section>
     <!-- The approvals this chat's subagent tasks wait on, answered here. -->
     <div id="task-approvals" class="lv-task-approvals" aria-label="Task approvals" data-i18n-aria="task.approvals" data-part="task-approvals" hidden></div>
     <!-- Messages queued to send once the running run completes. -->

@@ -1765,6 +1765,16 @@ async def test_decisions_persist_when_a_stage_raises_unexpectedly():
     assert state.cleared == {"c0"}  # the decision survived the crash
     assert state.last_view_estimate is not None  # calibration input too
 
+    # No view went out under that estimate: a count that comes next — say a
+    # fail-open wrapper sent the raw transcript instead, id-less — must not
+    # pair with it (it would read as pre-id state, which pairs unchecked).
+    assert state.last_view_id is not None
+    pipeline.stages = []
+    await pipeline.compact(
+        req(entries, scratch=scratch, last_input_tokens=50 * state.last_view_estimate)
+    )
+    assert CompactionState.load(scratch).ratio == 1.0
+
 
 async def test_warns_when_protected_tail_covers_the_entire_view(caplog):
     """keep_recent_tokens at or above the usable window fences off every

@@ -451,7 +451,10 @@ class Compaction:
             # unexpected raise must still keep what was already decided (and
             # the failure counters).
             state.last_view_estimate = raw + overhead
-            state.last_view_id = None  # no view goes out, so no count pairs
+            # No view goes out under this estimate: an id never handed out,
+            # so no count can pair with it (``None`` would read as pre-id
+            # state, which pairs unchecked).
+            state.last_view_id = secrets.token_hex(8)
             self._save(req, state)
             raise
 

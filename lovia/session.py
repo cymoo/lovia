@@ -59,12 +59,18 @@ class Segment:
 #   plus calibration), round-tripped into the next run's ``context_state`` so a
 #   follow-up run resumes without re-deriving. The same blob the checkpoint
 #   stores; opaque to the loop.
+# * ``calibration_tokens`` — the real input-token count of the run's final
+#   call, the view whose estimate that segment's ``context_state`` carries. The
+#   next run hands it to the policy as ``last_input_tokens``, so a run of single
+#   calls (plain chat) still calibrates. Only read from the segment whose
+#   ``context_state`` is carried, never paired across segments.
 # * ``context_notice`` — a JSON-safe snapshot of the run's last compaction that
 #   the web UI replays when a finished session is reloaded.
 # * ``timing`` — ``{"started_at", "finished_at"}`` in epoch seconds: when the
 #   run first started (a resumed run keeps its original start) and when its
 #   segment was written. Absent on segments from before it was recorded.
 STATE_META_KEY = "context_state"
+CALIBRATION_META_KEY = "calibration_tokens"
 NOTICE_META_KEY = "context_notice"
 TIMING_META_KEY = "timing"
 

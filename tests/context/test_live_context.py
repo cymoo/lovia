@@ -241,8 +241,8 @@ async def test_live_a_model_switch_keeps_each_models_ratio():
     await sess.append("s", _chat_history(40))
     policy = Compaction(context_window=1_000_000)
     try:
-        # Calibration needs two calls in one run (a tool loop): each run's
-        # first call has no real count to pair with yet.
+        # Two calls in one run (a tool loop) calibrate within it: the
+        # session's first run has no predecessor whose count it could carry.
         await Runner.run(
             _agent(model, instructions, tools=[pick_animal]),
             "Which animal?",
@@ -276,6 +276,44 @@ async def test_live_a_model_switch_keeps_each_models_ratio():
         aclose = getattr(real, "aclose", None)
         if callable(aclose):
             await aclose()
+
+
+async def test_live_plain_chat_calibrates_across_runs():
+    """One call per run (#507): each run carries its final call's real count
+    to the next, so the ratio leaves 1.0 and the calibrated estimate of the
+    last view lands close to the endpoint's real count."""
+    from lovia.context import CompactionState
+    from lovia.session import CALIBRATION_META_KEY, STATE_META_KEY
+
+    model = _live_model()
+    sess = InMemorySession()
+    await sess.append("s", _chat_history(40))
+    policy = Compaction(context_window=1_000_000)
+    agent = _agent(model, "Answer in at most five words.")
+    for i in range(5):
+        await Runner.run(
+            agent,
+            f"Name one ocean animal, try #{i}.",
+            context_policy=policy,
+            session=sess,
+            session_id="s",
+        )
+    segments = await sess.segments("s")
+    states = [
+        CompactionState.load(seg.meta[STATE_META_KEY])
+        for seg in segments
+        if seg.meta and STATE_META_KEY in seg.meta
+    ]
+    ratios = [s.ratio for s in states]
+    assert ratios[0] == 1.0 and ratios[-1] != 1.0, ratios
+    last = segments[-1].meta or {}
+    real = last[CALIBRATION_META_KEY]
+    estimate = states[-1].last_view_estimate
+    assert estimate is not None
+    # Calibrated estimate vs the endpoint's real count of the same view.
+    error = abs(int(estimate * states[-1].ratio) - real) / real
+    print(f"ratios {[round(r, 3) for r in ratios]}; final error {error:.1%}")
+    assert error < abs(estimate - real) / real  # calibration helped
 
 
 async def test_live_summarizer_learns_a_smaller_folding_window():

@@ -328,6 +328,116 @@ async def test_a_call_without_a_token_count_gives_calibration_nothing() -> None:
     assert result.last_input_tokens == 40
 
 
+class _CarryingPolicy:
+    """Records what it is handed; keeps a carried state so segments get one."""
+
+    def __init__(self) -> None:
+        self.seen: list[int | None] = []
+
+    async def compact(self, req: CompactionRequest) -> ContextResult:
+        self.seen.append(req.last_input_tokens)
+        req.scratch["calls"] = req.scratch.get("calls", 0) + 1
+        return ContextResult(entries=list(req.entries))
+
+
+def _counted(reply: str, tokens: int) -> AssistantTurn:
+    turn = text(reply)
+    turn.usage = Usage(input_tokens=tokens, output_tokens=1)
+    return turn
+
+
+async def test_a_new_run_calibrates_against_the_previous_runs_final_call() -> None:
+    """Plain chat — one call per run — still feeds calibration: the next run's
+    first compaction gets the final call's count from the segment."""
+    policy = _CarryingPolicy()
+    session = InMemorySession()
+    agent = Agent(
+        name="t", model=ScriptedProvider([_counted("a", 120), _counted("b", 180)])
+    )
+    for prompt in ("one", "two"):
+        await Runner.run(
+            agent, prompt, context_policy=policy, session=session, session_id="s"
+        )
+    assert policy.seen == [None, 120]
+
+
+async def test_the_carried_count_comes_from_the_segment_whose_state_is_carried() -> (
+    None
+):
+    """Each count pairs with its own segment's estimate: a later segment
+    without carried state contributes neither, even if it holds a count."""
+    policy = _CarryingPolicy()
+    session = InMemorySession()
+    agent = Agent(
+        name="t", model=ScriptedProvider([_counted("a", 120), _counted("b", 1)])
+    )
+    await Runner.run(
+        agent, "one", context_policy=policy, session=session, session_id="s"
+    )
+    await session.append(
+        "s",
+        [InputEntry(role="user", content="appended")],
+        meta={"calibration_tokens": 999},
+    )
+    await Runner.run(
+        agent, "two", context_policy=policy, session=session, session_id="s"
+    )
+    assert policy.seen == [None, 120]
+
+
+async def test_a_final_call_without_a_count_carries_none() -> None:
+    policy = _CarryingPolicy()
+    session = InMemorySession()
+    agent = Agent(
+        name="t", model=ScriptedProvider([_counted("a", 0), _counted("b", 1)])
+    )
+    for prompt in ("one", "two"):
+        await Runner.run(
+            agent, prompt, context_policy=policy, session=session, session_id="s"
+        )
+    assert policy.seen == [None, None]
+    segments = await session.segments("s")
+    assert "calibration_tokens" not in (segments[0].meta or {})
+
+
+async def test_single_call_runs_move_the_default_policys_ratio() -> None:
+    """End to end with the real ``Compaction``: chat turns that over-count
+    (real 30 tokens per call, far under bytes/4) pull the ratio below 1.0."""
+    from lovia.context import Compaction, CompactionState
+
+    session = InMemorySession()
+    agent = Agent(
+        name="t",
+        instructions="x" * 2000,
+        model=ScriptedProvider([_counted("a", 30), _counted("b", 30)]),
+    )
+    policy = Compaction(context_window=128_000)
+    for prompt in ("one", "two"):
+        await Runner.run(
+            agent, prompt, context_policy=policy, session=session, session_id="s"
+        )
+    first, second = await session.segments("s")
+    assert (first.meta or {})["calibration_tokens"] == 30
+    assert CompactionState.load(first.meta["context_state"]).ratio == 1.0
+    assert CompactionState.load(second.meta["context_state"]).ratio < 1.0
+
+
+@pytest.mark.parametrize("stored", ["120", True, -5, 0, 1.5])
+async def test_a_malformed_carried_count_is_ignored(stored: object) -> None:
+    policy = _CarryingPolicy()
+    session = InMemorySession()
+    await session.append(
+        "s",
+        [InputEntry(role="user", content="earlier")],
+        meta={"context_state": {"calls": 1}, "calibration_tokens": stored},
+    )
+    agent = Agent(name="t", model=ScriptedProvider([_counted("a", 1)]))
+    await Runner.run(
+        agent, "two", context_policy=policy, session=session, session_id="s"
+    )
+    assert policy.seen == [None]
+
+
 async def test_policy_usage_counts_against_the_budget_before_the_model_call() -> None:
     provider = ScriptedProvider([text("done")])
     agent = Agent(name="t", model=provider)

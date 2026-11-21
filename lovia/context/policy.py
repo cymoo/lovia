@@ -44,9 +44,12 @@ class CompactionRequest:
     can dwarf a small transcript."""
 
     last_input_tokens: int | None = None
-    """Last observed provider input-token count. Lags the current transcript
-    by one call; the default pipeline uses it to *calibrate* its estimates
-    rather than trusting it directly."""
+    """The previous call's real provider input-token count — the call that
+    sent the view this policy returned last time (on a run's first call, the
+    previous run's final call, carried in the session). ``None`` when that
+    call reported none or nothing pairs (a resumed run, an overflow retry).
+    Lags the current transcript by one call; the default pipeline uses it to
+    *calibrate* its estimates rather than trusting it directly."""
 
     overflow: bool = False
     """``True`` when the provider already raised

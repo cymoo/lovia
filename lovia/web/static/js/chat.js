@@ -2673,7 +2673,9 @@ function renderHistoryWindow({ stickBottom }) {
   /** @type {Set<string>} */
   const planCalls = new Set();
   let plan = [];
+  let lastTurn = false; // the plan came after the last user message
   for (const it of entries) {
+    if (it.role === 'user') lastTurn = false;
     for (const call of (it.role === 'assistant' && it.tool_calls) || []) {
       const result = pendingResults.get(call.id);
       if (!isPlanCall(call, result)) continue;
@@ -2682,9 +2684,10 @@ function renderHistoryWindow({ stickBottom }) {
       if (!items || !result || result.isError) continue;
       notePlan(call.id, items);
       plan = items;
+      lastTurn = true;
     }
   }
-  showPlan(plan, { update: false });
+  showPlan(plan, { update: false, lastTurn });
 
   // Absolute user-turn numbering spans the FULL history — the rendered
   // window may start mid-transcript.

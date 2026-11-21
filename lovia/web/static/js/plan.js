@@ -199,10 +199,13 @@ const MARK = {
 
 /**
  * The list, each item with its status mark; `changed` items are marked too.
+ * `idle`: no run is at it, so the step in progress reads as its task, as the
+ * plan line says it.
  * @param {PlanItem[]} items
  * @param {Set<number>} [changed]
+ * @param {{ idle?: boolean }} [opts]
  */
-export function planList(items, changed = new Set()) {
+export function planList(items, changed = new Set(), { idle = false } = {}) {
   const ul = document.createElement('ul');
   ul.className = 'lv-plan-list';
   items.forEach((item, i) => {
@@ -214,7 +217,7 @@ export function planList(items, changed = new Set()) {
     mark.innerHTML = MARK[item.status]();
     const text = document.createElement('span');
     text.className = 'lv-plan-text';
-    text.textContent = planLabel(item);
+    text.textContent = idle ? item.content : planLabel(item);
     li.append(mark, text);
     ul.append(li);
   });
@@ -262,13 +265,15 @@ function readOpen() {
 /**
  * Show `items` as the chat's current plan (an empty list hides the line).
  * @param {PlanItem[]} items
- * @param {{ update?: boolean }} [opts] `update`: an update that just landed —
- *   false for a plan read back from history, which is no news.
+ * @param {{ update?: boolean, lastTurn?: boolean }} [opts] `update`: an update
+ *   that just landed — false for a plan read back from history, which is no
+ *   news. `lastTurn`: read back, it came after the last user message, so a run
+ *   still going (a reconnect) is the one that wrote it.
  */
-export function showPlan(items, { update = true } = {}) {
+export function showPlan(items, { update = true, lastTurn = false } = {}) {
   plan.items = items;
   const step = currentStep(items);
-  plan.finished = update && plan.live && items.length > 0 && !step;
+  plan.finished = (update || lastTurn) && plan.live && items.length > 0 && !step;
   // Say a new step out loud as a run works through the plan — not when a
   // chat opens on one (the line itself is no live region: a run starting or
   // ending rewords it without the plan changing).
@@ -314,7 +319,7 @@ function drawPlan() {
   root.classList.toggle('lv-idle', !live);
   root.classList.toggle('lv-done', !step);
   const done = items.filter((item) => item.status === 'completed').length;
-  const status = !step ? 'completed' : live && !step.next ? 'in_progress' : 'pending';
+  const status = !step ? 'completed' : step.next ? 'pending' : 'in_progress';
   /** @type {HTMLElement} */ (line.querySelector('.lv-plan-mark')).innerHTML = MARK[status]();
   // The present-tense form only while a run is at it: an idle plan's step
   // reads as the task it is.
@@ -329,7 +334,7 @@ function drawPlan() {
   line.setAttribute('aria-expanded', String(plan.open));
   line.title = plan.open ? t('plan.hide') : t('plan.show');
   body.hidden = !plan.open;
-  body.replaceChildren(planList(items));
+  body.replaceChildren(planList(items, new Set(), { idle: !live }));
   const now = /** @type {HTMLElement | null} */ (body.querySelector('.lv-in_progress'));
   if (plan.open && now) {
     // A long list scrolls itself (never the page) to the step in progress.

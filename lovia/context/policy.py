@@ -52,13 +52,6 @@ class CompactionRequest:
     pipeline uses it to *calibrate* its estimates rather than trusting it
     directly."""
 
-    last_view_id: str | None = None
-    """:attr:`ContextResult.view_id` of the view :attr:`last_input_tokens`
-    measured, or ``None`` when that view had none. A policy that keeps an
-    estimate per view pairs the count with it only when this matches the id
-    it stored: a session can switch policies between runs, so the count may
-    measure a view some other policy built."""
-
     overflow: bool = False
     """``True`` when the provider already raised
     :class:`~lovia.ContextOverflowError`; compact more aggressively."""
@@ -83,6 +76,14 @@ class CompactionRequest:
     the runner folds it into the run's usage and budget when ``compact``
     returns — or raises — without touching the calibration it keeps for the
     main call."""
+
+    last_view_id: str | None = None
+    """:attr:`ContextResult.view_id` of the view :attr:`last_input_tokens`
+    measured, or ``None`` when that view had none. A policy that keeps an
+    estimate per view pairs the count with it only when this matches the id
+    it stored: a session can switch policies between runs, so the count may
+    measure a view some other policy built. Pass it on when rebuilding a
+    request — without it the default pipeline skips the sample."""
 
 
 @dataclass

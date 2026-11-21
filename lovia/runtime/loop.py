@@ -1015,8 +1015,11 @@ class RunLoop:
         finally:
             state.run_ctx.usage.add(request.usage)
             request.usage = Usage()
-        # The view the next recorded count will measure.
-        state.calibration_view = result.view_id
+        # The view the next recorded count will measure. A non-str id (a type
+        # slip in a custom policy) is dropped: it would not survive the
+        # session store, and a lost sample is the safe failure.
+        view_id = result.view_id
+        state.calibration_view = view_id if isinstance(view_id, str) else None
         if self.budget is not None:
             self.budget.check(state.run_ctx.usage)
         return result

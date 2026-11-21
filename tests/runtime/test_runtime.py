@@ -441,6 +441,27 @@ async def test_a_final_view_without_an_id_carries_no_count(between: str) -> None
     assert policy.seen == [(None, None), (None, None)]
 
 
+async def test_a_non_str_view_id_is_dropped_not_stored(tmp_path) -> None:
+    """A custom policy's type slip (a ``uuid.UUID`` id) must not reach the
+    session store, where it would fail to serialize and lose the turn."""
+    import uuid
+
+    from lovia.stores import SQLiteSession
+
+    class UuidIds:
+        async def compact(self, req: CompactionRequest) -> ContextResult:
+            req.scratch["x"] = 1
+            return ContextResult(entries=list(req.entries), view_id=uuid.uuid4())  # type: ignore[arg-type]  # the slip under test
+
+    session = SQLiteSession(tmp_path / "s.db")
+    agent = Agent(name="t", model=ScriptedProvider([_counted("a", 5)]))
+    await Runner.run(
+        agent, "one", context_policy=UuidIds(), session=session, session_id="s"
+    )
+    (segment,) = await session.segments("s")
+    assert "calibration" not in (segment.meta or {})
+
+
 async def test_a_final_call_without_a_count_carries_none() -> None:
     policy = _CarryingPolicy()
     session = InMemorySession()

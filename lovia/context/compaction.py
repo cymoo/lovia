@@ -499,10 +499,13 @@ class Compaction:
         """
         if not req.last_input_tokens or not state.last_view_estimate:
             return
-        if req.last_view_id is not None and req.last_view_id != state.last_view_id:
-            # The count measured a view this state didn't estimate: another
-            # policy's, after a switch between runs on the session. (No id at
-            # all is a caller that tracks none — trusted, as before ids.)
+        if req.last_view_id != state.last_view_id:
+            # The count measured a view this estimate doesn't describe —
+            # another policy's, after a switch between runs on the session —
+            # or its id was lost on the way (a wrapper rebuilding the
+            # request). A skipped sample is cheap; a wrong one can peg the
+            # ratio. Only state from before ids (no id on either side) pairs
+            # unchecked.
             logger.debug("context.calibrate: count is for another view; skipped")
             return
         observed = req.last_input_tokens / max(1, state.last_view_estimate)

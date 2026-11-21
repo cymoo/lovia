@@ -257,6 +257,7 @@ async def run_scenario(
     out = ScenarioResult(scn=scn, window=window, reserve=reserve, usable=usable)
     scratch: dict = {}
     prev_real: int | None = None
+    prev_view: str | None = None
     prev_est_raw: int | None = None
 
     for turn in range(n_turns):
@@ -268,8 +269,10 @@ async def run_scenario(
             tools=(),
             last_input_tokens=prev_real,
             scratch=scratch,
+            last_view_id=prev_view,
         )
         result = await policy.compact(req)
+        prev_view = result.view_id
         if result.compacted:
             out.compacted_any = True  # a stage fired: window mis-sized, note it
 

@@ -5910,8 +5910,17 @@ body.lv-files-resizing {
 .lv-plan:not(.lv-idle):not(.lv-done) .lv-plan-line .lv-plan-mark svg {
   color: var(--lv-accent);
 }
-.lv-plan:not(.lv-idle):not(.lv-done) .lv-plan-line .lv-plan-mark svg {
+/* The step a run is working on turns, in the line and its open list alike;
+   a reply's snapshot of the plan draws it as a still dot (plan.js). */
+.lv-plan:not(.lv-idle):not(.lv-done) .lv-plan-line .lv-plan-mark svg,
+.lv-plan-list.lv-live .lv-plan-item.lv-in_progress .lv-plan-mark svg {
   animation: lv-spin 1.2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lv-plan-line .lv-plan-mark svg,
+  .lv-plan-list .lv-plan-mark svg {
+    animation: none;
+  }
 }
 .lv-plan-item.lv-completed .lv-plan-mark,
 .lv-plan.lv-done .lv-plan-line .lv-plan-mark {
@@ -5921,10 +5930,6 @@ body.lv-files-resizing {
   color: var(--lv-muted-2);
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--lv-muted-2) 55%, transparent);
-}
-/* In a plan row: what this update changed. */
-.lv-plan-item.lv-changed {
-  background: var(--lv-surface-2);
 }
 
 /* A plan row's body is the list: the raw arguments and the plugin's text

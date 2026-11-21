@@ -67,7 +67,8 @@ Host applications can observe `ToolCallCompleted` events where
 The bundled Web UI shows the current step on a line above the input, which
 opens to the whole list; it stays while the list has unfinished items (muted
 when no run is going). Each update is also a row among the reply's steps:
-its line says what changed, and opened it shows the list as of that update.
+its line says where the plan stands after it (progress and the step at hand),
+and opened it shows the list as of that update.
 
 ## Sharp edges
 

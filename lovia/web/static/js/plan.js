@@ -5,11 +5,14 @@
 //   when no run is going), and while a run finishes one; a finished plan goes
 //   once the run ends. It never sits over the conversation.
 // - A row in the reply for each update, folded with the other steps: its line
-//   says what changed; opened, it shows the whole list as of that update.
+//   says where the plan stands after it; opened, it shows the whole list.
 //
-// Rows diff against the plan before them, so chat.js notes each successful
-// update here in transcript order (live and replay alike). Noting is also
-// what makes a call a plan row: by its outcome, never by its tool's name.
+// Rows say the plan's state, not what changed since the last one: the list
+// has no ids, so a diff could only guess which item became which (models
+// reword, reorder, and write statuses into the text), and a guess misleads.
+//
+// chat.js marks each plan update's card here (live and replay alike): by its
+// outcome, never by its tool's name.
 
 import { relabelStep } from './activity.js';
 import { t } from './i18n.js';
@@ -66,62 +69,8 @@ export function planLabel(item) {
 }
 
 /**
- * What one update changed. Items have no ids (each update replaces the whole
- * list), so they match by text — in order, one for one, as two items may
- * share a text.
- * @param {PlanItem[] | null} prev
- * @param {PlanItem[]} next
- * @returns {{ done: PlanItem[], started: PlanItem[], added: number, removed: number,
- *   changed: Set<number> }} `changed`: indexes into `next` of new items and
- *   items whose status moved; empty for a first plan.
- */
-export function planDiff(prev, next) {
-  /** @type {Map<string, string[]>} each text's statuses, still unmatched */
-  const was = new Map();
-  for (const item of prev ?? []) {
-    const queue = was.get(item.content);
-    if (queue) queue.push(item.status);
-    else was.set(item.content, [item.status]);
-  }
-  const out = { done: [], started: [], added: 0, removed: 0, changed: new Set() };
-  next.forEach((item, i) => {
-    const before = was.get(item.content)?.shift();
-    if (before === undefined) out.added += 1;
-    if (before === item.status) return;
-    if (prev) out.changed.add(i);
-    if (item.status === 'completed' && before !== undefined) out.done.push(item);
-    if (item.status === 'in_progress') out.started.push(item);
-  });
-  for (const queue of was.values()) out.removed += queue.length;
-  if (!prev) out.added = 0; // a first plan adds nothing: it is the plan
-  return /** @type {any} */ (out);
-}
-
-/**
- * The line of an update's row: progress, then what changed.
- * @param {PlanItem[] | null} prev The plan before it (null: there was none).
- * @param {PlanItem[]} next
- * @returns {string}
- */
-export function planSummary(prev, next) {
-  if (!next.length) return t('plan.cleared');
-  const done = next.filter((item) => item.status === 'completed').length;
-  const count = `${done}/${next.length}`;
-  if (!prev?.length) return `${count} · ${t('plan.created')}`;
-  const d = planDiff(prev, next);
-  const parts = [];
-  if (d.done.length === 1) parts.push(t('plan.doneOne', { text: d.done[0].content }));
-  else if (d.done.length > 1) parts.push(t('plan.doneMany', { n: d.done.length }));
-  if (d.started.length) parts.push(t('plan.now', { text: planLabel(d.started[0]) }));
-  if (d.added) parts.push(t('plan.added', { n: d.added }));
-  if (d.removed) parts.push(t('plan.removed', { n: d.removed }));
-  if (!parts.length) parts.push(t('plan.revised'));
-  return [count, ...parts].join(' · ');
-}
-
-/**
- * The step the plan line names: the one in progress, else the next pending
- * one, else none (all done).
+ * The step the plan names: the one in progress, else the next pending one,
+ * else none (all done).
  * @param {PlanItem[]} items
  * @returns {{ item: PlanItem, next: boolean } | null}
  */
@@ -130,6 +79,25 @@ export function currentStep(items) {
   if (now) return { item: now, next: false };
   const next = items.find((item) => item.status === 'pending');
   return next ? { item: next, next: true } : null;
+}
+
+/**
+ * The line of an update's row: the plan as it stands after it — progress and
+ * the step at hand ("Plan 1/3 · Now “Running task two”").
+ * @param {PlanItem[]} items
+ * @returns {string}
+ */
+export function planSummary(items) {
+  if (!items.length) return t('plan.cleared');
+  const done = items.filter((item) => item.status === 'completed').length;
+  const head = `${t('plan.label')} ${done}/${items.length}`;
+  const step = currentStep(items);
+  const where = !step
+    ? t('plan.rowDone')
+    : step.next
+      ? t('plan.next', { text: step.item.content })
+      : t('plan.now', { text: planLabel(step.item) });
+  return `${head} · ${where}`;
 }
 
 /**
@@ -165,67 +133,39 @@ export function isPlanOutput(text, items) {
   return full.startsWith(text.slice(0, cut.index)) && full.endsWith(text.slice(cut.index + cut[0].length));
 }
 
-// ---- The chat's plan history: each update's predecessor --------------------
+// ---- Plan rows ---------------------------------------------------------------
 
-// Keyed by tool card (tools.js toolKey), not call id: a provider may reuse ids.
-/** @type {Map<number, PlanItem[] | null>} */
-const before = new Map();
-/** @type {PlanItem[] | null} */
-let latest = null;
-
-/**
- * Record a successful update as it lands. A failed one never changed the
- * plan, so it is never noted. Without a card (none drawn), only the plan.
- * @param {number | undefined} key The update's tool card.
- * @param {PlanItem[]} items
- */
-export function notePlan(key, items) {
-  if (key !== undefined && !before.has(key)) before.set(key, latest);
-  latest = items;
-}
+// The chat's plan-update cards, by tool card (tools.js toolKey), not call id:
+// a provider may reuse ids, and another call of the same tool is no update.
+/** @type {Set<number>} */
+const rows = new Set();
 
 /**
- * Record a replayed update's card with the plan it replaced (the replay
- * worked that out over the whole history; the current plan is resetPlans').
- * @param {number | undefined} key
- * @param {PlanItem[] | null} prev
- */
-export function placePlan(key, prev) {
-  if (key !== undefined) before.set(key, prev);
-}
-
-/**
- * The plan the update on card `key` replaced; null for a first plan.
+ * Mark the card `key` as a successful plan update — before it settles, so its
+ * line reads as one at once. A failed update never changed the plan.
  * @param {number | undefined} key
  */
-export function planBefore(key) {
-  return (key !== undefined && before.get(key)) || null;
+export function markPlanRow(key) {
+  if (key !== undefined) rows.add(key);
 }
 
-/**
- * Forget the chat's plan rows (another chat opened, or the chat redrawn).
- * @param {PlanItem[] | null} [current] The plan as of the redraw.
- */
-export function resetPlans(current = null) {
-  before.clear();
-  latest = current;
+/** Forget the chat's plan rows (another chat opened, or the chat redrawn). */
+export function resetPlans() {
+  rows.clear();
 }
-
-// ---- The row view ----------------------------------------------------------
 
 /** @type {import('./tool-views.js').ToolView['summary']} */
 function rowSummary(tool) {
-  // Only a noted update: another call of the same tool keeps its own line.
-  if (!before.has(tool.key)) return null;
+  if (!rows.has(tool.key)) return null;
   const items = parsePlan(tool.args);
-  return items && planSummary(planBefore(tool.key), items);
+  return items && planSummary(items);
 }
 
 /** @type {Set<string>} tools whose default view already reads plan updates */
 const layered = new Set();
 
 /**
- * Let calls of tool `name` read as plan updates — the ones noted as such
+ * Let calls of tool `name` read as plan updates — the ones marked as such
  * (chat.js calls it for each tool it has seen land one). Layered over the
  * tool's own default view, which every other call of it keeps: a plan tool
  * may share its name with a built-in one (`start_session` keeps its card).
@@ -247,51 +187,52 @@ export function usePlanView(name) {
 
 const MARK = {
   completed: () => icon('check', { size: 13 }),
-  in_progress: () => icon('loader-circle', { size: 13 }),
+  in_progress: () => icon('loader-circle', { size: 13 }), // spun by CSS while live
   pending: () => '', // its ring is drawn in CSS
 };
 
 /**
- * The list, each item with its status mark; `changed` items are marked too.
- * `idle`: no run is at it, so the step in progress reads as its task, as the
- * plan line says it.
+ * The list, each item with its status mark. `mode` says what it shows:
+ * - `live`: the plan a run is working through — the step in progress spins,
+ *   as the plan line's does;
+ * - `idle`: the plan with no run at it — that step waits like the line says
+ *   (the ring, its task's words), still the current one (lv-current);
+ * - `snapshot`: the plan as of one update in a reply — that step was the
+ *   current one then, so a still dot, not a spinner frozen mid-turn.
  * @param {PlanItem[]} items
- * @param {Set<number>} [changed]
- * @param {{ idle?: boolean }} [opts]
+ * @param {'live' | 'idle' | 'snapshot'} [mode]
  */
-export function planList(items, changed = new Set(), { idle = false } = {}) {
+export function planList(items, mode = 'snapshot') {
   const ul = document.createElement('ul');
-  ul.className = 'lv-plan-list';
-  items.forEach((item, i) => {
-    // Idle, the step in progress waits like the line says: the ring, not a
-    // spinner nobody turns — still the current one (lv-current).
-    const waiting = idle && item.status === 'in_progress';
-    const status = waiting ? 'pending' : item.status;
+  ul.className = `lv-plan-list lv-${mode}`;
+  const idle = mode === 'idle';
+  for (const item of items) {
+    const current = item.status === 'in_progress';
+    const status = idle && current ? 'pending' : item.status;
     const li = document.createElement('li');
     li.className = `lv-plan-item lv-${status}`;
-    if (waiting) li.classList.add('lv-current');
-    if (changed.has(i)) li.classList.add('lv-changed');
+    if (idle && current) li.classList.add('lv-current');
     const mark = document.createElement('span');
     mark.className = 'lv-plan-mark';
-    mark.innerHTML = MARK[status]();
+    mark.innerHTML =
+      mode === 'snapshot' && current ? icon('circle-dot', { size: 13 }) : MARK[status]();
     const text = document.createElement('span');
     text.className = 'lv-plan-text';
     text.textContent = idle ? item.content : planLabel(item);
     li.append(mark, text);
     ul.append(li);
-  });
+  }
   return ul;
 }
 
 /**
- * Draw a settled update's row body: the whole list as of that update, with
- * what it changed marked — and label the row "Plan" in its activity digest,
- * whatever its tool is called. Idempotent.
+ * Draw a settled update's row body — the whole list as of that update — and
+ * label the row "Plan" in its activity digest, whatever its tool is called.
+ * Idempotent.
  * @param {HTMLElement} node The tool card.
- * @param {number | undefined} key Its toolKey.
  * @param {PlanItem[]} items
  */
-export function fillPlanRow(node, key, items) {
+export function fillPlanRow(node, items) {
   node.classList.add('lv-tool--plan');
   node.dataset.label = t('toolview.plan');
   relabelStep(node);
@@ -300,10 +241,10 @@ export function fillPlanRow(node, key, items) {
   box.querySelector(':scope > .lv-plan-list')?.remove();
   // A cleared plan has no list: its result text says so (styles.css shows
   // the text unless a list stands in for it).
-  if (!items.length) return;
-  const prev = planBefore(key);
-  box.append(planList(items, prev ? planDiff(prev, items).changed : new Set()));
+  if (items.length) box.append(planList(items, 'snapshot'));
 }
+
+// ---- The plan line -----------------------------------------------------------
 
 const OPEN_KEY = 'lovia.plan.open';
 const plan = {
@@ -405,7 +346,7 @@ function drawPlan() {
   line.setAttribute('aria-expanded', String(plan.open));
   line.title = plan.open ? t('plan.hide') : t('plan.show');
   body.hidden = !plan.open;
-  body.replaceChildren(planList(items, new Set(), { idle: !live }));
+  body.replaceChildren(planList(items, live ? 'live' : 'idle'));
   const now = /** @type {HTMLElement | null} */ (body.querySelector('.lv-in_progress, .lv-current'));
   if (plan.open && now) {
     // A long list scrolls itself (never the page) to the step in progress.

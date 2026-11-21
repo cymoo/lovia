@@ -65,25 +65,96 @@ export function planLabel(item) {
   return item.status === 'in_progress' && item.active_form ? item.active_form : item.content;
 }
 
+/** @param {string} text What an item says, minus what models reword: bracketed asides
+ *  (often the status: "Task two (in progress)"), punctuation, space, case. */
+function core(text) {
+  return text
+    .toLowerCase()
+    .replace(/[(（[【][^)）\]】]*[)）\]】]/g, '')
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+/**
+ * Whether two item texts read as one task reworded: the same core, one core
+ * inside the other, or most of their character pairs shared. Works the same
+ * for CJK and Latin text.
+ * @param {string} a
+ * @param {string} b
+ */
+export function similarText(a, b) {
+  const x = core(a);
+  const y = core(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  if (short.length >= 4 && long.includes(short)) return true;
+  if (short.length < 2) return false;
+  /** @type {Map<string, number>} */
+  const pairs = new Map();
+  for (let i = 0; i < x.length - 1; i++) {
+    const g = x.slice(i, i + 2);
+    pairs.set(g, (pairs.get(g) ?? 0) + 1);
+  }
+  let shared = 0;
+  for (let i = 0; i < y.length - 1; i++) {
+    const g = y.slice(i, i + 2);
+    const n = pairs.get(g) ?? 0;
+    if (n) {
+      shared += 1;
+      pairs.set(g, n - 1);
+    }
+  }
+  return (2 * shared) / (x.length + y.length - 2) >= 0.6;
+}
+
+/**
+ * Which item of `prev` each item of `next` is. Items have no ids (each update
+ * replaces the whole list): the same text first — in order, one for one, as
+ * two items may share a text — then a similar one (similarText), as a
+ * model rewording an item (often to say its status) still moved that item.
+ * An item with no such match is new; one left in `prev` was removed.
+ * @param {PlanItem[]} prev
+ * @param {PlanItem[]} next
+ * @returns {(number | undefined)[]} each next item's index in `prev`
+ */
+function matchItems(prev, next) {
+  /** @type {Map<string, number[]>} each text's prev indexes, still unmatched */
+  const byText = new Map();
+  prev.forEach((item, j) => {
+    const queue = byText.get(item.content);
+    if (queue) queue.push(j);
+    else byText.set(item.content, [j]);
+  });
+  const match = next.map((item) => byText.get(item.content)?.shift());
+  const free = new Set(prev.map((_, j) => j).filter((j) => !match.includes(j)));
+  next.forEach((item, i) => {
+    if (match[i] !== undefined) return;
+    for (const j of free) {
+      if (similarText(prev[j].content, item.content)) {
+        match[i] = j;
+        free.delete(j);
+        return;
+      }
+    }
+  });
+  return match;
+}
+
 /**
  * Whether `next` starts a plan of its own rather than revising `prev`: there
- * was none, or it was all done and `next` keeps none of its items.
+ * was none, or it was all done and `next` keeps none of its items (matched
+ * as planDiff matches them).
  * @param {PlanItem[] | null} prev
  * @param {PlanItem[]} next
  */
 export function isFreshPlan(prev, next) {
   if (!prev?.length) return true;
   if (!prev.every((item) => item.status === 'completed')) return false;
-  const texts = new Set(prev.map((item) => item.content));
-  return !next.some((item) => texts.has(item.content));
+  return matchItems(prev, next).every((j) => j === undefined);
 }
 
 /**
- * What one update changed. Items have no ids (each update replaces the whole
- * list), so they match by text first — in order, one for one, as two items may
- * share a text — then what is left pairs up by order: a model that reworded
- * an item (often to say its status) still moved that item, not swapped it
- * for a new one. Only a change in count is an addition or a removal.
+ * What one update changed (items matched as matchItems says).
  * @param {PlanItem[] | null} prev
  * @param {PlanItem[]} next
  * @returns {{ done: PlanItem[], started: PlanItem[], added: number, removed: number,
@@ -94,30 +165,16 @@ export function planDiff(prev, next) {
   const out = { done: [], started: [], added: 0, removed: 0, changed: new Set() };
   if (isFreshPlan(prev, next)) return /** @type {any} */ (out);
   const old = /** @type {PlanItem[]} */ (prev);
-  /** @type {Map<string, number[]>} each text's prev indexes, still unmatched */
-  const byText = new Map();
-  old.forEach((item, j) => {
-    const queue = byText.get(item.content);
-    if (queue) queue.push(j);
-    else byText.set(item.content, [j]);
-  });
-  /** @type {(number | undefined)[]} each next item's prev index */
-  const match = next.map((item) => byText.get(item.content)?.shift());
-  const used = new Set(match);
-  const leftOld = old.map((_, j) => j).filter((j) => !used.has(j));
-  next.forEach((_, i) => {
-    if (match[i] === undefined) match[i] = leftOld.shift();
-  });
-  out.removed = leftOld.length;
+  const match = matchItems(old, next);
+  out.removed = old.length - match.filter((j) => j !== undefined).length;
   next.forEach((item, i) => {
     const j = match[i];
     const before = j === undefined ? undefined : old[j];
     if (!before) out.added += 1;
     if (before?.status === item.status && before.content === item.content) return;
     out.changed.add(i);
-    // Order pairing is a guess where an item came in beside a reworded one;
-    // the step in progress is what the line must not lose, so any in
-    // progress that isn't exactly as before is named ("Now").
+    // The step in progress is what the line must not lose: named whenever it
+    // isn't exactly as before, a reworded one included.
     if (item.status === 'in_progress') out.started.push(item);
     if (before?.status === item.status) return; // reworded only
     if (item.status === 'completed' && before) out.done.push(item);

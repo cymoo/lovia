@@ -14,6 +14,7 @@ import {
   parsePlan,
   planBefore,
   planDiff,
+  similarText,
   planSummary,
   planText,
   resetPlans,
@@ -56,9 +57,41 @@ test('a new plan after a finished one reads as made, not swapped', () => {
   assert.deepEqual([...planDiff(old, items('~..')).changed], []);
   // Extending a finished plan keeps its items: a revision.
   assert.equal(planSummary(items('xx'), items('xx~')), '2/3 · Now “c” · 1 added');
-  // An unfinished plan is always revised, whatever its new words (its step in
-  // progress named, as it reads differently now).
-  assert.equal(planSummary(items('x~', 'ab'), items('x~', 'cd')), '1/2 · Now “d”');
+  // …even when the extension rewords them (matched as planDiff matches).
+  const done = (c) => ({ content: c, status: 'completed', active_form: null });
+  const reworded = [done('Review diff (done)'), done('Run tests (done)'),
+    { content: 'Deploy', status: 'pending', active_form: null }];
+  assert.equal(planSummary([done('Review diff'), done('Run tests')], reworded), '2/3 · 1 added');
+  assert.ok(planDiff([done('Review diff'), done('Run tests')], reworded).changed.has(2));
+  // An unfinished plan is always revised, unrelated words and all.
+  assert.equal(
+    planSummary(items('x~', 'ab'), items('x~', 'cd')),
+    '1/2 · Now “d” · 2 added · 2 removed',
+  );
+});
+
+test('a step replaced by an unrelated one is added and removed, not moved', () => {
+  const prev = [
+    { content: 'Draft API', status: 'in_progress', active_form: null },
+    { content: 'Publish docs', status: 'pending', active_form: null },
+  ];
+  const next = [
+    { content: 'Add audit logs', status: 'completed', active_form: null },
+    { content: 'Publish docs', status: 'in_progress', active_form: null },
+  ];
+  assert.equal(planSummary(prev, next), '1/2 · Now “Publish docs” · 1 added · 1 removed');
+});
+
+test('similar texts: the same task reworded, in any script', () => {
+  assert.ok(similarText('任务二（待处理）', '任务二（进行中）'));
+  assert.ok(similarText('Task two (pending)', 'Task two (in_progress)'));
+  assert.ok(similarText('Review diff', 'Review diff (done)'));
+  assert.ok(similarText('Run tests', 'Run tests and fix failures'));
+  assert.ok(similarText('Write the migration script', 'Write migration script'));
+  assert.ok(!similarText('任务二', '任务三'));
+  assert.ok(!similarText('Task two', 'Task three'));
+  assert.ok(!similarText('Draft API', 'Add audit logs'));
+  assert.ok(!similarText('b', 'b2'));
 });
 
 test('a reworded item is the same item: its status moved, nothing swapped', () => {
@@ -76,16 +109,17 @@ test('a reworded item is the same item: its status moved, nothing swapped', () =
   );
   assert.deepEqual([...planDiff(prev, next).changed], [0, 1]);
   // A reword alone marks the item but reports no status change…
-  const renamed = [prev[0], prev[1], { ...prev[2], content: 'Task 3' }];
+  const renamed = [prev[0], prev[1], { ...prev[2], content: 'Task three, carefully' }];
   assert.equal(planSummary(prev, renamed), '0/3 · Revised the plan');
   assert.deepEqual([...planDiff(prev, renamed).changed], [2]);
-  // …except the step in progress, which is always named when not as before:
-  // a step inserted beside a reworded one may take its pair, and "Now" must
-  // not go missing.
+  // …except the step in progress, which is always named when not as before.
+  const reworded = [{ ...prev[0], content: 'Task one (now)' }, prev[1], prev[2]];
+  assert.equal(planSummary(prev, reworded), '0/3 · Now “Task one (now)”');
+  // A step inserted beside a reworded one doesn't take its place.
   const p = items('x~.', 'abc');
   const n = [p[0], { content: 'inv', status: 'in_progress', active_form: null },
     { content: 'b2', status: 'pending', active_form: null }, p[2]];
-  assert.equal(planSummary(p, n), '1/4 · Now “inv” · 1 added');
+  assert.equal(planSummary(p, n), '1/4 · Now “inv” · 2 added · 1 removed');
 });
 
 test('items sharing a text match one for one', () => {

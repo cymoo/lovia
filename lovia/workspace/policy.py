@@ -537,28 +537,45 @@ def _strip_wrappers(lexed: list[str]) -> tuple[list[str], list[str]]:
 
 # Run what follows as another user. Not thin wrappers: `sudo` is a command a
 # rule names on its own (``IRREVERSIBLE``); only the baseline looks through.
-_ELEVATORS = frozenset({"sudo", "doas"})
-# Their options that take the next word as a value (`sudo -u web rm …`,
-# `sudo --user web rm …`; `--user=web` is one word).
-_ELEVATOR_VALUE_OPTIONS = frozenset(
-    {"-u", "-g", "-h", "-p", "-r", "-t", "-C", "-D", "-R", "-T", "-U"}
-    | {"--user", "--group", "--host", "--prompt", "--role", "--type"}
+# Each one's short options: the letters that take a value (glued, `-uweb`,
+# or the next word, `-nu web`), and those that run no command at all — a
+# query names one without running it (`sudo -l reboot`, `doas -C conf x`).
+_ELEVATORS = {"sudo": ("ughprtCDRTU", "elvKV"), "doas": ("uC", "CL")}
+# sudo's long options, the same two ways (`--user=web` is one word).
+_SUDO_LONG_VALUE = frozenset(
+    {"--user", "--group", "--host", "--prompt", "--role", "--type"}
     | {"--close-from", "--chdir", "--chroot", "--command-timeout", "--other-user"}
+)
+_SUDO_LONG_QUERY = frozenset(
+    {"--list", "--validate", "--remove-timestamp", "--version", "--edit", "--help"}
 )
 
 
 def _elevated(words: list[str]) -> list[str] | None:
     """The command a leading ``sudo`` / ``doas`` runs — its own options
     skipped, thin wrappers stripped — or None when ``words`` starts with
-    neither (or runs nothing)."""
+    neither, or runs nothing."""
     if not words or words[0] not in _ELEVATORS:
         return None
+    takes_value, queries = _ELEVATORS[words[0]]
     i = 1
     while i < len(words) and words[i].startswith("-"):
-        if words[i] == "--":
-            i += 1
+        word = words[i]
+        i += 1
+        if word == "--":
             break
-        i += 2 if words[i] in _ELEVATOR_VALUE_OPTIONS else 1
+        if word.startswith("--"):
+            name, eq, _ = word.partition("=")
+            if name in _SUDO_LONG_QUERY:
+                return None
+            i += name in _SUDO_LONG_VALUE and not eq
+            continue
+        for at, letter in enumerate(word[1:], 1):
+            if letter in queries:
+                return None
+            if letter in takes_value:
+                i += at == len(word) - 1  # else the rest of the word is the value
+                break
     inner, _ = _strip_wrappers(words[i:])
     return inner or None
 

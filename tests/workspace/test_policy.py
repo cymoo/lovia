@@ -835,8 +835,16 @@ def test_trusted_preset_interrupts_only_for_the_baseline() -> None:
         "sudo --user=root rm -rf /",
         "doas -- mkfs /dev/sda",
         "sudo env sudo -n reboot",
+        "sudo -nu root rm -rf /",  # a cluster ending in a value option
+        "sudo -nuroot rm -rf /",  # ...or carrying it glued
+        "doas -nu root reboot",
+        "sudo -k reboot",  # -k forgets the credentials, then runs
     ):
         assert policy.decide_command(cmd).action == "deny", cmd
+    # A query names a command without running it.
+    for cmd in ("sudo -l reboot", "sudo -nl reboot", "sudo --list reboot"):
+        assert policy.decide_command(cmd).action == "allow", cmd
+    assert policy.decide_command("doas -C /etc/doas.conf reboot").action == "allow"
     # Outside the root too — "full access" asks nothing a baseline rule
     # doesn't name.
     for op in ("read", "write"):

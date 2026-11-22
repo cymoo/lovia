@@ -288,6 +288,7 @@ only when it needs to differ:
 | `--lv-sidebar-surface`, `--lv-sidebar-edge`, `--lv-sidebar-hover`, `--lv-sidebar-active` | The sidebar's background, its dividing edge, and its rows on hover and when selected |
 | `--lv-ink`, `--lv-ink-2`, `--lv-muted`, `--lv-muted-2` | Text, from primary to faint |
 | `--lv-accent`, `--lv-accent-hover`, `--lv-accent-soft`, `--lv-accent-text` | The brand color and its tints (the last three derive from `--lv-accent`) |
+| `--lv-on-accent` | Send icon on the filled accent button. Set this per theme if a custom accent needs a different foreground for contrast. |
 | `--lv-user-surface`, `--lv-user-border` | The user's message bubble |
 | `--lv-chart-1` … `--lv-chart-8` | Chart series colors |
 | `--lv-warn`, `--lv-danger`, `--lv-ok` | Status colors |

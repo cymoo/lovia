@@ -263,6 +263,7 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 | `--lv-sidebar-surface`、`--lv-sidebar-edge`、`--lv-sidebar-hover`、`--lv-sidebar-active` | 侧栏背景、分隔线，及其列表行悬停、选中时的底色 |
 | `--lv-ink`、`--lv-ink-2`、`--lv-muted`、`--lv-muted-2` | 文字，由深到浅 |
 | `--lv-accent`、`--lv-accent-hover`、`--lv-accent-soft`、`--lv-accent-text` | 品牌色及其衍生色（后三个默认由 `--lv-accent` 推导） |
+| `--lv-on-accent` | 品牌色底上的发送图标颜色。自定义品牌色时，可以按主题调整图标颜色以保证对比度。 |
 | `--lv-user-surface`、`--lv-user-border` | 用户消息气泡 |
 | `--lv-chart-1` … `--lv-chart-8` | 图表系列颜色 |
 | `--lv-warn`、`--lv-danger`、`--lv-ok` | 状态色 |

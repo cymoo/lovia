@@ -9,8 +9,8 @@
    quiet-card vocabulary.
 
    Restraint is the rule: both themes are a warm-neutral gray ramp, and the
-   accent is the only colour, kept for action and live state — the send button,
-   switches, links, progress. Content (bubbles, inline code) stays neutral.
+   accent is the only colour, kept for actions, selection, and live state.
+   Content (bubbles, inline code) stays neutral.
 
    Contracts: every class name here is load-bearing for static/js/* — rename
    nothing without updating the JS. Tokens first; components in DOM order.
@@ -29,11 +29,11 @@
   /* Native form controls / scrollbars follow the active theme. */
   color-scheme: light;
 
-  /* surfaces — warm neutral: the chat canvas is the paper (white); the sidebar
-     is chrome, a pure-neutral gray plane beside it behind a hairline edge.
+  /* surfaces — warm neutral: a white chat canvas and a recessed sidebar
+     behind a hairline edge.
      Mirrors the dark theme's ramp so both read as one system. */
   --lv-bg: #ffffff;
-  --lv-sidebar-surface: #f9f9f9;
+  --lv-sidebar-surface: #f5f5f1;
   --lv-sidebar-edge: #ebebeb;
   /* sidebar rows hover and select a step darker than the sidebar itself —
      black mixed into its tone (neutral, never muddy), so they hold on any
@@ -53,12 +53,13 @@
   /* ink ramp — warm near-black down to stone */
   --lv-ink: #1b1b19;
   --lv-ink-2: #3d3d3a;
-  --lv-muted: #6e6e69;
+  --lv-muted: #666660;
   --lv-muted-2: #9e9e98;
 
-  /* brand accent — restrained green, used for meaning, not decoration. Its
-     tints derive from it, so a rebrand only has to set --lv-accent per theme. */
+  /* brand accent — restrained green. Tints derive from it; set --lv-on-accent
+     alongside a custom accent if its filled button needs different contrast. */
   --lv-accent: #2d8a6e;
+  --lv-on-accent: #fff;
   --lv-accent-hover: color-mix(in srgb, var(--lv-accent) 80%, black);
   --lv-accent-soft: color-mix(in srgb, var(--lv-accent) 11%, var(--lv-surface));
   --lv-accent-text: color-mix(in srgb, var(--lv-accent) 77%, black);
@@ -153,11 +154,12 @@
   /* ink ramp — warm near-white down to stone */
   --lv-ink: #ececea;
   --lv-ink-2: #c8c8c4;
-  --lv-muted: #9b9b96;
+  --lv-muted: #9e9e98;
   --lv-muted-2: #6f6f6a;
 
   /* brand accent — restrained emerald, legible on graphite */
   --lv-accent: #3ecb8f;
+  --lv-on-accent: #143427;
   --lv-accent-hover: color-mix(in srgb, var(--lv-accent) 86%, white);
   --lv-accent-soft: color-mix(in srgb, var(--lv-accent) 12%, var(--lv-bg));
   --lv-accent-text: color-mix(in srgb, var(--lv-accent) 92%, white);
@@ -705,10 +707,21 @@ body.lv-sidebar-resizing {
 .lv-session-item:has(:focus-visible, [aria-expanded="true"]) {
   --lv-row-bg: var(--lv-sidebar-hover);
 }
-/* Selection is a deeper neutral tint, not the accent: the accent stays for
-   meaning (status, focus), and the topbar already names the open chat. */
 .lv-session-item.lv-active {
   --lv-row-bg: var(--lv-sidebar-active);
+}
+/* Mark the current row in either sidebar without shifting its contents. */
+:is(.lv-session-item, .lv-file-row).lv-active::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 1px;
+  inset-block: 0;
+  margin-block: auto;
+  width: 2px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--lv-accent);
+  pointer-events: none;
 }
 [data-theme="dark"] .lv-session-item.lv-active {
   --lv-row-bg: var(--lv-surface-3);
@@ -742,6 +755,7 @@ body.lv-sidebar-resizing {
 }
 .lv-session-item.lv-active .lv-session-title {
   color: var(--lv-ink);
+  font-weight: 600;
 }
 /* A live background run for this session (detach/reconnect): a dot after the
    title's text (and its mark), outside the title's ellipsis so a long title
@@ -2596,7 +2610,7 @@ body.lv-view-open #files-btn {
 .lv-tool .lv-tool-args {
   font-family: var(--lv-mono);
   font-size: 11.5px;
-  color: var(--lv-muted-2);
+  color: var(--lv-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2625,7 +2639,7 @@ body.lv-view-open #files-btn {
   font-family: var(--lv-mono);
   font-size: 11.5px;
   line-height: 1.5;
-  color: var(--lv-muted-2);
+  color: var(--lv-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3375,7 +3389,7 @@ button.lv-question-option:hover {
   display: none;
 }
 #prompt::placeholder {
-  color: var(--lv-muted-2);
+  color: var(--lv-muted);
 }
 .lv-btn-send {
   flex-shrink: 0;
@@ -3386,7 +3400,7 @@ button.lv-question-option:hover {
   height: 38px;
   border-radius: 50%;
   background: var(--lv-accent);
-  color: #fff;
+  color: var(--lv-on-accent);
   transition:
     background var(--lv-t-fast),
     opacity var(--lv-t-fast),
@@ -5350,6 +5364,7 @@ body.lv-files-resizing {
 /* One line per row, 28px tall — the tree's sticky rows stack by that height. */
 .lv-file-row {
   --lv-row-h: 28px;
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -5364,8 +5379,7 @@ body.lv-files-resizing {
 .lv-file-row:focus-visible {
   outline-offset: -2px;
 }
-/* Hover and selection are the sidebar's own neutral steps, so both lists
-   read alike; the accent stays for meaning (the "written here" dot below). */
+/* Use the same surface steps as the chat list. */
 .lv-file-row:hover {
   background: var(--lv-sidebar-hover);
 }
@@ -5419,7 +5433,7 @@ body.lv-files-resizing {
   flex: 0 1 auto;
   min-width: 0;
   font-size: 11.5px;
-  color: var(--lv-muted-2);
+  color: var(--lv-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

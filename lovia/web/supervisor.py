@@ -1486,8 +1486,21 @@ class RunSupervisor:
             # (a remote chat's: the host's copy, put there now).
             folder = await attachments_for_run(self.deps.store, session_id, agent)
             agent = await self.deps.workspaces.bind(session_id, agent, folder)
-            # That await may have let a concurrent start for this chat in. (Its
-            # workspace is this chat's too: nothing to undo.)
+            # What a page attaching before the task opens its leg is shown —
+            # one that follows the run_started event, from a run sent by
+            # another client, gets there first: the task sets the same again.
+            # Best effort: a history that won't load fails the run in its task,
+            # as a failed run — raised here, it would stall a schedule's fire.
+            history: Runs = []
+            if self.deps.session is not None:
+                try:
+                    history = segments_runs(
+                        await self.deps.session.segments(session_id)
+                    )
+                except Exception as exc:
+                    log.warning("history prefill failed for %s: %s", session_id, exc)
+            # Those awaits may have let a concurrent start for this chat in.
+            # (Its workspace is this chat's too: nothing to undo.)
             self._check_slot(session_id, cap=False)
             client = dict(client or {})
             # ``input`` seeds the transcript for immediate display and is what the
@@ -1521,6 +1534,8 @@ class RunSupervisor:
             ctrl.binding, ctrl.source_agent = binding, handed
             ctrl.grant_owner = grants
             ctrl.is_task = bool(meta and meta.parent_id)
+            ctrl.history_runs = history
+            ctrl.completed_mirror = list(seed)
             # Reserve the session slot BEFORE the checkpoint await: two concurrent
             # starts (e.g. two tabs submitting at once) would otherwise both pass the
             # caller's live-check and the second would silently orphan the first's

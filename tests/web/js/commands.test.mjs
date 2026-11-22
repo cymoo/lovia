@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { evaluate } from './composer_harness.mjs';
 import {
   findCommand,
   listCommands,
@@ -14,6 +15,46 @@ import {
 } from '../../../lovia/web/static/js/commands.js';
 
 const names = () => listCommands().map((c) => c.name);
+
+test('built-ins offer review in a workspace and branch in a branchable chat', async () => {
+  const store = {
+    agent: 'text',
+    agents: [{ name: 'text' }, { name: 'coding', workspace: true }],
+    canConfigure: true,
+    configured: true,
+  };
+  const sent = [];
+  const branches = [];
+  let chat = null;
+  const commands = evaluate(
+    ['registry.js', 'commands.js', 'builtin-commands.js'],
+    ['initBuiltinCommands', 'listCommands', 'runCommand'],
+    {
+      store,
+      t: (key) => key,
+      openChat: () => chat,
+      sendText: async (message) => { sent.push(message); },
+      forkChat: async (id) => { branches.push(id); },
+    },
+  );
+  const offered = () => Array.from(commands.listCommands(), (command) => command.name);
+  commands.initBuiltinCommands();
+  assert.deepEqual(offered(), []);
+
+  store.agent = 'coding';
+  assert.deepEqual(offered(), ['review']);
+  await commands.runCommand('review', '', null);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /staged and unstaged diffs, and relevant untracked source files/);
+  assert.match(sent[0], /do not modify files or apply fixes/);
+
+  chat = { id: 'task', parent_id: 'session' };
+  assert.deepEqual(offered(), ['review']);
+  chat = { id: 'session' };
+  assert.deepEqual(offered(), ['review', 'branch']);
+  await commands.runCommand('branch', '', chat.id);
+  assert.deepEqual(branches, ['session']);
+});
 
 test('a name is typed after a slash: lower-case, digits and dashes', () => {
   const ok = { description: 'd', run() {} };

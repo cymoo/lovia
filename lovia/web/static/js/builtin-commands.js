@@ -1,24 +1,20 @@
 // builtin-commands.js — the slash commands the page comes with. A command
 // does something, or takes what is typed after it; what a control beside
 // the composer already does in one click (the model, the mode) gets none.
-// `/init` sends a message — a prompt of ours, to write the project's
-// AGENTS.md.
+// `/review` sends a code-review prompt to the assistant.
 import { store } from './store.js';
 import { t } from './i18n.js';
 import { registerCommand } from './commands.js';
 import { sendText } from './chat.js';
-import { openChatMcp } from './project-mcp.js';
-import { forkChat, openChat, renameSession } from './sessions.js';
+import { forkChat, openChat } from './sessions.js';
 
-// For the model: plain instructions, English whatever the page's language
-// (the model answers in the user's).
-const INIT_PROMPT = `Read through this project, then write an AGENTS.md at its root — or update the one that is there — for an AI coding agent that starts with no context.
+const REVIEW_PROMPT = `Review the current workspace's uncommitted code changes. Inspect Git status, staged and unstaged diffs, and relevant untracked source files. Read surrounding code as needed to verify each finding. If there are no changes or you cannot inspect them, say so and stop.
 
-Cover only what it can't guess: what the project is; how to set up, build, run, test and lint it (the exact commands); how the code is laid out; conventions that differ from the usual; things that will bite. Verify commands against the project's own files rather than assuming them.
+Report only concrete, actionable problems introduced by the changes. Skip style nits, speculation, and unrelated pre-existing issues. List findings from most to least severe. For each, give its priority, the changed file and line, and a brief explanation of when it causes a problem and why it matters.
 
-Keep it short and specific to this project — no generic advice. If an AGENTS.md exists, keep what is still true and fix what isn't.`;
+Finish with a brief overall assessment. If there are no actionable findings, say so. This is a read-only review: do not modify files or apply fixes.`;
 
-/** Whether the composer's agent has a workspace to write the file in. */
+/** Whether the composer's agent has a workspace to review. */
 function hasWorkspace() {
   return !!store.agents.find((a) => a.name === store.agent)?.workspace;
 }
@@ -30,22 +26,10 @@ function listedChat() {
 }
 
 export function initBuiltinCommands() {
-  registerCommand('mcp', {
-    description: t('command.mcp'),
-    when: () => store.canConfigure && store.configured,
-    run: () => openChatMcp(),
-  });
-  registerCommand('init', {
-    description: t('command.init'),
+  registerCommand('review', {
+    description: t('command.review'),
     when: hasWorkspace,
-    run: () => sendText(INIT_PROMPT),
-  });
-  registerCommand('rename', {
-    description: t('command.rename'),
-    argument: t('command.renameArg'),
-    when: () => !!openChat(),
-    // No title typed: the dialog asks, as the menu's Rename does.
-    run: ({ args }) => renameSession(openChat(), args || undefined),
+    run: () => sendText(REVIEW_PROMPT),
   });
   registerCommand('branch', {
     description: t('command.branch'),

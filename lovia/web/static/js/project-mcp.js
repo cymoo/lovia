@@ -1,6 +1,6 @@
 // project-mcp.js — a chat's project and its MCP servers, from the composer:
 // a line over it while servers the project's own .mcp.json names wait to be
-// confirmed, and `/mcp`. Both open Settings → MCP on that project, where
+// confirmed. It opens Settings → MCP on that project, where
 // the servers are listed and switched (mcp-config.js).
 //
 // Nothing waits on an answer — the chat runs without a server that isn't
@@ -8,7 +8,6 @@
 import { api } from './api.js';
 import { store } from './store.js';
 import { t } from './i18n.js';
-import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { draftWorkspaceRoot } from './workspaces.js';
 
@@ -59,15 +58,6 @@ function renderNote() {
   open.addEventListener('click', () => _listing && void openSettingsOn(_listing));
   note.replaceChildren(text, open);
   note.insertAdjacentHTML('afterbegin', icon('server', { size: 15 }));
-}
-
-/** The open chat's servers: `/mcp`. */
-export async function openChatMcp() {
-  try {
-    await openSettingsOn(await api.getProjectMcp(chatScope()));
-  } catch (err) {
-    toast(String(err.message || err), { type: 'error' });
-  }
 }
 
 export function initProjectMcp() {

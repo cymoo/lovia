@@ -180,15 +180,12 @@ permission mode) has no command.
 
 | Command | Does |
 | --- | --- |
-| `/mcp` | Opens Settings → MCP on this chat's project: [the servers that came with it](#a-projects-own-servers) and [the ones you added](#servers-for-one-project), each with a switch for the project |
-| `/init` | Asks the assistant to read the project and write (or update) its `AGENTS.md` |
-| `/rename New title` | Renames the chat; without a title it asks |
+| `/review` | Asks the assistant to review staged and unstaged changes and relevant untracked files, report prioritized findings, and leave files untouched |
 | `/branch` | Branches a new chat off this one |
 
-A command shows only where it applies (`/init` where there is a workspace,
-`/branch` in an open chat). Picking one runs it; one that takes text —
-`/rename` — leaves `/rename ` in the box to finish and send. A command wins
-over a skill of the same name. Your own page can
+A command shows only where it applies (`/review` when the assistant has a
+workspace, `/branch` in a chat that can be branched). Picking one runs it.
+A command wins over a skill of the same name. Your own page can
 [add commands](web-server.md#commands).
 
 ## The assistant
@@ -209,8 +206,8 @@ composer (the folder and the permission mode).
   into chats in every project; notes about a project, and recall over its
   past chats, are kept per chat directory. A chat in "No project" has only
   the first. **Settings → Memory** edits either scope, "About me" or a
-  project picked from the list — starting at the open chat's folder; a
-  sidebar folder's **⋯ → Project memory** opens it on that folder. **Clear project memory** there deletes that
+  project picked from the list — starting at the open chat's folder.
+  **Clear project memory** there deletes that
   project's notes and recall for good; deleting chats never clears memory. A project is its
   directory, so renaming or moving it starts a fresh one. Notes saved by
   earlier versions all stay under "About me"; move project facts by hand.
@@ -325,8 +322,7 @@ it on**:
   each as written with a switch, then the ones you added.
 - While any is undecided, a line over the composer says so, and **Review**
   opens that page. The chat runs meanwhile, without those servers — nothing
-  waits on the answer. `/mcp` in a chat, or the folder's **⋯ → Project MCP
-  servers** in the sidebar, opens the same page.
+  waits on the answer.
 - The decision is kept in lovia's home (`mcp-projects.json`), per project
   directory, never in the project: a repository can't approve itself.
 - It holds for the entry as it was written. An edited entry — after a pull,

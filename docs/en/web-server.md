@@ -582,11 +582,11 @@ lovia.registerCommand('ticket', {
 | `run({ args, sessionId })` | `args` is the text after the name, trimmed; `sessionId` is `null` in a new chat. May be async; an error it throws shows as a toast |
 
 - `name` is lower-case letters, digits and `-`. Registering a name again
-  replaces the command — a built-in included (`/mcp`, `/init`, `/rename`, `/branch`; each shows
+  replaces the command — a built-in included (`/review`, `/branch`; each shows
   only where it applies) — and the function `registerCommand` returns brings
   the earlier one back.
 - A command that should *say* something to the model calls `lovia.send(text)`
-  — that is all `/init` does, with a prompt of its own. One that should
+  — that is all `/review` does, with a prompt of its own. One that should
   prefill the composer calls `lovia.setDraft(text)`.
 - A command wins over a skill of the same name: the message never reaches
   the model. A `/name` that is no command is sent as typed, where it may

@@ -1,7 +1,7 @@
 // commands.js — the composer's slash commands (lovia.registerCommand).
 //
 // A message that starts with `/name` and names a command runs it here and
-// is never sent: `/rename New title`, `/mcp`. The `/` menu lists commands
+// is never sent. The `/` menu lists commands
 // ahead of the chat's skills (skill-menu.js); a `/name` that is no command
 // goes to the model as typed, where it may name a skill. A command and a
 // skill of one name: the command wins.
@@ -21,7 +21,7 @@ const TYPED = /^\/([a-z][a-z0-9-]*)(?:\s+([\s\S]*))?$/;
  * @typedef {object} Command
  * @property {string} description One line, shown beside the name in the menu.
  * @property {string} [argument] What goes after the name (a placeholder, as
- *   in "/rename New title"). With one, picking the command from the menu
+ *   in "/ticket Subject"). With one, picking the command from the menu
  *   leaves `/name ` to finish and send; without, it runs at once — and a
  *   message with more after the name is not the command.
  * @property {() => boolean} [when] Whether it is offered now; always when absent.

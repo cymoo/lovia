@@ -40,11 +40,6 @@ export function hasMemory() {
   return !!memoryAgent();
 }
 
-/** Whether that memory is kept per project (a sidebar folder can open its own). */
-export function hasProjectMemory() {
-  return !!memoryAgent()?.memory_projects;
-}
-
 const droppedLines = (content) =>
   content.split('\n').filter((l) => l.trim() && !l.trim().startsWith('- ')).length;
 

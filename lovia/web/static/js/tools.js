@@ -271,8 +271,7 @@ export function buildToolNode(call) {
   if (command) {
     const sub = document.createElement('span');
     sub.className = 'lv-tool-command';
-    sub.textContent = command;
-    sub.title = command; // ellipsized subtitle stays readable on hover
+    sub.textContent = command; // in full once the card opens: no hover copy
     node.querySelector('summary')?.appendChild(sub);
   }
   fillParams(node.querySelector('.lv-tool-params'), call.arguments);
@@ -363,10 +362,8 @@ function applySummary(node) {
     el.className = 'lv-tool-summary';
     summary.querySelector('.lv-tool-args')?.after(el);
   }
+  // The call it stands for is the open card's params: no hover copy of it.
   el.textContent = text;
-  // The call it stands for, on hover.
-  /** @type {HTMLElement} */ (el).title =
-    `${state.name} ${node.querySelector('.lv-tool-args')?.textContent ?? ''}`.trim();
   node.classList.add('lv-tool--summary');
   // The title already shows the lone argument: skip the params row repeating it.
   node.classList.toggle('lv-tool--echoed', argEchoed(state.arguments, text));

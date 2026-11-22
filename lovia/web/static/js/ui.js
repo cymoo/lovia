@@ -74,10 +74,11 @@ export function initTheme() {
 // an ephemeral "auto" claim the Files panel makes when the viewport is too
 // tight for three columns (see files.js). The auto layer is never persisted —
 // a reload re-derives it — and an explicit expand clears it: the user's word
-// beats ours.
+// beats ours, until the claim is let go (the panel closes, or there is room).
 const overlay = document.getElementById('sidebar-overlay');
 let sidebarOpen = false;
 let sidebarAutoCollapsed = false;
+let claimOverruled = false;
 // One button for both ways: collapsed, the sidebar stays as a rail of icons
 // (styles.css) with this toggle at its top.
 const sidebarToggleBtn = document.getElementById('sidebar-collapse');
@@ -119,17 +120,22 @@ export function toggleSidebar() {
 function setSidebarCollapsed(collapsed) {
   store.sidebarCollapsed = collapsed;
   localStorage.setItem('lovia-sidebar-collapsed', collapsed ? '1' : '0');
-  if (!collapsed) sidebarAutoCollapsed = false;
+  if (!collapsed && sidebarAutoCollapsed) {
+    sidebarAutoCollapsed = false;
+    claimOverruled = true;
+  }
   syncSidebar();
 }
 
 /**
  * The Files panel claims the sidebar's space while open on a tight viewport
- * and releases it on close.
+ * and releases it on close. A claim the user overruled stays off until it is
+ * released.
  * @param {boolean} claimed
  */
 export function setSidebarAutoCollapsed(claimed) {
-  sidebarAutoCollapsed = claimed;
+  if (!claimed) claimOverruled = false;
+  sidebarAutoCollapsed = claimed && !claimOverruled;
   syncSidebar();
 }
 
@@ -180,16 +186,25 @@ export function widthDivider(handle, { width, apply, done, grow, busyClass }) {
 }
 
 // The sidebar's width: dragged at its right edge, kept per browser in
-// `--lv-sidebar-w` (unset: the stylesheet's). The chat column keeps its room.
+// `--lv-sidebar-w` (unset: the stylesheet's). The chat column keeps its room,
+// beside the Files panel too: a drag stops short of it, never collapses
+// anything.
 const SIDEBAR_W_KEY = 'lovia-sidebar-w';
 const SIDEBAR_MIN_W = 220;
 const SIDEBAR_MAX_W = 480;
+/** The least the chat column keeps when a divider is dragged. */
+export const CHAT_MIN_W = 520;
 
-/** @param {number | null} px */
-function applySidebarWidth(px) {
+/**
+ * @param {number | null} px
+ * @param {boolean} [beside] A drag: stop short of the open Files panel.
+ */
+function applySidebarWidth(px, beside = false) {
   const root = document.documentElement.style;
   if (px == null) return void root.removeProperty('--lv-sidebar-w');
-  const max = Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, window.innerWidth - 520));
+  const panel = beside ? document.querySelector('#files-panel.lv-open') : null;
+  const room = window.innerWidth - CHAT_MIN_W - (panel?.getBoundingClientRect().width ?? 0);
+  const max = Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, room));
   root.setProperty('--lv-sidebar-w', `${Math.min(Math.max(Math.round(px), SIDEBAR_MIN_W), max)}px`);
 }
 
@@ -207,7 +222,7 @@ function initSidebarResizer() {
   const width = () => sidebar.getBoundingClientRect().width;
   widthDivider(handle, {
     width,
-    apply: applySidebarWidth,
+    apply: (px) => applySidebarWidth(px, true),
     grow: 1,
     busyClass: 'lv-sidebar-resizing',
     done: (reset) => {
@@ -217,8 +232,6 @@ function initSidebarResizer() {
       } catch {
         /* storage off */
       }
-      // The Files panel weighs the sidebar's width when it claims room.
-      store.emit('sidebar-resized');
     },
   });
 }

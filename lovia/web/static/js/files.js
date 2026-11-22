@@ -15,6 +15,7 @@ import { t } from './i18n.js';
 import { store } from './store.js';
 import { api, apiError } from './api.js';
 import {
+  CHAT_MIN_W,
   addCodeBlockControls,
   copyCodeBlock,
   copyToClipboard,
@@ -108,34 +109,45 @@ function revOf(path) {
 // per browser; unset, the stylesheet default applies.
 const WIDTH_KEY = 'lovia-files-w';
 const MIN_W = 300;
-const RESERVED_W = 520; // keep at least this much viewport for the chat column
 
 const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
-const clampW = (w) =>
-  Math.min(Math.max(Math.round(w), MIN_W), Math.max(MIN_W, window.innerWidth - RESERVED_W));
 const panelWidth = () => els.panel.getBoundingClientRect().width;
 
-function applyWidth(px) {
-  if (px == null) document.documentElement.style.removeProperty('--lv-files-w');
-  else document.documentElement.style.setProperty('--lv-files-w', `${clampW(px)}px`);
+/**
+ * @param {number | null} px
+ * @param {boolean} [beside] A drag: stop short of the sidebar as it stands,
+ *   so the chat column keeps its room without anything collapsing.
+ */
+function applyWidth(px, beside = false) {
+  if (px == null) return void document.documentElement.style.removeProperty('--lv-files-w');
+  const sidebar = beside && !isPhone() ? document.getElementById('sidebar') : null;
+  const room = window.innerWidth - CHAT_MIN_W - (sidebar?.getBoundingClientRect().width ?? 0);
+  const w = Math.min(Math.max(Math.round(px), MIN_W), Math.max(MIN_W, room));
+  document.documentElement.style.setProperty('--lv-files-w', `${w}px`);
 }
 
-// Three columns need room. While the panel is open on a viewport too tight
-// for sidebar + panel + a comfortable chat column, it claims the sidebar's
-// space; the claim is released on close (and beaten by an explicit expand —
-// the two layers live in ui.js).
-function claimSpace() {
-  if (isPhone()) return; // the phone drawer overlays, it doesn't push
+// Three columns need room. When the panel opens (or the window shrinks) on a
+// viewport too tight for sidebar + panel + a comfortable chat column, it
+// claims the sidebar's space; the claim is released on close or once there
+// is room, and beaten by an explicit expand (the two layers live in ui.js).
+// A divider drag never claims — the user is arranging the columns, and each
+// drag stops short of the chat column instead — but may give the room back.
+// `release` only lets go.
+function claimSpace({ release = false } = {}) {
+  // Closed, the claim goes at any width — a close on a phone included, or
+  // an overruled claim would outlive the panel back on the desktop.
   if (!state.open) {
     setSidebarAutoCollapsed(false);
     return;
   }
+  if (isPhone()) return; // the phone drawer overlays, it doesn't push
   const sidebarW =
     parseInt(
       getComputedStyle(document.documentElement).getPropertyValue('--lv-sidebar-w'),
       10,
     ) || 272;
-  setSidebarAutoCollapsed(window.innerWidth < sidebarW + panelWidth() + 760);
+  const tight = window.innerWidth < sidebarW + panelWidth() + 760;
+  if (!(release && tight)) setSidebarAutoCollapsed(tight);
 }
 
 function initResizer() {
@@ -144,16 +156,16 @@ function initResizer() {
 
   widthDivider(els.resizer, {
     width: panelWidth,
-    apply: applyWidth,
+    apply: (px) => applyWidth(px, true),
     grow: -1, // the panel sits right: dragging left widens it
     busyClass: 'lv-files-resizing',
     done: (reset) => {
       if (reset) localStorage.removeItem(WIDTH_KEY);
       else localStorage.setItem(WIDTH_KEY, String(Math.round(panelWidth())));
-      claimSpace();
+      // A reset jumps to the default width unclamped: judged as an opening.
+      claimSpace({ release: !reset });
     },
   });
-  store.on('sidebar-resized', claimSpace);
 
   // A window resize can re-tighten (or free) the space the open panel needs.
   let resizeTimer = null;
@@ -1815,10 +1827,17 @@ async function followViewerLink(href) {
  * delegated back to the panel above. A diagram still rendering when the panel
  * was cloned renders into the copy too.
  */
-function syncModal() {
+/**
+ * Mirror the viewer into the reader.
+ * @param {{ keepScroll?: boolean }} [o] The same page, grown or re-sorted:
+ *   the reader stays where it was read to (the copy is its scroller).
+ */
+function syncModal({ keepScroll = false } = {}) {
+  const top = keepScroll ? (els.modalBody.firstElementChild?.scrollTop ?? 0) : 0;
   const copy = /** @type {HTMLElement} */ (els.viewerBody.cloneNode(true));
   copy.removeAttribute('id');
   els.modalBody.replaceChildren(copy);
+  copy.scrollTop = top;
   renderMermaid(copy);
 }
 
@@ -1850,7 +1869,15 @@ function renderViewerContent() {
   els.wrapToggle.classList.toggle('lv-hidden', !textual);
   // Copy only means something when there is text content to copy.
   els.copyContent.classList.toggle('lv-hidden', typeof v.content !== 'string');
+  if (v.kind === 'md' || v.kind === 'html') {
+    els.mdToggle.classList.remove('lv-hidden');
+    els.mdToggle.innerHTML = icon(v.raw ? 'file-text' : 'code', { size: 15 });
+    els.mdToggle.title = v.raw ? t('files.rendered') : t('files.raw');
+    els.mdToggle.setAttribute('aria-label', els.mdToggle.title);
+  }
+  appendFileBody(v);
 
+  // Where the shown lines run out, so reading on is one click from there.
   if (v.truncated) {
     const more = document.createElement('button');
     more.type = 'button';
@@ -1863,13 +1890,13 @@ function renderViewerContent() {
       viewerNote(t('files.showingLines', { end: v.end, total: v.totalLines }), more),
     );
   }
+}
 
-  if (v.kind === 'md' || v.kind === 'html') {
-    els.mdToggle.classList.remove('lv-hidden');
-    els.mdToggle.innerHTML = icon(v.raw ? 'file-text' : 'code', { size: 15 });
-    els.mdToggle.title = v.raw ? t('files.rendered') : t('files.raw');
-    els.mdToggle.setAttribute('aria-label', els.mdToggle.title);
-  }
+/**
+ * The file itself, as its kind and the raw toggle say.
+ * @param {NonNullable<typeof state.viewing>} v
+ */
+function appendFileBody(v) {
   if (v.kind === 'md' && !v.raw) {
     const { turn, body } = bodyWrapper();
     // Images resolve like the links below: against the document's own
@@ -2123,7 +2150,7 @@ export function initFiles() {
       const col = [...(sortBtn.closest('tr')?.children || [])].indexOf(sortBtn.parentElement);
       /** @type {HTMLElement | undefined} */
       ([...els.viewerBody.querySelectorAll('.lv-files-csv-sort')][col])?.click();
-      syncModal();
+      syncModal({ keepScroll: true });
       return;
     }
     const copyBtn = target?.closest('.lv-btn-copy-code');
@@ -2133,7 +2160,7 @@ export function initFiles() {
     }
     if (target?.closest('.lv-files-load-more')) {
       await loadMore();
-      syncModal();
+      syncModal({ keepScroll: true });
       return;
     }
     const a = target?.closest('a[data-ws-path]');

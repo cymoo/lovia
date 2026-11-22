@@ -204,15 +204,15 @@ composer (the folder and the permission mode).
 - Memory is split by project (see
   [Memory scopes](memory.md#scopes)): notes about you are one list, carried
   into chats in every project; notes about a project, and recall over its
-  past chats, are kept per chat directory. A chat in "No project" has only
-  the first. **Settings → Memory** edits either scope, "About me" or a
+  past chats, are kept per chat directory. A chat in the **Chats** folder
+  (no project) has only the first. **Settings → Memory** edits either scope, "About me" or a
   project picked from the list — starting at the open chat's folder.
   **Clear project memory** there deletes that
   project's notes and recall for good; deleting chats never clears memory. A project is its
   directory, so renaming or moving it starts a fresh one. Notes saved by
   earlier versions all stay under "About me"; move project facts by hand.
   Recall over chats from earlier versions stays at the top level, searched
-  only from "No project" chats.
+  only from chats in **Chats**.
 
 In `config.json` a missing field takes its default ([below](#settings-that-apply-without-a-restart)):
 
@@ -364,7 +364,7 @@ a switch for *this project*:
 - These are your own entries, so there is nothing to approve; the record is
   the same `mcp-projects.json`.
 - A chat on another machine has these switches too: the servers still run on
-  the lovia web host. A chat in "No project" follows **All projects**.
+  the lovia web host. A chat in **Chats** (no project) follows **All projects**.
 - Fewer servers on means fewer tools in every request of the project's
   chats — each server's tools are sent to the model whether or not they are
   used.
@@ -686,11 +686,11 @@ starts and Settings shows these as view-only.
 
 Each chat works in a folder of its own. The sidebar groups chats by folder:
 the one `lovia web` was launched in first, then the rest by recent activity,
-with **No project** (`<home>/workspace`, for chats that belong to no
-project) always listed. A folder's **+** starts a new chat there; its
-**⋯** removes it from the list — files and chats stay, and adding the folder
-again brings its chats back. The folder button beside **Chats** adds
-one, completing the path as you type; the view button next to it switches
+with **Chats** (`<home>/workspace`, for chats that belong to no project,
+marked by a chat bubble rather than a folder) always listed. A folder's **+**
+starts a new chat there; its **⋯** removes it from the list — files and chats
+stay, and adding the folder again brings its chats back. The folder button
+beside **Workspaces** adds one, completing the path as you type; the view button next to it switches
 between a group per folder and one list by date, and between the chats in
 use and the archived ones. Drag the sidebar's right edge to resize it
 (double-click resets).

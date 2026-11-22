@@ -88,8 +88,8 @@ function entry(root) {
 }
 
 /**
- * A directory's display name: the list's, "General" for the catch-all,
- * else its last path segment.
+ * A directory's display name: the list's, "Chats" for the catch-all, else
+ * its last path segment.
  * @param {string | null | undefined} root
  */
 export function workspaceName(root) {
@@ -97,6 +97,16 @@ export function workspaceName(root) {
   const w = entry(root);
   if (w?.kind === 'general') return t('ws.general');
   return w?.name || root.split('/').filter(Boolean).pop() || root;
+}
+
+/**
+ * A directory's icon name: a chat bubble for the catch-all — no project, so
+ * no folder — a server for a remote one, else a folder.
+ * @param {string | null | undefined} root
+ */
+export function workspaceGlyph(root) {
+  if (entry(root)?.kind === 'general') return 'message-circle';
+  return isRemote(root) ? 'server' : 'folder';
 }
 
 /** @param {string | null | undefined} id */
@@ -298,7 +308,7 @@ export function groupHeader(group, rerender) {
         : group.root || '';
   const glyph =
     { unlinked: 'triangle-alert', pinned: 'pin' }[group.kind] ||
-    (isRemote(group.root) ? 'server' : 'folder');
+    workspaceGlyph(group.root);
   toggle.innerHTML = `<span class="lv-ws-group-icon" aria-hidden="true">${icon(glyph, { size: 15 })}</span>`;
   const name = document.createElement('span');
   name.className = 'lv-ws-group-name';
@@ -431,7 +441,7 @@ function renderChip() {
   _chip.classList.toggle('lv-unlinked', !!id && root === null && !!_list.can_add);
   _chip.classList.toggle('lv-fixed', !!id && !!root);
   const unlinked = _chip.classList.contains('lv-unlinked');
-  const where = unlinked ? 'triangle-alert' : isRemote(root) ? 'server' : 'folder';
+  const where = unlinked ? 'triangle-alert' : workspaceGlyph(root);
   glyph.innerHTML = icon(where, { size: 14 });
   label.textContent = root ? workspaceName(root) : t('ws.unassociated');
   const locked = !id && _draftHasFiles;
@@ -480,7 +490,7 @@ function openChipMenu() {
   /** @type {(import('./ui.js').MenuItem | null)[]} */
   const items = /** @type {Workspace[]} */ (ordered).map((w) => ({
     label: workspaceName(w.root),
-    icon: icon('folder', { size: 15 }),
+    icon: icon(workspaceGlyph(w.root), { size: 15 }),
     checked: w.root === current,
     onSelect: () => pick(w.root),
   }));

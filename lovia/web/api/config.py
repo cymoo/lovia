@@ -718,7 +718,7 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
     async def _project(session: str | None, root: str | None) -> str | None:
         """The project of chat ``session`` — or of a draft opening in
         ``root`` — as its runs know it; ``None``: it has none (no
-        workspace, or "No project")."""
+        workspace, or the "Chats" catch-all)."""
         if session is not None:
             meta = await deps.store.get(session)
             if meta is None:

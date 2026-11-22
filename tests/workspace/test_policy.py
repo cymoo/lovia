@@ -308,10 +308,9 @@ def test_wrapped_commands_are_at_most_asked_and_never_grantable() -> None:
         "command git status",
         "exec git status",
     ):
+        # Silently: the guard's bookkeeping is not for the card.
         verdict = policy.decide_command(wrapped)
-        assert verdict.action == "ask" and "wraps the command" in verdict.reason, (
-            wrapped
-        )
+        assert verdict == Verdict("ask"), wrapped
     # The shell's own wrappers are stripped like the others, so the inner
     # command meets the baseline and a gray wrapped command has no scope.
     assert policy.decide_command("command git push --force").action == "deny"
@@ -368,13 +367,14 @@ def test_shell_syntax_is_not_the_programs() -> None:
     # is judged before the syntax is stepped over: never allowed, no scope.
     for cmd in ('>"$HOME/.ssh/config" ls', "> $F ls", "2>$LOG ls"):
         verdict = opted.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scopes == (), cmd
-        assert "expanded by the shell" in verdict.reason, cmd
+        assert verdict == Verdict("ask"), cmd
         assert policy.decide_command(cmd).scopes == (), cmd
     # Syntax alone (`fi`, `done`, `}`) runs nothing — unless the shell
     # expands something in it.
-    for cmd in ("fi", "esac", "}", "done"):
+    for cmd in ("fi", "esac", "}", "done", "x=1", "do x=1"):
         assert policy.decide_command(cmd).action == "allow", cmd
+    for cmd in ("> $F", "PATH=$x", 'do f="$s/x"'):
+        assert opted.decide_command(cmd) == Verdict("ask"), cmd
     assert opted.decide_command("if ls; then ls; fi").action == "allow"
     # A `for` / `case` header is gray and not a program: ask, no scope.
     for cmd in ("for f in a b", "case x in x) ls", "for f in $(ls)"):
@@ -397,9 +397,7 @@ def test_output_looking_options_cap_allowed_commands_at_ask() -> None:
         "pytest --junitxml=r.xml",
         "ls -o",  # a false hit costs one question, never a bypass
     ):
-        verdict = policy.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scopes == (), cmd
-        assert "output option" in verdict.reason, cmd
+        assert policy.decide_command(cmd) == Verdict("ask"), cmd
     # Not an output option: `--oneline`, anything after a bare `--`, or one
     # aimed at a stream.
     for cmd in (
@@ -434,9 +432,7 @@ def test_globs_variables_and_substitutions_cap_allowed_commands_at_ask() -> None
     # literal arguments only.
     policy = _opted_in()
     for cmd in ("ls *", "ls -- *", "du *.pem", "echo $F", "ls $(ls)", "ls ~/x[1]"):
-        verdict = policy.decide_command(cmd)
-        assert verdict.action == "ask" and verdict.scopes == (), cmd
-        assert "expanded by the shell" in verdict.reason, cmd
+        assert policy.decide_command(cmd) == Verdict("ask"), cmd
 
 
 @pytest.mark.skipif(os.name == "nt", reason="cmd.exe quotes differently")
@@ -825,8 +821,30 @@ def test_trusted_preset_interrupts_only_for_the_baseline() -> None:
         "cat *",
         "env X=1 make",
         "sort -o x y",
+        # Assignments alone run nothing the baseline names, expanded or not.
+        'for s in a b; do f="dir/$s/x"; [ -f "$f" ] && echo "$f"; done',
+        "p=sys.argv[1]",
+        "> $F",
     ):
         assert policy.decide_command(cmd).action == "allow", cmd
+    # ...but a `sudo` doesn't hide a command it denies.
+    for cmd in (
+        "sudo rm -rf /",
+        "sudo -u root rm -rf ~",
+        "sudo --user root -R /mnt rm -rf /",
+        "sudo --user=root rm -rf /",
+        "doas -- mkfs /dev/sda",
+        "sudo env sudo -n reboot",
+        "sudo -nu root rm -rf /",  # a cluster ending in a value option
+        "sudo -nuroot rm -rf /",  # ...or carrying it glued
+        "doas -nu root reboot",
+        "sudo -k reboot",  # -k forgets the credentials, then runs
+    ):
+        assert policy.decide_command(cmd).action == "deny", cmd
+    # A query names a command without running it.
+    for cmd in ("sudo -l reboot", "sudo -nl reboot", "sudo --list reboot"):
+        assert policy.decide_command(cmd).action == "allow", cmd
+    assert policy.decide_command("doas -C /etc/doas.conf reboot").action == "allow"
     # Outside the root too — "full access" asks nothing a baseline rule
     # doesn't name.
     for op in ("read", "write"):

@@ -318,11 +318,11 @@ _NOT_A_PROGRAM = _THIN_WRAPPERS | {"timeout", "for", "case", "select"}
 #   that globs a quoted pattern itself still names its directory to the path
 #   guard (``'~/.ssh/*'``).
 #
-# Each check is a heuristic with false hits, so its reason is shown only when
-# it changes the outcome — an allowed command that now asks. A command that
-# asks anyway just loses its "always allow" offer, silently: the card's
-# reason line is for what the person should weigh, not for the guard's
-# bookkeeping.
+# Each check is a heuristic with false hits, so it never shows on the card:
+# an allowed command now asks, one that asks anyway loses its "always allow"
+# offer, both silently. The card's reason line is for what the person should
+# weigh, not for the guard's bookkeeping ("'$f' is expanded by the shell"
+# only taught people to click Approve).
 _OUTPUT_LIKE = ("--out", "--log-file", "--junit")
 # cmd.exe expands `%VAR%` and strips the `^` escape (`type .e^nv` is `.env`).
 _EXPANSION_CHARS = frozenset("*?[{$`" + ("%^" if os.name == "nt" else ""))
@@ -409,10 +409,10 @@ _GLOBS_AND_SEPARATORS = frozenset("*?[{") | _SEPARATORS
 _WORD_BREAKS = frozenset(" \t\r\n;&|()<>")
 
 
-def _uncertain_word(
+def _unvouched(
     segment: list[str], command: list[str], masked: list[str] | None = None
-) -> str | None:
-    """The first word an allow rule cannot vouch for, with why, or None.
+) -> bool:
+    """Whether a word in the segment is one an allow rule cannot vouch for.
 
     ``segment`` is every word as lexed — the shell expands everywhere, a
     redirect target included, so expansion is judged before any syntax is
@@ -421,17 +421,16 @@ def _uncertain_word(
     what is left after the syntax, whose arguments alone can be options.
     """
     seen = masked if masked is not None and len(masked) == len(segment) else segment
-    for word, judged in zip(segment, seen):
-        if any(c in judged for c in _EXPANSION_CHARS):
-            return f"'{word}' is expanded by the shell"
+    if any(c in judged for judged in seen for c in _EXPANSION_CHARS):
+        return True
     args = command[1:]
     for i, word in enumerate(args):
         if word == "--":
             break  # ends options
         target = _output_target(word, args[i + 1 : i + 2])
         if target is not None and not is_pseudo_device(target):
-            return f"'{word}' may be an output option"
-    return None
+            return True
+    return False
 
 
 def _output_target(word: str, following: list[str]) -> str | None:
@@ -534,6 +533,51 @@ def _strip_wrappers(lexed: list[str]) -> tuple[list[str], list[str]]:
         else:
             break
     return words, stripped
+
+
+# Run what follows as another user. Not thin wrappers: `sudo` is a command a
+# rule names on its own (``IRREVERSIBLE``); only the baseline looks through.
+# Each one's short options: the letters that take a value (glued, `-uweb`,
+# or the next word, `-nu web`), and those that run no command at all — a
+# query names one without running it (`sudo -l reboot`, `doas -C conf x`).
+_ELEVATORS = {"sudo": ("ughprtCDRTU", "elvKV"), "doas": ("uC", "CL")}
+# sudo's long options, the same two ways (`--user=web` is one word).
+_SUDO_LONG_VALUE = frozenset(
+    {"--user", "--group", "--host", "--prompt", "--role", "--type"}
+    | {"--close-from", "--chdir", "--chroot", "--command-timeout", "--other-user"}
+)
+_SUDO_LONG_QUERY = frozenset(
+    {"--list", "--validate", "--remove-timestamp", "--version", "--edit", "--help"}
+)
+
+
+def _elevated(words: list[str]) -> list[str] | None:
+    """The command a leading ``sudo`` / ``doas`` runs — its own options
+    skipped, thin wrappers stripped — or None when ``words`` starts with
+    neither, or runs nothing."""
+    if not words or words[0] not in _ELEVATORS:
+        return None
+    takes_value, queries = _ELEVATORS[words[0]]
+    i = 1
+    while i < len(words) and words[i].startswith("-"):
+        word = words[i]
+        i += 1
+        if word == "--":
+            break
+        if word.startswith("--"):
+            name, eq, _ = word.partition("=")
+            if name in _SUDO_LONG_QUERY:
+                return None
+            i += name in _SUDO_LONG_VALUE and not eq
+            continue
+        for at, letter in enumerate(word[1:], 1):
+            if letter in queries:
+                return None
+            if letter in takes_value:
+                i += at == len(word) - 1  # else the rest of the word is the value
+                break
+    inner, _ = _strip_wrappers(words[i:])
+    return inner or None
 
 
 @dataclass(frozen=True)
@@ -921,27 +965,40 @@ class WorkspacePolicy:
         lexed = _words(segment)
         words, stripped = _strip_wrappers(lexed)
         # The words as the shell reads them: a quoted '*' is literal.
-        uncertain = _uncertain_word(lexed, words, _words(masked))
+        unvouched = _unvouched(lexed, words, _words(masked))
         if not words:
-            # Syntax alone (`fi`, `done`, `}`) runs nothing — unless the
-            # shell expands something in it.
-            return Verdict("ask", uncertain) if uncertain else Verdict("allow")
+            # Syntax and assignments alone (`fi`, `}`, `f=x`) run nothing —
+            # unless the shell expands something in them (`> $F`, `PATH=$x`),
+            # which asks wherever commands are judged at all. A default of
+            # allow (``trusted``) is the choice not to judge them.
+            if unvouched and self.shell_default != "allow":
+                return Verdict("ask")
+            return Verdict("allow")
         verdict, by_rule = self._decide_words(segment, words)
-        if stripped or uncertain:
+        if (stripped or unvouched) and (
+            verdict.action == "ask" or (by_rule and verdict.action == "allow")
+        ):
             # The wrapper (or the word) is what neither an allow *rule*
             # nor a grant for the command can vouch for: a rule's allow is
-            # capped at ask, and an ask loses its scope. A default of allow
-            # (``trusted``) is not a rule vouching for anything — it is the
-            # choice not to judge commands — and is left alone.
-            why = f"'{' '.join(stripped)}' wraps the command" if stripped else uncertain
-            if by_rule and verdict.action == "allow":
-                verdict = Verdict("ask", f"{why}, so it needs approval")
-            elif verdict.action == "ask":
-                # It asked anyway: only the "always allow" offer goes, and
-                # the guard's why stays off the card (see _OUTPUT_LIKE).
-                verdict = Verdict("ask", verdict.reason)
-        base = self._command_rule_verdict(self._baseline_commands, words, every=True)
-        return merge_verdicts(verdict, base) if base is not None else verdict
+            # capped at ask, and an ask loses its scope — silently (see
+            # _OUTPUT_LIKE). A default of allow (``trusted``) is not a rule
+            # vouching for anything — it is the choice not to judge
+            # commands — and is left alone.
+            verdict = Verdict("ask", verdict.reason if verdict.action == "ask" else "")
+        return self._with_baseline(verdict, words)
+
+    def _with_baseline(self, verdict: Verdict, words: list[str]) -> Verdict:
+        """``verdict`` merged with the baseline's for ``words`` — and for what
+        a leading ``sudo`` / ``doas`` runs, so the baseline that denies
+        ``rm -rf /`` denies ``sudo rm -rf /`` under every preset."""
+        hits: list[Verdict] = []
+        run: list[str] | None = words
+        while run:
+            hit = self._command_rule_verdict(self._baseline_commands, run, every=True)
+            if hit is not None:
+                hits.append(hit)
+            run = _elevated(run)
+        return merge_verdicts(verdict, *hits) if hits else verdict
 
     def _decide_words(self, segment: str, words: list[str]) -> tuple[Verdict, bool]:
         """The verdict and whether a static rule produced it (the decider saw

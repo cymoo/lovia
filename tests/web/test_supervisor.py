@@ -1682,6 +1682,29 @@ async def test_attach_before_the_task_begins_sees_the_history() -> None:
     await asyncio.wait_for(ctrl.task, timeout=5)
 
 
+@pytest.mark.asyncio
+async def test_unreadable_history_fails_the_run_not_the_start(monkeypatch) -> None:
+    """The prefill is best effort: a history that won't load fails the run
+    (recorded, so a schedule's fire moves on), never the start itself."""
+    agent = Agent(name="bot", model=ScriptedProvider([text("hi")]))
+    deps = _app(agent).state.deps
+
+    async def broken(self, session_id):
+        raise ValueError("Unknown entry type: 'future'")
+
+    monkeypatch.setattr(type(deps.session), "segments", broken)
+    ctrl = await deps.supervisor.start(
+        session_id="s1",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+    )
+    await asyncio.wait_for(ctrl.task, timeout=5)
+    assert ctrl.final_status == "failed"
+
+
 # ------------------------------------------------------ durable run records -
 
 

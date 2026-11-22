@@ -1489,11 +1489,16 @@ class RunSupervisor:
             # What a page attaching before the task opens its leg is shown —
             # one that follows the run_started event, from a run sent by
             # another client, gets there first: the task sets the same again.
-            history = (
-                segments_runs(await self.deps.session.segments(session_id))
-                if self.deps.session is not None
-                else []
-            )
+            # Best effort: a history that won't load fails the run in its task,
+            # as a failed run — raised here, it would stall a schedule's fire.
+            history: Runs = []
+            if self.deps.session is not None:
+                try:
+                    history = segments_runs(
+                        await self.deps.session.segments(session_id)
+                    )
+                except Exception as exc:
+                    log.warning("history prefill failed for %s: %s", session_id, exc)
             # Those awaits may have let a concurrent start for this chat in.
             # (Its workspace is this chat's too: nothing to undo.)
             self._check_slot(session_id, cap=False)

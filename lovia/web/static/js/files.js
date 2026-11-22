@@ -134,11 +134,13 @@ function applyWidth(px, beside = false) {
 // drag stops short of the chat column instead — but may give the room back.
 // `release` only lets go.
 function claimSpace({ release = false } = {}) {
-  if (isPhone()) return; // the phone drawer overlays, it doesn't push
+  // Closed, the claim goes at any width — a close on a phone included, or
+  // an overruled claim would outlive the panel back on the desktop.
   if (!state.open) {
     setSidebarAutoCollapsed(false);
     return;
   }
+  if (isPhone()) return; // the phone drawer overlays, it doesn't push
   const sidebarW =
     parseInt(
       getComputedStyle(document.documentElement).getPropertyValue('--lv-sidebar-w'),
@@ -1825,10 +1827,17 @@ async function followViewerLink(href) {
  * delegated back to the panel above. A diagram still rendering when the panel
  * was cloned renders into the copy too.
  */
-function syncModal() {
+/**
+ * Mirror the viewer into the reader.
+ * @param {{ keepScroll?: boolean }} [o] The same page, grown or re-sorted:
+ *   the reader stays where it was read to (the copy is its scroller).
+ */
+function syncModal({ keepScroll = false } = {}) {
+  const top = keepScroll ? (els.modalBody.firstElementChild?.scrollTop ?? 0) : 0;
   const copy = /** @type {HTMLElement} */ (els.viewerBody.cloneNode(true));
   copy.removeAttribute('id');
   els.modalBody.replaceChildren(copy);
+  copy.scrollTop = top;
   renderMermaid(copy);
 }
 
@@ -2141,7 +2150,7 @@ export function initFiles() {
       const col = [...(sortBtn.closest('tr')?.children || [])].indexOf(sortBtn.parentElement);
       /** @type {HTMLElement | undefined} */
       ([...els.viewerBody.querySelectorAll('.lv-files-csv-sort')][col])?.click();
-      syncModal();
+      syncModal({ keepScroll: true });
       return;
     }
     const copyBtn = target?.closest('.lv-btn-copy-code');
@@ -2151,7 +2160,7 @@ export function initFiles() {
     }
     if (target?.closest('.lv-files-load-more')) {
       await loadMore();
-      syncModal();
+      syncModal({ keepScroll: true });
       return;
     }
     const a = target?.closest('a[data-ws-path]');

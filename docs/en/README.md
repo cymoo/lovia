@@ -25,18 +25,21 @@ print(agent.run_sync("Why is the sky blue?").output)
 
 [Complete your first run →](quickstart.md){ .md-button .md-button--primary }
 [Open the Web UI →](web-ui.md){ .md-button }
+[Cheatsheet →](cheatsheet.md){ .md-button }
 
 ## Start from your goal
 
 | I want to… | Start with | Then explore |
 | --- | --- | --- |
 | Run my first agent | [Quickstart](quickstart.md) | [Core concepts](concepts.md) |
+| See every feature on one page | [Cheatsheet](cheatsheet.md) | Each feature's full guide |
 | Connect a model or gateway | [Configure a model](quickstart.md#2-configure-a-model) | [Providers & models](providers.md) |
 | Let the model call code | [Tools](tools.md) | [Built-in tools](built-in-tools.md) |
 | Read files or run commands | [Workspace](workspace.md) | [Tool approvals](tools.md#tool-approval) |
 | Preserve conversations or resume work | [Sessions & checkpoints](sessions-and-checkpoints.md) | [Context management](context.md) |
 | Compose multiple agents | [Multi-agent](multi-agent.md) | [Plugins](plugins.md) |
 | Build a chat application | [Web UI](web-ui.md) | [Web server](web-server.md) · [HTTP API](http-api.md) |
+| Build my own harness on lovia web | [Two ways in](web-server.md#two-ways-in) | [Customizing the page](web-server.md#customizing-the-page) · [HTTP API](http-api.md) |
 | Test agent behavior | [Testing](testing.md) | [Evals](eval.md) · [Observability](observability.md) |
 
 ## lovia's tradeoffs

@@ -3,9 +3,12 @@
 Runs a real ``lovia web`` (the default agent, a ``trusted`` workspace)
 against a scripted OpenAI-compatible stub built into this file, so no API key is
 spent and nothing is nondeterministic. The tools really execute: the agent plans
-with ``todo_write``, reads ``sales.csv``, writes and runs ``analyze.py``, and
-writes ``report.md``, which is then opened in the Files panel. The workspace,
-config, and chat DB live in a temp dir; only the images are written::
+with ``todo_write`` (its last step left pending, so the plan line shows), reads
+``sales.csv``, writes and runs ``analyze.py``, charts the result with
+``show_chart``, and updates the committed
+``report.md``, whose diff is then opened in the Files panel's Changes tab. The
+workspace (a git repo), config, and chat DB live in a temp dir; only the images
+are written::
 
     python3 scripts/web_ui_screenshot.py      # -> docs/images/web-ui{,-dark}.webp
 
@@ -34,27 +37,32 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
-VIEWPORT = {"width": 1600, "height": 960}
-SCALE = 1.5  # 2400x1440 output: sharp on retina at docs/README widths
+# Tall enough for the whole exchange, chart included, without scrolling.
+VIEWPORT = {"width": 1600, "height": 1200}
+SCALE = 1.5  # 2400x1800 output: sharp on retina at docs/README widths
 QUALITY = 0.88  # WebP quality; small text stays crisp in both themes
 
 PROMPT = (
     "Analyze sales.csv: which region grew fastest from Q2 to Q3? "
-    "Write a short report to report.md."
+    "Update report.md for Q3."
 )
 TITLE = "Q3 regional sales analysis"
 FOLLOWUPS = [
     "What drove West's growth in July?",
     "Break the results down by product line",
-    "Draft a Q4 forecast from this trend",
+    "Go ahead with the Q4 forecast",
 ]
-# Earlier chats for the sidebar: (id, title, age in hours).
+# Earlier chats for the sidebar: (id, title, age in hours, workspace folder —
+# WORKSPACE, another in OTHER_WORKSPACES, or None for no project, "Chats").
+WORKSPACE = "sales-ops"
+OTHER_WORKSPACES = ("billing-service", "churn-model")
 HISTORY = [
-    ("s-tickets", "Summarize this week's support tickets", 22),
-    ("s-billing", "Refactor the billing export script", 29),
-    ("s-okr", "Draft Q4 OKR review notes", 55),
-    ("s-churn", "Explain the churn model features", 110),
-    ("s-onboard", "Onboarding checklist for new analysts", 146),
+    ("s-tickets", "Summarize this week's support tickets", 5, None),
+    ("s-invoice", "Fix rounding in invoice totals", 9, "billing-service"),
+    ("s-march", "Clean up the March revenue export", 26, WORKSPACE),
+    ("s-billing", "Refactor the billing export script", 29, "billing-service"),
+    ("s-okr", "Draft Q4 OKR review notes", 55, None),
+    ("s-churn", "Explain the churn model features", 110, "churn-model"),
 ]
 
 SALES_CSV = "month,region,revenue\n" + "".join(
@@ -90,6 +98,29 @@ q2, q3 = (sum(v[i] for v in totals.values()) for i in (0, 1))
 print(f"{'Total':<8}{q2:>10,}{q3:>10,}{(q3 - q2) / q2:>+9.1%}")
 """
 
+# Committed before the run, so the Files panel's Changes tab diffs the update.
+Q2_REPORT_MD = """\
+# Q2 2026 Regional Sales Review
+
+Q2 revenue was **$1.98M**, up **2.9%** from Q1 ($1.92M).
+
+| Region | Q1 | Q2 | Growth |
+|---|---:|---:|---:|
+| West | $355,400 | $380,900 | **+7.2%** |
+| South | $426,500 | $438,400 | +2.8% |
+| East | $598,200 | $609,800 | +1.9% |
+| North | $541,000 | $548,300 | +1.3% |
+
+## Highlights
+
+- **West is picking up.** It grew 7.2%, the fastest of any region.
+- **East and North are flat**, at +1.9% and +1.3%.
+
+## Next steps
+
+1. Watch whether West's growth holds into Q3.
+"""
+
 # The figures below are what ANALYZE_PY prints for SALES_CSV; keep them in sync.
 REPORT_MD = """\
 # Q3 2026 Regional Sales Review
@@ -118,33 +149,56 @@ dipped below June.
 """
 
 FINAL = (
-    "I analyzed `sales.csv` and saved the write-up to `report.md`.\n\n"
+    "I analyzed `sales.csv` and updated `report.md` for Q3.\n\n"
     "- **Total:** Q3 revenue was $2.15M, up **8.9%** from Q2.\n"
     "- **Fastest growth:** **West, +28.7%**. It grew every month and delivered "
     "62% of the quarter's increase.\n"
     "- **Watch:** East is the largest region but grew only 1.2%.\n\n"
-    "The report has the full table, highlights, and suggested next steps."
+    "Last on the plan is a Q4 forecast. Say the word and I'll draft it."
 )
 
+# Drawn in the chat by the built-in show_chart tool; figures as in REPORT_MD.
+CHART = {
+    "title": {"text": "Revenue by region, Q2 vs Q3"},
+    "tooltip": {"trigger": "axis"},
+    "legend": {"right": 0},
+    "dataset": {
+        "source": [
+            ["region", "Q2", "Q3"],
+            ["West", 380900, 490300],
+            ["South", 438400, 473100],
+            ["North", 548300, 572400],
+            ["East", 609800, 617300],
+        ]
+    },
+    "xAxis": {"type": "category"},
+    "yAxis": {"type": "value"},
+    "series": [{"type": "bar"}, {"type": "bar"}],
+}
+
+# The last step stays pending, so the plan line above the composer shows.
 PLAN = [
-    ("Inspect sales.csv", "Inspecting sales.csv"),
+    ("Inspect sales.csv and the Q2 report", "Inspecting the data"),
     ("Compute Q2 vs Q3 growth by region", "Computing growth by region"),
-    ("Write the findings to report.md", "Writing report.md"),
+    ("Update report.md for Q3", "Updating report.md"),
+    ("Draft a Q4 forecast", "Drafting the Q4 forecast"),
 ]
 
 
-def todos(done: int) -> dict[str, Any]:
+def todos(done: int, *, active: bool = True) -> dict[str, Any]:
+    """``done`` steps completed; the next one in progress unless ``active``
+    is false."""
     items = [
         {
             "content": content,
             "status": "completed"
             if i < done
             else "in_progress"
-            if i == done
+            if i == done and active
             else "pending",
-            "active_form": active,
+            "active_form": active_form,
         }
-        for i, (content, active) in enumerate(PLAN)
+        for i, (content, active_form) in enumerate(PLAN)
     ]
     return {"name": "todo_write", "args": {"todos": items}}
 
@@ -159,6 +213,7 @@ TURNS: list[dict[str, Any]] = [
         "tool": todos(0),
     },
     {"tool": {"name": "read_file", "args": {"path": "sales.csv"}}},
+    {"tool": {"name": "read_file", "args": {"path": "report.md"}}},
     {"tool": todos(1)},
     {
         "tool": {
@@ -167,6 +222,7 @@ TURNS: list[dict[str, Any]] = [
         }
     },
     {"tool": {"name": "shell", "args": {"command": "python3 analyze.py"}}},
+    {"tool": {"name": "show_chart", "args": {"option": CHART}}},
     {"tool": todos(2)},
     {
         "tool": {
@@ -174,7 +230,7 @@ TURNS: list[dict[str, Any]] = [
             "args": {"path": "report.md", "content": REPORT_MD},
         }
     },
-    {"tool": todos(3)},
+    {"tool": todos(3, active=False)},
     {"text": FINAL},
 ]
 
@@ -302,8 +358,9 @@ class StubModel(BaseHTTPRequestHandler):
 # ---- setup -----------------------------------------------------------------------
 
 
-def seed(db: str) -> None:
-    """Write HISTORY into the chat DB. Runs under the server's interpreter."""
+def seed(db: str, root: str, general: str) -> None:
+    """Write HISTORY into the chat DB, as chats of folders under ``root`` or of
+    ``general`` (no project). Runs under the server's interpreter."""
     import asyncio
     import sqlite3
 
@@ -312,13 +369,20 @@ def seed(db: str) -> None:
 
     async def write() -> None:
         store = ChatStore.sqlite(db)
-        for sid, title, _ in HISTORY:
+        for name in OTHER_WORKSPACES:  # the sidebar lists registered folders
+            await store.touch_workspace(str(Path(root) / name))
+        for sid, title, _, folder in HISTORY:
             entries = [
                 InputEntry(role="user", content=title),
                 AssistantTextEntry(content="Done."),
             ]
             await store.session.append(sid, entries, run_id=f"run-{sid}")
-            await store.upsert(sid, agent="lovia", title=title)
+            await store.upsert(
+                sid,
+                agent="lovia",
+                title=title,
+                workspace_root=str(Path(root) / folder) if folder else general,
+            )
 
     asyncio.run(write())
     now = time.time()
@@ -327,7 +391,7 @@ def seed(db: str) -> None:
             "UPDATE chat_sessions SET created_at = ?, updated_at = ? WHERE id = ?",
             [
                 (now - hours * 3600, now - hours * 3600, sid)
-                for sid, _, hours in HISTORY
+                for sid, _, hours, _ in HISTORY
             ],
         )
 
@@ -418,26 +482,34 @@ def main() -> None:
         default=default_python(),
         help="interpreter with lovia[web] for the server (default: the repo .venv)",
     )
-    ap.add_argument("--seed", metavar="DB", help=argparse.SUPPRESS)
+    ap.add_argument(
+        "--seed", nargs=3, metavar=("DB", "ROOT", "GENERAL"), help=argparse.SUPPRESS
+    )
     args = ap.parse_args()
     if args.seed:
-        seed(args.seed)
+        seed(*args.seed)
         return
 
     stub = ThreadingHTTPServer(("127.0.0.1", 0), StubModel)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
     with tempfile.TemporaryDirectory(prefix="lovia-shot-") as tmp:
-        root = Path(tmp)
-        ws, run, db = root / "ws", root / "run", root / "chat.db"
-        ws.mkdir()
-        (run / ".lovia").mkdir(parents=True)
+        root = Path(tmp).resolve()  # the server stores resolved roots
+        ws, home, db = root / WORKSPACE, root / "home", root / "chat.db"
+        for folder in (ws, home, *(root / name for name in OTHER_WORKSPACES)):
+            folder.mkdir()
         (ws / "sales.csv").write_text(SALES_CSV)
         (ws / "README.md").write_text(
             "# Sales ops\n\nMonthly revenue exports land in `sales.csv` "
             "(one row per month and region).\n"
         )
-        # A project-scope config wins over ~/.lovia/config.json as a whole file,
-        # so the server can only ever reach the stub.
+        (ws / "report.md").write_text(Q2_REPORT_MD)
+        git = ["git", "-C", str(ws), "-c", "user.name=Sales Ops"]
+        git += ["-c", "user.email=ops@example.com"]
+        subprocess.run([*git, "init", "-q"], check=True)
+        subprocess.run([*git, "add", "."], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "Q2 report"], check=True)
+        # A throwaway --home: the server reads this config, not ~/.lovia, so it
+        # can only ever reach the stub (and memory lands here too).
         model = {
             "id": "stub",
             "name": "glm-5.2",
@@ -449,24 +521,34 @@ def main() -> None:
             "vision": "off",
         }
         config = {
-            "version": 1,
+            "version": 3,
             "models": [model],
             "roles": {"chat": "stub", "aux": "stub"},
             "skills": {"dirs": []},
             # Unprompted shell, so the scripted run never parks on a card.
-            "workspace": {"default_mode": "trusted"},
+            "assistant": {"mode": "trusted"},
         }
-        (run / ".lovia" / "config.json").write_text(json.dumps(config))
-        subprocess.run([args.python, __file__, "--seed", str(db)], check=True)
+        (home / "config.json").write_text(json.dumps(config))
+        subprocess.run(
+            [
+                args.python,
+                __file__,
+                "--seed",
+                str(db),
+                str(root),
+                str(home / "workspace"),
+            ],
+            check=True,
+        )
 
         port = free_port()
         log = root / "server.log"
         with log.open("wb") as log_file:
             cmd = [args.python, "-m", "lovia.web", "--port", str(port)]
-            cmd += ["--db", str(db), str(ws)]
+            cmd += ["--home", str(home), "--db", str(db), str(ws)]
             proc = subprocess.Popen(
                 cmd,
-                cwd=run,
+                cwd=root,
                 env={**os.environ, "BROWSER": "true", "PYTHONUNBUFFERED": "1"},
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
@@ -474,7 +556,7 @@ def main() -> None:
             try:
                 url = f"http://127.0.0.1:{port}/"
                 wait_ready(url, proc, log)
-                if not re.search(r"config\s+\.lovia/config\.json", log.read_text()):
+                if not re.search(r"base URL\s+http://127\.0\.0\.1:", log.read_text()):
                     sys.exit(f"server did not load the stub config:\n{log.read_text()}")
                 args.out.mkdir(parents=True, exist_ok=True)
                 shoot(url, args.out)

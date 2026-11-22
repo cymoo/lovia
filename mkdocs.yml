@@ -70,6 +70,7 @@ plugins:
             Start here: 开始使用
             Quickstart: 快速开始
             Core concepts: 核心概念
+            Cheatsheet: 速查表
             Core: 核心
             Agents: Agent
             Running agents: 运行 Agent
@@ -139,6 +140,7 @@ nav:
   - Start here:
       - Quickstart: quickstart.md
       - Core concepts: concepts.md
+      - Cheatsheet: cheatsheet.md
   - Core:
       - Agents: agents.md
       - Running agents: running.md

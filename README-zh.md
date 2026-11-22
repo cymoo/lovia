@@ -1,13 +1,28 @@
 # lovia
 
-[English](./README.md) | **简体中文**
+[English](https://github.com/cymoo/lovia/blob/main/README.md) | **简体中文**
 
-lovia 是一个优雅、克制的 Python Agent 框架，适合想要掌控 Agent
-循环、又不想从零搭完所有基础设施的开发者。它把 Agent 应用里反复出现的
-难点处理好：工具、会话、事件流、上下文压缩、服务化等；但不会因此变得大而重。
+lovia 是一个轻量、不绑定模型厂商的 Python Agent 框架，有三种用法：
+
+| | 你得到什么 | 从这里开始 |
+| --- | --- | --- |
+| [**作为库**](#作为库) | 一个 Agent 循环：工具、流式输出、会话、审批、上下文管理，写的都是普通 Python | `pip install lovia` |
+| [**作为开箱即用的 harness**](#作为开箱即用的-harnesslovia-web) | 一个本地聊天应用，直接在你的目录里干活：文件、shell、记忆、skills、MCP、定时任务 | `pip install "lovia[web]"`，然后 `lovia web` |
+| [**作为自定义 harness 的底座**](#作为自定义-harness-的底座) | 把这个应用当作工具箱：加上你的工具、换上你的品牌、加自己的视图，或者只用它的 API | `pip install "lovia[web]"`，然后 `default_app()` 或 `create_app()` |
+
+每一层都建在前一层之上：从一个脚本走到一个产品，不用换框架。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cymoo/lovia/main/docs/images/web-ui-dark.webp">
+  <img alt="lovia web 界面：侧栏按工作区分组对话；一个用图表分析 CSV 并更新报告的对话，输入框上方是计划；文件面板里是报告的 diff" src="https://raw.githubusercontent.com/cymoo/lovia/main/docs/images/web-ui.webp">
+</picture>
+
+## 作为库
 
 ```bash
 pip install lovia
+export OPENAI_BASE_URL=https://your-endpoint/v1  # 任何 OpenAI 兼容端点
+export OPENAI_API_KEY=...
 ```
 
 ```python
@@ -20,548 +35,141 @@ def get_order(order_id: str) -> str:
     return f"订单 {order_id}：两天前已发货，预计周四送达。"
 
 
-# 在环境变量里配置 OPENAI_BASE_URL 和 OPENAI_API_KEY。
 agent = Agent(
     name="support",
-    instructions="你是一名客服 agent。回答前先查询订单，然后用一两句具体的话回复。",
-    model="glm-5.2",
+    instructions="回答前先查询订单，用一两句话回复。",
+    model="glm-5.2",  # 你的端点提供的模型
     tools=[get_order],
 )
 
-# run_sync() 适合脚本和 notebook；在异步代码里，
-# 请使用 `await Runner.run(agent, ...)`。
-result = agent.run_sync("我的订单 A-1042 到哪了？")
-print(result.output)
+print(agent.run_sync("我的订单 A-1042 到哪了？").output)
 ```
 
-也可以一行命令启动完整聊天 UI：自带长期记忆、支持 skills 和定时任务，以及把当前目录作为工作区（提供文件读写和执行命令的能力）。
+`run_sync()` 适合脚本和 notebook；异步代码里用 `await Runner.run(agent, ...)`，
+需要类型化事件流就用 `Runner.stream(...)`。使用 Anthropic 时，设置 `ANTHROPIC_API_KEY`
+并写 `model="anthropic:<model>"`；更多见[配置模型](https://cymoo.github.io/lovia/zh/quickstart/#2-配置模型)。
+
+核心只依赖 `httpx`、`pydantic` 和 `pyyaml`。在循环之上：
+
+- **工具**来自带类型的函数，并发执行；结构化输出直接解析成 Pydantic 模型。
+- **多 Agent**：handoff、agent-as-tool 或后台子 Agent。
+- **审批**：敏感工具的调用可以由任意 UI 决定，也可以挂起等人回来再答。
+- **Session 与 Checkpoint**：对话持久化，崩溃的运行可以续跑。
+- **上下文压缩**：从不改写 transcript，保持 provider 的提示词缓存持续命中。
+- **工作区**：文件和 shell 工具由同一套路径与命令策略管理，可以在本地，也可以在 SSH
+  主机或容器里。
+- **插件**：Skills、MCP、Todo 和长期记忆，与你自己的扩展走同一套机制。
+- **护栏、重试、预算、取消与运行中引导**，以及离线的 `ScriptedProvider` 和评测。
+
+**→ [速查表](https://cymoo.github.io/lovia/zh/cheatsheet/)**：每个功能一段代码。
+然后是[快速开始](https://cymoo.github.io/lovia/zh/quickstart/)和
+[核心概念](https://cymoo.github.io/lovia/zh/concepts/)。
+
+## 作为开箱即用的 harness：`lovia web`
 
 ```bash
-pip install "lovia[web]" && lovia web
+pip install "lovia[web]"
+lovia web
 ```
 
-Anthropic 也内置支持：配置 `ANTHROPIC_API_KEY`；使用非默认端点时再配置
-`ANTHROPIC_BASE_URL`。模型名使用 `anthropic:` 前缀即可。模型相关的更多内容见
-[Provider 与模型](https://cymoo.github.io/lovia/zh/providers/)。
+打开 `http://127.0.0.1:8000`，首次启动时添加一个模型。新对话在启动目录里工作
+（`lovia web ~/code/app` 指定其他目录）。
 
-## 文档
+- **在你的目录里干活的助手**：读写文件、执行命令、用 todo 清单规划、搜索网页，
+  把独立的工作交给后台子 Agent。可以同时在多个项目里工作：侧栏按工作区分组对话，
+  每个对话单独选目录、模型和权限模式（从只读到完全访问）。SSH 主机或容器里的目录也可以。
+- **遵循项目自己的约定**：对话会读取所在目录的 `AGENTS.md`、`.agents/skills` 和
+  `.mcp.json`。输入框里 `/` 列出命令和 skills，`@` 引用文件。
+- **完整的聊天体验**：流式输出、审批、从任一回复分支、运行中插话、附件、定时任务，
+  以及可编辑的长期记忆。关掉标签页，运行也会继续。
+- **设置不用重启**：模型、MCP 服务器、skills 和助手的指令都在设置页里改。所有数据都在一个
+  home 目录里（`~/.lovia`，`--home` 可指定其他目录），从不放进你的仓库。
 
-这份 README 只做快速介绍。更完整的内容见[文档](https://cymoo.github.io/lovia/zh/)；
-建议先读[快速开始](https://cymoo.github.io/lovia/zh/quickstart/)和[核心概念](https://cymoo.github.io/lovia/zh/concepts/)。
-[示例](./examples/README-zh.md)按编号组织，可以作为一条直接运行的学习路径。
-1.0 承诺保持稳定的范围见[稳定性](https://cymoo.github.io/lovia/zh/stability/)。
+在 `127.0.0.1` 上无需认证；绑定其他地址时必须使用 token。完整参数见 `lovia web --help`。
 
-## 为什么是 lovia
+**→ [Web UI 指南](https://cymoo.github.io/lovia/zh/web-ui/)**
 
-可组合的原语，普通的 Python，不另造一套抽象宇宙：
+## 作为自定义 harness 的底座
 
-- **极简依赖。** 核心依赖只有 `httpx`、`pydantic` 和 `pyyaml`，其余按需安装即可。
-- **抽象很少。** `Agent` 按约定作为不可变配置使用，通常用 `clone()` 派生；`Runner` 执行一次运行，`@tool`
-  把带类型的 callable 包装成 `Tool`；handoff 和 agent-as-tool 组合多个 agent；插件负责打包
-  其余能力。
-- **读得懂。** 关键流程集中，模型调用、工具执行、重试和持久化的顺序都很清楚。
-  遇到意外行为时，可以顺着同一条链路查下去。
-- **模型接入轻。** 内置 OpenAI、Anthropic 及其兼容接口。
-  不堆厚重适配层；要接新模型，实现一个小 `Protocol` 就够了。
-- **缓存友好的上下文管理。** 压缩只改变下一次模型调用能看到的内容，
-  不改写对话主体，并保持提示词前缀稳定；显式输出上限和持久化维护仍会按配置生效。
-- **生产控制点清楚。** 审批、预算、取消、运行中追加指令、重试、快照/恢复，
-  都是明确的开关，可以按你的应用需要接入。
-- **扩展方式统一。** Skills、MCP、Todo、Memory 都是插件；要加入自定义的能力，
-  也走同一套机制。
+`lovia web` 由一组公开的部件组装而成，你也可以直接用它们，按三种深度使用。
 
-lovia 在设计上始终保持克制：能在应用层用少量代码组合出来的，
-就不做成框架内置。
-
-## 功能巡礼
-
-下面每一站都附有完整指南。
-
-### Agent
-
-`Agent` 是声明式配置：不保存会话状态，可用 `clone()` 派生不同配置。自定义工具、
-工作区和插件等都可以直接组合到这份配置上：
+**同一个助手，加上你的东西。** `default_app()` 构建的正是 `lovia web` 启动的应用；
+`customize` 把每个 Agent 交给你扩展：
 
 ```python
-from lovia import Agent, Memory, Skills, tool
-from lovia.workspace import Workspace
+from lovia import tool
+from lovia.web import default_app, serve
 
 
 @tool
-def light_travel_time(distance_km: float) -> str:
-    """计算光走完一段距离需要多久。"""
-    return f"{distance_km / 299_792.458:.2f} 秒"
+def order_status(order_id: str) -> str:
+    """查询订单。"""
+    return "shipped"
 
 
-agent = Agent(
-    name="science-writer",
-    instructions="你是一位科普作者，善于用生动的日常比喻讲清复杂的科学概念。",
-    model="deepseek-v4-pro",
-    tools=[light_travel_time],
-    workspace=Workspace.local(".", mode="readonly"),
-    plugins=[
-        Skills("./skills"),
-        Memory(),
-    ],
-)
+serve(default_app(customize=lambda agent: agent.clone(tools=[*agent.tools, order_status])))
 ```
 
-→ [Agent](https://cymoo.github.io/lovia/zh/agents/)
-
-### 运行与流式输出
-
-一次运行，三种消费方式。流式句柄既可以异步迭代，也可以 await。迭代本身
-不会抛出运行错误：每个流都会以且仅以一个终止事件结束。
+**你的 Agent，你的页面。** `create_app(agent)` 原样托管你构建的 Agent，并返回一个
+FastAPI 应用，方便挂上你自己的路由：
 
 ```python
-from lovia import Runner, events
+from lovia.web import ChatUI, create_app, serve
 
-handle = Runner.stream(agent, "火星距离地球 2.25 亿公里时，信号传过去需要多久？")
-
-async for ev in handle:
-    if isinstance(ev, events.TextDelta):
-        print(ev.delta, end="", flush=True)
-
-result = await handle.result()
-```
-
-→ [运行 agent](https://cymoo.github.io/lovia/zh/running/) · [流式输出](https://cymoo.github.io/lovia/zh/streaming/)
-
-### 工具
-
-`@tool` 把带类型的 callable 包装成 `Tool`，schema 来自函数签名、docstring、`Annotated`
-和 Pydantic `Field`。同一轮里的多个工具调用默认并发执行；有不可重入副作用的
-工具可以选择退出并发：
-
-```python
-from typing import Annotated
-from pydantic import Field
-from lovia import tool
-
-
-@tool(strict=True)
-def search_docs(
-    query: Annotated[str, "搜索关键词"],
-    limit: Annotated[int, Field(ge=1, le=10)] = 5,
-) -> list[str]:
-    """搜索内部文档。"""
-    return []
-
-
-@tool(parallel=False)
-async def apply_migration(name: str) -> str:
-    """执行数据库迁移；不能和其他工具并发。"""
-    return "applied"
-```
-
-内置的网络工具（`web_fetch`、`web_search`）会把抓取到的内容放进隔离框，
-让模型把它当作素材而不是指令；自定义工具可以用 `fence()` 做同样的处理。
-
-→ [工具](https://cymoo.github.io/lovia/zh/tools/) · [内置工具](https://cymoo.github.io/lovia/zh/built-in-tools/)
-
-### 结构化输出
-
-传入 Pydantic 模型、dataclass、`TypedDict` 或普通类型；最终结果会被解析并
-校验。解析失败时，默认会让模型修复一次：
-
-```python
-from pydantic import BaseModel
-from lovia import Agent, Runner
-
-
-class Brief(BaseModel):
-    title: str
-    bullets: list[str]
-
-
-agent = Agent(name="summarizer", model="glm-5.2", output_type=Brief)
-result = await Runner.run(agent, "给 Python 开发者总结 Transformer。")
-print(result.output.title)
-```
-
-→ [结构化输出](https://cymoo.github.io/lovia/zh/structured-output/)
-
-### Provider
-
-模型可以写字符串，也可以传 provider 实例。OpenAI 兼容端点读取
-`OPENAI_BASE_URL` / `OPENAI_API_KEY`；Anthropic 默认走官方端点，读取
-`ANTHROPIC_API_KEY`，非默认端点再设置 `ANTHROPIC_BASE_URL`。自定义 provider 只是一个小 `Protocol`：
-
-```python
-from lovia import Agent, ModelSettings
-
-agent = Agent(
-    name="assistant",
-    model="anthropic:<model>",
-    settings=ModelSettings(temperature=0.2, max_tokens=800),
-)
-```
-
-→ [Provider 与模型](https://cymoo.github.io/lovia/zh/providers/)
-
-### 多 Agent
-
-| 你的任务 | 使用 | 运行方式 |
-| --- | --- | --- |
-| 让专家接手后续对话 | **Handoff** | 专家带着完整历史，在同一次 Run 中继续回答 |
-| 主 Agent 需要先拿到子任务结果 | **Agent-as-tool** | 子 Agent 只接收委派提示词，结果作为 Tool 返回 |
-| 独立任务可以在后台完成 | **Subagents** | 子 Agent 独立运行，稍后把报告送回父对话 |
-
-下面三段配置彼此独立，展示同一个 `researcher` 的三种接入方式：
-
-```python
-from lovia import Agent, Subagents
-
-researcher = Agent(
-    name="researcher",
-    instructions="调研给定主题并返回简明报告。",
-    model="glm-5.2",
-)
-
-# Handoff：researcher 接管对话，并看到此前的完整历史
-router = Agent(
-    name="router",
-    instructions="需要深入调研时，把对话转给 researcher。",
-    model="deepseek-v4-flash",
-    handoffs=[researcher],
-)
-
-# Agent-as-tool：manager 等待调研结果，再自行回答用户
-manager = Agent(
-    name="manager",
-    instructions="回答前先让 researcher 完成必要的调研。",
-    model="deepseek-v4-flash",
-    tools=[researcher.as_tool(description="调研一个主题并返回报告。")],
-)
-
-# Subagents：assistant 派出后台任务，同时继续处理当前工作
-assistant = Agent(
-    name="assistant",
-    instructions="把独立调研放到后台，同时继续组织答案。",
-    model="deepseek-v4-flash",
-    plugins=[Subagents([researcher])],
-)
-```
-
-`lovia web` 默认启用 Subagents，并在任务完成后自动把报告送回原对话。
-
-→ [多 Agent](https://cymoo.github.io/lovia/zh/multi-agent/)
-
-### 人工介入
-
-给敏感工具一个 `permission`；`ask` 的决策可以来自 UI、服务端规则，也可以通过单独接口处理。
-无人决策时默认拒绝，所以运行不会挂住；拒绝的理由会回到模型那里。暂时没人能回答时，
-`ev.suspend()` 让运行停在这个调用上，从 checkpoint 续跑时会再次询问：
-
-```python
-from lovia import Runner, events, tool
-
-
-@tool(permission="ask")
-async def refund(order_id: str, amount_cents: int) -> str:
-    """发起退款。"""
-    return "refunded"
-
-
-async for ev in Runner.stream(agent, "给订单 A123 退款。"):
-    if isinstance(ev, events.ApprovalRequired):
-        ev.approve()          # 或 ev.reject("改用店内积分")、ev.suspend()
-```
-
-→ [工具审批](https://cymoo.github.io/lovia/zh/tools/#工具审批)
-
-### Session 与 Checkpoint
-
-Session 让对话跨运行持续；Checkpoint 让单次运行在崩溃后可恢复，并且具备幂等性。
-重新提交一个已经完成的 `run_id` 会直接重放结果，不再调用模型：
-
-```python
-from lovia import CheckpointOptions, Runner, SQLiteCheckpointer, SQLiteSession
-
-session = SQLiteSession("chat.db")
-await Runner.run(agent, "我的项目叫 Atlas。", session=session, session_id="u1")
-
-cp = SQLiteCheckpointer("runs.db")
-result = await Runner.run(
+app = create_app(
     agent,
-    "迁移报告格式。",
-    checkpoint=CheckpointOptions(cp, "report-migration-42"),
+    title="Acme",
+    auth=my_auth,          # 任意 FastAPI 依赖
+    run_deps=my_run_deps,  # 谁在提问、页面上选了什么 -> ctx.deps
+    ui=ChatUI(assets="ui", styles=["theme.css"], logo="logo.svg", scripts=["acme.js"]),
 )
+serve(app)
 ```
 
-→ [Session 与 Checkpoint](https://cymoo.github.io/lovia/zh/sessions-and-checkpoints/)
-
-### 上下文压缩
-
-长对话不会撑爆上下文窗口，而且不需要改写历史。压缩只改变发给 model 的视图，同时保持稳定的提示词前缀：
-
-```python
-from lovia import Agent, Compaction
-
-agent = Agent(
-    name="companion",
-    model="glm-5.2",
-    context_policy=Compaction(context_window=200_000, compact_at=0.85, compact_to=0.60),
-)
-```
-
-→ [上下文管理](https://cymoo.github.io/lovia/zh/context/)
-
-### 护栏与可靠性
-
-护栏可以在输入/输出边界否决运行。重试这类默认行为配置在 agent 上；
-每次请求的预算和时间限制，则在运行时传入：
-
-```python
-from lovia import Agent, GuardrailTripped, RetryPolicy, RunBudget, Runner
-
-
-async def must_cite(output, ctx):
-    if "source:" not in str(output).lower():
-        return "缺少来源引用。"
-
-
-agent = Agent(
-    name="researcher",
-    model="glm-5.2",
-    output_guardrails=[must_cite],
-    retry=RetryPolicy(max_attempts=2)
-)
-
-result = await Runner.run(
-    agent,
-    "分析这些日志。",
-    budget=RunBudget(max_tool_calls=20, max_seconds=60)
-)
-```
-
-→ [护栏](https://cymoo.github.io/lovia/zh/guardrails/) · [Provider 重试](https://cymoo.github.io/lovia/zh/retries/) · [预算与限制](https://cymoo.github.io/lovia/zh/budgets/)
-
-### 观察与运行中调整
-
-hooks 可以监听每个运行事件，事件类型和流式输出一致。通过 mailbox，
-你可以在运行中追加一条用户消息，让模型在下一轮看到；运行本身也可以这样调整自己：
-
-```python
-from lovia import AgentHooks, Mailbox, RunContext, Runner, events
-
-hooks = AgentHooks()
-
-
-@hooks.on(events.TurnStarted)
-def deadline(ev, ctx: RunContext):
-    if ev.turn == 9:
-        ctx.mailbox.push("最后一轮：用已有信息回答。")
-
-
-mailbox = Mailbox()
-handle = Runner.stream(agent.clone(hooks=hooks), "分析这些日志。", mailbox=mailbox)
-mailbox.push("重点看 14:00 左右的 5xx 峰值。")  # 下一轮可见
-```
-
-→ [可观测性](https://cymoo.github.io/lovia/zh/observability/) ·
-[取消与运行中引导](https://cymoo.github.io/lovia/zh/cancellation/#在运行中追加指令)
-
-### 工作区
-
-文件和 shell 工具限定在一个根目录下，并由同一套 `allow`/`ask`/`deny` 策略
-同时管理路径和命令。`ask` 决策走标准审批通道；`shell(background=true)` 把
-dev server、watcher、长构建作为 session 拥有的后台进程运行（用
-`read_process_output` 轮询输出，`kill_process` 终止）；前台命令中的 `cmd &` 不再拖住调用：
-
-```python
-from lovia import Agent
-from lovia.workspace import CommandRule, Workspace
-
-agent = Agent(
-    name="coder",
-    instructions="做小而明确的代码修改。",
-    model="glm-5.2",
-    workspace=Workspace.local(
-        ".",
-        mode="coding",
-        command_rules=(CommandRule("make test", "allow"), CommandRule("gh", "ask")),
-    ),
-)
-```
-
-`coding` 可以修改根目录内的文件、读取任何地方，但不写根目录外。它自己不为任何命令担保：不可撤回的操作（`git push`、`rm -r`、`sudo` 等）带理由询问，
-其余问一次、用户可以按对话记住（“本对话中总是允许 `ls`”，串起来的 `ls; git status` 两个一起记）；任何模式之下都有一条底线：拒绝危险命令
-（`git push --force`、`rm -rf /`），禁止触碰凭据库，写 `.git` 或 CI 配置前先问。想让检查命令和
-开发工具免问，显式启用：`lovia.workspace.rules` 里的 `command_rules=READ_ONLY + DEV_TOOLS`——`lovia web`
-默认就启用了（在设置 → 助手里取消勾选，则每条命令都问）。
-
-Shell 命令继承最小环境，包括 Windows 系统、命令解释器、临时目录和用户目录变量，
-确保默认配置下 socket 和用户主目录查找可以正常工作。API key 和代理配置不会自动继承；需要的变量通过
-`Workspace.local(..., env={...})` 显式传入。
-
-在 Git 工作树里，`grep_files` 和带 glob 的 `list_files` 跳过 Git 忽略的内容（`node_modules/`、`dist/`）；
-点名一个被忽略的目录仍会搜它。会话上次读取某个文件之后，它在磁盘上被改过（或删除）时，`write_file` 和
-`edit_file` 拒绝改动，要求先重新读取。
-
-工作区也可以是运行中的容器或 SSH 主机上的一个目录：
-`Workspace.remote(RemoteHost.ssh("box"), "/srv/project")`。工具和策略都一样，在那一端执行；
-主机只需要 `python3` ≥ 3.10，不用安装任何东西。
-
-→ [工作区](https://cymoo.github.io/lovia/zh/workspace/)
-
-### 插件
-
-一条扩展轴：插件可以贡献工具、提示词、每轮视图注入器、hooks 和护栏，
-但不接管控制流：
-
-```python
-from lovia import Agent, Skills, Todo
-from lovia.plugins.mcp import MCP, MCPServerStdio
-
-agent = Agent(
-    name="builder",
-    model="glm-5.2",
-    plugins=[
-        Todo(),
-        Skills("./skills"),
-        MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])),
-    ],
-)
-```
-
-- **`Todo()`**：给模型一份多步任务清单；清单未完成又久未更新时重新展示，
-  但不会撑大 transcript。
-- **`Skills(dir)`**：可复用的指令包（`SKILL.md` + 附属文件）。提示词里常驻
-  一行索引，完整内容按需加载。消息以 `/名字` 开头就是点名使用这个 skill；
-  web 输入框里打 `/` 会列出可用的 skill。
-- **`MCP(server)`**：接入 Model Context Protocol 服务器提供的工具，支持
-  stdio 或 HTTP，可按服务器加名称前缀和审批门禁。网页研究可参考
-  [Parallel Search MCP 配置示例](https://cymoo.github.io/lovia/zh/mcp/#使用-parallel-进行网页研究)。
-
-自己写插件，只需要一个 `name` 和一个返回贡献内容的异步 `setup(ctx)`。
-
-→ [插件](https://cymoo.github.io/lovia/zh/plugins/) · [技能](https://cymoo.github.io/lovia/zh/skills/) ·
-[MCP](https://cymoo.github.io/lovia/zh/mcp/)
-
-### 记忆
-
-跨对话的长期记忆：常驻提示词的 **Notes**（按会话固定，不破坏提示词缓存）加可检索的
-**Archive**。零配置可用，
-默认会在运行结束时筛选真正值得长期保留的事实（只取用户说过或确认过的内容，不取助手自己的
-说法），并定期整理 Notes，合并重复内容、
-清理过期信息。需要更强的检索能力时，可以按需增加参数：
-
-```python
-from lovia import Agent, Memory
-from lovia.plugins import OpenAIEmbedder
-
-agent = Agent(name="assistant", model="glm-5.2",
-              plugins=[Memory("./.lovia/memory")])
-
-Memory("./memory")                             # 标准库关键词检索（FTS5 bm25）
-Memory("./memory", embedder=OpenAIEmbedder())  # + 语义检索 -> 混合召回
-Memory("./memory", index=None)                 # 只有 Notes，不建 Archive
-Memory("./memory", scope=lambda ctx: ctx.deps.project)  # + 按项目分开的 Notes 和召回
-```
-
-→ [记忆](https://cymoo.github.io/lovia/zh/memory/)
-
-### Web UI
-
-一个可接入任意 Agent 的轻量 FastAPI 聊天应用（`pip install "lovia[web]"`）：
-
-```bash
-lovia web --port 9000                      # python -m lovia.web 亦可
-```
-
-```python
-from lovia.web import create_app, serve
-
-serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
-```
-
-- **开箱即用的完整聊天** —— SSE 流式输出、可从任一回复分支的会话、运行中插话或排队到本轮完成后发送、审批、定时任务、记忆编辑（关于你的、按项目分开的）与文件附件（跟着对话存放，不进你的仓库）；输入框里打 `@` 可以按路径引用工作区里的文件；
-  在自己的电脑上，文件面板能在 Finder 中显示文件，或用你的编辑器打开它；浏览器断开后运行仍在服务端继续。
-- **设置不用重启** —— `lovia web` 的模型、MCP 服务器（直接粘贴常见的 `mcpServers` JSON）以及助手的自定义指令、默认权限模式和开关都在设置页里改。
-  改动从下次运行起生效。设置、聊天记录和记忆都在一个 home 里（`~/.lovia`，或 `--home DIR`），不放在启动目录；
-  项目自己的 `AGENTS.md` 和 `.agents/skills` 会在该项目的每个对话里加载（在 Git 仓库里，从仓库根到对话目录沿途的 `AGENTS.md` 都会加载）。每个对话在自己的目录里工作——侧栏按目录分组，权限模式也可以单独选择（自己的应用里用 `create_app(workspaces=WorkspaceSwitch())`）。
-  目录也可以在 SSH 主机上或运行中的容器里：在添加对话框里选好位置，对话的工具就在那边执行。
-- **项目自己的 MCP 服务器** —— 对话目录下的 `.mcp.json`（其他客户端读的也是它）可以给这个项目配服务器；每个服务器在你打开之前不会启动，
-  条目被改过后会重新询问。
-- **斜杠命令** —— 输入框里打 `/`，命令排在技能前面：`/review`（审查未提交的改动，不修改文件）和 `/branch`；
-  自己的页面用 `lovia.registerCommand` 添加。
-- **同一个应用，也能从代码里构建** —— `default_app()` 构建的就是 `lovia web` 启动的那个应用，`customize=` 给它加上你的工具和插件；
-  `create_app()` 则原样托管你自己写的 Agent。
-- **富工具结果** —— 工具返回 `ui_result(kind, props)` 即可渲染 UI；内置表格、ECharts 图表
-  和沙箱 HTML 页面（`show_table`、`show_chart`、`show_html`）。
-- **页面可定制** —— `ChatUI(...)` 与 `assets=` 修改文案、logo、样式和脚本；脚本通过
-  `window.lovia` 驱动页面，还能在聊天之外加自己的视图；`run_deps=` 把用户身份和页面上下文
-  交给工具。
-- **也可以不用内置页面** —— 所有能力都是 JSON + SSE REST API（`/api/docs`）；
-  `create_app(agent, ui=False)` 为你自己的前端提供服务。
-
-→ [Web UI](https://cymoo.github.io/lovia/zh/web-ui/) · [Web 服务端](https://cymoo.github.io/lovia/zh/web-server/) · [HTTP API](https://cymoo.github.io/lovia/zh/http-api/)
-
-### 评测
-
-用 `Case` 定义输入和验收条件，跑完后生成报告。验收可以是普通函数，
-也可以交给 LLM judge；报告还能在 CI 里和基线对比：
-
-```python
-from lovia.eval import Case, contains, evaluate, llm_judge, tool_called
-
-report = await evaluate(agent, [
-    Case("法国首都是哪里？", checks=[contains("巴黎")]),
-    Case("23.4 * 91 等于多少？", checks=[tool_called("calculator")]),
-    Case("为一家书店写一句雨天文案",
-         checks=[llm_judge("不超过 30 个汉字，包含雨天和阅读意象，不使用感叹号")],
-         samples=4, pass_threshold=0.75),
-])
-print(report)
-assert report.passed
-```
-
-→ [评测](https://cymoo.github.io/lovia/zh/eval/)
-
-### 测试
-
-所有东西都可以离线跑在脚本化 provider 上：真实工具、真实循环、预置模型回复。
-
-```python
-from lovia.testing import ScriptedProvider, call, text
-
-provider = ScriptedProvider([
-    call("add", {"a": 2, "b": 3}, call_id="c1"),
-    text("答案是 5。"),
-])
-```
-
-→ [测试](https://cymoo.github.io/lovia/zh/testing/)
-
-## 示例
-
-`examples/` 目录是一条按编号排列、自包含、可直接运行的学习路径：从
-`01_hello.py` 到终端客服 bot 共三十个脚本；另有每个内置工具族一个脚本
-（`tools/`），以及经典 workflow 模式（`workflows/`）。
-环境准备与完整索引见 [examples/README-zh.md](examples/README-zh.md)。
-
-## 安装选项
+- **能渲染 UI 的工具结果**：工具返回 `ui_result(kind, props)` 即可；内置表格、ECharts
+  图表和沙箱 HTML 页面。
+- **可脚本化的页面**：通过 `window.lovia` 注册自定义 kind 的渲染器、工具卡片视图、斜杠命令，
+  以及聊天旁边的整页视图；模板 block、设计 token 和 `data-i18n` 键分别用来改结构、外观和
+  文案。`lovia web init-ui ui` 生成脚手架目录；[lovia-react](https://github.com/cymoo/lovia-react)
+  演示了用 React 视图扩展内置聊天页面。
+
+**只要 API。** 页面能做的一切都是 JSON + SSE API（`/api/docs`）：`create_app(agent, ui=False)`
+只提供 API，`build_api_router()` 把它挂进你自己的 FastAPI 应用，认证由你自己负责。
+
+**→ [Web 服务端指南](https://cymoo.github.io/lovia/zh/web-server/)** ·
+[HTTP API](https://cymoo.github.io/lovia/zh/http-api/) ·
+[生产部署](https://cymoo.github.io/lovia/zh/deployment/)
+
+## 设计取向
+
+- **核心很小。** 只有三个硬依赖；MCP、Web 应用和搜索后端都是可选的 extra。
+- **抽象很少。** 不可变的 `Agent`、无状态的 `Runner`、`@tool`，以及作为唯一扩展轴的插件。
+  扩展点都是 dataclass、Protocol 和装饰器，从不靠继承。
+- **一条路径读到底。** 模型调用、工具执行、重试和持久化都在一个显式的循环里；
+  遇到意外行为，顺着一条链查下去就行。
+- **克制。** 能在应用层用几行代码搞定的，就不做进框架。
+
+## 示例、安装与开发
+
+[示例](https://github.com/cymoo/lovia/tree/main/examples)是一条按编号排列、可直接运行的
+学习路径：从 `01_hello.py` 到带组件、品牌定制和扩展脚本的 Web 应用（`26`–`27`、`31`–`35`）。
 
 | 需求 | 安装 |
 | --- | --- |
-| 核心框架 | `pip install lovia` |
-| DuckDuckGo 搜索 | `pip install "lovia[ddg]"` |
-| Tavily 搜索 | 无需安装额外依赖；设置 `TAVILY_API_KEY` 即可 |
-| MCP 集成 | `pip install "lovia[mcp]"` |
-| Web UI（含 MCP） | `pip install "lovia[web]"` |
+| 核心库 | `pip install lovia` |
+| MCP | `pip install "lovia[mcp]"` |
+| Web 应用（含 MCP） | `pip install "lovia[web]"` |
+| DuckDuckGo 搜索 | `pip install "lovia[ddg]"`（Tavily 无需额外依赖，设置 `TAVILY_API_KEY` 即可） |
 | 可运行示例 | `pip install "lovia[examples,web]"` |
-| 开发 | `pip install -e ".[dev]"` |
-
-## 开发
 
 ```bash
-pip install -e ".[dev]"
+python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest
-.venv/bin/python -m ruff check .
-.venv/bin/python -m ruff format .
+.venv/bin/python -m ruff check . && .venv/bin/python -m ruff format .
 .venv/bin/python -m mypy lovia
 ```
 
-标记为 `live_provider` 的真实端点测试默认跳过，需要显式开启。面向贡献者的
-内部机制文档见 [docs/architecture.md](https://cymoo.github.io/lovia/zh/architecture/)。
+真实端点测试默认跳过，开启方式：
+`LOVIA_LIVE_TESTS=1 .venv/bin/python -m pytest -m live_provider`。1.0 之前哪些部分可能变化，
+见[稳定性](https://cymoo.github.io/lovia/zh/stability/)；贡献者请先读
+[架构说明](https://cymoo.github.io/lovia/zh/architecture/)。

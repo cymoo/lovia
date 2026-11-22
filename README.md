@@ -1,14 +1,30 @@
 # lovia
 
-**English** | [简体中文](./README-zh.md)
+**English** | [简体中文](https://github.com/cymoo/lovia/blob/main/README-zh.md)
 
-lovia is an elegant, restrained Python framework for developers who want to
-own the agent loop without rebuilding every supporting primitive from scratch.
-It covers the recurring hard parts of agent applications — tools, sessions,
-events, context compaction, serving — without turning into a platform.
+lovia is a lightweight, provider-neutral agent framework for Python. Use it
+three ways:
+
+| | You get | Start with |
+| --- | --- | --- |
+| [**A library**](https://github.com/cymoo/lovia#a-library) | An agent loop with tools, streaming, sessions, approvals and context management, in ordinary Python | `pip install lovia` |
+| [**A ready-made harness**](https://github.com/cymoo/lovia#a-ready-made-harness-lovia-web) | A local chat app that works in your folders: files, shell, memory, skills, MCP, schedules | `pip install "lovia[web]"`, then `lovia web` |
+| [**The base for your own**](https://github.com/cymoo/lovia#the-base-for-your-own-harness) | That app as a toolkit: add your tools, brand the page, add views — or keep only its API | `pip install "lovia[web]"`, then `default_app()` or `create_app()` |
+
+Each layer is built on the one before it, so moving from a script to a
+product never means switching frameworks.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cymoo/lovia/main/docs/images/web-ui-dark.webp">
+  <img alt="The lovia web UI: chats grouped by workspace; a chat that charted a CSV file and updated a report, its plan above the composer; the report's diff in the Files panel" src="https://raw.githubusercontent.com/cymoo/lovia/main/docs/images/web-ui.webp">
+</picture>
+
+## A library
 
 ```bash
 pip install lovia
+export OPENAI_BASE_URL=https://your-endpoint/v1  # any OpenAI-compatible endpoint
+export OPENAI_API_KEY=...
 ```
 
 ```python
@@ -21,610 +37,164 @@ def get_order(order_id: str) -> str:
     return f"Order {order_id}: shipped 2 days ago, arriving Thursday."
 
 
-# Configure OPENAI_BASE_URL and OPENAI_API_KEY in your environment.
 agent = Agent(
     name="support",
-    instructions="You are a customer-support agent. Look the order up before "
-    "answering, and reply in one or two concrete sentences.",
-    model="glm-5.2",
+    instructions="Look the order up before answering, in one or two sentences.",
+    model="glm-5.2",  # a model your endpoint serves
     tools=[get_order],
 )
 
-# run_sync() suits scripts and notebooks; from async code,
-# use `await Runner.run(agent, ...)` instead.
-result = agent.run_sync("Where is my order A-1042?")
-print(result.output)
+print(agent.run_sync("Where is my order A-1042?").output)
 ```
 
-Or serve a full chat UI — memory, skills, scheduling, and a workspace on
-the current directory included — in one line:
+`run_sync()` suits scripts and notebooks; async code calls
+`await Runner.run(agent, ...)`, or `Runner.stream(...)` for typed events. For
+Anthropic, set `ANTHROPIC_API_KEY` and use `model="anthropic:<model>"`; more in
+[configure a model](https://cymoo.github.io/lovia/quickstart/#2-configure-a-model).
+
+The core depends only on `httpx`, `pydantic` and `pyyaml`. On top of the loop:
+
+- **Tools** from typed functions, run concurrently; structured output into
+  Pydantic models.
+- **Multi-agent** by handoff, agent-as-tool, or background subagents.
+- **Approvals** for sensitive tools, answered from any UI or suspended until
+  someone does.
+- **Sessions and checkpoints** — conversations persist, and a crashed run
+  resumes.
+- **Context compaction** that never rewrites the transcript and keeps provider
+  prompt caches warm.
+- **A workspace** — file and shell tools under one path-and-command policy,
+  locally or on an SSH host or container.
+- **Plugins** — Skills, MCP, Todo and long-term Memory, all on the same seam as
+  your own.
+- **Guardrails, retries, budgets, cancellation and mid-run steering**, plus an
+  offline `ScriptedProvider` and evals for testing.
+
+**→ [Cheatsheet](https://cymoo.github.io/lovia/cheatsheet/)**: every feature,
+one snippet each. Then the [quickstart](https://cymoo.github.io/lovia/quickstart/)
+and [core concepts](https://cymoo.github.io/lovia/concepts/).
+
+## A ready-made harness: `lovia web`
 
 ```bash
-pip install "lovia[web]" && lovia web
+pip install "lovia[web]"
+lovia web
 ```
 
-Anthropic is built in too: configure `ANTHROPIC_API_KEY`, set
-`ANTHROPIC_BASE_URL` for non-default endpoints, and use the `anthropic:`
-model prefix. Everything else about models lives in
-[Providers & models](https://cymoo.github.io/lovia/providers/).
+Open `http://127.0.0.1:8000` and add a model on first launch. New chats work
+in the directory you started from (`lovia web ~/code/app` names another).
 
-## Documentation
+- **An assistant that works in your folders** — reads and edits files, runs
+  commands, plans with a todo list, searches the web and hands independent work
+  to background subagents. Work across several projects at once: the sidebar
+  groups chats by workspace, and each chat picks its folder, model and
+  permission mode, from read-only to full access. Folders on an SSH host or in
+  a container work too.
+- **Your project's conventions** — a chat follows its folder's `AGENTS.md`,
+  `.agents/skills` and `.mcp.json`. `/` in the composer lists commands and
+  skills, `@` mentions a file.
+- **A chat that keeps up** — streaming, approvals, branching from any reply,
+  steering a run while it works, attachments, scheduled runs, and long-term
+  memory you can edit. Runs survive a closed tab.
+- **Settings without restarts** — models, MCP servers, skills and the
+  assistant's instructions live in Settings. Everything is kept in one home,
+  `~/.lovia` (`--home` names another), never in your repository.
 
-This README is a quick tour. For the full guide, start with the
-[quickstart](https://cymoo.github.io/lovia/quickstart/) and
-[core concepts](https://cymoo.github.io/lovia/concepts/) in the
-[documentation](https://cymoo.github.io/lovia/). The
-[examples](./examples/README.md) are a numbered, runnable learning path.
-What 1.0 keeps stable is spelled out in
-[Stability](https://cymoo.github.io/lovia/stability/).
+On `127.0.0.1` the app needs no credentials; any other address requires a
+token. `lovia web --help` lists the flags.
 
-## Why lovia
+**→ [Web UI guide](https://cymoo.github.io/lovia/web-ui/)**
 
-Composable primitives, ordinary Python — no new universe of abstractions:
+## The base for your own harness
 
-- **Minimum dependencies.** The core depends only on `httpx`, `pydantic`,
-  and `pyyaml`; install everything else only when needed.
-- **Few abstractions.** An `Agent` is treated as immutable configuration and
-  normally varied with `clone()`; a `Runner`
-  executes one run, and `@tool` wraps a typed callable as a `Tool`; handoff and agent-as-tool
-  compose agents; plugins package the rest.
-- **Readable.** The critical path is concentrated and explicit: model
-  calls, tool execution, retries, and persistence happen in a clear order.
-  When something surprises you, there is one chain to follow.
-- **Lightweight model integration.** OpenAI, Anthropic, and compatible
-  endpoints are built in. There is no adapter stack to
-  fight; a new provider is just a small `Protocol`.
-- **Cache-friendly context management.** Compaction changes only the next
-  model view, without rewriting the conversation body, and keeps prompt
-  prefixes stable. Explicit output limits and persistence maintenance still
-  apply.
-- **Production seams, not a production costume.** Approvals, budgets,
-  cancellation, mid-run steering, retries, checkpoint/resume — explicit
-  knobs you wire into your own app.
-- **One extension axis.** Skills, MCP, Todo, and Memory are all plugins on
-  the same seam you get for your own capabilities.
+`lovia web` is assembled from public pieces you can use yourself, at three
+depths.
 
-The design pressure throughout is restraint: if a feature can be a short
-user-side recipe, it stays out of the framework.
-
-## The tour
-
-Every stop below has a full guide; each snippet runs as written.
-
-### Agents
-
-An `Agent` is declarative configuration — no conversation state, safe to
-share, cheap to `clone()`. Tools, a workspace, and plugins compose directly on
-that configuration:
+**The same assistant, plus yours.** `default_app()` builds exactly what
+`lovia web` serves; `customize` hands you each agent to extend:
 
 ```python
-from lovia import Agent, Memory, Skills, tool
-from lovia.workspace import Workspace
+from lovia import tool
+from lovia.web import default_app, serve
 
 
 @tool
-def light_travel_time(distance_km: float) -> str:
-    """Calculate one-way light-signal delay for a distance in kilometers."""
-    return f"{distance_km / 299_792.458:.2f} seconds"
+def order_status(order_id: str) -> str:
+    """Look up an order."""
+    return "shipped"
 
 
-agent = Agent(
-    name="science-writer",
-    instructions="Explain complex science with vivid, everyday analogies.",
-    model="gpt-5.5",
-    tools=[light_travel_time],
-    workspace=Workspace.local(".", mode="readonly"),
-    plugins=[
-        Skills("./skills"),
-        Memory(),
-    ],
-)
+serve(default_app(customize=lambda agent: agent.clone(tools=[*agent.tools, order_status])))
 ```
 
-→ [Agents](https://cymoo.github.io/lovia/agents/)
-
-### Running and streaming
-
-One run, three consumption styles — and the stream handle is both
-async-iterable and awaitable. Iteration never raises: every stream ends with
-exactly one terminal event.
+**Your agent, your page.** `create_app(agent)` serves the agent you built,
+exactly as built, and returns a FastAPI app for your own routes:
 
 ```python
-from lovia import Runner, events
+from lovia.web import ChatUI, create_app, serve
 
-handle = Runner.stream(
+app = create_app(
     agent,
-    "How long does a signal take to reach Mars at 225 million km?",
+    title="Acme",
+    auth=my_auth,          # any FastAPI dependency
+    run_deps=my_run_deps,  # who is asking, and what the page picked -> ctx.deps
+    ui=ChatUI(assets="ui", styles=["theme.css"], logo="logo.svg", scripts=["acme.js"]),
 )
-
-async for ev in handle:
-    if isinstance(ev, events.TextDelta):
-        print(ev.delta, end="", flush=True)
-
-result = await handle.result()
+serve(app)
 ```
 
-→ [Running](https://cymoo.github.io/lovia/running/) · [Streaming](https://cymoo.github.io/lovia/streaming/)
-
-### Tools
-
-`@tool` wraps a typed callable as a `Tool`; the schema comes from signatures,
-docstrings, `Annotated`, and Pydantic `Field`s. One turn's calls execute concurrently by
-default — tools with non-reentrant side effects opt out and become execution
-barriers:
-
-```python
-from typing import Annotated
-from pydantic import Field
-from lovia import tool
-
-
-@tool(strict=True)
-def search_docs(
-    query: Annotated[str, "Search terms"],
-    limit: Annotated[int, Field(ge=1, le=10)] = 5,
-) -> list[str]:
-    """Search internal documentation."""
-    return []
-
-
-@tool(parallel=False)
-async def apply_migration(name: str) -> str:
-    """Apply a database migration (never concurrently with other tools)."""
-    return "applied"
-```
-
-The built-in web tools (`web_fetch`, `web_search`) fence what
-they fetch, so the model reads it as material rather than instructions;
-`fence()` does the same for your own tools.
-
-→ [Tools](https://cymoo.github.io/lovia/tools/) · [Built-in tools](https://cymoo.github.io/lovia/built-in-tools/)
-
-### Structured output
-
-Pass a Pydantic model, dataclass, `TypedDict`, or plain type; the final
-answer is validated — and repaired once, by default, when it doesn't parse:
-
-```python
-from pydantic import BaseModel
-from lovia import Agent, Runner
-
-
-class Brief(BaseModel):
-    title: str
-    bullets: list[str]
-
-
-agent = Agent(name="summarizer", model="glm-5.2", output_type=Brief)
-result = await Runner.run(agent, "Summarize Transformer for a Python developer.")
-print(result.output.title)
-```
-
-→ [Structured output](https://cymoo.github.io/lovia/structured-output/)
-
-### Providers
-
-Use model strings or provider instances. OpenAI-compatible
-endpoints read `OPENAI_BASE_URL` / `OPENAI_API_KEY`; Anthropic defaults to
-the official endpoint, reads `ANTHROPIC_API_KEY`, and uses
-`ANTHROPIC_BASE_URL` for non-default endpoints. Prompt caching and reasoning
-models are handled per endpoint, and a custom provider is a small
-`Protocol`:
-
-```python
-from lovia import Agent, ModelSettings
-
-agent = Agent(
-    name="assistant",
-    model="anthropic:<model>",
-    settings=ModelSettings(temperature=0.2, max_tokens=800),
-)
-```
-
-→ [Providers & models](https://cymoo.github.io/lovia/providers/)
-
-### Multi-agent
-
-| Your task | Use | Runtime behavior |
-| --- | --- | --- |
-| Let a specialist take over the conversation | **Handoff** | The specialist receives full history and continues in the same Run |
-| Get a subtask result before the parent continues | **Agent-as-tool** | The child receives only the delegated prompt and returns a Tool result |
-| Run independent work in the background | **Subagents** | The child runs independently and reports back later |
-
-The three alternatives below show the same `researcher` in each mode:
-
-```python
-from lovia import Agent, Subagents
-
-researcher = Agent(
-    name="researcher",
-    instructions="Research the given topic and return a concise report.",
-    model="glm-5.2",
-)
-
-# Handoff: researcher takes over and receives the full conversation
-router = Agent(
-    name="router",
-    instructions="Transfer to researcher when in-depth research is needed.",
-    model="deepseek-v4-flash",
-    handoffs=[researcher],
-)
-
-# Agent-as-tool: manager waits for the research, then answers the user itself
-manager = Agent(
-    name="manager",
-    instructions="Ask researcher for any research needed before answering.",
-    model="deepseek-v4-flash",
-    tools=[researcher.as_tool(description="Research a topic and return a report.")],
-)
-
-# Subagents: assistant starts background research and keeps working
-assistant = Agent(
-    name="assistant",
-    instructions="Run independent research in the background while drafting the answer.",
-    model="deepseek-v4-flash",
-    plugins=[Subagents([researcher])],
-)
-```
-
-`lovia web` enables Subagents by default and reports completed work back to
-the original conversation.
-
-→ [Multi-agent](https://cymoo.github.io/lovia/multi-agent/)
-
-### Human in the loop
-
-Give sensitive tools a `permission`; resolve `ask` from your UI, a
-server-side policy, or an out-of-band channel — unresolved approvals deny,
-so runs never hang, and a denial carries its reason back to the model. Nobody
-around to answer? `ev.suspend()` stops the run at that call, and resuming its
-checkpoint asks again:
-
-```python
-from lovia import Runner, events, tool
-
-
-@tool(permission="ask")
-async def refund(order_id: str, amount_cents: int) -> str:
-    """Issue a refund."""
-    return "refunded"
-
-
-async for ev in Runner.stream(agent, "Refund order A123."):
-    if isinstance(ev, events.ApprovalRequired):
-        ev.approve()          # or ev.reject("use store credit instead"), ev.suspend()
-```
-
-→ [Tool approval](https://cymoo.github.io/lovia/tools/#tool-approval)
-
-### Sessions and checkpoints
-
-Sessions persist conversations across runs; checkpoints make single runs
-crash-safe and idempotent — re-issuing a completed `run_id` replays its
-result without calling the model:
-
-```python
-from lovia import CheckpointOptions, Runner, SQLiteCheckpointer, SQLiteSession
-
-session = SQLiteSession("chat.db")
-await Runner.run(agent, "My project is called Atlas.", session=session, session_id="u1")
-
-cp = SQLiteCheckpointer("runs.db")
-result = await Runner.run(
-    agent,
-    "Migrate the report format.",
-    checkpoint=CheckpointOptions(cp, "report-migration-42"),
-)
-```
-
-→ [Sessions & checkpoints](https://cymoo.github.io/lovia/sessions-and-checkpoints/)
-
-### Context compaction
-
-Long conversations survive the window without rewriting history: compaction
-is view-only, keeps the prompt prefix stable for provider caches:
-
-```python
-from lovia import Agent, Compaction
-
-agent = Agent(
-    name="companion",
-    model="glm-5.2",
-    context_policy=Compaction(context_window=200_000, compact_at=0.85, compact_to=0.60),
-)
-```
-
-→ [Context management](https://cymoo.github.io/lovia/context/)
-
-### Guardrails and reliability
-
-Guardrails veto runs at the input/output boundary. Reliability follows one
-placement rule — retry posture on the agent, per-run limits on the run:
-
-```python
-from lovia import Agent, GuardrailTripped, RetryPolicy, RunBudget, Runner
-
-
-async def must_cite(output, ctx):
-    if "source:" not in str(output).lower():
-        return "Missing source citation."
-
-
-agent = Agent(
-    name="researcher",
-    model="glm-5.2",
-    output_guardrails=[must_cite],
-    retry=RetryPolicy(max_attempts=2)
-)
-
-result = await Runner.run(
-    agent,
-    "Analyze these logs.",
-    budget=RunBudget(max_tool_calls=20, max_seconds=60)
-)
-```
-
-→ [Guardrails](https://cymoo.github.io/lovia/guardrails/) · [Provider retries](https://cymoo.github.io/lovia/retries/) · [Budgets & limits](https://cymoo.github.io/lovia/budgets/)
-
-### Hooks and steering
-
-Hooks observe every run event (fail-open, same types as streaming); the
-mailbox is the inbound dual of cancellation — push a message into a live run
-and the model sees it next turn. A run can even steer itself:
-
-```python
-from lovia import AgentHooks, Mailbox, RunContext, Runner, events
-
-hooks = AgentHooks()
-
-
-@hooks.on(events.TurnStarted)
-def deadline(ev, ctx: RunContext):
-    if ev.turn == 9:
-        ctx.mailbox.push("Last turn: answer with what you have.")
-
-
-mailbox = Mailbox()
-handle = Runner.stream(agent.clone(hooks=hooks), "Analyze these logs.", mailbox=mailbox)
-mailbox.push("Focus on the 5xx spike around 14:00.")  # seen next turn
-```
-
-→ [Observability](https://cymoo.github.io/lovia/observability/) · [Cancellation & steering](https://cymoo.github.io/lovia/cancellation/#steering-a-live-run)
-
-### Workspace
-
-File and shell tools scoped to a root, governed by one `allow`/`ask`/`deny`
-policy over paths *and* commands — `ask` decisions ride the normal approval
-channel. `shell(background=true)` runs dev servers, watchers, and long
-builds as session-owned background processes (poll `read_process_output`,
-stop with `kill_process`); a foreground `cmd &` no longer stalls the call:
-
-```python
-from lovia import Agent
-from lovia.workspace import CommandRule, Workspace
-
-agent = Agent(
-    name="coder",
-    instructions="Make small, targeted code changes.",
-    model="glm-5.2",
-    workspace=Workspace.local(
-        ".",
-        mode="coding",
-        command_rules=(CommandRule("make test", "allow"), CommandRule("gh", "ask")),
-    ),
-)
-```
-
-`coding` edits inside the root, reads anywhere and writes nowhere else. It
-vouches for no command itself: the irreversible ask with a reason
-(`git push`, `rm -r`, `sudo`, …), everything else asks once and the user can
-remember it per chat ("always allow `ls`" — a chained `ls; git status`
-offers both at once), and under every mode a baseline
-denies the dangerous (`git push --force`, `rm -rf /`), keeps credential
-stores off-limits and asks before writing `.git` or CI configuration. To run
-inspection and dev tools unprompted, opt in: `command_rules=READ_ONLY +
-DEV_TOOLS` from `lovia.workspace.rules` — `lovia web` does, by default
-(clear the bundles in Settings → Assistant to ask for every command).
-
-Shell commands inherit a minimal environment, including Windows system,
-shell, temporary-directory, and user-profile variables so sockets and home
-lookups work by default.
-API keys and proxy settings are not inherited; pass required variables via
-`Workspace.local(..., env={...})`.
-
-In a git work tree, `grep_files` and globbed `list_files` skip what git
-ignores (`node_modules/`, `dist/`) — naming an ignored directory still
-searches it. `write_file` and `edit_file` refuse a file that changed on disk
-(or was deleted) since the session last read it, and ask for a fresh read.
-
-The workspace can also be a directory in a running container or on an SSH
-host — `Workspace.remote(RemoteHost.ssh("box"), "/srv/project")` — with the
-same tools and the same policy, enforced over there. The host needs
-`python3` ≥ 3.10 and nothing installed.
-
-→ [Workspace](https://cymoo.github.io/lovia/workspace/)
-
-### Plugins
-
-One extension axis: a plugin contributes tools, prompt text, per-turn view
-injectors, hooks, and guardrails — never control flow:
-
-```python
-from lovia import Agent, Skills, Todo
-from lovia.plugins.mcp import MCP, MCPServerStdio
-
-agent = Agent(
-    name="builder",
-    model="glm-5.2",
-    plugins=[
-        Todo(),
-        Skills("./skills"),
-        MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])),
-    ],
-)
-```
-
-- **`Todo()`** — gives the model a checklist for multi-step work; a list left
-  unfinished and untouched for a while is re-shown, without growing the
-  transcript.
-- **`Skills(dir)`** — reusable instruction bundles (`SKILL.md` + files): a
-  one-line index stays in the prompt, full content loads on demand. A
-  message that starts with `/name` asks for that skill by name; the web
-  composer lists them as you type `/`.
-- **`MCP(server)`** — tools from Model Context Protocol servers, stdio or
-  HTTP, with per-server name prefixes and approval gates. For web research,
-  try the [Parallel Search MCP recipe](https://cymoo.github.io/lovia/mcp/#web-research-with-parallel).
-
-Writing your own is a `name` plus one async `setup(ctx)` returning the
-contributions.
-
-→ [Plugins](https://cymoo.github.io/lovia/plugins/) · [Skills](https://cymoo.github.io/lovia/skills/) · [MCP](https://cymoo.github.io/lovia/mcp/)
-
-### Memory
-
-Long-term memory across conversations — always-in-prompt **Notes** (facts
-the user stated or confirmed, never the assistant's own claims; pinned per
-session so they never bust the prompt cache) plus a searchable **Archive**,
-zero-config, self-tidying (a periodic **dream** pass merges duplicates and
-prunes stale facts), upgradeable one argument at a time:
-
-```python
-from lovia import Agent, Memory
-from lovia.plugins import OpenAIEmbedder
-
-agent = Agent(name="assistant", model="glm-5.2",
-              plugins=[Memory("./.lovia/memory")])
-
-Memory("./memory")                             # stdlib keyword search (FTS5 bm25)
-Memory("./memory", embedder=OpenAIEmbedder())  # + semantic arm -> hybrid recall
-Memory("./memory", index=None)                 # notes only, no archive
-Memory("./memory", scope=lambda ctx: ctx.deps.project)  # + per-project notes & recall
-```
-
-→ [Memory](https://cymoo.github.io/lovia/memory/)
-
-### Web UI
-
-A lightweight FastAPI chat app for any agent (`pip install "lovia[web]"`):
-
-```bash
-lovia web --port 9000                      # python -m lovia.web works too
-```
-
-```python
-from lovia.web import create_app, serve
-
-serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
-```
-
-- **Full chat out of the box** — SSE streaming, sessions you can branch from
-  any reply, messages that steer a running run or queue until it completes,
-  approvals, schedules, a memory editor (notes about you, and per project)
-  and file attachments, kept with the chat rather than in your repository;
-  `@` in the composer mentions a workspace file by path; on your own
-  machine the Files panel shows a file in Finder or opens it in your
-  editor; runs survive browser disconnects.
-- **Settings without restarts** — `lovia web` keeps models, MCP servers
-  (paste the usual `mcpServers` JSON) and the assistant's custom
-  instructions, default permission mode and switches in Settings. A change
-  applies from the next run. Settings, chat history and memory live in one
-  home (`~/.lovia`, or `--home DIR`), never in the launch directory; a
-  project's own `AGENTS.md` and `.agents/skills` load in every chat working
-  there (in a Git repository, every `AGENTS.md` from its root down to the
-  chat's folder). Each chat works in a folder of its own — the
-  sidebar groups chats by folder, and each picks its permission mode
-  (`create_app(workspaces=WorkspaceSwitch())` in your own app). The folder
-  can be on an SSH host or in a running container: pick it in the add
-  dialog, and the chat's tools run there.
-- **A project's own MCP servers** — a `.mcp.json` in the chat's folder, the
-  file other clients read, names servers for that project; each stays off
-  until you turn it on, and an edited entry asks again.
-- **Slash commands** — `/` in the composer lists commands ahead of skills:
-  `/review` (review uncommitted changes without editing files) and
-  `/branch`; your page adds its own with `lovia.registerCommand`.
-- **The same app from code** — `default_app()` builds what `lovia web`
-  serves, and `customize=` adds your tools and plugins to it; `create_app()`
-  serves an agent of your own as you built it.
-- **Rich tool results** — a tool returns `ui_result(kind, props)` to draw UI;
-  tables, ECharts charts and sandboxed HTML pages come built in
-  (`show_table`, `show_chart`, `show_html`).
-- **Customizable page** — `ChatUI(...)` and `assets=` change wording, logo,
-  styles and scripts; scripts drive the page through `window.lovia` and add
-  views of their own beside the chat, and `run_deps=` hands tools the
-  user's identity and page context.
-- **Headless if you prefer** — everything is a JSON + SSE REST API
-  (`/api/docs`); `create_app(agent, ui=False)` serves your own front-end.
-
-→ [Web UI](https://cymoo.github.io/lovia/web-ui/) · [Web server](https://cymoo.github.io/lovia/web-server/) · [HTTP API](https://cymoo.github.io/lovia/http-api/)
-
-### Evals
-
-Behavioral test suites: a `Case` pairs input with checks, any function is a
-check, the LLM judge is just another check, and reports diff against a
-baseline in CI:
-
-```python
-from lovia.eval import Case, contains, evaluate, llm_judge, tool_called
-
-report = await evaluate(agent, [
-    Case("What is the capital of France?", checks=[contains("Paris")]),
-    Case("What's 23.4 * 91?", checks=[tool_called("calculator")]),
-    Case("Write a haiku about spring",
-         checks=[llm_judge("A 5-7-5 haiku that evokes spring")],
-         samples=4, pass_threshold=0.75),
-])
-print(report)
-assert report.passed
-```
-
-→ [Evals](https://cymoo.github.io/lovia/eval/)
-
-### Testing
-
-Everything runs offline against a scripted provider — real tools, real loop,
-canned model:
-
-```python
-from lovia.testing import ScriptedProvider, call, text
-
-provider = ScriptedProvider([
-    call("add", {"a": 2, "b": 3}, call_id="c1"),
-    text("The answer is 5."),
-])
-```
-
-→ [Testing](https://cymoo.github.io/lovia/testing/)
-
-## Examples
-
-The `examples/` directory is a numbered learning path of thirty
-self-contained, runnable scripts — from `01_hello.py` to a terminal support
-bot — plus one script per built-in tool family (`tools/`) and the classic
-agentic patterns in plain Python (`workflows/`). Setup and the full index:
-[examples/README.md](examples/README.md).
-
-## Install extras
+- **Tool results that draw UI** — a tool returns `ui_result(kind, props)`;
+  tables, ECharts charts and sandboxed HTML pages are built in.
+- **A scriptable page** — `window.lovia` adds renderers for your own kinds,
+  tool views, slash commands, and whole views beside the chat; template blocks,
+  design tokens and `data-i18n` keys change its markup, look and wording.
+  `lovia web init-ui ui` scaffolds the directory, and
+  [lovia-react](https://github.com/cymoo/lovia-react) extends the bundled chat
+  with React views.
+
+**Only the API.** Everything the page does is a JSON + SSE API (`/api/docs`):
+`create_app(agent, ui=False)` serves it alone, and `build_api_router()` mounts
+it in your own FastAPI app, behind your own auth.
+
+**→ [Web server guide](https://cymoo.github.io/lovia/web-server/)** ·
+[HTTP API](https://cymoo.github.io/lovia/http-api/) ·
+[Deployment](https://cymoo.github.io/lovia/deployment/)
+
+## Design
+
+- **Small core.** Three hard dependencies; MCP, the web app and search
+  backends are opt-in extras.
+- **Few abstractions.** An immutable `Agent`, a stateless `Runner`, `@tool`,
+  and plugins as the one extension axis. Extension points are dataclasses,
+  Protocols and decorators — never subclassing.
+- **One path to read.** Model calls, tool execution, retries and persistence
+  happen in one explicit loop; when something surprises you, there is one
+  chain to follow.
+- **Restraint.** What fits in a short recipe on your side stays out of the
+  framework.
+
+## Examples, install and development
+
+The [examples](https://github.com/cymoo/lovia/tree/main/examples) are a
+numbered learning path of runnable scripts, from `01_hello.py` to web apps
+with components, branding and extensions (`26`–`27`, `31`–`35`).
 
 | Need | Install |
 | --- | --- |
-| Core framework | `pip install lovia` |
-| DuckDuckGo search | `pip install "lovia[ddg]"` |
-| Tavily search | no extra — set `TAVILY_API_KEY` |
-| MCP integration | `pip install "lovia[mcp]"` |
-| Web UI (includes MCP) | `pip install "lovia[web]"` |
+| Core library | `pip install lovia` |
+| MCP | `pip install "lovia[mcp]"` |
+| Web app (includes MCP) | `pip install "lovia[web]"` |
+| DuckDuckGo search | `pip install "lovia[ddg]"` (Tavily needs no extra: set `TAVILY_API_KEY`) |
 | Runnable examples | `pip install "lovia[examples,web]"` |
-| Development | `pip install -e ".[dev]"` |
-
-## Development
 
 ```bash
-pip install -e ".[dev]"
+python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest
-.venv/bin/python -m ruff check .
-.venv/bin/python -m ruff format .
+.venv/bin/python -m ruff check . && .venv/bin/python -m ruff format .
 .venv/bin/python -m mypy lovia
 ```
 
-Live provider tests are marked `live_provider` and stay skipped unless
-enabled explicitly. Contributor-facing internals are documented in
-[docs/architecture.md](https://cymoo.github.io/lovia/architecture/).
+Live provider tests are skipped unless enabled:
+`LOVIA_LIVE_TESTS=1 .venv/bin/python -m pytest -m live_provider`. Before 1.0, see [Stability](https://cymoo.github.io/lovia/stability/) for what
+may change; contributors start with
+[Architecture](https://cymoo.github.io/lovia/architecture/).

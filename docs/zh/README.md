@@ -24,18 +24,21 @@ print(agent.run_sync("天空为什么是蓝色的？").output)
 
 [完成首次运行 →](quickstart.md){ .md-button .md-button--primary }
 [打开 Web UI →](web-ui.md){ .md-button }
+[速查表 →](cheatsheet.md){ .md-button }
 
 ## 从你的目标开始
 
 | 我想要… | 先看 | 再深入 |
 | --- | --- | --- |
 | 跑通第一个 Agent | [快速开始](quickstart.md) | [核心概念](concepts.md) |
+| 一页看完所有功能 | [速查表](cheatsheet.md) | 各功能的完整指南 |
 | 接入模型或网关 | [配置模型](quickstart.md#2-配置模型) | [Provider 与模型](providers.md) |
 | 让模型调用代码 | [工具](tools.md) | [内置工具](built-in-tools.md) |
 | 读取文件、执行命令 | [工作区](workspace.md) | [工具审批](tools.md#工具审批) |
 | 保存对话或恢复任务 | [Session 与 Checkpoint](sessions-and-checkpoints.md) | [上下文管理](context.md) |
 | 组合多个 Agent | [多 Agent](multi-agent.md) | [插件](plugins.md) |
 | 做成聊天应用 | [Web UI](web-ui.md) | [Web 服务端](web-server.md) · [HTTP API](http-api.md) |
+| 在 lovia web 之上做自己的 harness | [两个入口](web-server.md#两个入口) | [定制页面](web-server.md#定制页面) · [HTTP API](http-api.md) |
 | 测试 Agent 行为 | [测试](testing.md) | [评测](eval.md) · [可观测性](observability.md) |
 
 ## lovia 的取舍

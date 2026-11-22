@@ -1658,6 +1658,30 @@ async def test_failed_start_releases_window_attachers(monkeypatch) -> None:
         await asyncio.wait_for(attachment.subscription.__anext__(), timeout=2)
 
 
+@pytest.mark.asyncio
+async def test_attach_before_the_task_begins_sees_the_history() -> None:
+    """A page re-attaches on the run_started event of a run another client
+    sent (a bridge posting to /api/chat): its snapshot replaces the transcript
+    on screen, so one taken before the task loaded the history wiped it."""
+    agent = Agent(name="bot", model=ScriptedProvider([text("hi")]))
+    deps = _app(agent).state.deps
+    await deps.session.append(
+        "s1",
+        [InputEntry(role="user", content="earlier")],
+        run_id="r0",
+    )
+    ctrl = await deps.supervisor.start(
+        session_id="s1", agent=agent, input="now", is_new=False, title_message=None
+    )
+    attachment = ctrl.attach(with_snapshot=True)  # the task hasn't begun yet
+    assert [m.content for m in attachment.snapshot if m.role == "user"] == [
+        "earlier",
+        "now",
+    ]
+    ctrl._ensure_begun()
+    await asyncio.wait_for(ctrl.task, timeout=5)
+
+
 # ------------------------------------------------------ durable run records -
 
 

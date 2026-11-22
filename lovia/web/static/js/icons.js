@@ -78,6 +78,8 @@ const PATHS = {
   // A workspace on another machine (workspaces.js): a folder there.
   server:
     '<rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>',
+  // The catch-all folder for chats of no project (workspaces.js).
+  'message-circle': '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
   // The composer's agent chip (agent-chip.js).
   bot: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
   // The permission modes (workspace-mode.js): view, edit, everything.

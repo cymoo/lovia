@@ -21,6 +21,7 @@ import {
   canAddWorkspace,
   scopeRoot,
   workspaceChoices,
+  workspaceGlyph,
   workspaceName,
   workspacesOn,
 } from './workspaces.js';
@@ -990,7 +991,7 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
   unattended.innerHTML = icon('shield-alert', { size: 14 });
   unattended.append(el('span', '', t('sched.unattended')));
   const drawWhere = () => {
-    drawChip(rootChip, icon('folder', { size: 14 }), where.root ? workspaceName(where.root) : t('sched.ownDir'));
+    drawChip(rootChip, icon(workspaceGlyph(where.root), { size: 14 }), where.root ? workspaceName(where.root) : t('sched.ownDir'));
     rootChip.title = where.root ?? t('sched.ownDirTitle');
     drawChip(modeChip, modeGlyph(where.mode), modeLabel(where.mode));
     // Full access needs no approval: nothing to warn about.
@@ -1000,7 +1001,7 @@ export function openScheduleForm({ editing = null, preset = null, onSaved } = {}
     /** @type {(import('./ui.js').MenuItem | null)[]} */
     const items = choices.map((/** @type {any} */ w) => ({
       label: workspaceName(w.root),
-      icon: icon('folder', { size: 15 }),
+      icon: icon(workspaceGlyph(w.root), { size: 15 }),
       checked: w.root === where.root,
       onSelect: () => {
         Object.assign(where, { root: w.root, touched: true });

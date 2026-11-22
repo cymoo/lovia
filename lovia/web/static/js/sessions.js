@@ -777,8 +777,8 @@ function renderSessions() {
   // as does the "one list" view.
   const searching = !!sessionSearch?.value.trim();
   const grouped = sidebarGroups(chats);
-  syncSectionLabel(!!grouped);
   const groups = searching || _showArchived || sidebarView() === 'flat' ? null : grouped;
+  syncSectionLabel(!!grouped, !!groups);
   if (groups) {
     renderGroups(groups);
     renderMore();
@@ -963,11 +963,14 @@ function groupPager(key, shown, more) {
 }
 
 /**
- * The list's label, "Chats": over groups it carries an add-a-folder button,
- * where more may be opened.
- * @param {boolean} grouped
+ * The list's label row: its view menu, and over groups an add-a-folder
+ * button where more may be opened. Its text says what the list holds:
+ * "Workspaces" over groups — one of which, the folder of no project, is
+ * "Chats" — else "Chats", or the archived ones.
+ * @param {boolean} grouped Chats work in folders (the list may group them).
+ * @param {boolean} shown Groups are on screen.
  */
-function syncSectionLabel(grouped) {
+function syncSectionLabel(grouped, shown) {
   const label = document.querySelector('[data-part="sessions-label"]');
   if (!label) return;
   let text = /** @type {HTMLElement | null} */ (label.querySelector('.lv-section-label-text'));
@@ -976,7 +979,9 @@ function syncSectionLabel(grouped) {
     text.className = 'lv-section-label-text';
     label.replaceChildren(text);
   }
-  text.textContent = t(_showArchived ? 'nav.view.archived' : 'nav.chats');
+  text.textContent = t(
+    _showArchived ? 'nav.view.archived' : shown ? 'nav.workspaces' : 'nav.chats',
+  );
   let tools = /** @type {HTMLElement | null} */ (label.querySelector('.lv-section-label-tools'));
   // Built once (a redraw must not pull an open menu's button from under it),
   // again only when what it offers changes.

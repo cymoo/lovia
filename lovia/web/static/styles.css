@@ -2630,9 +2630,10 @@ body.lv-view-open #files-btn {
   color: var(--lv-ink-2);
   font-size: 13px;
 }
-/* Open, the title reads in full: when it echoes a lone argument
-   (`lv-tool--echoed`) there is no params row to read it in instead. */
-.lv-tool[open] > summary .lv-tool-summary {
+/* Open, a title that echoes a lone argument reads in full: its params row
+   is hidden, so there is nowhere else to read it. Any other title stays one
+   line — its params row (height-capped) has the whole call. */
+.lv-tool--echoed[open] > summary .lv-tool-summary {
   white-space: normal;
   overflow-wrap: anywhere;
 }

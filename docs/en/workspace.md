@@ -138,10 +138,12 @@ option (`-o …`, `-oPATH`, `-ro`, `-sLo …`, `--output=…`, `--log-file`,
 end and a glued file name starts is not lexical (`-foid_rsa`); the command
 may write wherever it points; not one aimed at `/dev/null`); and
 an argument the shell expands (`cat *`, `cat $F`, `$(…)` — the guard never
-sees the paths it becomes). An allow becomes an ask, saying why, a deny
-still bites (`env git push --force`); the ask is not grantable. A command
-that asks anyway just loses its "always allow" offer, with no reason on the
-card — the guard's bookkeeping is not something to weigh. A word quoted
+sees the paths it becomes). An allow becomes an ask, a deny still bites
+(`env git push --force`); the ask is not grantable. A command that asks
+anyway just loses its "always allow" offer. Neither shows a reason on the
+card — the guard's bookkeeping is not something to weigh. An assignment or
+redirection standing alone (`f="$dir/x"`, `> $F`) runs no program but asks
+the same way when the shell expands something in it. A word quoted
 against the shell (`find . -name '*.py'`, `echo "done?"`) is a literal
 argument like any other, for allow rules and grants alike: the shell expands
 nothing there. The same
@@ -154,6 +156,9 @@ spelled and can be approved once, with no grant on offer. Whatever the cut as
 spelled refuses — a deny rule, the baseline — stays refused either way. The mode default `shell_default="allow"`
 is not a rule vouching for anything, so `trusted` runs `cat *` unprompted —
 which is its point.
+
+The baseline also looks through a leading `sudo` / `doas` (its own options
+skipped), so `sudo rm -rf /` is denied wherever `rm -rf /` is.
 
 **The baseline** (`WorkspacePolicy.baseline`) is judged on its own — every
 matching rule, strictest wins — and merged most-restrictive with everything

@@ -233,8 +233,8 @@ def _render_edit_result(result: Any, ctx: RunContext[Any]) -> Any:
         "- path is workspace-relative (e.g. 'src/app.py') or absolute.\n"
         "- Large files are truncated; use start/end (1-based line numbers, inclusive) "
         "to read in pages.\n"
-        "- Binary and non-UTF-8 files are refused; inspect those via the shell "
-        "instead (file, xxd, iconv, ...)."
+        "- Binary and non-UTF-8 files are refused; where there is a shell, "
+        "inspect those with it instead (file, xxd, iconv, ...)."
     ),
     permission=path_permission("read"),
     result_renderer=_render_file_content,
@@ -266,7 +266,8 @@ VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024
         "Look at an image file: the image itself is returned for you to see.\n"
         "- path is workspace-relative (e.g. 'shots/app.png') or absolute.\n"
         "- Supported: jpg, jpeg, png, gif, webp.\n"
-        "- Images over 5 MB are refused; downscale first via the shell, e.g. "
+        "- Images over 5 MB are refused; where there is a shell, downscale "
+        "first with it, e.g. "
         "`sips -Z 1568 img.png` (macOS) or `magick img.png -resize 1568x1568 "
         "img.png`."
     ),
@@ -290,7 +291,7 @@ async def view_image(
         raise ToolError(
             str(exc),
             hint=(
-                "Downscale it first via the shell, e.g. `sips -Z 1568 "
+                "Where there is a shell, downscale it first, e.g. `sips -Z 1568 "
                 f"{path}` (macOS) or `magick {path} -resize 1568x1568 {path}`, "
                 "then view the smaller file."
             ),

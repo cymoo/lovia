@@ -237,10 +237,15 @@ def render_instructions(
                 "The shell runs commands without approval by default; a "
                 "command a rule covers may still ask first."
             )
-        else:
+        elif policy.shell_default == "ask":
             lines.append(
                 "The shell is gated: a command no rule allows waits for the "
                 "user's approval, and some are denied by policy."
+            )
+        else:
+            lines.append(
+                "The shell runs only what its rules allow or ask about; a "
+                "command no rule covers is refused."
             )
         if facts.system == "Windows":
             # Unsaid, models write POSIX shell — a multi-line `python -c "…"`

@@ -1193,6 +1193,13 @@ async def test_workspace_instructions_reflect_policy(tmp_path) -> None:
     assert "so does the shell for a command that names them" in trusted
     assert "every tool and command" not in trusted
 
+    # An allowlist-only shell refuses what no rule covers: nothing waits.
+    allowlist = render_instructions(
+        replace(WorkspacePolicy.coding(), shell_default="deny"), RootFacts(name="ws")
+    )
+    assert "a command no rule covers is refused" in allowlist
+    assert "waits for the user's approval" not in allowlist
+
 
 async def test_workspace_instructions_state_no_venv_that_is_not_there(
     tmp_path,
@@ -1269,6 +1276,11 @@ async def test_workspace_instructions_layout_follows_root_kind(tmp_path) -> None
     assert "never commit" in text
     assert "Commit only when the user asks" in text
     assert "topical subdirectory" not in text
+
+    # A workspace below the repository's root is in that repository too.
+    (tmp_path / "pkg").mkdir()
+    text = Workspace.local(str(tmp_path / "pkg"), mode="coding").instructions()
+    assert "Commit only when the user asks" in text
 
 
 async def test_workspace_instructions_venv_guidance_follows_shell(tmp_path) -> None:

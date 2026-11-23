@@ -67,8 +67,7 @@ _INSTRUCTIONS = (
     'time, after a delay, or repeatedly — "remind me in 10 minutes", "every '
     'morning…", "keep checking until…" — and never for what you could just do '
     "now. Anchor relative times by calling `now` first. `list_schedules` and "
-    "`cancel_schedule` manage the schedules that exist; deleting one is the "
-    "user's call, in the Scheduled runs page.\n"
+    "`cancel_schedule` manage the schedules that exist.\n"
     "To do something now but in its own chat — the user asks for a new or "
     "separate chat — call `start_session` instead: the chat starts at once and "
     "the user can open it, but its results are not reported back here."

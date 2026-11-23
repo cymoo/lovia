@@ -353,7 +353,8 @@ async def test_setup_instructions_include_notes_and_tools(tmp_path) -> None:
     assert {t.name for t in inst.tools} == {"remember", "forget", "recall"}
     assert "NOTES" in inst.instructions
     assert "user prefers dark mode" in inst.instructions
-    assert "recall" in inst.instructions
+    # What recall does is its description's job, not the section's.
+    assert "`recall(" not in inst.instructions
     assert inst.hooks is not None
 
 

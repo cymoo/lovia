@@ -153,7 +153,9 @@ def _make_tool(store: ChatStore) -> Tool:
             "Optional stop condition in natural language (e.g. 'the log "
             'contains "ready"\'). Each fire evaluates it after doing the task '
             "and cancels the schedule once it is met. Repeating triggers only; "
-            "requires max_fires or expires_at as a safety net.",
+            'requires max_fires or expires_at as a safety net. For "keep doing '
+            'X until Y", put Y here, not in `instruction`: a condition only '
+            "written there never stops the schedule.",
         ] = None,
         max_fires: Annotated[
             int | None,

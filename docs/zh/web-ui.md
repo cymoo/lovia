@@ -57,8 +57,9 @@ CLI 创建的默认 Agent 包含 Todo、Memory、时间与 HTTP Tool、Web 搜�
 ### 项目指令
 
 在 Git 仓库里，对话会加载从仓库根（向上第一个含 `.git` 的目录，worktree 或 submodule 的 `.git` 文件也算）
-到对话目录沿途的每一个 `AGENTS.md`，由外到内拼接，每段前一行标明来源路径。不在仓库里，或者就在仓库根时，
-只加载对话目录自己的 `AGENTS.md`，原样使用。加载了哪些文件会写进日志。
+到对话目录沿途的每一个 `AGENTS.md`，由外到内排列。不在仓库里时只加载对话目录自己的 `AGENTS.md`。
+这些文件接在助手自己的提示词之后，前面有一段简短说明：冲突时以更深一层的文件为准，用户的要求优先于所有文件；
+每个文件包在一个 `<project_instructions path="…">` 标签里。加载了哪些文件会写进日志。
 
 - **大小。**合计 256 KB，从对话目录往外装：装不下的文件整份跳过，日志里会写明是哪个。
 - **权限。**这些文件是项目的指令，不是 Agent 去探索的内容，所以权限模式对"读取目录之外"的默认判定不适用：
@@ -475,7 +476,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | 设置页 | `config.json` | 默认值 |
 | --- | --- | --- |
 | **模型** → 模型的高级选项 | `models[].max_tokens` | 沿用 Provider 的默认值 |
-| **助手** → 自定义指令 | `assistant.instructions` | 空：使用对话的[项目指令](#项目指令)，没有就用通用提示；填写后项目指令接在后面 |
+| **助手** → 自定义指令 | `assistant.instructions` | 空：使用通用提示；填写后替换通用提示。两种情况下对话的[项目指令](#项目指令)都接在后面 |
 | **助手** → 新对话的权限模式 | `assistant.mode` | `coding`，见[模式](workspace.md#模式)和[下文](#每个对话的权限模式) |
 | **助手** → 不询问直接运行的命令（选“工作区内修改”时显示） | `assistant.auto_allow` | `read-only`、`dev-tools`：coding 模式免审批运行的[命令包](workspace.md#模式)（`ls`、`git status` 等；`pytest`、`ruff` 等）；清空则没有规则放行的命令一律询问 |
 | **助手** → 网页搜索 | `assistant.search` | 开启；关闭后去掉 `web_search`（`web_fetch` 保留） |

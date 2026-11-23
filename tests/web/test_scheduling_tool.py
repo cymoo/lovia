@@ -284,6 +284,13 @@ async def test_until_with_safety_nets_persists() -> None:
     assert "stops when" in out
 
 
+def test_until_is_where_a_stop_condition_goes() -> None:
+    # Written only into the instruction, a condition never stops anything:
+    # the tool's own description sends it to `until`.
+    until = _make_tool(ChatStore.in_memory()).parameters["properties"]["until"]
+    assert "not in `instruction`" in until["description"]
+
+
 @pytest.mark.asyncio
 async def test_until_requires_a_safety_net() -> None:
     store = ChatStore.in_memory()

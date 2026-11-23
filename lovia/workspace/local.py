@@ -17,6 +17,7 @@ import codecs
 import contextlib
 import logging
 import os
+import platform
 import re
 import signal
 import stat as stat_module
@@ -190,11 +191,17 @@ def root_facts(root: Path) -> RootFacts:
     """
     return RootFacts(
         name=root.name or str(root),
-        # .git may be a worktree's *file*, hence exists().
-        git=(root / ".git").exists(),
+        git=_git_level((root, *root.parents)) is not None,
         python=_python_pkg_flavor(root),
-        shell="cmd" if os.name == "nt" else "sh",
+        system=platform.system(),
     )
+
+
+def _git_level(ups: tuple[Path, ...]) -> int | None:
+    """Index of the first of ``ups`` holding a ``.git`` (a worktree's or
+    submodule's *file* too), or None outside any repository."""
+    # os.path, not Path: its checks answer False on any OSError (EACCES too).
+    return next((i for i, d in enumerate(ups) if os.path.exists(d / ".git")), None)
 
 
 INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
@@ -218,8 +225,7 @@ def instruction_files(root: Path, policy: WorkspacePolicy) -> list[InstructionFi
     """
     root = root.resolve()
     ups = (root, *root.parents)
-    # os.path, not Path: its checks answer False on any OSError (EACCES too).
-    top = next((i for i, d in enumerate(ups) if os.path.exists(d / ".git")), 0)
+    top = _git_level(ups) or 0
     room = INSTRUCTIONS_MAX_BYTES
     found: list[InstructionFile] = []
     for level, d in enumerate(ups[: top + 1]):

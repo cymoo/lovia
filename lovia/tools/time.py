@@ -33,7 +33,7 @@ def now(
     """Return the current wall-clock time as an ISO-8601 string.
 
     Defaults to the server's local timezone (the string carries its UTC
-    offset); pass ``tz`` for a specific zone.
+    offset); pass `tz` for a specific zone.
     """
     if tz is None:
         return datetime.now().astimezone().isoformat()

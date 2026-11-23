@@ -230,14 +230,11 @@ def _render_edit_result(result: Any, ctx: RunContext[Any]) -> Any:
     name="read_file",
     description=(
         "Read a UTF-8 text file.\n"
-        "- path is workspace-relative (e.g. 'src/app.py') or absolute; paths "
-        "outside the workspace may require user approval or be denied by "
-        "policy.\n"
+        "- path is workspace-relative (e.g. 'src/app.py') or absolute.\n"
         "- Large files are truncated; use start/end (1-based line numbers, inclusive) "
         "to read in pages.\n"
-        "- Always read a file before editing it so edit_file gets exact text.\n"
-        "- Binary and non-UTF-8 files are refused; inspect those via the shell "
-        "instead (file, xxd, iconv, ...)."
+        "- Binary and non-UTF-8 files are refused; where there is a shell, "
+        "inspect those with it instead (file, xxd, iconv, ...)."
     ),
     permission=path_permission("read"),
     result_renderer=_render_file_content,
@@ -267,11 +264,10 @@ VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024
     name="view_image",
     description=(
         "Look at an image file: the image itself is returned for you to see.\n"
-        "- path is workspace-relative (e.g. 'shots/app.png') or absolute; "
-        "paths outside the workspace may require user approval or be denied "
-        "by policy.\n"
+        "- path is workspace-relative (e.g. 'shots/app.png') or absolute.\n"
         "- Supported: jpg, jpeg, png, gif, webp.\n"
-        "- Images over 5 MB are refused; downscale first via the shell, e.g. "
+        "- Images over 5 MB are refused; where there is a shell, downscale "
+        "first with it, e.g. "
         "`sips -Z 1568 img.png` (macOS) or `magick img.png -resize 1568x1568 "
         "img.png`."
     ),
@@ -295,7 +291,7 @@ async def view_image(
         raise ToolError(
             str(exc),
             hint=(
-                "Downscale it first via the shell, e.g. `sips -Z 1568 "
+                "Where there is a shell, downscale it first, e.g. `sips -Z 1568 "
                 f"{path}` (macOS) or `magick {path} -resize 1568x1568 {path}`, "
                 "then view the smaller file."
             ),
@@ -308,8 +304,7 @@ async def view_image(
     name="write_file",
     description=(
         "Create or overwrite a UTF-8 text file.\n"
-        "- path is workspace-relative or absolute; writes outside the "
-        "workspace are usually denied or need user approval.\n"
+        "- path is workspace-relative or absolute.\n"
         "- Writes the full content; parent directories are created automatically.\n"
         "- Prefer edit_file for targeted changes to an existing file — write_file "
         "replaces the whole file and loses anything you did not include.\n"
@@ -382,8 +377,7 @@ async def edit_file(
         "'**/*.py' for all Python files recursively. In a git repository, "
         "git-ignored paths are left out unless path is itself ignored.\n"
         "- Hidden files (dotfiles) are skipped unless include_hidden=true.\n"
-        "- Symlinks are shown with their resolved target ('link -> /target').\n"
-        "- To search file *contents*, use grep_files instead."
+        "- Symlinks are shown with their resolved target ('link -> /target')."
     ),
     permission=path_permission("read"),
     result_renderer=_render_entries,
@@ -439,15 +433,12 @@ async def list_files(
         "Search file contents in the workspace with a regular expression "
         "(Python re syntax).\n"
         "- Returns matching lines as 'path:line: text', capped at max_matches.\n"
-        "- Scope the search with path (directory) and/or glob (filename "
-        "pattern, e.g. '*.py').\n"
-        "- path may be a directory to search recursively, or a single file.\n"
+        "- Scope the search with path (a directory, searched recursively, or "
+        "a single file) and/or glob (filename pattern, e.g. '*.py').\n"
         "- Dotfiles are skipped unless include_hidden=true; binary files and "
         "policy-denied paths are always skipped.\n"
         "- In a git repository, git-ignored files are skipped unless path "
-        "is itself ignored (e.g. path='node_modules' searches it).\n"
-        "- This is the fastest way to locate code or text; prefer it over "
-        "reading files one by one."
+        "is itself ignored (e.g. path='node_modules' searches it)."
     ),
     permission=path_permission("read"),
     result_renderer=_render_matches,
@@ -545,8 +536,7 @@ def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
     name="shell",
     description=(
         "Run a non-interactive shell command in the workspace.\n"
-        "- cwd is workspace-relative; the command starts there. Quote paths "
-        "that contain spaces.\n"
+        "- cwd is workspace-relative; the command starts there.\n"
         "- Each call is a fresh process: nothing persists between calls (a cd "
         "or an exported variable does not carry over). Chain steps in one "
         "command with && (or set cwd=).\n"
@@ -563,11 +553,9 @@ def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
         "with the session.\n"
         "- stdout/stderr are captured and truncated when large; pipe through "
         "filters (grep, head, tail) to keep output focused.\n"
-        "- The same path policy that governs the file tools also governs "
-        "commands: paths named in a command (arguments, redirect targets, "
-        "cwd) are checked, so a command touching denied or out-of-workspace "
-        "paths is denied or requires user approval — the shell is not a way "
-        "around the file tools.\n"
+        "- Paths a command names (arguments, redirect targets, cwd) are "
+        "checked against the same rules as the file tools: the shell is not "
+        "a way around them.\n"
         "- The command runs as the host user and is NOT OS-sandboxed. Never "
         "run destructive commands (rm -rf, git reset --hard, force-push, ...) "
         "unless the user explicitly asked.\n"

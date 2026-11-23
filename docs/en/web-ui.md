@@ -72,9 +72,11 @@ cheaper model. See [Memory](memory.md#sharp-edges) for the full cost boundary.
 In a Git repository a chat loads every `AGENTS.md` from the repository's
 root (the first directory up that holds a `.git`, a worktree's or
 submodule's `.git` file included) down to its own directory, outermost
-first, each preceded by a line naming its path. Outside a repository, or at
-its root, it loads the directory's own `AGENTS.md` as it is. The log names
-every file loaded.
+first. Outside a repository it loads the directory's own `AGENTS.md`. The
+files follow the assistant's own prompt, under a short note that a deeper
+file wins a conflict and the user's requests override them all, each
+wrapped in a `<project_instructions path="…">` tag. The log names every
+file loaded.
 
 - **Size.** 256 KB in all, filled from the chat's directory outwards: a file
   that does not fit is left out whole, and the log says which.
@@ -670,7 +672,7 @@ finishes with what it started with.
 | Settings pane | `config.json` | Default |
 | --- | --- | --- |
 | **Models** → a model's advanced fields | `models[].max_tokens` | The provider's |
-| **Assistant** → Custom instructions | `assistant.instructions` | Empty: the chat's [project instructions](#project-instructions), else a generic prompt; set, they are appended |
+| **Assistant** → Custom instructions | `assistant.instructions` | Empty: a generic prompt; set, they take its place. The chat's [project instructions](#project-instructions) follow either way |
 | **Assistant** → Permission mode for new chats | `assistant.mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
 | **Assistant** → Commands that run without asking (shown for Edit in workspace) | `assistant.auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
 | **Assistant** → Web search | `assistant.search` | On; off leaves out `web_search` (`web_fetch` stays) |

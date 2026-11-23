@@ -307,11 +307,11 @@ def resolve_instructions(
 ) -> str:
     """An agent's system prompt for a chat working in ``root``.
 
-    ``custom`` (from Settings → Assistant) comes first; the
-    project's ``AGENTS.md`` files (the cross-agent convention) follow it,
-    from the Git root down to ``root`` (:func:`instruction_files`, whose
-    explicit rules come from ``policy``; default: the baseline). Without
-    one the files alone serve, and without either a generic prompt. Read on
+    ``custom`` (from Settings → Assistant), or a generic prompt without
+    one, comes first; the project's ``AGENTS.md`` files (the cross-agent
+    convention) follow it, from the Git root down to ``root``
+    (:func:`instruction_files`, whose explicit rules come from ``policy``;
+    default: the baseline). Read on
     every build — and, with chats in several directories, on every run — so
     an edited ``AGENTS.md`` applies without a restart.
     """
@@ -325,9 +325,18 @@ def instructions_policy(deployment: Deployment) -> WorkspacePolicy:
     return WorkspacePolicy(denied_paths=_home_secrets(deployment))
 
 
+PROJECT_INSTRUCTIONS_LEAD = (
+    "## Project instructions\n"
+    "From the project's AGENTS.md files, outermost first: where they "
+    "conflict the deeper file wins, and the user's own requests override "
+    "them all. Before changing files further down, check each directory on "
+    "the way there for an AGENTS.md of its own."
+)
+
+
 def _project_text(files: list[InstructionFile]) -> str:
-    """``files`` as one prompt section. The root's own file alone reads as
-    it always has; anything more says where each part comes from."""
+    """``files`` as one prompt section, each fenced in a tag naming its
+    path — so a file's own headings never read as the prompt's."""
     for f in files:
         if f.skipped:
             log.warning("not using %s: %s", f.path, f.skipped)
@@ -335,16 +344,18 @@ def _project_text(files: list[InstructionFile]) -> str:
     if not used:
         return ""
     log.info("instructions from %s", ", ".join(f.path for f in used))
-    if len(used) == 1 and used[0].level == 0:
-        return used[0].text
-    return "\n\n".join(f"Instructions from {f.path}:\n{f.text.strip()}" for f in used)
+    tagged = (
+        f'<project_instructions path="{f.path}">\n{f.text.strip()}\n'
+        "</project_instructions>"
+        for f in used
+    )
+    return "\n\n".join([PROJECT_INSTRUCTIONS_LEAD, *tagged])
 
 
 def _compose(custom: str, project: str) -> str:
-    custom = custom.strip()
-    if custom and project:
-        return f"{custom}\n\n{project}"
-    return custom or project or GENERIC_INSTRUCTIONS
+    """The configured prompt — else the generic one — then the project's."""
+    head = custom.strip() or GENERIC_INSTRUCTIONS
+    return f"{head}\n\n{project}" if project else head
 
 
 def remote_instructions(custom: str = "") -> InstructionsFn:

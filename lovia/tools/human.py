@@ -245,8 +245,7 @@ def ask_human(channel: HumanChannel, *, name: str = "ask_human") -> Tool:
                 default=False,
                 description=(
                     "Set true when several options may be picked together; "
-                    "the reply then lists the chosen labels, one per line. "
-                    "Meaningless without options (ignored)."
+                    "the reply then lists the chosen labels, one per line."
                 ),
             ),
         ] = False,
@@ -258,8 +257,6 @@ def ask_human(channel: HumanChannel, *, name: str = "ask_human") -> Tool:
           you assumed.
         - Blocks until the human answers; a cancelled question surfaces as a
           tool error you can route around.
-        - Prefer options for pick-one (or pick-many) questions; the reply may
-          still be any free text.
         """
         q, fut = channel._new_question(
             question,

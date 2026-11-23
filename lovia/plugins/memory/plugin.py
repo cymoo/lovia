@@ -764,7 +764,12 @@ _REMEMBER_DESCRIPTION = (
 
 _FORGET_DESCRIPTION = (
     "Remove a fact from long-term memory when it is wrong or no longer true. "
-    "Pass text matching the note to drop."
+    "Pass the note's full text, as your notes show it: the closest match goes."
+)
+
+_FORGET_SCOPED_DESCRIPTION = (
+    _FORGET_DESCRIPTION + " It searches the user's notes and this {name}'s "
+    "alike, so a partial text can take a note from the wrong one."
 )
 
 _RECALL_DESCRIPTION = (
@@ -779,7 +784,8 @@ _REMEMBER_SCOPED_DESCRIPTION = (
     "that the user stated or confirmed — not transient task state, and not "
     "your own explanations or conclusions. Pass one concise, self-contained "
     'fact per call, and say whom it is about: "user" for the person (kept '
-    'in every {name}) or "{name}" for this {name} (kept only here).'
+    'in every {name}) or "{name}" for this {name} or the work on it (kept '
+    'only here) — when unsure, "{name}".'
 )
 
 _RECALL_SCOPED_DESCRIPTION = (
@@ -790,7 +796,7 @@ _RECALL_SCOPED_DESCRIPTION = (
 )
 
 
-def _build_instructions(has_index: bool, scope_name: str | None = None) -> str:
+def _build_instructions(scope_name: str | None = None) -> str:
     """The Memory guidance; ``scope_name`` set means a scoped run."""
     if scope_name is None:
         parts = [
@@ -801,10 +807,7 @@ def _build_instructions(has_index: bool, scope_name: str | None = None) -> str:
             "context worth keeping. They are a snapshot from when this "
             "conversation began: anything remembered or forgotten since shows "
             "in the conversation, not below.",
-            "- `remember(fact)` saves a new durable fact; `forget(fact)` removes "
-            "a note that is wrong or no longer true.",
         ]
-        recall = "past conversations"
     else:
         name = scope_name
         parts = [
@@ -817,19 +820,10 @@ def _build_instructions(has_index: bool, scope_name: str | None = None) -> str:
             "shown below and are always in context. They are a snapshot from "
             "when this conversation began: anything remembered or forgotten "
             "since shows in the conversation, not below.",
-            "- `remember(fact, about)` saves a new durable fact: "
-            f'about="user" for a fact about the person, about="{name}" for a '
-            f'fact about this {name} or the work on it — when unsure, "{name}". '
-            "`forget(fact)` removes a note that is wrong or no longer true, "
-            "from either layer.",
         ]
-        recall = f"this {name}'s past conversations"
-    if has_index:
-        parts.append(
-            f"- `recall(query)` searches {recall} when the user refers to "
-            "something earlier or you need context not in your notes."
-        )
-    # What makes a fact worth keeping is the remember tool's description.
+    # What each memory tool does, and what makes a fact worth keeping, is in
+    # the tools' descriptions; this says only what they cannot: the notes
+    # below and when to act.
     parts.append(
         "When the user asks you to remember something, or corrects a wrong "
         "assumption, call `remember` immediately; everything else is curated "
@@ -1294,9 +1288,7 @@ class Memory:
             # evicted it while this run outlasted the window.
             self._pin(sid, notes, epoch, scope)
 
-        guidance = _build_instructions(
-            archived, None if scope is None else self.scope_name
-        )
+        guidance = _build_instructions(None if scope is None else self.scope_name)
         return PluginInstance(
             tools=tools,
             instructions=f"{guidance}\n\n{notes}",
@@ -1342,10 +1334,15 @@ class Memory:
     def _make_forget(self, scope: _Tier | None = None) -> Tool:
         plugin = self
         tiers = [self._user] if scope is None else [self._user, scope]
+        description = (
+            _FORGET_DESCRIPTION
+            if scope is None
+            else _FORGET_SCOPED_DESCRIPTION.format(name=self.scope_name)
+        )
 
-        @tool(name="forget", description=_FORGET_DESCRIPTION)
+        @tool(name="forget", description=description)
         async def forget(
-            fact: Annotated[str, "Text matching the note to remove."],
+            fact: Annotated[str, "The full text of the note to remove."],
         ) -> str:
             if await plugin._drop(fact, tiers):
                 return "Forgotten."

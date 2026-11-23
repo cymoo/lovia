@@ -26,8 +26,7 @@ __all__ = ["current_date", "now"]
 def now(
     tz: Annotated[
         str | None,
-        "IANA timezone name, e.g. 'UTC' or 'Asia/Shanghai'. Defaults to the "
-        "server's local timezone.",
+        "IANA timezone name, e.g. 'UTC' or 'Asia/Shanghai'.",
     ] = None,
 ) -> str:
     """Return the current wall-clock time as an ISO-8601 string.

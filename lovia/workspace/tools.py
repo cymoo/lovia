@@ -588,8 +588,7 @@ async def shell(
         Field(
             default=False,
             description=(
-                "Start the command as a background process and return its "
-                "process id immediately instead of waiting for it to finish."
+                "Start the command as a background process (see the tool description)."
             ),
         ),
     ] = False,

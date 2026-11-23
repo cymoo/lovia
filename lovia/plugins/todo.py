@@ -36,19 +36,17 @@ from .base import PluginInstance, ViewInjector
 TodoStatus = Literal["pending", "in_progress", "completed"]
 
 
+# One checklist item — both model input and host record. A comment, not a
+# docstring: pydantic would send a docstring to the model as the schema's
+# description.
 class TodoItem(BaseModel):
-    """One checklist item — both model input and host record."""
-
     content: str = Field(
         description=(
             "Short, one-line imperative label for the task, e.g. 'Run the test "
             "suite'. Keep it glanceable — a few words, not a paragraph."
         )
     )
-    status: TodoStatus = Field(
-        default="pending",
-        description="One of: pending, in_progress, completed.",
-    )
+    status: TodoStatus = "pending"
     active_form: str | None = Field(
         default=None,
         description=(
@@ -153,9 +151,7 @@ def todos_from_entries(
 
 _TOOL_DESCRIPTION = (
     "Maintain a structured todo list for the current task. Always pass the "
-    "COMPLETE list — it replaces the previous one entirely. Each item has a "
-    "short one-line `content`, a `status` (pending, in_progress, or completed), "
-    "and an optional `active_form` (present-tense label shown while in_progress)."
+    "COMPLETE list — it replaces the previous one entirely."
 )
 
 _INSTRUCTIONS = (
@@ -181,7 +177,7 @@ def _make_tool(store: TodoList, tool_name: str) -> Tool:
         ctx: RunContext[Any],
         todos: Annotated[
             list[TodoItem],
-            "The complete todo list. Replaces the previous list entirely.",
+            "The complete todo list.",
         ],
     ) -> list[TodoItem]:
         return store.replace(todos)

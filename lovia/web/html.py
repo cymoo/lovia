@@ -35,9 +35,8 @@ def show_html(
 ) -> str:
     """Show the user an interactive HTML page, run in a sandbox inside the chat.
 
-    Use it for what a chart or table can't do: a calculator, a simulation, a
-    form that explores options, a custom visualisation. For a plain chart or
-    table, use show_chart or show_table instead.
+    Use it for what show_chart and show_table can't do: a calculator, a
+    simulation, a form that explores options, a custom visualisation.
 
     The page has no network: no CDN scripts, fonts, remote images, or fetch —
     inline everything. No storage, alert(), or form submission either. Style

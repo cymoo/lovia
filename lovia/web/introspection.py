@@ -359,14 +359,17 @@ def _mcp_lines(ctx: RunContext[Any]) -> list[str]:
     on = {s.name: s for s in plugin.servers_for(ctx)}
     servers = {**{s.name: s for s in plugin.servers}, **on}
     held, unreadable = _held_project_servers(plugin, ctx, on)
-    if not servers and not held and unreadable is None:
+    if not servers and not held and not unreadable:
         return ["MCP servers: none configured"]
     # The book holds each server's latest connection by any chat or a test
     # in Settings, so it says when, never whose. Which servers this run
     # started without is in its own instructions.
     lines = ["MCP servers (last connection by any chat or a test in Settings):"]
-    if unreadable is not None:
-        lines.append(f"- this project's {PROJECT_MCP_FILE} can't be read: {unreadable}")
+    if unreadable:
+        lines.append(
+            f"- this project's {PROJECT_MCP_FILE} can't be read "
+            "(Settings → MCP says why)"
+        )
     for name in sorted(servers.keys() | held.keys()):
         if name in held:
             lines.append(f"- {name}: {held[name]}")
@@ -388,14 +391,18 @@ def _mcp_lines(ctx: RunContext[Any]) -> list[str]:
 
 def _held_project_servers(
     plugin: SettingsMCP, ctx: RunContext[Any], on: dict[str, MCPServerConfig]
-) -> tuple[dict[str, str], str | None]:
+) -> tuple[dict[str, str], bool]:
     """The servers of the chat's project's ``.mcp.json`` this run didn't
-    start, each with why — as Settings tells them — and what is wrong with
-    the file as a whole, if anything. A project on another machine: its
-    file is not read (see :meth:`SettingsMCP.servers_for`)."""
+    start, each with why, and whether the file as a whole can't be read. A
+    project on another machine: its file is not read (see
+    :meth:`SettingsMCP.servers_for`).
+
+    Never the parser's own words: they quote entries after ``${VAR}``
+    expansion, so a repository's file could have the server's secrets
+    spelled into the chat. Settings shows them to the person instead."""
     key = chat_project(ctx) if plugin.project is not None else None
     if plugin.project is None or key is None or WorkspaceRef.parse(key).remote:
-        return {}, None
+        return {}, False
     found, unreadable = read_project_servers(Path(key))
     states = plugin.project.states(key, found)
     held = {}
@@ -403,14 +410,16 @@ def _held_project_servers(
         if s.name in on:
             continue
         if s.config is None:
-            held[s.name] = f"in {PROJECT_MCP_FILE}, can't be used: {s.error}"
+            held[s.name] = (
+                f"in {PROJECT_MCP_FILE}, can't be used (Settings → MCP says why)"
+            )
         elif states[s.name] == "pending":
             held[s.name] = (
                 f"in {PROJECT_MCP_FILE}, waiting for the user's OK on the page"
             )
         else:
             held[s.name] = "turned off for this project"
-    return held, unreadable
+    return held, unreadable is not None
 
 
 @dataclass

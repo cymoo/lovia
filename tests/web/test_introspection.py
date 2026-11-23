@@ -240,7 +240,9 @@ async def test_lovia_status_models_and_mcp() -> None:
     assert "secret" not in status
 
 
-async def test_lovia_status_project_servers_not_started(tmp_path: Path) -> None:
+async def test_lovia_status_project_servers_not_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import json
 
     from lovia.web.introspection import lovia_status
@@ -250,7 +252,13 @@ async def test_lovia_status_project_servers_not_started(tmp_path: Path) -> None:
 
     project = tmp_path / "proj"
     project.mkdir()
-    servers = {"db": {"command": "x"}, "needs": {"command": "${NOT_SET_ANYWHERE}"}}
+    monkeypatch.setenv("LOVIA_FAKE_SECRET", "sk-fake-1234")
+    servers = {
+        "db": {"command": "x"},
+        "needs": {"command": "${NOT_SET_ANYWHERE}"},
+        # The parser quotes a bad type after ${VAR} expansion.
+        "leak": {"type": "${LOVIA_FAKE_SECRET}"},
+    }
     (project / ".mcp.json").write_text(json.dumps({"mcpServers": servers}))
     deps = SimpleNamespace(
         store=ChatStore.in_memory(),
@@ -272,7 +280,11 @@ async def test_lovia_status_project_servers_not_started(tmp_path: Path) -> None:
     # The page asks before a project's server starts; the tool says so.
     assert "none configured" not in status
     assert "- db: in .mcp.json, waiting for the user's OK on the page" in status
-    assert "- needs: in .mcp.json, can't be used: the variable" in status
+    for name in ("needs", "leak"):
+        assert f"- {name}: in .mcp.json, can't be used (Settings → MCP says" in status
+    # The parser's own words stay with Settings: they can quote secrets.
+    assert "sk-fake-1234" not in status
+    assert "NOT_SET_ANYWHERE" not in status
 
 
 async def test_tools_need_the_web_app() -> None:

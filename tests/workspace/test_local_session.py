@@ -1185,8 +1185,13 @@ async def test_workspace_instructions_reflect_policy(tmp_path) -> None:
         assert absent not in text
 
     trusted = Workspace.local(str(tmp_path), mode="trusted").instructions()
-    assert "without approval" in trusted
+    # Only the default: a rule can still make a command wait for the user.
+    assert "without approval by default" in trusted
+    assert "may still ask first" in trusted
     assert "reading and writing are allowed" in trusted
+    # The shell judges the paths a command names, nothing wider.
+    assert "so does the shell for a command that names them" in trusted
+    assert "every tool and command" not in trusted
 
 
 async def test_workspace_instructions_state_no_venv_that_is_not_there(
@@ -1197,6 +1202,8 @@ async def test_workspace_instructions_state_no_venv_that_is_not_there(
     text = Workspace.local(str(tmp_path), mode="coding").instructions()
     assert "already resolve" not in text
     assert "one you just created included" in text
+    # A directory merely named .venv is not picked up: the prompt says so.
+    assert "with this host's interpreter inside" in text
 
 
 async def test_workspace_instructions_layout_needs_writes(tmp_path) -> None:

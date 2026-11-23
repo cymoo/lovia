@@ -329,8 +329,8 @@ PROJECT_INSTRUCTIONS_LEAD = (
     "## Project instructions\n"
     "From the project's AGENTS.md files, outermost first: where they "
     "conflict the deeper file wins, and the user's own requests override "
-    "them all. Before changing files in a subdirectory, check it for an "
-    "AGENTS.md of its own."
+    "them all. Before changing files further down, check each directory on "
+    "the way there for an AGENTS.md of its own."
 )
 
 

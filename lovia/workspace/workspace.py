@@ -229,13 +229,14 @@ def render_instructions(
         lines.append(outside)
     if policy.denied_paths:
         denied = ", ".join(repr(p) for p in policy.denied_paths)
-        lines.append(
-            f"Paths matching {denied} are off-limits to every tool and command."
-        )
+        lines.append(f"Paths matching {denied} are off-limits: {_refused(policy)}")
     lines.extend(_describe_rules(policy))
     if policy.allow_shell:
         if policy.shell_default == "allow":
-            lines.append("The shell runs commands without approval.")
+            lines.append(
+                "The shell runs commands without approval by default; a "
+                "command a rule covers may still ask first."
+            )
         else:
             lines.append(
                 "The shell is gated: a command no rule allows waits for the "
@@ -265,9 +266,10 @@ def render_instructions(
         # every command (LocalWorkspaceSession's env).
         lines.append(
             "Python work stays in the workspace's own virtualenv: a '.venv' "
-            "(or 'venv') at the root is on PATH for every shell command — one "
-            "you just created included — so 'python' runs in it with no "
-            "activation. Never install into the global environment."
+            "(or 'venv') at the root with this host's interpreter inside is "
+            "on PATH for every shell command — one you just created included "
+            "— so 'python' runs in it with no activation. Never install into "
+            "the global environment."
         )
         if facts.python == "uv":
             lines.append(
@@ -308,6 +310,14 @@ _SYSTEM_NAMES = {"Darwin": "macOS"}
 """``platform.system()`` names a model would not read as the OS people say."""
 
 
+def _refused(policy: WorkspacePolicy) -> str:
+    """Who refuses an off-limits path. The shell judges the paths a command
+    names, not what the process it starts goes on to open."""
+    if policy.allow_shell:
+        return "the tools refuse them, and so does the shell for a command that names them."
+    return "the tools refuse them."
+
+
 def _describe_rules(policy: WorkspacePolicy) -> list[str]:
     """What the baseline and the preset's path rules refuse or ask about —
     derived, so the prompt never claims a protection the policy lacks."""
@@ -321,7 +331,7 @@ def _describe_rules(policy: WorkspacePolicy) -> list[str]:
     if off_limits:
         lines.append(
             f"Credential stores ({', '.join(repr(p) for p in off_limits)}) are "
-            "off-limits to every tool and command."
+            f"off-limits: {_refused(policy)}"
         )
     # Where nothing can be written, rules about writes only confuse (the same
     # test that leaves out the write tools, policy_tools).

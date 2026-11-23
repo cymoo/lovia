@@ -801,9 +801,8 @@ def _build_instructions(has_index: bool, scope_name: str | None = None) -> str:
             "context worth keeping. They are a snapshot from when this "
             "conversation began: anything remembered or forgotten since shows "
             "in the conversation, not below.",
-            "- Call `remember(fact)` to save a new durable fact (a preference, a "
-            "correction, a stable detail). Keep each fact short and self-contained.",
-            "- Call `forget(fact)` to remove a note that is wrong or no longer true.",
+            "- `remember(fact)` saves a new durable fact; `forget(fact)` removes "
+            "a note that is wrong or no longer true.",
         ]
         recall = "past conversations"
     else:
@@ -818,27 +817,23 @@ def _build_instructions(has_index: bool, scope_name: str | None = None) -> str:
             "shown below and are always in context. They are a snapshot from "
             "when this conversation began: anything remembered or forgotten "
             "since shows in the conversation, not below.",
-            "- Call `remember(fact, about)` to save a new durable fact (a "
-            'preference, a correction, a stable detail): about="user" for a '
-            f'fact about the person, about="{name}" for a fact about this '
-            f'{name} or the work on it — when unsure, "{name}". Keep each fact '
-            "short and self-contained.",
-            "- Call `forget(fact)` to remove a note that is wrong or no longer "
-            "true, from either layer.",
+            "- `remember(fact, about)` saves a new durable fact: "
+            f'about="user" for a fact about the person, about="{name}" for a '
+            f'fact about this {name} or the work on it — when unsure, "{name}". '
+            "`forget(fact)` removes a note that is wrong or no longer true, "
+            "from either layer.",
         ]
         recall = f"this {name}'s past conversations"
     if has_index:
         parts.append(
-            f"- Call `recall(query)` to search {recall} when the user "
-            "refers to something earlier or you need context not in your notes."
+            f"- `recall(query)` searches {recall} when the user refers to "
+            "something earlier or you need context not in your notes."
         )
+    # What makes a fact worth keeping is the remember tool's description.
     parts.append(
         "When the user asks you to remember something, or corrects a wrong "
         "assumption, call `remember` immediately; everything else is curated "
-        "automatically when the run ends — never record transient task details. "
-        "Record only what the user said or confirmed, never your own "
-        "explanations or conclusions; if a note turns out to be wrong, "
-        "`forget` it."
+        "automatically when the run ends."
     )
     return "\n".join(parts)
 

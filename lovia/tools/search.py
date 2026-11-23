@@ -244,7 +244,7 @@ def web_search(impl: WebSearch, *, name: str = "web_search") -> Tool:
         result_renderer=_render_search_results,
         retries=2,
         description=(
-            "Search the web and return a list of ``{title, url, snippet}``.\n"
+            "Search the web and return a list of {title, url, snippet}.\n"
             f"{FENCE_NOTE}"
         ),
     )

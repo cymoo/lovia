@@ -17,6 +17,7 @@ import codecs
 import contextlib
 import logging
 import os
+import platform
 import re
 import signal
 import stat as stat_module
@@ -193,7 +194,7 @@ def root_facts(root: Path) -> RootFacts:
         # .git may be a worktree's *file*, hence exists().
         git=(root / ".git").exists(),
         python=_python_pkg_flavor(root),
-        shell="cmd" if os.name == "nt" else "sh",
+        system=platform.system(),
     )
 
 

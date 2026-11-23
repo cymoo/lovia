@@ -197,12 +197,26 @@ def test_resolve_instructions_custom_alone(
     assert builder.resolve_instructions("  be terse \n") == "be terse"
 
 
+def _project(*files: tuple[Path, str]) -> str:
+    """The project section ``resolve_instructions`` renders for ``files``."""
+    tagged = [
+        f'<project_instructions path="{p.as_posix()}">\n{text}\n</project_instructions>'
+        for p, text in files
+    ]
+    return "\n\n".join([builder.PROJECT_INSTRUCTIONS_LEAD, *tagged])
+
+
 def test_resolve_instructions_convention_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "AGENTS.md").write_text("conventional prompt", encoding="utf-8")
-    assert builder.resolve_instructions() == "conventional prompt"
+    # The project's file never displaces the assistant's own prompt.
+    assert builder.resolve_instructions() == (
+        builder.GENERIC_INSTRUCTIONS
+        + "\n\n"
+        + _project((tmp_path.resolve() / "AGENTS.md", "conventional prompt"))
+    )
 
 
 def test_resolve_instructions_custom_then_agents_md(
@@ -210,7 +224,9 @@ def test_resolve_instructions_custom_then_agents_md(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "AGENTS.md").write_text("project rules", encoding="utf-8")
-    assert builder.resolve_instructions("be terse") == "be terse\n\nproject rules"
+    assert builder.resolve_instructions("be terse") == (
+        "be terse\n\n" + _project((tmp_path.resolve() / "AGENTS.md", "project rules"))
+    )
 
 
 def test_resolve_instructions_generic_fallback(
@@ -227,28 +243,35 @@ def test_resolve_instructions_layers_a_repositorys_agents_md_files(
     (repo / ".git").mkdir(parents=True)
     (repo / "pkg").mkdir()
     (repo / "AGENTS.md").write_text("repo rules\n", encoding="utf-8")
-    # At the Git root: the file as it is, exactly as before.
-    assert builder.resolve_instructions("be terse", repo) == "be terse\n\nrepo rules\n"
+    # At the Git root and below it alike, each file tagged with its path.
+    assert builder.resolve_instructions("be terse", repo) == (
+        "be terse\n\n" + _project((repo / "AGENTS.md", "repo rules"))
+    )
 
-    # Below it, outermost first, each part saying where it comes from.
     caplog.set_level("INFO", logger="lovia.web.builder")
     assert builder.resolve_instructions("be terse", repo / "pkg") == (
-        f"be terse\n\nInstructions from {repo.as_posix()}/AGENTS.md:\nrepo rules"
+        "be terse\n\n" + _project((repo / "AGENTS.md", "repo rules"))
     )
+    # Outermost first.
     (repo / "pkg" / "AGENTS.md").write_text("pkg rules", encoding="utf-8")
     assert builder.resolve_instructions("", repo / "pkg") == (
-        f"Instructions from {repo.as_posix()}/AGENTS.md:\nrepo rules\n\n"
-        f"Instructions from {repo.as_posix()}/pkg/AGENTS.md:\npkg rules"
+        builder.GENERIC_INSTRUCTIONS
+        + "\n\n"
+        + _project(
+            (repo / "AGENTS.md", "repo rules"),
+            (repo / "pkg" / "AGENTS.md", "pkg rules"),
+        )
     )
     assert (
         f"instructions from {repo.as_posix()}/AGENTS.md, "
         f"{repo.as_posix()}/pkg/AGENTS.md" in caplog.text
     )
 
-    # A file the rules hide is left out, and the log says so. The chat
-    # directory's own file alone then reads as it always has.
+    # A file the rules hide is left out, and the log says so.
     denied = builder.WorkspacePolicy(denied_paths=(f"{repo.as_posix()}/AGENTS.md",))
-    assert builder.resolve_instructions("", repo / "pkg", denied) == "pkg rules"
+    assert builder.resolve_instructions("", repo / "pkg", denied).endswith(
+        _project((repo / "pkg" / "AGENTS.md", "pkg rules"))
+    )
     assert f"not using {repo.as_posix()}/AGENTS.md: a workspace rule" in caplog.text
 
 
@@ -498,13 +521,17 @@ def test_project_agent_reads_the_chat_directory(
     assert "launch rules" in str(agent.instructions)
     assert not any(isinstance(p, Skills) for p in agent.plugins)
     moved = builder.project_agent(agent, proj, config)
-    assert moved.instructions == "custom\n\nproj rules"
+    assert moved.instructions == "custom\n\n" + _project(
+        (proj.resolve() / "AGENTS.md", "proj rules")
+    )
     (skills,) = [p for p in moved.plugins if isinstance(p, Skills)]
     assert moved.plugins[0] is skills
     # Back in a directory with no skills: none.
     back = builder.project_agent(moved, launch, config)
     assert not any(isinstance(p, Skills) for p in back.plugins)
-    assert back.instructions == "custom\n\nlaunch rules"
+    assert back.instructions == "custom\n\n" + _project(
+        (launch.resolve() / "AGENTS.md", "launch rules")
+    )
 
 
 # -------------------------------------------------------------- --app -

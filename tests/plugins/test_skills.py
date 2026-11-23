@@ -989,6 +989,19 @@ class TestExtraFrontmatter:
             text = await catalog.instructions()
             assert "tags: sql, db" in text
 
+    async def test_license_left_out_of_the_index(self) -> None:
+        # Nothing a model routes on, and long: kept in metadata, not the prompt.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "s" / "SKILL.md").write_text(
+                "---\nname: s\ndescription: A skill.\nlicense: MIT\n---\n# Body"
+            )
+            catalog = SkillCatalog.from_dir(root)
+            assert "license" not in await catalog.instructions()
+            (meta,) = await catalog.list_skills()
+            assert meta.extra["license"] == "MIT"
+
     async def test_extra_carried_into_loaded_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

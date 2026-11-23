@@ -188,17 +188,11 @@ def render_instructions(
             "absolute paths ('/etc', '/var/log') and commands (uptime, df, "
             "systemctl) are that host's."
         )
-    lines.append(
-        "Explore with list_files and grep_files; read a file before editing "
-        "it; use edit_file for targeted changes and write_file for new files "
-        "or full rewrites. Large reads and command output are truncated — "
-        "page with start/end or narrow the command rather than dumping "
-        "everything."
-    )
+    # How to use each tool lives in its description; this fragment states
+    # only what this policy and root make true.
     if policy.write == "deny":
         lines.append(
-            "The workspace is read-only: write_file and edit_file are "
-            "disabled inside it."
+            "The workspace is read-only: you can read and search it, not change it."
         )
     elif policy.write == "ask":
         lines.append(
@@ -220,7 +214,8 @@ def render_instructions(
             lines.append(
                 "The workspace is a git repository: follow its layout "
                 "and conventions, keep the tree clean, and never commit "
-                f"anything under '{SCRATCH_DIR}/'."
+                f"anything under '{SCRATCH_DIR}/'. Commit only when the user "
+                "asks, and never revert changes you did not make."
             )
         else:
             lines.append(
@@ -235,33 +230,18 @@ def render_instructions(
     if policy.denied_paths:
         denied = ", ".join(repr(p) for p in policy.denied_paths)
         lines.append(
-            f"Paths matching {denied} are off-limits: file tools refuse "
-            "them, and shell commands that name them are refused too."
+            f"Paths matching {denied} are off-limits to every tool and command."
         )
     lines.extend(_describe_rules(policy))
     if policy.allow_shell:
         if policy.shell_default == "allow":
-            lines.append(
-                "A shell tool is available and generally runs without "
-                "approval; it is not OS-sandboxed and runs as the host "
-                "user, so be deliberate with anything destructive or "
-                "irreversible."
-            )
+            lines.append("The shell runs commands without approval.")
         else:
             lines.append(
-                "A shell tool is available but gated: a command no rule "
-                "allows waits for the user's approval, and some are denied "
-                "by policy. Explore and read with list_files, grep_files "
-                "and read_file rather than the shell, and keep the shell "
-                "for what only it can do."
+                "The shell is gated: a command no rule allows waits for the "
+                "user's approval, and some are denied by policy."
             )
-        lines.append(
-            "Paths named in shell commands (arguments, redirect targets, "
-            "cwd) are checked against the same rules as the file tools, "
-            "so the shell is not a way around them; a command that needs "
-            "broader access will ask for approval instead."
-        )
-        if facts.shell == "cmd":
+        if facts.system == "Windows":
             # Unsaid, models write POSIX shell — a multi-line `python -c "…"`
             # that cmd.exe cuts at its first line break.
             cmd = (
@@ -276,13 +256,18 @@ def render_instructions(
                     f"'{SCRATCH_DIR}/' and run that."
                 )
             lines.append(cmd)
+        elif facts.system:
+            lines.append(
+                f"Shell commands run under /bin/sh on "
+                f"{_SYSTEM_NAMES.get(facts.system, facts.system)}."
+            )
+        # True whether or not a venv exists yet: the shell re-detects it on
+        # every command (LocalWorkspaceSession's env).
         lines.append(
-            "Python work stays in the workspace's own virtualenv: when a "
-            "real '.venv' (or 'venv') virtualenv exists at the root — one "
-            "with an interpreter inside, not just a directory by that "
-            "name — it is automatically on PATH for shell commands "
-            "(VIRTUAL_ENV set), so 'python' already resolves to it, no "
-            "activation needed. Never install into the global environment."
+            "Python work stays in the workspace's own virtualenv: a '.venv' "
+            "(or 'venv') at the root is on PATH for every shell command — one "
+            "you just created included — so 'python' runs in it with no "
+            "activation. Never install into the global environment."
         )
         if facts.python == "uv":
             lines.append(
@@ -303,16 +288,24 @@ def render_instructions(
             )
         else:
             lines.append(
-                "python and pip already resolve to the venv. To install "
-                "packages when none exists, create it first (e.g. "
-                "'python -m venv .venv')."
+                "To install packages when no venv exists, create one first "
+                "('python -m venv .venv')."
             )
     lines.append(
         "A denied or unapproved call comes back with its reason: respect "
         "it and choose a different approach that the policy allows — "
-        "never retry the same forbidden operation under another spelling."
+        "never retry the same forbidden operation under another spelling; "
+        "if the task needs more access, ask the user to widen the workspace."
+    )
+    lines.append(
+        "Report what actually happened: say so when a command or check "
+        "fails, or when you skip a step."
     )
     return "\n".join(lines)
+
+
+_SYSTEM_NAMES = {"Darwin": "macOS"}
+"""``platform.system()`` names a model would not read as the OS people say."""
 
 
 def _describe_rules(policy: WorkspacePolicy) -> list[str]:
@@ -330,17 +323,20 @@ def _describe_rules(policy: WorkspacePolicy) -> list[str]:
             f"Credential stores ({', '.join(repr(p) for p in off_limits)}) are "
             "off-limits to every tool and command."
         )
+    # Where nothing can be written, rules about writes only confuse (the same
+    # test that leaves out the write tools, policy_tools).
+    writable = policy.write != "deny" or policy.write_outside != "deny"
     # A write-only deny (a chat's attachments) is no credential store: called
     # one, a model won't even read what it was sent.
     for r in denied:
-        if "read" not in r.ops:
+        if "read" not in r.ops and writable:
             lines.append(f"Writes to {r.pattern!r} are refused. {r.reason}".rstrip())
     guarded_writes = [
         r.pattern
         for r in policy.baseline or ()
         if isinstance(r, PathRule) and r.action == "ask" and "write" in r.ops
     ]
-    if guarded_writes:
+    if guarded_writes and writable:
         lines.append(
             f"Writes to {', '.join(repr(p) for p in guarded_writes)} ask the "
             "user first: they change how tools behave."
@@ -372,10 +368,12 @@ def _describe_outside_access(read: Decision, write: Decision) -> str:
         "ask": "requires user approval",
         "deny": "is not permitted",
     }
+    if read == write:
+        joint = phrases[read].replace("is ", "are ").replace("requires", "require")
+        return f"Outside the workspace root, reading and writing {joint}."
     return (
         f"Outside the workspace root, reading {phrases[read]} and writing "
-        f"{phrases[write]}. When access is denied, ask the user to widen the "
-        "workspace configuration rather than working around it."
+        f"{phrases[write]}."
     )
 
 

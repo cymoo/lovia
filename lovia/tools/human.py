@@ -253,6 +253,9 @@ def ask_human(channel: HumanChannel, *, name: str = "ask_human") -> Tool:
     ) -> str:
         """Ask the human operator a question and wait for their reply.
 
+        - Ask only when the answer changes what you do next and neither the
+          request nor the context settles it; otherwise proceed and say what
+          you assumed.
         - Blocks until the human answers; a cancelled question surfaces as a
           tool error you can route around.
         - Prefer options for pick-one (or pick-many) questions; the reply may

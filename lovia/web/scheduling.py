@@ -56,39 +56,19 @@ from .titles import provisional_title
 from .workspaces import ChatBinding
 
 _DESCRIPTION = (
-    "Schedule a run to execute later, after a delay, or on a recurring basis. "
-    "At each scheduled time the agent runs autonomously with `instruction` as "
-    "its prompt. Use this for reminders, periodic checks or summaries, and "
-    "deferred tasks — anything the user wants to happen in the future or "
-    "repeatedly. Creating a schedule requires the user's approval."
+    "Schedule a run to execute later, after a delay, or on a recurring basis: "
+    "at each scheduled time the agent runs autonomously with `instruction` as "
+    "its prompt. Creating a schedule requires the user's approval."
 )
 
 _INSTRUCTIONS = (
     "## Scheduling\n"
-    "You can schedule work for later with the `schedule_run` tool. Use it when "
-    "the user wants something to happen at a future time, after a delay, or "
-    'repeatedly — e.g. "remind me in 10 minutes", "every morning…", "tomorrow '
-    'at 9 check…". Choose the trigger: `at` for a one-time moment, `every` for '
-    "a fixed interval in seconds, `cron` for a calendar schedule. For relative "
-    'or natural-language times ("in 10 minutes", "tomorrow at 9"), call the '
-    "`now` tool first to anchor them (it returns local time with its UTC "
-    "offset), then pass an ISO-8601 datetime that keeps that offset. A bare "
-    "datetime with no offset is read in the server's own timezone. Write "
-    "`instruction` as a complete, standalone prompt (a fire may happen long "
-    "after this chat). By default the scheduled run continues THIS conversation "
-    "so the user sees results inline; set `continue_session=false` only if the "
-    "user asks for it to run in a separate chat. "
-    "Don't schedule something you could just do now — and note that creating a "
-    "schedule asks the user to approve it first.\n"
-    'For "keep doing X until Y" requests, set `until` to the stop condition '
-    "and ALWAYS add a safety net — `max_fires` or `expires_at` — sized "
-    "generously from the user's intent (e.g. every 60s until a log line "
-    "appears → max_fires=120). Each fire is automatically told to evaluate "
-    "the condition and cancel the schedule once met. You can also inspect and "
-    "stop schedules yourself with `list_schedules` and "
-    "`cancel_schedule(schedule_id, reason)` — stopping only deactivates (the "
-    "user can resume or delete it in the Scheduled runs page), so it needs "
-    "no approval; deleting outright is the user's call, via the panel.\n"
+    "Use `schedule_run` when the user wants something to happen at a future "
+    'time, after a delay, or repeatedly — "remind me in 10 minutes", "every '
+    'morning…", "keep checking until…" — and never for what you could just do '
+    "now. Anchor relative times by calling `now` first. `list_schedules` and "
+    "`cancel_schedule` manage the schedules that exist; deleting one is the "
+    "user's call, in the Scheduled runs page.\n"
     "To do something now but in its own chat — the user asks for a new or "
     "separate chat — call `start_session` instead: the chat starts at once and "
     "the user can open it, but its results are not reported back here."
@@ -178,7 +158,8 @@ def _make_tool(store: ChatStore) -> Tool:
         max_fires: Annotated[
             int | None,
             "Safety net: deactivate the schedule after this many fires, even "
-            "if `until` is never met.",
+            "if `until` is never met. Size it generously from the user's intent "
+            "(every 60s until a log line appears → 120).",
         ] = None,
         expires_at: Annotated[
             str | None,

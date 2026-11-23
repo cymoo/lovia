@@ -234,17 +234,11 @@ def _running_summary(records: Sequence[_Record]) -> str:
 
 _INSTRUCTIONS_COMMON = (
     "## Background subagents\n"
-    "You can delegate self-contained tasks to background subagents that run "
-    "while you continue working: `spawn_subagent(prompt)` starts one and "
-    "returns immediately with an id. Write every prompt standalone — the "
-    "subagent sees nothing of this conversation and works in a fresh context. "
-    "Spawn early, then keep doing your own work while they run. Reports "
-    "arrive automatically as `[subagent …]` messages; call `wait_subagents` "
-    "when you need pending results before continuing, "
-    "`send_to_subagent(id, message)` to steer a running one (a forgotten "
-    "constraint, a scope change), and `cancel_subagent(id)` to stop one. "
-    "A subagent may not get approval for tools that need it, so delegate "
-    "only work its tools can do unattended."
+    "You can delegate self-contained tasks to background subagents with "
+    "`spawn_subagent`: spawn early, then keep doing your own work while they "
+    "run; each report arrives as a `[subagent …]` message. A subagent may not "
+    "get approval for tools that need it, so delegate only work its tools "
+    "can do unattended."
 )
 
 _INSTRUCTIONS_BOUNDED = (

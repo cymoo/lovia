@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import gc
 import os
+import platform
 import shlex
 import shutil
 import signal
@@ -1178,9 +1179,24 @@ async def test_workspace_instructions_reflect_policy(tmp_path) -> None:
     text = ws.instructions()
     assert "read-only" in text
     assert ".env*" in text
+    # Read-only has no write tools and no shell: nothing names them, and no
+    # rule about writes asks the user anything.
+    for absent in ("edit_file", "write_file", "shell", "Writes to"):
+        assert absent not in text
 
-    trusted = Workspace.local(str(tmp_path), mode="trusted")
-    assert "without approval" in trusted.instructions()
+    trusted = Workspace.local(str(tmp_path), mode="trusted").instructions()
+    assert "without approval" in trusted
+    assert "reading and writing are allowed" in trusted
+
+
+async def test_workspace_instructions_state_no_venv_that_is_not_there(
+    tmp_path,
+) -> None:
+    # No venv yet: the prompt says how one is picked up, never that python
+    # and pip already resolve to it.
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "already resolve" not in text
+    assert "one you just created included" in text
 
 
 async def test_workspace_instructions_layout_needs_writes(tmp_path) -> None:
@@ -1244,6 +1260,7 @@ async def test_workspace_instructions_layout_follows_root_kind(tmp_path) -> None
     text = Workspace.local(str(tmp_path), mode="coding").instructions()
     assert "git repository" in text
     assert "never commit" in text
+    assert "Commit only when the user asks" in text
     assert "topical subdirectory" not in text
 
 
@@ -1258,18 +1275,20 @@ def test_workspace_instructions_name_cmd_exe_where_it_runs_commands() -> None:
     # Told nothing, a model writes POSIX shell, multi-line `python -c` and all.
     coding = WorkspacePolicy.coding()
 
-    def text(policy: WorkspacePolicy, shell: str) -> str:
-        return render_instructions(policy, RootFacts(name="ws", shell=shell))
+    def text(policy: WorkspacePolicy, system: str) -> str:
+        return render_instructions(policy, RootFacts(name="ws", system=system))
 
-    assert "cmd.exe" not in text(coding, "sh")
-    assert "cmd.exe" in text(coding, "cmd")
-    assert "write it to a file" in text(coding, "cmd")
+    assert "cmd.exe" not in text(coding, "Linux")
+    assert "cmd.exe" in text(coding, "Windows")
+    assert "write it to a file" in text(coding, "Windows")
     # Nowhere to put the script: no advice to write one.
     readonly = replace(coding, write="deny")
-    assert "write it to a file" not in text(readonly, "cmd")
-    assert local_module.root_facts(Path.cwd()).shell == (
-        "cmd" if os.name == "nt" else "sh"
-    )
+    assert "write it to a file" not in text(readonly, "Windows")
+    # Elsewhere the OS is named, so the model picks GNU or BSD flags.
+    assert "/bin/sh on macOS" in text(coding, "Darwin")
+    assert "/bin/sh on Linux" in text(coding, "Linux")
+    assert "/bin/sh" not in text(coding, "")  # a remote host not opened yet
+    assert local_module.root_facts(Path.cwd()).system == platform.system()
 
 
 async def test_workspace_instructions_default_to_pip_guidance(tmp_path) -> None:

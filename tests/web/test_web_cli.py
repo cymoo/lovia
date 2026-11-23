@@ -819,11 +819,12 @@ def test_build_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert agent.model is provider
     assert agent.instructions == builder.GENERIC_INSTRUCTIONS
     # ./.agents/skills -> Skills, plus the on-by-default Todo + Scheduling +
-    # Memory + Subagents plugins.
+    # Introspection + Memory + Subagents plugins.
     assert {type(p).__name__ for p in agent.plugins} == {
         "Skills",
         "Todo",
         "Scheduling",
+        "Introspection",
         "Memory",
         "Subagents",
     }
@@ -851,7 +852,8 @@ def test_build_agent_subagents_child_composition(
     (plugin,) = [p for p in agent.plugins if isinstance(p, Subagents)]
     (child,) = plugin._catalog.values()
     # The child keeps the basic capabilities (Skills, Todo) and sheds the
-    # ones that must not ride along (Subagents, Scheduling, Memory).
+    # ones that must not ride along (Subagents, Scheduling, Introspection,
+    # Memory).
     assert {type(p).__name__ for p in child.plugins} == {"Skills", "Todo"}
     assert child.workspace is agent.workspace
     parent_only = {"show_chart", "show_table", "show_html"}  # no one watches a child

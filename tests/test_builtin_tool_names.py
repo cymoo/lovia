@@ -134,7 +134,14 @@ async def test_mcp_deferred_tools() -> None:
 
 async def test_web_tools() -> None:
     pytest.importorskip("fastapi")
-    from lovia.web import ChatStore, Scheduling, show_chart, show_html, show_table
+    from lovia.web import (
+        ChatStore,
+        Introspection,
+        Scheduling,
+        show_chart,
+        show_html,
+        show_table,
+    )
     from lovia.web.vision import make_describe_image_tool
 
     # describe_image is the CLI's vision tool, added when a vision model is set.
@@ -150,4 +157,10 @@ async def test_web_tools() -> None:
         "list_schedules",
         "schedule_run",
         "start_session",
+    ]
+    assert await _plugin_names(Introspection()) == [
+        "list_chats",
+        "list_workspaces",
+        "lovia_status",
+        "read_chat",
     ]

@@ -37,110 +37,120 @@ from ..workspaces import WorkspaceRef, own_root
 from .deps import RouterDeps
 
 
+def _require_switch(deps: RouterDeps) -> None:
+    if deps.workspace_switch is None:
+        raise WebError(
+            404,
+            "feature_unavailable",
+            "this server doesn't let chats pick a directory",
+        )
+
+
+def _agent_of(deps: RouterDeps) -> Agent[Any]:
+    """The agent the list is for: the default one, else the first with a
+    local workspace (a new chat's directory defaults to its own)."""
+    default = deps.default_agent
+    candidates = [deps.agents[default]] if default else []
+    candidates += list(deps.agents.values())
+    for agent in candidates:
+        if own_root(agent) is not None:
+            return agent
+    raise WebError(
+        404,
+        "feature_unavailable",
+        "no agent with a local workspace is served",
+        hint="configure a model first (Settings → Models)",
+    )
+
+
+def _fixed(deps: RouterDeps, agent: Agent[Any]) -> list[WorkspaceItem]:
+    switch = deps.workspace_switch
+    assert switch is not None
+    items: list[WorkspaceItem] = []
+    own = own_root(agent)
+    if own is not None:
+        items.append(
+            WorkspaceItem(
+                root=own.as_posix(), name=own.name or str(own), kind="default"
+            )
+        )
+    general = switch.general
+    if isinstance(general, Path) and general != own:
+        items.append(
+            WorkspaceItem(root=general.as_posix(), name=general.name, kind="general")
+        )
+    return items
+
+
+def _item_of(
+    deps: RouterDeps, agent: Agent[Any], root: str, *, row: Any = None
+) -> WorkspaceItem:
+    for item in _fixed(deps, agent):
+        if item.root == root:
+            return item
+    return WorkspaceItem(
+        id=row.id if row else None,
+        root=root,
+        name=row.name if row else Path(root).name,
+        host=WorkspaceRef.parse(root).host_name,
+        last_used_at=row.last_used_at if row else None,
+    )
+
+
+async def workspace_list(deps: RouterDeps) -> WorkspaceList:
+    """``GET /api/workspaces``: what the page lists, and the agent's
+    ``list_workspaces`` tool (:mod:`lovia.web.introspection`) too."""
+    _require_switch(deps)
+    switch = deps.workspace_switch
+    assert switch is not None
+    agent = _agent_of(deps)
+    own = own_root(agent)
+    items = _fixed(deps, agent)
+    shown = {i.root: i for i in items}
+    for row in await deps.store.list_workspaces():
+        if row.root in shown:
+            # Always listed; its row holds the name it was given, if any
+            # ("General" stays the page's word).
+            if shown[row.root].kind == "default":
+                shown[row.root].name = row.name
+            continue
+        # A place a narrower deployment no longer allows isn't offered.
+        ref = WorkspaceRef.parse(row.root)
+        refused = (
+            switch.remote_refusal(ref)
+            if ref.remote
+            else switch.refusal(Path(row.root), own)
+        )
+        if refused is not None:
+            continue
+        items.append(_item_of(deps, agent, row.root, row=row))
+    roots = switch.roots
+    return WorkspaceList(
+        workspaces=items,
+        default=own.as_posix() if own else None,
+        can_add=roots is not None,
+        remotes=(
+            None
+            if switch.remotes is None
+            else "any"
+            if switch.remotes == "any"
+            else list(switch.remotes)
+        ),
+        roots=(
+            None
+            if roots is None or roots == "any"
+            else [Path(r).as_posix() for r in roots]
+        ),
+    )
+
+
 def build_workspaces_router(deps: RouterDeps) -> APIRouter:
     router = APIRouter()
     store = deps.store
 
-    def require_switch() -> None:
-        if deps.workspace_switch is None:
-            raise WebError(
-                404,
-                "feature_unavailable",
-                "this server doesn't let chats pick a directory",
-            )
-
-    def agent_of() -> Agent[Any]:
-        """The agent the list is for: the default one, else the first with a
-        local workspace (a new chat's directory defaults to its own)."""
-        default = deps.default_agent
-        candidates = [deps.agents[default]] if default else []
-        candidates += list(deps.agents.values())
-        for agent in candidates:
-            if own_root(agent) is not None:
-                return agent
-        raise WebError(
-            404,
-            "feature_unavailable",
-            "no agent with a local workspace is served",
-            hint="configure a model first (Settings → Models)",
-        )
-
-    def fixed(agent: Agent[Any]) -> list[WorkspaceItem]:
-        switch = deps.workspace_switch
-        assert switch is not None
-        items: list[WorkspaceItem] = []
-        own = own_root(agent)
-        if own is not None:
-            items.append(
-                WorkspaceItem(
-                    root=own.as_posix(), name=own.name or str(own), kind="default"
-                )
-            )
-        general = switch.general
-        if isinstance(general, Path) and general != own:
-            items.append(
-                WorkspaceItem(
-                    root=general.as_posix(), name=general.name, kind="general"
-                )
-            )
-        return items
-
-    def item_of(agent: Agent[Any], root: str, *, row: Any = None) -> WorkspaceItem:
-        for item in fixed(agent):
-            if item.root == root:
-                return item
-        return WorkspaceItem(
-            id=row.id if row else None,
-            root=root,
-            name=row.name if row else Path(root).name,
-            host=WorkspaceRef.parse(root).host_name,
-            last_used_at=row.last_used_at if row else None,
-        )
-
     @router.get("/api/workspaces", response_model=WorkspaceList)
     async def list_workspaces() -> WorkspaceList:
-        require_switch()
-        switch = deps.workspace_switch
-        assert switch is not None
-        agent = agent_of()
-        own = own_root(agent)
-        items = fixed(agent)
-        shown = {i.root: i for i in items}
-        for row in await store.list_workspaces():
-            if row.root in shown:
-                # Always listed; its row holds the name it was given, if any
-                # ("General" stays the page's word).
-                if shown[row.root].kind == "default":
-                    shown[row.root].name = row.name
-                continue
-            # A place a narrower deployment no longer allows isn't offered.
-            ref = WorkspaceRef.parse(row.root)
-            refused = (
-                switch.remote_refusal(ref)
-                if ref.remote
-                else switch.refusal(Path(row.root), own)
-            )
-            if refused is not None:
-                continue
-            items.append(item_of(agent, row.root, row=row))
-        roots = switch.roots
-        return WorkspaceList(
-            workspaces=items,
-            default=own.as_posix() if own else None,
-            can_add=roots is not None,
-            remotes=(
-                None
-                if switch.remotes is None
-                else "any"
-                if switch.remotes == "any"
-                else list(switch.remotes)
-            ),
-            roots=(
-                None
-                if roots is None or roots == "any"
-                else [Path(r).as_posix() for r in roots]
-            ),
-        )
+        return await workspace_list(deps)
 
     @router.post("/api/workspaces", response_model=WorkspaceItem)
     async def add_workspace(req: WorkspaceAdd) -> WorkspaceItem:
@@ -148,8 +158,8 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
         be allowed here). ``path`` may name a remote location —
         ``ssh://box/srv/project``, ``docker://api/app`` — which is looked up
         on its host."""
-        require_switch()
-        agent = agent_of()
+        _require_switch(deps)
+        agent = _agent_of(deps)
         try:
             key = await deps.admit_new(agent, req.path.strip())
         except WebError as exc:
@@ -162,13 +172,13 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
                 ) from None
             raise
         row = await store.touch_workspace(key)
-        return item_of(agent, row.root, row=row)
+        return _item_of(deps, agent, row.root, row=row)
 
     @router.patch("/api/workspaces", response_model=WorkspaceItem)
     async def rename_workspace(req: WorkspaceRename) -> WorkspaceItem:
         """Give a listed directory a display name (two folders may share
         one); empty restores the folder's own. Its path is not touched."""
-        listed = {i.root: i for i in (await list_workspaces()).workspaces}
+        listed = {i.root: i for i in (await workspace_list(deps)).workspaces}
         item = listed.get(req.root)
         if item is None or item.kind == "general":
             raise WebError(
@@ -184,7 +194,7 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
     async def remove_workspace(workspace_id: str) -> dict[str, bool]:
         """Drop a directory from the list. Its files and chats stay; using
         it again (a new chat there) lists it again."""
-        require_switch()
+        _require_switch(deps)
         if not await store.remove_workspace(workspace_id):
             raise WebError(
                 404,
@@ -207,7 +217,7 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
         be reached included) is an empty list: this only feeds a picker, and
         adding the location is what reports why.
         """
-        require_switch()
+        _require_switch(deps)
         switch = deps.workspace_switch
         assert switch is not None
         if host is not None:
@@ -227,7 +237,7 @@ def build_workspaces_router(deps: RouterDeps) -> APIRouter:
     async def associate_sessions(req: AssociateRequest) -> AssociateResponse:
         """Bind chats that have no directory yet (from before chats had one)
         to ``root``, for good. A chat already bound is left as it is."""
-        require_switch()
+        _require_switch(deps)
         root, bound = await deps.associate(req.session_ids, req.root)
         return AssociateResponse(associated=list(bound), root=root)
 

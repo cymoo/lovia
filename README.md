@@ -102,7 +102,8 @@ the directory you started from; `lovia web ~/code/app` picks another.
   independent work to background subagents.
 - **Many projects at once.** The sidebar groups chats by workspace. Each chat
   has its own folder, model and permission mode, and the folder can be on an
-  SSH host or in a container.
+  SSH host or in a container. Ask the assistant about your workspaces or an
+  earlier chat and it looks them up.
 - **You stay in control.** Permission modes range from read-only to full
   access. In the default mode, irreversible commands ask first and say why,
   and an approval can be remembered for the chat; in every mode, dangerous

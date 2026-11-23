@@ -56,6 +56,7 @@ from .config import (
     resolve_skills_dirs,
 )
 from .html import show_html
+from .introspection import Introspection
 from .mcp import MCPBook, SettingsMCP
 from .project_mcp import DECISIONS_FILE, ProjectMCP
 from .run_deps import chat_project
@@ -506,6 +507,7 @@ def build_agent(
     # Let the model create Scheduled runs from chat (gated by approval). Closes
     # over the app's store so it writes the rows the scheduler polls.
     plugins.append(Scheduling(store))
+    plugins.append(Introspection())
     if spec.memory:
         if memory is None:
             memory = resolve_memory(True, deployment.home / "memory")

@@ -23,11 +23,13 @@ from ..parts import text_of
 from ..plugins.base import PluginInstance
 from ..run_context import RunContext
 from ..tools import Tool, tool
-from ..transcript import AssistantTextEntry, InputEntry
+from ..transcript import AssistantTextEntry, InputEntry, TranscriptEntry
 from .api.workspaces import workspace_list
 from .errors import WebError
 from .mcp import SettingsMCP
 from .run_deps import RUN_SERVER
+from .stop_check import without_stop_check
+from .waiting import RESUMABLE
 from .workspaces import WorkspaceRef, own_root
 
 if TYPE_CHECKING:
@@ -206,7 +208,8 @@ async def read_chat(
         raise ToolError(
             f"No chat {chat_id!r}.", hint="list_chats shows the ids of chats"
         )
-    messages = _messages(await deps.session.load(meta.id))
+    unfinished = await _unfinished(deps, meta.id)
+    messages = _messages([*await deps.session.load(meta.id), *unfinished])
     end = max(0, len(messages) - max(0, skip))
     page = messages[max(0, end - max(1, min(last, 50))) : end]
     # Newest first until the budget runs out, so a page never ends mid-way.
@@ -230,18 +233,38 @@ async def read_chat(
             "It has no messages yet." if not messages else "No messages that far back."
         )
     head += f"Messages {first}–{end} of {len(messages)}."
-    if deps.run_snapshot(meta.id) is not None and meta.id != ctx.session_id:
-        head += " A reply is in progress there; it isn't included yet."
+    if meta.id != ctx.session_id:
+        if unfinished:
+            head += " Its latest turn hasn't finished: it reads as far as it got."
+        elif deps.run_snapshot(meta.id) is not None:
+            head += " A reply is in progress there; it isn't included yet."
     return head + "\n\n" + "\n\n".join(kept)
 
 
-def _messages(entries: list[Any]) -> list[tuple[str, str]]:
-    """The chat as the user saw it: their messages and the assistant's text,
-    a run of assistant text between tool calls joined into one."""
+async def _unfinished(deps: RouterDeps, chat_id: str) -> list[TranscriptEntry]:
+    """The turn the page shows but the Session doesn't hold yet — a run going
+    on, suspended on a card, or cut off by a restart: its checkpoint, as far
+    as it got. Read only, unlike the page's view, which also clears what has
+    gone stale."""
+    store = deps.store
+    if store.checkpointer is None:
+        return []
+    live = deps.supervisor.get(chat_id)
+    run_id = live.run_id if live is not None else await store.get_active_run_id(chat_id)
+    snapshot = await store.checkpointer.load(run_id) if run_id else None
+    if snapshot is None or snapshot.status not in RESUMABLE:
+        return []
+    return list(snapshot.entries)
+
+
+def _messages(entries: list[TranscriptEntry]) -> list[tuple[str, str]]:
+    """The chat as the user saw it: their messages (without a schedule's stop
+    check, which is for the agent) and the assistant's text, a run of
+    assistant text between tool calls joined into one."""
     out: list[tuple[str, str]] = []
     for entry in entries:
         if isinstance(entry, InputEntry) and entry.role == "user":
-            text, role = text_of(entry.content), "user"
+            text, role = without_stop_check(text_of(entry.content)), "user"
         elif isinstance(entry, AssistantTextEntry):
             text, role = entry.content, "assistant"
         else:
@@ -270,7 +293,7 @@ async def lovia_status(ctx: RunContext[Any]) -> str:
     lines = [f"lovia {__version__}"]
     lines += _chat_lines(deps, ctx, meta, await _names(deps))
     lines += _model_lines(deps, meta)
-    lines += _mcp_lines(deps, ctx)
+    lines += _mcp_lines(ctx)
     return "\n".join(lines)
 
 
@@ -316,7 +339,7 @@ def _model_lines(deps: RouterDeps, meta: ChatMeta | None) -> list[str]:
     return lines
 
 
-def _mcp_lines(deps: RouterDeps, ctx: RunContext[Any]) -> list[str]:
+def _mcp_lines(ctx: RunContext[Any]) -> list[str]:
     plugin = next((p for p in ctx.agent.plugins if isinstance(p, SettingsMCP)), None)
     if plugin is None:
         return []
@@ -325,9 +348,10 @@ def _mcp_lines(deps: RouterDeps, ctx: RunContext[Any]) -> list[str]:
     servers = {**{s.name: s for s in plugin.servers}, **on}
     if not servers:
         return ["MCP servers: none configured"]
-    ctrl = deps.supervisor.get(ctx.session_id) if ctx.session_id else None
-    started = ctrl.started_at if ctrl is not None else None
-    lines = ["MCP servers:"]
+    # The book holds each server's latest connection by any chat or a test
+    # in Settings, so it says when, never whose. Which servers this run
+    # started without is in its own instructions.
+    lines = ["MCP servers (last connection by any chat or a test in Settings):"]
     for name, cfg in sorted(servers.items()):
         if name not in on:
             lines.append(f"- {name}: off for this chat")
@@ -335,14 +359,10 @@ def _mcp_lines(deps: RouterDeps, ctx: RunContext[Any]) -> list[str]:
         status = plugin.book.get(cfg)
         if status is None:
             seen = "not connected yet"
+        elif status.ok:
+            seen = f"connected {_when(status.at)}, {len(status.tools)} tools"
         else:
-            this_run = started is not None and status.at >= started
-            when = "for this run" if this_run else f"last at {_when(status.at)}"
-            seen = (
-                f"connected {when}, {len(status.tools)} tools"
-                if status.ok
-                else f"failed to connect {when}"
-            )
+            seen = f"failed to connect {_when(status.at)}"
         lines.append(f"- {name}: on — {seen}")
     return lines
 

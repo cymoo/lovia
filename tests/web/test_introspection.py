@@ -10,11 +10,14 @@ import pytest
 pytest.importorskip("fastapi")
 
 from lovia import Agent  # noqa: E402
+from lovia.checkpointer import RunHead  # noqa: E402
 from lovia.exceptions import ToolError  # noqa: E402
+from lovia.messages import Usage  # noqa: E402
 from lovia.run_context import RunContext  # noqa: E402
 from lovia.transcript import AssistantTextEntry, InputEntry  # noqa: E402
 from lovia.web import ChatStore, Introspection, WorkspaceSwitch, create_app  # noqa: E402
-from lovia.web.introspection import list_workspaces, read_chat  # noqa: E402
+from lovia.web.introspection import _when, list_workspaces, read_chat  # noqa: E402
+from lovia.web.stop_check import with_stop_check  # noqa: E402
 from lovia.workspace import Workspace  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
@@ -126,6 +129,45 @@ async def test_read_chat_shows_text_only(
     assert missing.endswith("No messages that far back.")
 
 
+async def test_read_chat_as_the_page_shows_it(
+    tmp_path: Path, dirs: tuple[Path, Path]
+) -> None:
+    launch, _ = dirs
+    store = ChatStore.in_memory()
+    # A schedule's fire: the stop check it appends is for that chat's agent.
+    await store.upsert("fired", agent="bot", title="log watch")
+    fire = with_stop_check("check the log", "sched1", "it says ready")
+    await store.session.append(
+        "fired",
+        [InputEntry(role="user", content=fire), AssistantTextEntry(content="not yet")],
+    )
+    # A first turn stopped on an approval: in its checkpoint only.
+    await store.upsert("pending", agent="bot", title="deploy")
+    assert store.checkpointer is not None
+    await store.checkpointer.append(
+        "r9",
+        [
+            InputEntry(role="user", content="deploy it"),
+            AssistantTextEntry(content="Running the deploy script."),
+        ],
+        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+    )
+    await store.set_active_run_id("pending", "r9")
+    fired, pending = await _run(
+        store,
+        launch,
+        [
+            ("read_chat", {"chat_id": "fired"}),
+            ("read_chat", {"chat_id": "pending"}),
+        ],
+        tmp_path,
+    )
+    assert "[user] check the log\n\n[assistant] not yet" in fired
+    assert "cancel_schedule" not in fired
+    assert "Messages 1–2 of 2. Its latest turn hasn't finished" in pending
+    assert pending.endswith("[assistant] Running the deploy script.")
+
+
 async def test_lovia_status_names_this_chat(
     tmp_path: Path, dirs: tuple[Path, Path]
 ) -> None:
@@ -168,7 +210,6 @@ async def test_lovia_status_models_and_mcp() -> None:
         workspace_switch=None,
         run_snapshot=lambda _sid: None,
         config_runtime=SimpleNamespace(config=config),
-        supervisor=SimpleNamespace(get=lambda _sid: SimpleNamespace(started_at=100.0)),
     )
     agent = SimpleNamespace(
         model=SimpleNamespace(model="gpt-x", name="openai"),
@@ -184,8 +225,10 @@ async def test_lovia_status_models_and_mcp() -> None:
     assert "- model setting: big — a change applies from the next message" in status
     assert "- fast: gpt-x (gpt-x, default)" in status
     assert "- big: Big (gpt-y)" in status
-    assert "- files: on — connected for this run, 2 tools" in status
-    assert "- web: on — failed to connect last at" in status
+    # The book is shared by every chat and Settings' test: when, never whose.
+    assert f"- files: on — connected {_when(200.0)}, 2 tools" in status
+    assert f"- web: on — failed to connect {_when(50.0)}" in status
+    assert "this run" not in status
     assert "- off: off for this chat" in status
     # A server's own words never reach the model.
     assert "secret" not in status

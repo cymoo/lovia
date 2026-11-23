@@ -764,7 +764,12 @@ _REMEMBER_DESCRIPTION = (
 
 _FORGET_DESCRIPTION = (
     "Remove a fact from long-term memory when it is wrong or no longer true. "
-    "Pass text matching the note to drop."
+    "Pass the note's full text, as your notes show it: the closest match goes."
+)
+
+_FORGET_SCOPED_DESCRIPTION = (
+    _FORGET_DESCRIPTION + " It searches the user's notes and this {name}'s "
+    "alike, so a partial text can take a note from the wrong one."
 )
 
 _RECALL_DESCRIPTION = (
@@ -1329,10 +1334,15 @@ class Memory:
     def _make_forget(self, scope: _Tier | None = None) -> Tool:
         plugin = self
         tiers = [self._user] if scope is None else [self._user, scope]
+        description = (
+            _FORGET_DESCRIPTION
+            if scope is None
+            else _FORGET_SCOPED_DESCRIPTION.format(name=self.scope_name)
+        )
 
-        @tool(name="forget", description=_FORGET_DESCRIPTION)
+        @tool(name="forget", description=description)
         async def forget(
-            fact: Annotated[str, "Text matching the note to remove."],
+            fact: Annotated[str, "The full text of the note to remove."],
         ) -> str:
             if await plugin._drop(fact, tiers):
                 return "Forgotten."

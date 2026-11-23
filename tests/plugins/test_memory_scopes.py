@@ -248,6 +248,14 @@ async def test_forget_tool_looks_in_both_layers(tmp_path) -> None:
     assert await _notes(mem) == []
     assert await _notes(mem, "/srv/app") == []
 
+    # A partial text can match the wrong layer, so the scoped tool says it
+    # searches both and asks for the note's full text.
+    (forget,) = [
+        t for t in (await mem.setup(_ctx("/srv/app"))).tools if t.name == "forget"
+    ]
+    assert "full text" in forget.description
+    assert "the user's notes and this project's alike" in forget.description
+
 
 def test_best_match_prefers_strength_then_the_later_layer() -> None:
     user = ["[2026-01] uses uv for everything"]

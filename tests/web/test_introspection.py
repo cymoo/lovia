@@ -129,11 +129,17 @@ async def test_read_chat_shows_text_only(
     assert missing.endswith("No messages that far back.")
 
 
-async def test_read_chat_as_the_page_shows_it(
+async def test_read_chat_stop_check_and_unfinished_turn(
     tmp_path: Path, dirs: tuple[Path, Path]
 ) -> None:
     launch, _ = dirs
     store = ChatStore.in_memory()
+    assert store.checkpointer is not None
+    turn = [
+        InputEntry(role="user", content="deploy it"),
+        AssistantTextEntry(content="Running the deploy script."),
+    ]
+    head = RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted")
     # A schedule's fire: the stop check it appends is for that chat's agent.
     await store.upsert("fired", agent="bot", title="log watch")
     fire = with_stop_check("check the log", "sched1", "it says ready")
@@ -143,22 +149,20 @@ async def test_read_chat_as_the_page_shows_it(
     )
     # A first turn stopped on an approval: in its checkpoint only.
     await store.upsert("pending", agent="bot", title="deploy")
-    assert store.checkpointer is not None
-    await store.checkpointer.append(
-        "r9",
-        [
-            InputEntry(role="user", content="deploy it"),
-            AssistantTextEntry(content="Running the deploy script."),
-        ],
-        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
-    )
+    await store.checkpointer.append("r9", turn, head)
     await store.set_active_run_id("pending", "r9")
-    fired, pending = await _run(
+    # Stopped mid-read: the run is in the Session, its checkpoint not yet gone.
+    await store.upsert("stopped", agent="bot", title="deploy")
+    await store.session.append("stopped", turn, run_id="r8")
+    await store.checkpointer.append("r8", turn, head)
+    await store.set_active_run_id("stopped", "r8")
+    fired, pending, stopped = await _run(
         store,
         launch,
         [
             ("read_chat", {"chat_id": "fired"}),
             ("read_chat", {"chat_id": "pending"}),
+            ("read_chat", {"chat_id": "stopped"}),
         ],
         tmp_path,
     )
@@ -166,6 +170,8 @@ async def test_read_chat_as_the_page_shows_it(
     assert "cancel_schedule" not in fired
     assert "Messages 1–2 of 2. Its latest turn hasn't finished" in pending
     assert pending.endswith("[assistant] Running the deploy script.")
+    assert "Messages 1–2 of 2.\n" in stopped
+    assert stopped.count("deploy it") == 1
 
 
 async def test_lovia_status_names_this_chat(
@@ -232,6 +238,41 @@ async def test_lovia_status_models_and_mcp() -> None:
     assert "- off: off for this chat" in status
     # A server's own words never reach the model.
     assert "secret" not in status
+
+
+async def test_lovia_status_project_servers_not_started(tmp_path: Path) -> None:
+    import json
+
+    from lovia.web.introspection import lovia_status
+    from lovia.web.mcp import MCPBook, SettingsMCP
+    from lovia.web.project_mcp import ProjectMCP
+    from lovia.web.run_deps import RUN_PROJECT, RUN_SERVER
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    servers = {"db": {"command": "x"}, "needs": {"command": "${NOT_SET_ANYWHERE}"}}
+    (project / ".mcp.json").write_text(json.dumps({"mcpServers": servers}))
+    deps = SimpleNamespace(
+        store=ChatStore.in_memory(),
+        workspace_switch=None,
+        run_snapshot=lambda _sid: None,
+        config_runtime=None,
+    )
+    plugin = SettingsMCP([], MCPBook(), project=ProjectMCP(tmp_path / "home"))
+    agent = SimpleNamespace(
+        model=SimpleNamespace(model="m", name="p"), plugins=[plugin]
+    )
+    ctx = RunContext(deps=None, entries=[], agent=agent, session_id="s1")
+    tokens = RUN_SERVER.set(deps), RUN_PROJECT.set(project.as_posix())  # type: ignore[arg-type]
+    try:
+        status = await lovia_status.invoke({}, ctx)
+    finally:
+        RUN_SERVER.reset(tokens[0])
+        RUN_PROJECT.reset(tokens[1])
+    # The page asks before a project's server starts; the tool says so.
+    assert "none configured" not in status
+    assert "- db: in .mcp.json, waiting for the user's OK on the page" in status
+    assert "- needs: in .mcp.json, can't be used: the variable" in status
 
 
 async def test_tools_need_the_web_app() -> None:

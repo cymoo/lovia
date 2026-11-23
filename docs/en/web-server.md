@@ -1281,8 +1281,8 @@ it runs in, so it never goes looking in lovia's database for them:
 | --- | --- |
 | `list_workspaces()` | The page's workspace list, with each one's chat count (no tasks, nothing archived) and which one this chat works in |
 | `list_chats(query="", workspace=None, archived=False, limit=20)` | Chats, pinned first, then most recent: id, title, workspace, last activity. `workspace` takes a root or a listed name |
-| `read_chat(chat_id, last=20, skip=0)` | A chat's messages as the page shows them — user and assistant text, no tool calls or results, a schedule's stop check left out, a turn not finished yet (running, waiting on an approval, cut off by a restart) as far as it got — capped per message and in all; `skip` pages back |
-| `lovia_status()` | The version; this chat's workspace, mode and model; under `default_app`, the configured models and the chat's model setting; with Settings → MCP, each server's state for this chat and its latest connection by any chat or a test in Settings (never the server's own error text) |
+| `read_chat(chat_id, last=20, skip=0)` | A chat's user and assistant text as stored — no tool calls or results, a schedule's stop check left out — with a turn not finished yet (running, waiting on an approval, cut off by a restart) as far as it got; capped per message and in all; `skip` pages back |
+| `lovia_status()` | The version; this chat's workspace, mode and model; under `default_app`, the configured models and the chat's model setting; with Settings → MCP, each server's state for this chat and its latest connection by any chat or a test in Settings (never the server's own error text), and the project's `.mcp.json` servers not started, with why (waiting for the user's OK, turned off, unusable) |
 
 `lovia web` serves its assistant with it (not its background child). An app
 of your own adds it with `Agent(..., plugins=[Introspection()])`; it reads the

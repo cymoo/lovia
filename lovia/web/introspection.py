@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
 from .. import __version__
@@ -26,8 +27,10 @@ from ..tools import Tool, tool
 from ..transcript import AssistantTextEntry, InputEntry, TranscriptEntry
 from .api.workspaces import workspace_list
 from .errors import WebError
+from .config.schema import MCPServerConfig
 from .mcp import SettingsMCP
-from .run_deps import RUN_SERVER
+from .project_mcp import PROJECT_MCP_FILE, read_project_servers
+from .run_deps import RUN_SERVER, chat_project
 from .stop_check import without_stop_check
 from .waiting import RESUMABLE
 from .workspaces import WorkspaceRef, own_root
@@ -191,9 +194,10 @@ def _chat_line(meta: ChatMeta, names: dict[str, str], current: str | None) -> st
 @tool(
     name="read_chat",
     description=(
-        "Read what was said in another chat: its messages — the user's and "
-        "yours, text only, no tool calls or results — newest last. Long chats "
-        "come in pages: `skip` the newest messages to read further back."
+        "Read what was said in another chat: the user's and the assistant's "
+        "text, no tool calls or results, newest last — a turn not finished "
+        "yet as far as it got. Long chats come in pages: `skip` the newest "
+        "messages to read further back."
     ),
 )
 async def read_chat(
@@ -208,8 +212,13 @@ async def read_chat(
         raise ToolError(
             f"No chat {chat_id!r}.", hint="list_chats shows the ids of chats"
         )
-    unfinished = await _unfinished(deps, meta.id)
-    messages = _messages([*await deps.session.load(meta.id), *unfinished])
+    # The checkpoint first: a stop in between saves the run to the Session
+    # before clearing it, and then the Session's copy is the one kept.
+    run_id, unfinished = await _unfinished(deps, meta.id)
+    segments = await deps.session.segments(meta.id)
+    if any(s.run_id == run_id for s in segments):
+        unfinished = []
+    messages = _messages([e for s in segments for e in s.entries] + unfinished)
     end = max(0, len(messages) - max(0, skip))
     page = messages[max(0, end - max(1, min(last, 50))) : end]
     # Newest first until the budget runs out, so a page never ends mid-way.
@@ -241,26 +250,29 @@ async def read_chat(
     return head + "\n\n" + "\n\n".join(kept)
 
 
-async def _unfinished(deps: RouterDeps, chat_id: str) -> list[TranscriptEntry]:
-    """The turn the page shows but the Session doesn't hold yet — a run going
-    on, suspended on a card, or cut off by a restart: its checkpoint, as far
-    as it got. Read only, unlike the page's view, which also clears what has
+async def _unfinished(
+    deps: RouterDeps, chat_id: str
+) -> tuple[str | None, list[TranscriptEntry]]:
+    """The turn the Session doesn't hold yet — a run going on, suspended on a
+    card, or cut off by a restart: its run id and its checkpoint, as far as
+    it got. Read only, unlike the page's view, which also clears what has
     gone stale."""
     store = deps.store
     if store.checkpointer is None:
-        return []
+        return None, []
     live = deps.supervisor.get(chat_id)
     run_id = live.run_id if live is not None else await store.get_active_run_id(chat_id)
     snapshot = await store.checkpointer.load(run_id) if run_id else None
     if snapshot is None or snapshot.status not in RESUMABLE:
-        return []
-    return list(snapshot.entries)
+        return None, []
+    return run_id, list(snapshot.entries)
 
 
 def _messages(entries: list[TranscriptEntry]) -> list[tuple[str, str]]:
-    """The chat as the user saw it: their messages (without a schedule's stop
-    check, which is for the agent) and the assistant's text, a run of
-    assistant text between tool calls joined into one."""
+    """The user's text (without a schedule's stop check: an instruction to
+    that chat's agent) and the assistant's, a run of assistant text between
+    tool calls joined into one. Not the page's rendering: an attachment
+    note, say, stays as written."""
     out: list[tuple[str, str]] = []
     for entry in entries:
         if isinstance(entry, InputEntry) and entry.role == "user":
@@ -346,13 +358,20 @@ def _mcp_lines(ctx: RunContext[Any]) -> list[str]:
     # A project's own server stands in for a global one of its name.
     on = {s.name: s for s in plugin.servers_for(ctx)}
     servers = {**{s.name: s for s in plugin.servers}, **on}
-    if not servers:
+    held, unreadable = _held_project_servers(plugin, ctx, on)
+    if not servers and not held and unreadable is None:
         return ["MCP servers: none configured"]
     # The book holds each server's latest connection by any chat or a test
     # in Settings, so it says when, never whose. Which servers this run
     # started without is in its own instructions.
     lines = ["MCP servers (last connection by any chat or a test in Settings):"]
-    for name, cfg in sorted(servers.items()):
+    if unreadable is not None:
+        lines.append(f"- this project's {PROJECT_MCP_FILE} can't be read: {unreadable}")
+    for name in sorted(servers.keys() | held.keys()):
+        if name in held:
+            lines.append(f"- {name}: {held[name]}")
+            continue
+        cfg = servers[name]
         if name not in on:
             lines.append(f"- {name}: off for this chat")
             continue
@@ -365,6 +384,33 @@ def _mcp_lines(ctx: RunContext[Any]) -> list[str]:
             seen = f"failed to connect {_when(status.at)}"
         lines.append(f"- {name}: on — {seen}")
     return lines
+
+
+def _held_project_servers(
+    plugin: SettingsMCP, ctx: RunContext[Any], on: dict[str, MCPServerConfig]
+) -> tuple[dict[str, str], str | None]:
+    """The servers of the chat's project's ``.mcp.json`` this run didn't
+    start, each with why — as Settings tells them — and what is wrong with
+    the file as a whole, if anything. A project on another machine: its
+    file is not read (see :meth:`SettingsMCP.servers_for`)."""
+    key = chat_project(ctx) if plugin.project is not None else None
+    if plugin.project is None or key is None or WorkspaceRef.parse(key).remote:
+        return {}, None
+    found, unreadable = read_project_servers(Path(key))
+    states = plugin.project.states(key, found)
+    held = {}
+    for s in found:
+        if s.name in on:
+            continue
+        if s.config is None:
+            held[s.name] = f"in {PROJECT_MCP_FILE}, can't be used: {s.error}"
+        elif states[s.name] == "pending":
+            held[s.name] = (
+                f"in {PROJECT_MCP_FILE}, waiting for the user's OK on the page"
+            )
+        else:
+            held[s.name] = "turned off for this project"
+    return held, unreadable
 
 
 @dataclass

@@ -951,12 +951,17 @@ Ask the agent to do something "in a new chat" and it can start one itself
 (`start_session`). Its card opens the new chat, which starts with none of
 this conversation and links back to the chat that started it.
 
+The assistant can also answer questions about the app itself — which
+workspaces you have, what an earlier chat settled, which model or mode this
+chat runs on — by looking them up with read-only tools
+([Introspection](web-server.md#introspection)).
+
 ## Background subagents
 
 `lovia web` enables [background subagents](multi-agent.md#background-subagents)
 by default; turn them off in **Settings → Assistant**. A default child keeps Skills,
-Todo, Tools, and Workspace, but omits Scheduling, Memory, and Subagents, so it
-cannot spawn recursively.
+Todo, Tools, and Workspace, but omits Scheduling, Introspection, Memory, and
+Subagents, so it cannot spawn recursively.
 
 A custom Agent must attach the `Subagents` Plugin. `create_app()` wires a
 Plugin using its default execution mode into Web supervision; disable that with

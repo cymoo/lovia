@@ -665,10 +665,13 @@ Cron 按服务器时钟计算；浏览器时区不同时，表单会提示。
 让 agent “在新对话里”做某件事时，它可以自己新建对话（`start_session`）。点击工具卡片即可打开
 新对话；新对话不带当前对话的任何内容，并会链接回发起它的对话。
 
+助手也能回答关于应用本身的问题：你有哪些工作区、之前某个对话定下了什么、本对话用的是哪个
+模型或模式。它会用只读工具去查（[自省](web-server.md#自省)）。
+
 ## 后台子 Agent
 
 `lovia web` 默认启用[后台子 Agent](multi-agent.md#后台子-agent)，可在**设置 → 助手**里关闭。
-默认子 Agent 保留 Skills、Todo、Tool 和 Workspace，但不加载 Scheduling、Memory 或 Subagents，
+默认子 Agent 保留 Skills、Todo、Tool 和 Workspace，但不加载 Scheduling、Introspection、Memory 或 Subagents，
 因此不会递归派生。
 
 自定义 Agent 需要自行添加 `Subagents` Plugin。`create_app()` 会把使用默认执行方式的 Plugin

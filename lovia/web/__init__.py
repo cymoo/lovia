@@ -39,6 +39,7 @@ try:
     from .default import default_app
     from .followups import FollowupFn, FollowupRequest, generate_followups
     from .html import show_html
+    from .introspection import Introspection
     from .questions import QuestionRegistry
     from .run_deps import RunDepsFn, RunTrigger, chat_project
     from .scheduling import Scheduling
@@ -58,6 +59,7 @@ __all__ = [
     "ChatUI",
     "FollowupFn",
     "FollowupRequest",
+    "Introspection",
     "QuestionRegistry",
     "RouterDeps",
     "RunDepsFn",

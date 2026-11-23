@@ -252,7 +252,7 @@ class SettingsMCP:
         self.project = project
         self.timeout = timeout
 
-    def _for_run(self, ctx: RunContext[Any]) -> Sequence[MCPServerConfig]:
+    def servers_for(self, ctx: RunContext[Any]) -> Sequence[MCPServerConfig]:
         """This run's servers: the global ones that are on — by their own
         switch, or as the chat's project has them — behind the project's
         own, which also stand in for a global one of their name. Read when
@@ -286,7 +286,7 @@ class SettingsMCP:
                     )
 
         try:
-            for cfg in self._for_run(ctx):
+            for cfg in self.servers_for(ctx):
                 try:
                     conn = await connect(cfg, self.timeout)
                 except Exception as exc:  # noqa: BLE001 — skipped, and said so

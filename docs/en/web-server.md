@@ -1272,6 +1272,23 @@ is not reported back. It needs no approval, since the chat is visible right
 away and `max_background_runs` bounds it; at that limit the call fails and
 leaves no chat behind.
 
+## Introspection
+
+`Introspection()` gives the agent read-only tools for questions about the app
+it runs in, so it never goes looking in lovia's database for them:
+
+| Tool | Returns |
+| --- | --- |
+| `list_workspaces()` | The page's workspace list, with each one's chat count (no tasks, nothing archived) and which one this chat works in |
+| `list_chats(query="", workspace=None, archived=False, limit=20)` | Chats, pinned first, then most recent: id, title, workspace, last activity. `workspace` takes a root or a listed name |
+| `read_chat(chat_id, last=20, skip=0)` | A chat's user and assistant text as stored — no tool calls or results, a schedule's stop check left out — with a turn not finished yet (running, waiting on an approval, cut off by a restart) as far as it got; capped per message and in all; `skip` pages back |
+| `lovia_status()` | The version; this chat's workspace, mode and model; under `default_app`, the configured models and the chat's model setting; with Settings → MCP, each server's state for this chat and its latest connection by any chat or a test in Settings (never the server's own error text), and the project's `.mcp.json` servers not started, with why (waiting for the user's OK, turned off, unusable) |
+
+`lovia web` serves its assistant with it (not its background child). An app
+of your own adds it with `Agent(..., plugins=[Introspection()])`; it reads the
+serving app off the run, so it takes no arguments. The tools see every chat
+the app's store holds: add it only where those chats all belong to one person.
+
 ## Security checklist
 
 - Keep `host="127.0.0.1"` for personal use; non-loopback binds are

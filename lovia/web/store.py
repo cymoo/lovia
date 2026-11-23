@@ -1401,20 +1401,48 @@ class ChatStore:
             await self.checkpointer.delete(run_id)
 
     async def search(
-        self, query: str, *, limit: int = 200, offset: int = 0
+        self,
+        query: str,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+        workspace: str | None = None,
+        archived: bool | None = None,
     ) -> Sequence[ChatMeta]:
         """Search sessions whose title or id contains ``query`` (literally —
-        LIKE wildcards in the query are escaped, so "100%" matches "100%")."""
+        LIKE wildcards in the query are escaped, so "100%" matches "100%"),
+        in ``workspace`` only if given; archived ones too unless ``archived``
+        says which."""
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         pattern = f"%{escaped}%"
+        where = (
+            "parent_id IS NULL AND (title LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\')"
+        )
+        params: list[Any] = [pattern, pattern]
+        if workspace is not None:
+            where += " AND workspace_root = ?"
+            params.append(workspace)
+        if archived is not None:
+            where += " AND archived = ?"
+            params.append(archived)
         return await self._read_all(
-            f"SELECT {_META_COLS} FROM chat_sessions "
-            "WHERE parent_id IS NULL "
-            "AND (title LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\') "
+            f"SELECT {_META_COLS} FROM chat_sessions WHERE {where} "
             "ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",
-            (pattern, pattern, limit, offset),
+            (*params, limit, offset),
             ChatMeta.from_row,
         )
+
+    async def chat_counts(self) -> dict[str, int]:
+        """How many chats each directory holds, as the sidebar counts them:
+        no tasks, nothing archived."""
+        rows = await self._read_all(
+            "SELECT workspace_root, COUNT(*) FROM chat_sessions "
+            "WHERE parent_id IS NULL AND archived = 0 "
+            "AND workspace_root IS NOT NULL GROUP BY workspace_root",
+            (),
+            tuple,
+        )
+        return {root: count for root, count in rows}
 
     # ---- UI component data ----------------------------------------------
     # Full props kept out of the model's context (lovia.web.put_ui_data);

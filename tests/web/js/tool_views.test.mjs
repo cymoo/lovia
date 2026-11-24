@@ -11,6 +11,7 @@ import {
   registerToolView,
   toolInfo,
   toolViewField,
+  valueEchoed,
   watchToolViews,
 } from '../../../lovia/web/static/js/tool-views.js';
 
@@ -69,4 +70,9 @@ test('a lone argument that ends the summary as a word counts as echoed', () => {
   assert.ok(!argEchoed('{"q": ""}', 'Search'));
   assert.ok(!argEchoed(undefined, 'List files'));
   assert.ok(!argEchoed('{oops', 'List files'));
+});
+
+test('a value is echoed whatever else the call carries', () => {
+  assert.ok(valueEchoed('src/a.py', 'Edit file src/a.py'));
+  assert.ok(!valueEchoed('a.py', 'Edit file src/a.py'));
 });

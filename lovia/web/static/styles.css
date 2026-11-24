@@ -2630,10 +2630,11 @@ body.lv-view-open #files-btn {
   color: var(--lv-ink-2);
   font-size: 13px;
 }
-/* Open, a title that echoes a lone argument reads in full: its params row
-   is hidden, so there is nowhere else to read it. Any other title stays one
+/* Open, a title that echoes a lone argument (or the path) reads in full: its
+   params row is hidden, so there is nowhere else to read it. Any other title stays one
    line — its params row (height-capped) has the whole call. */
-.lv-tool--echoed[open] > summary .lv-tool-summary {
+.lv-tool--echoed[open] > summary .lv-tool-summary,
+.lv-tool--path-echoed[open] > summary .lv-tool-summary {
   white-space: normal;
   overflow-wrap: anywhere;
 }
@@ -2672,7 +2673,8 @@ body.lv-view-open #files-btn {
   padding: 10px 14px;
 }
 /* The title already reads the call's lone argument (tools.js applySummary). */
-.lv-tool.lv-tool--echoed > .lv-tool-params {
+.lv-tool.lv-tool--echoed > .lv-tool-params,
+.lv-tool--path-echoed > .lv-tool-params .lv-param-path {
   display: none;
 }
 .lv-tool-params .lv-param-key {
@@ -6737,19 +6739,26 @@ body.lv-files-resizing {
   background: var(--lv-border);
 }
 
-/* ---- Diff blocks (old / new params) --------------------------------------------------- */
-/* Matches `.lv-block` too: these values are always block-rendered, and the plain
-   `.lv-param-val.diff-*` pair loses to `.lv-tool-params .lv-param-val.block` above on
-   specificity. Naming `.lv-block` here ties them, and later wins. */
-.lv-param-val.lv-block.lv-diff-old {
-  background: var(--lv-danger-soft);
-  border-left: 3px solid var(--lv-danger);
-  color: var(--lv-ink-2);
+/* ---- An edit's old / new params, as one diff --------------------------------------------- */
+/* Rows are the Files panel's (.lv-diff-line); a sign stands in for its numbers. */
+.lv-tool-params .lv-param-val.lv-param-diff {
+  padding: 4px 0;
 }
-.lv-param-val.lv-block.lv-diff-new {
-  background: color-mix(in srgb, var(--lv-ok) 10%, var(--lv-surface));
-  border-left: 3px solid var(--lv-ok);
-  color: var(--lv-ink-2);
+.lv-param-diff .lv-diff-line {
+  grid-template-columns: 2em 1fr;
+  min-width: 0;
+  min-height: 1.6em; /* an empty context line has no text to hold it open */
+}
+.lv-diff-sign {
+  text-align: center;
+  color: var(--lv-muted-2);
+  user-select: none;
+}
+.lv-param-diff .lv-add .lv-diff-sign {
+  color: var(--lv-ok);
+}
+.lv-param-diff .lv-del .lv-diff-sign {
+  color: var(--lv-danger);
 }
 
 /* ---- Approvals: always-allow + auto-approved notes -------------------------------------------------- */

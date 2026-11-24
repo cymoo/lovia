@@ -328,8 +328,6 @@ const MESSAGES = {
     'tool.expand': '展开结果',
     'tool.collapse': '收起结果',
     'tool.openInFiles': '在文件面板中打开',
-    'tool.old': '− 旧',
-    'tool.new': '+ 新',
     'tool.lines': '第 {start}–{end} 行 · 共 {total} 行',
     'tool.linesAll': '共 {total} 行',
     // ---- files panel
@@ -1195,8 +1193,6 @@ const EN = {
   'tool.expand': 'Expand result',
   'tool.collapse': 'Collapse result',
   'tool.openInFiles': 'Open in Files panel',
-  'tool.old': '− old',
-  'tool.new': '+ new',
   'tool.lines': 'Lines {start}–{end} of {total}',
   'tool.linesAll': '{total} lines',
   'files.changes': 'Changes',

@@ -31,11 +31,14 @@ SURFACE_NOTE = (
     "itself, so embed images directly instead of saying they cannot be shown. "
     "A workspace file works the same way — reference it by its "
     "workspace-relative path: ![chart](charts/q3.png) shows the image, "
-    "[report](report.md) links to the file."
+    "[report](report.md) links to the file. ```mermaid is the only fenced "
+    "block drawn as a picture: any other, ```chart included, shows as code, "
+    "so draw a chart with a chart tool when you have one."
 )
 r"""What the bundled chat UI renders — tell the model, or it assumes plain text.
 
-An untold model answers image requests with "I cannot display images here".
+An untold model answers image requests with "I cannot display images here",
+and one told only about ```mermaid invents a ```chart fence to go with it.
 The ``lovia web`` default agent carries this note automatically; agents served
 via ``--app`` or :func:`~lovia.web.serve` opt in::
 

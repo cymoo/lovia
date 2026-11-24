@@ -49,6 +49,7 @@ sampling, OAuth, heartbeats/subscriptions, and hosted MCP.
 from __future__ import annotations
 
 import asyncio
+import base64
 import difflib
 import json
 import logging
@@ -110,8 +111,8 @@ class MCPToolResult:
     decide exactly what the model sees.
 
     One result never arrives in this shape: without a custom renderer, a
-    successful result carrying an image the model can see is returned as
-    content parts instead (see :func:`_image_parts`).
+    successful result carrying an image in a format and size the providers
+    accept is returned as content parts instead (see :func:`_image_parts`).
     """
 
     content: list[Any] = field(default_factory=list)
@@ -187,14 +188,31 @@ def render_mcp_content(content: list[Any], *, is_error: bool = False) -> str:
     return text
 
 
-# Anthropic's documented per-image limit, the strictest current provider (the
-# cap ``view_image`` uses), in decoded bytes.
-_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+# The strictest per-image limit Anthropic documents, counted on the base64
+# string as providers count it (about 3.7 MB of image).
+_MAX_IMAGE_BASE64 = 5 * 1024 * 1024
 _IMAGE_MIMES = frozenset(IMAGE_MIME_BY_SUFFIX.values())
 
 
+def _sendable_image(mime: Any, data: Any) -> bool:
+    """Whether a provider would take this image block as it is.
+
+    A server's ``data`` is checked, not trusted: one bad image on the wire
+    fails the whole request, where a placeholder costs nothing.
+    """
+    if mime not in _IMAGE_MIMES or not isinstance(data, str) or not data:
+        return False
+    if len(data) > _MAX_IMAGE_BASE64:
+        return False
+    try:
+        base64.b64decode(data, validate=True)
+    except ValueError:  # binascii.Error: line-wrapped, a data: URL, ...
+        return False
+    return True
+
+
 def _image_parts(content: list[Any]) -> list[ContentPart] | None:
-    """``content`` as content parts, if it holds an image a model can see.
+    """``content`` as content parts, if it holds an image worth sending.
 
     An image block in a format and size the providers accept becomes an
     :class:`~lovia.parts.ImagePart`; every other block keeps its
@@ -207,11 +225,7 @@ def _image_parts(content: list[Any]) -> list[ContentPart] | None:
         if getattr(block, "type", None) == "image":
             mime = _field(block, "mime_type", "mimeType")
             data = getattr(block, "data", None)
-            if (
-                mime in _IMAGE_MIMES
-                and data
-                and _approx_bytes(data) <= _MAX_IMAGE_BYTES
-            ):
+            if _sendable_image(mime, data):
                 parts.append(ImagePart(data=data, mime_type=mime))
                 seen = True
                 continue

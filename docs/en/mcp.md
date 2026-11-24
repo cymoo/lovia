@@ -128,7 +128,8 @@ has two ways to look:
 
 `browser__browser_console_messages` and `browser__browser_network_requests`
 report what broke. A page is outside content: what it says is data for the
-agent, and the server's `permission` decides which calls ask first.
+agent. Which calls ask first is the server's `permission`; `lovia web`
+[asks before each one](web-ui.md#mcp-servers) outside Full access.
 
 The browser lives as long as the connection. A per-run connection, which is
 what `lovia web` uses, starts a new browser for every run, so the agent opens
@@ -173,10 +174,11 @@ single MCP session are unsupported; give each concurrent worker its own.
 - Tool *results* may carry resources: text is inlined; audio and binary
   resources become size-stamped placeholders (never raw base64); resource
   links become `[resource link: uri]` lines.
-- **Images reach the model as images.** A jpeg, png, gif or webp block of up
-  to 5 MB is handed over as an [`ImagePart`](tools.md#returning-images), in
-  order with the result's text. Any other image, and every image for a model
-  without vision, is a size-stamped placeholder. Such a result is content
+- **Images reach the model as images.** A jpeg, png, gif or webp block whose
+  base64 is valid and at most 5 MB (about 3.7 MB of image) is handed over as
+  an [`ImagePart`](tools.md#returning-images), in order with the result's
+  text. Any other image, and every image for a model without vision, is a
+  size-stamped placeholder. Such a result is content
   parts, which no renderer formats. A server with a custom `result_renderer`
   is the exception: its renderer still gets the raw `MCPToolResult` and
   returns text. A result flagged `isError` is text too.

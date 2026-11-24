@@ -117,7 +117,8 @@ agent = Agent(name="coder", model="<model>", plugins=[MCP(browser)])
   用来检查布局和样式。
 
 `browser__browser_console_messages` 和 `browser__browser_network_requests` 报告哪里出了错。
-页面是外部内容：上面的文字对 Agent 只是数据；哪些调用要先询问，由服务器的 `permission` 决定。
+页面是外部内容：上面的文字对 Agent 只是数据。哪些调用要先询问，由服务器的 `permission`
+决定；`lovia web` 在“完全权限”之外[每次调用都会先问](web-ui.md#mcp-服务器)。
 
 浏览器的寿命和连接一样长。按运行打开的连接（`lovia web` 用的就是这种）每次运行都会启动一个
 新浏览器，所以 Agent 在每条消息里都要重新打开页面。
@@ -153,8 +154,9 @@ async with server.session() as conn:      # 只打开一次
   异常一样结束该调用。
 - 工具**结果**可以携带资源：文本内联；音频和二进制资源变成带大小的 placeholder（不会放原始
   base64）；资源链接变成 `[resource link: uri]` 行。
-- **图片以图片的形式交给模型。** 不超过 5 MB 的 jpeg、png、gif、webp 图片块会作为
-  [`ImagePart`](tools.md#返回图片) 交给模型，与结果里的文本保持原有顺序。其他图片，以及
+- **图片以图片的形式交给模型。** jpeg、png、gif、webp 图片块，只要 base64 合法且不超过
+  5 MB（约 3.7 MB 的图片），就会作为 [`ImagePart`](tools.md#返回图片) 交给模型，与结果里的
+  文本保持原有顺序。其他图片，以及
   模型不支持视觉时的所有图片，都是带大小的 placeholder。这样的结果是内容片段，不经过任何
   renderer。配置了自定义 `result_renderer` 的服务器是例外：它的 renderer 仍然拿到原始
   `MCPToolResult`，并返回文本。标记了 `isError` 的结果也是文本。

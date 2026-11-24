@@ -323,17 +323,21 @@ async def test_image_the_model_cannot_take_stays_a_placeholder(
 ) -> None:
     svg = await _invoke_pic([_image("image/svg+xml", "AAAA")])
     assert str(svg) == "[image: image/svg+xml, 3 B]"
-    monkeypatch.setattr("lovia.plugins.mcp._MAX_IMAGE_BYTES", 2)
-    assert str(await _invoke_pic([_image("image/png", "AAAA")])) == (
-        "[image: image/png, 3 B]"
+    # Data a provider would refuse: line-wrapped base64, a data: URL.
+    for bad in ("AAAA\nAAAA", "data:image/png;base64,AAAA"):
+        assert isinstance(await _invoke_pic([_image("image/png", bad)]), MCPToolResult)
+    # The cap counts the base64 string, as providers do.
+    monkeypatch.setattr("lovia.plugins.mcp._MAX_IMAGE_BASE64", 4)
+    assert str(await _invoke_pic([_image("image/png", "AAAAAAAA")])) == (
+        "[image: image/png, 6 B]"
     )
     # Beside one that qualifies, it keeps its place as text.
     mixed = await _invoke_pic(
-        [_image("image/png", "AAAA"), _image("image/png", "AA==")]
+        [_image("image/png", "AAAAAAAA"), _image("image/png", "AAAA")]
     )
     assert mixed == [
-        TextPart("[image: image/png, 3 B]"),
-        ImagePart(data="AA==", mime_type="image/png"),
+        TextPart("[image: image/png, 6 B]"),
+        ImagePart(data="AAAA", mime_type="image/png"),
     ]
 
 

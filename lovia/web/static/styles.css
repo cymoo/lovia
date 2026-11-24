@@ -5142,9 +5142,10 @@ body.lv-files-resizing {
 }
 
 /* An open file takes the panel (files.js `lv-viewing`). Narrow, the list's
-   rows step aside and the preview's crumbs lead back. Wide (`lv-files-wide`,
-   ≥720px), the list keeps a column beside the preview, as a desktop file pane
-   does — a grid over the panel's own children, so no wrapper is needed. */
+   rows step aside and the preview's back button leads to them. Wide
+   (`lv-files-wide`: ≥720px, the list not hidden by its toggle), the list keeps
+   a column beside the preview, as a desktop file pane does — a grid over the
+   panel's own children, so no wrapper is needed. */
 .lv-files-panel.lv-viewing:not(.lv-files-wide)
   > :is(.lv-files-search, .lv-files-procs, .lv-files-list) {
   display: none;
@@ -5574,7 +5575,8 @@ body.lv-files-resizing {
   height: 28px;
 }
 .lv-files-wide .lv-files-viewer-back,
-.lv-files-panel:not(.lv-files-wide) #files-viewer-close {
+.lv-files-panel:not(.lv-files-wide) #files-viewer-close,
+.lv-files-panel:not(.lv-files-roomy) #files-list-toggle {
   display: none;
 }
 .lv-files-panel:not(.lv-files-wide) .lv-files-viewer-head {
@@ -5619,14 +5621,17 @@ body.lv-files-resizing {
 }
 /* Source / line wrap / attach / download live in the "⋯" menu until the
    panel has room for them beside the file's name; then they come back inline.
-   Copy, used far more, always stays out; "⋯" always stays (the file's place). */
-.lv-files-viewer {
+   Copy, used far more, always stays out; "⋯" always stays (the file's place).
+   The header is the container, not the viewer: as the panel turns from flex to
+   grid or back around the viewer, Chromium 145 leaves a container's children
+   not laid out — a blank file. */
+.lv-files-viewer-head {
   container-type: inline-size;
 }
 .lv-files-viewer-actions .lv-files-overflow {
   display: none;
 }
-@container (min-width: 480px) {
+@container (min-width: 456px) { /* inside the header's padding */
   .lv-files-viewer-actions .lv-files-overflow:not(.lv-hidden) {
     display: inline-flex;
   }
@@ -6746,7 +6751,6 @@ body.lv-files-resizing {
 }
 .lv-param-diff .lv-diff-line {
   grid-template-columns: 2em 1fr;
-  min-width: 0;
   min-height: 1.6em; /* an empty context line has no text to hold it open */
 }
 .lv-diff-sign {
@@ -7075,13 +7079,13 @@ body.lv-files-resizing {
 .lv-files-viewer-body.lv-nowrap .lv-files-diff {
   overflow-x: auto;
 }
+/* As wide as the longest line, so every row's colour reaches the scroll's end. */
+.lv-files-viewer-body.lv-nowrap .lv-files-diff-rows {
+  min-width: max-content;
+}
 .lv-diff-line {
   display: grid;
   grid-template-columns: 3.6em 3.6em 1fr;
-  min-width: max-content;
-}
-.lv-files-viewer-body:not(.lv-nowrap) .lv-diff-line {
-  min-width: 0;
 }
 .lv-diff-n {
   padding: 0 8px 0 4px;

@@ -77,8 +77,9 @@ const state = {
   failed: false, // the last listing failed: the list shows why, and a retry
   filter: '', // case-insensitive substring over listed paths
   wrap: localStorage.getItem('lovia-files-wrap') !== '0', // wrap long lines
+  listBeside: localStorage.getItem('lovia-files-list') !== '0', // beside an open file, given room
   viewing: null, // { path, kind, raw, name, end, totalLines, truncated, view, diff }
-  listScroll: 0, // the list's scroll when a file covered it (narrow panel)
+  listScroll: 0, // the list's scroll when a file covered it
 };
 
 const ext = (path) => (path.split('.').pop() || '').toLowerCase();
@@ -179,15 +180,36 @@ function initResizer() {
 // ---- List / preview layout --------------------------------------------------
 // An open file takes the panel (`lv-viewing`): on a narrow panel the list
 // steps aside and the tabs, the header's folder or Esc lead back; once the panel is dragged
-// wide enough (`lv-files-wide`), the list stays beside the preview instead.
-// Width is the panel's own, so a ResizeObserver decides — not the viewport.
+// wide enough (`lv-files-roomy`), the list stays beside the preview instead
+// (`lv-files-wide`) — unless the header's toggle hid it: then the panel works
+// as a narrow one. Width is the panel's own, so a ResizeObserver decides — not
+// the viewport.
 const WIDE_W = 720;
 const isWide = () => els.panel.classList.contains('lv-files-wide');
 
+function syncLayout() {
+  const roomy = els.panel.clientWidth >= WIDE_W;
+  els.panel.classList.toggle('lv-files-roomy', roomy);
+  els.panel.classList.toggle('lv-files-wide', roomy && state.listBeside);
+}
+
 function initLayout() {
-  new ResizeObserver(() => {
-    els.panel.classList.toggle('lv-files-wide', els.panel.clientWidth >= WIDE_W);
-  }).observe(els.panel);
+  new ResizeObserver(syncLayout).observe(els.panel);
+}
+
+function syncListToggle() {
+  els.listToggle.title = t(state.listBeside ? 'files.hideList' : 'files.showList');
+  els.listToggle.setAttribute('aria-label', els.listToggle.title);
+}
+
+function toggleList() {
+  // A hidden list loses its scroll: keep it for when the list is back.
+  if (isWide()) state.listScroll = els.list.scrollTop;
+  state.listBeside = !state.listBeside;
+  localStorage.setItem('lovia-files-list', state.listBeside ? '1' : '0');
+  syncListToggle();
+  syncLayout();
+  if (isWide()) els.list.scrollTop = state.listScroll;
 }
 
 // ---- Panel open/close -----------------------------------------------------
@@ -1588,8 +1610,11 @@ function renderDiff(d, path) {
   if (!d.diff.trim()) return viewerNote(t('files.diffEmpty'));
   const box = document.createElement('div');
   if (d.truncated) box.appendChild(viewerNote(t('files.diffCut')));
+  const frame = document.createElement('div');
+  frame.className = 'lv-files-diff'; // scrolls sideways; the rows inside share one width
   const lines = document.createElement('div');
-  lines.className = 'lv-files-diff';
+  lines.className = 'lv-files-diff-rows';
+  frame.appendChild(lines);
   const lang = diffLanguage(path, d.diff.length);
   const line = (cls, oldN, newN, text, isCode = false) => {
     const row = document.createElement('div');
@@ -1634,7 +1659,7 @@ function renderDiff(d, path) {
   // Nothing git said is worth a row (a header shape not foreseen): say so,
   // rather than an empty box.
   if (!lines.childElementCount) return viewerNote(t('files.diffEmpty'));
-  box.appendChild(lines);
+  box.appendChild(frame);
   return box;
 }
 
@@ -2006,6 +2031,12 @@ export function initFiles() {
   els.viewerClose.innerHTML = icon('x', { size: 15 });
   els.viewerClose.title = t('files.closeFile');
   els.viewerClose.setAttribute('aria-label', els.viewerClose.title);
+  els.listToggle = document.getElementById('files-list-toggle');
+  if (els.listToggle) {
+    els.listToggle.innerHTML = icon('panel-right', { size: 15 });
+    syncListToggle();
+    els.listToggle.addEventListener('click', toggleList);
+  }
   els.viewerBack = document.getElementById('files-viewer-back');
   if (els.viewerBack) {
     els.viewerBack.innerHTML = icon('chevron-left', { size: 16 });

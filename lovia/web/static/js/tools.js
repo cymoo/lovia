@@ -71,14 +71,16 @@ export function toolKey(node) {
 }
 
 /**
- * The card still waiting on call `id`'s result, if any — the one a resumed
- * run re-announces. A settled card with that id is another call.
+ * The card in `bubble` still waiting on call `id`'s result, if any — the one a
+ * resumed run re-announces. A settled card with that id is another call, and
+ * so is one in an earlier reply: a stopped run leaves its cards waiting.
+ * @param {HTMLElement} bubble The reply being written.
  * @param {string} id
  * @returns {HTMLElement | null}
  */
-export function findPendingToolNode(id) {
+export function findPendingToolNode(bubble, id) {
   const escaped = window.CSS?.escape ? CSS.escape(id) : id.replace(/["\\]/g, '\\$&');
-  const cards = document.querySelectorAll(`#transcript .lv-tool[data-call-id="${escaped}"]`);
+  const cards = bubble.querySelectorAll(`.lv-tool[data-call-id="${escaped}"]`);
   for (let i = cards.length - 1; i >= 0; i--) {
     const card = /** @type {HTMLElement} */ (cards[i]);
     if (states.get(card)?.result === undefined) return card;

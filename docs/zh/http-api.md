@@ -282,7 +282,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `message_completed` | `{message, usage}`：完整的模型回复；`usage` 是这次模型调用的用量，`last_input_tokens` 即它的提示长度；已知时 `context_window` 是为它做预算所依据的窗口（运行记录保留最后一个） |
 | `user_injected` | `{content, turn}` |
 | `tool_call` | `{id, name, arguments}`：`arguments` 是原始 JSON 字符串 |
-| `tool_result` | `{id, name, result, is_error, images?}`：`images` 列出 `{index, mime_type}`，图片本身通过 `GET /api/sessions/{id}/tool-images/{call_id}/{index}` 获取 |
+| `tool_result` | `{id, name, result, is_error, images?, arguments?}`：`images` 列出 `{index, mime_type}`，图片本身通过 `GET /api/sessions/{id}/tool-images/{call_id}/{index}` 获取。出错时带上该调用的 `arguments`：没开始执行就被拒绝的调用（被规则拒绝、工具不存在、参数格式错误等）不会先发 `tool_call` |
 | `todo` | `{call_id, name, todos}`：结构化 todo 更新，替代该调用的 `tool_result` |
 | `approval_required` | `{id, name, arguments, reason, scopes, granted, expires_at}` → 通过 `POST /api/chat/approve` 回答。`reason` 是为什么要问（除了“不在允许清单上”之外没什么特别时为空）；`scopes` 是“总是允许”会放开的范围——全部列出、一起记住（`[]` = 不提供）；`granted` 为 true 表示已有授权替用户答了——显示一行提示而不是卡片；`expires_at`（epoch 秒，`null` = 不过期）是无人回答时不再在线等待的时刻：运行就此暂停 |
 | `approval_resolved` | `{id, approved, cause}`——请求 `id` 已有结论：`cause` 为 `user`（任一标签页的回答）、`cancel`（运行被停止）或 `policy`（等待期间对话切换了权限模式，由新模式允许或拒绝）。发给所有连接中的客户端，并随当前 Turn 回放，卡片一旦有结论就不再可点 |

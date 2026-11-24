@@ -116,6 +116,9 @@ class _ToolResultRequired(TypedDict):
 
 class ToolResultData(_ToolResultRequired, total=False):
     images: list[JsonObject]
+    # With an error only: a call rejected before it started had no
+    # ``tool_call`` frame, so this one carries all a client needs to show it.
+    arguments: str
 
 
 class TodoData(TypedDict):
@@ -548,6 +551,8 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
         payload = ToolResultData(
             id=ev.call.id, name=ev.call.name, result=ev.output, is_error=ev.is_error
         )
+        if ev.is_error:
+            payload["arguments"] = ev.call.arguments
         # Image parts ride as byte-free stubs; the client fetches the pixels
         # from the tool-images route (0-based over the result's image parts).
         parts = None if ev.is_error else coerce_parts(result)

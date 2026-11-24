@@ -79,6 +79,50 @@ print(result.output)
 再抓取选定的 URL。只有配置了此插件的 Agent 才会使用该服务器。在异步代码中，
 用 `await Runner.run(agent, ...)` 代替 `run_sync()`。
 
+## 给写代码的 Agent 一个浏览器
+
+修改 Web 应用的 Agent 可以打开页面，看自己刚改的效果。浏览器由
+[Playwright MCP](https://github.com/microsoft/playwright-mcp) 驱动，lovia 这边只需要
+一条服务器配置：
+
+```python
+browser = MCPServerStdio(
+    name="browser",
+    command="npx",
+    args=["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+)
+agent = Agent(name="coder", model="<model>", plugins=[MCP(browser)])
+```
+
+在 `lovia web` 里，把同样的配置填进[设置 → MCP](web-ui.md#mcp-服务器)，或写进项目的
+`.mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "browser": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated"]
+    }
+  }
+}
+```
+
+配合[工作区](workspace.md)，Agent 用 `shell(background=true)` 启动 dev server，用
+`browser__browser_navigate` 打开它，然后有两种方式看页面：
+
+- `browser__browser_snapshot` 以文本返回页面：一棵无障碍树，其中的元素引用就是
+  `browser__browser_click` 的参数。它比图片省得多，操作页面时用它。
+- `browser__browser_take_screenshot` 返回渲染后的页面，模型看到的是图片（见下文），
+  用来检查布局和样式。
+
+`browser__browser_console_messages` 和 `browser__browser_network_requests` 报告哪里出了错。
+页面是外部内容：上面的文字对 Agent 只是数据。哪些调用要先询问，由服务器的 `permission`
+决定；`lovia web` 在“完全权限”之外[每次调用都会先问](web-ui.md#mcp-服务器)。
+
+浏览器的寿命和连接一样长。按运行打开的连接（`lovia web` 用的就是这种）每次运行都会启动一个
+新浏览器，所以 Agent 在每条消息里都要重新打开页面。
+
 ## 连接生命周期
 
 **按运行打开（默认）。** 传入服务器**配置**时，每次运行都会在插件 `setup()` 中打开连接，并在
@@ -108,8 +152,14 @@ async with server.session() as conn:      # 只打开一次
 - **失败分两类。** 协议层工具失败（服务器返回 `isError`）会以 `[tool error] ...` 渲染给模型，
   让它自我修正，不会抛出。传输/连接失败会抛 `MCPError`（携带 `tool_name`），像普通工具
   异常一样结束该调用。
-- 工具**结果**可以携带资源：文本内联；图片/音频变成带大小的 placeholder（不会放原始
+- 工具**结果**可以携带资源：文本内联；音频和二进制资源变成带大小的 placeholder（不会放原始
   base64）；资源链接变成 `[resource link: uri]` 行。
+- **图片以图片的形式交给模型。** jpeg、png、gif、webp 图片块，只要 base64 合法且不超过
+  5 MB（约 3.7 MB 的图片），就会作为 [`ImagePart`](tools.md#返回图片) 交给模型，与结果里的
+  文本保持原有顺序。其他图片，以及
+  模型不支持视觉时的所有图片，都是带大小的 placeholder。这样的结果是内容片段，不经过任何
+  renderer。配置了自定义 `result_renderer` 的服务器是例外：它的 renderer 仍然拿到原始
+  `MCPToolResult`，并返回文本。标记了 `isError` 的结果也是文本。
 - **支持范围仅限工具。** MCP 提示词、资源浏览、采样、OAuth 和订阅不在支持范围内；
   这个插件只做一件事。
 

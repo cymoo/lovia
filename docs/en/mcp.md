@@ -130,6 +130,10 @@ has two ways to look:
 report what broke. A page is outside content: what it says is data for the
 agent, and the server's `permission` decides which calls ask first.
 
+The browser lives as long as the connection. A per-run connection, which is
+what `lovia web` uses, starts a new browser for every run, so the agent opens
+the page again in each message.
+
 ## Connection lifecycle
 
 **Per-run (default).** Passing a server *config* means each run opens the
@@ -173,8 +177,9 @@ single MCP session are unsupported; give each concurrent worker its own.
   to 5 MB is handed over as an [`ImagePart`](tools.md#returning-images), in
   order with the result's text. Any other image, and every image for a model
   without vision, is a size-stamped placeholder. Such a result is content
-  parts, which no renderer formats, so a server with a custom
-  `result_renderer` keeps placeholders, as does a result flagged `isError`.
+  parts, which no renderer formats. A server with a custom `result_renderer`
+  is the exception: its renderer still gets the raw `MCPToolResult` and
+  returns text. A result flagged `isError` is text too.
 - **Scope is deliberately tools-only.** MCP prompts, resource browsing,
   sampling, OAuth, and subscriptions are non-goals; the plugin does one
   thing.

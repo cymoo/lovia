@@ -1115,6 +1115,9 @@ class RunLoop:
         turn: ModelTurnResult,
         tracer: Tracer,
     ) -> AsyncIterator[events.Event]:
+        # The last moment a stop costs nothing: it may have landed since the
+        # policy returned (a hook on the compaction event, a view injector).
+        self.cancel_token.check()
         async for ev in stream_model_turn(
             agent=state.agent,
             provider=provider,

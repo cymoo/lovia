@@ -415,6 +415,10 @@ class Compaction:
                 if n and not certainly_over(raw + overhead):
                     break  # the ordinary pass got it out of certain refusal
                 for stage in self.stages:
+                    # A stop decides nothing more: a summary cut short must
+                    # not hand its unfolded span to the truncate stage.
+                    if req.cancel_token.is_cancelled:
+                        break
                     ctx = StageContext(
                         request=req,
                         state=state,

@@ -1477,6 +1477,53 @@ async def test_a_slow_summary_is_announced_and_a_quick_compaction_is_not():
     assert any(isinstance(e, ContextCompacted) for e in quick)
 
 
+async def test_stop_after_the_policy_returned_still_ends_before_the_model_call():
+    """A stop can land between the policy's return and the request: on the
+    compaction event's hooks, or in a view injector."""
+
+    class _Compacts:
+        async def compact(self, req):
+            return ContextResult(entries=req.entries, compacted=True, reason="x")
+
+    provider = ScriptedProvider([text("hi")])
+    handle = Runner.stream(
+        Agent(name="t", model=provider), "go", context_policy=_Compacts()
+    )
+    seen: list = []
+    async for ev in handle:
+        seen.append(ev)
+        if isinstance(ev, ContextCompacted):
+            handle.cancel("stop")
+    assert isinstance(seen[-1], RunFailed)
+    assert isinstance(seen[-1].error, RunCancelled)
+    assert not provider.calls
+
+
+async def test_stop_mid_summary_leaves_the_rest_for_a_later_fold_not_truncated():
+    """On the overflow pass, a summary cut short by a stop looks like one that
+    ran out of road — the truncate stage must not drop what it left."""
+
+    class _StopsOnFirstFold(FakeSummarizer):
+        async def summarize(self, entries, *, req, prior_summary=None):
+            req.cancel_token.cancel("stop")
+            return await super().summarize(
+                entries, req=req, prior_summary=prior_summary
+            )
+
+    entries = [system("sys")]
+    for i in range(20):
+        entries += [user(f"q{i} " + "x" * 1500), _assistant(f"a{i} " + "y" * 1500)]
+    summarizer = _StopsOnFirstFold("S")
+    request = req(entries, provider=FakeProviderWithWindow(window=4_000), overflow=True)
+    result = await _pipeline(summarizer=summarizer).compact(request)
+    assert len(summarizer.calls) == 1
+    assert result.reason == "reactive_summary"
+    state = CompactionState.load(request.scratch)
+    assert state.summary is not None
+    assert state.summary.text == "S"  # no truncation note
+    assert state.summary.covered < 38  # the unfolded span is still in the view
+
+
 async def test_runner_no_policy_keeps_existing_behavior():
     provider = ScriptedProvider([text("hi")])
     agent = Agent(name="t", instructions="x", model=provider)

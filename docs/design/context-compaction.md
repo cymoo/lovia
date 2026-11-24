@@ -101,7 +101,7 @@ RunLoop：overflow=True 再 compact 一次；视图明显变小（< 失败时的
 
 - **标记保留 `call_id` 和 `is_error`**，视图里的工具对永远合法。offload 标记用内容摘要做 recall 引用（store 跨 session 共享，`call_id` 只在 session 内唯一）。
 - **摘要是增量的**：只把新的一段连同旧摘要交给 summarizer；分块上限是"可用窗口减去旧摘要"的一半，且同时受主模型和摘要模型窗口约束（摘要模型用自己的 provider 时，第一次折叠前会探测它的窗口）。折叠被拒、报错里点名了上限时，按做折叠的那个 provider 的 `window_key` 记进 `learned_windows`，把这一块重新切小、只重试一次；之后的折叠一开始就按它切。每块成功就立刻提交，中途失败不丢已有进度；分块只能结束在成对安全的位置。
-- **摘要开始前先宣布，分块之间看取消**：第一次调用 summarizer 前调 `req.announce_compacting()`，runner 把策略放进 task，宣布后仍在进行就发一对 `ContextCompacting(active)`（先关闭，再出结果或抛错）。每个分块前检查 `req.cancel_token`，已取消就带着已提交的折叠返回；runner 在策略返回后、模型调用前统一抛 `RunCancelled`。不打断进行中的那一次摘要调用，取消仍是"安全点"语义。
+- **摘要开始前先宣布，分块之间看取消**：第一次调用 summarizer 前调 `req.announce_compacting()`，runner 把策略放进 task，宣布后仍在进行就发一对 `ContextCompacting(active)`（先关闭，再出结果或抛错）。每个分块前检查 `req.cancel_token`，已取消就带着已提交的折叠返回，后续阶段也不再运行（否则溢出路径会把没摘要完的一段截断掉）；runner 在策略返回后、以及模型请求发出前各检查一次，抛 `RunCancelled`。不打断进行中的那一次摘要调用，取消仍是"安全点"语义。
 - **摘要最多占可用窗口的 1/4**，超出按失败处理；从大窗口带过来、在小窗口放不下的旧摘要会从头重做。
 - **截断复用摘要的覆盖边界**：被丢弃的一段记成一条"摘要"，渲染、指纹、成对安全全部沿用摘要的逻辑；之后成功的折叠会用真正的摘要替换这条说明。
 

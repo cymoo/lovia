@@ -29,6 +29,7 @@ import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { isRemote, scopeRoot } from './workspaces.js';
 import { desktopItems } from './desktop.js';
+import { diffLanguage, diffSource } from './diff.js';
 import { sortRows } from './tables.js';
 import { renderMermaid } from './diagrams.js';
 import { sandboxFrame } from './sandbox.js';
@@ -1582,13 +1583,6 @@ const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 // The header lines worth showing: the rest (index, ---/+++) repeat the path.
 const DIFF_META = /^(rename from|rename to|old mode|new mode|deleted file mode|new file mode) /;
 
-/** The highlight.js language for a file's diff, or null to leave it plain. */
-function diffLanguage(path, size) {
-  const e = ext(path);
-  if (typeof hljs === 'undefined' || size > 200_000 || !/^[a-z0-9]+$/.test(e)) return null;
-  return hljs.getLanguage(e) ? e : null;
-}
-
 function renderDiff(d, path) {
   if (d.binary) return viewerNote(t('files.diffBinary'));
   if (!d.diff.trim()) return viewerNote(t('files.diffEmpty'));
@@ -1596,9 +1590,6 @@ function renderDiff(d, path) {
   if (d.truncated) box.appendChild(viewerNote(t('files.diffCut')));
   const lines = document.createElement('div');
   lines.className = 'lv-files-diff';
-  // Each line is highlighted on its own: a construct spanning lines (a block
-  // comment, a template string) loses its colour past the first, but a diff
-  // holds no whole file to read one from.
   const lang = diffLanguage(path, d.diff.length);
   const line = (cls, oldN, newN, text, isCode = false) => {
     const row = document.createElement('div');
@@ -1611,14 +1602,8 @@ function renderDiff(d, path) {
     }
     const code = document.createElement('span');
     code.className = 'lv-diff-code';
-    if (isCode && lang && hljs) {
-      const src = document.createElement('span');
-      // hljs escapes the source it returns: safe as markup.
-      src.innerHTML = hljs.highlight(text.slice(1), { language: lang, ignoreIllegals: true }).value;
-      code.append(text[0], src);
-    } else {
-      code.textContent = text;
-    }
+    if (isCode) code.append(text[0], diffSource(text.slice(1), lang));
+    else code.textContent = text;
     row.appendChild(code);
     lines.appendChild(row);
   };

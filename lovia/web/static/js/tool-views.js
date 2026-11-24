@@ -165,10 +165,26 @@ export function toolInfo(state) {
 }
 
 /**
- * Whether a call's only argument already ends its summary line as a whole
- * word ("List files src" for `{path: "src"}`, `Search “q”`), so the expanded
- * card's params row would just repeat it. Anchored at the end, where summaries
- * put their subject, so a short value can't match a stray substring.
+ * Whether an argument's value already ends the summary line as a whole word
+ * ("List files src" for "src", `Search “q”`), so a params row would just
+ * repeat it. Anchored at the end, where summaries put their subject, so a
+ * short value can't match a stray substring.
+ * @param {string} value
+ * @param {string} summary The summary a view drew for the call.
+ * @returns {boolean}
+ */
+export function valueEchoed(value, summary) {
+  // Line breaks and runs of spaces keep their row: one line can't show them.
+  if (value !== value.replace(/\s+/g, ' ').trim()) return false;
+  const tail = summary.replace(/[”"']$/, '');
+  const at = tail.length - value.length;
+  return (
+    value !== '' && at >= 0 && tail.endsWith(value) && (at === 0 || /[\s“"']/.test(tail[at - 1]))
+  );
+}
+
+/**
+ * Whether the summary line echoes (valueEchoed) a call's only argument.
  * @param {string | undefined} args The call's raw JSON arguments.
  * @param {string} summary The summary a view drew for it.
  * @returns {boolean}
@@ -182,13 +198,5 @@ export function argEchoed(args, summary) {
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
   const values = Object.values(obj);
-  if (values.length !== 1 || typeof values[0] !== 'string') return false;
-  // A multi-line value keeps its row: the summary flattens its layout.
-  if (values[0].includes('\n')) return false;
-  const value = values[0].replace(/\s+/g, ' ').trim();
-  const tail = summary.replace(/[”"']$/, '');
-  const at = tail.length - value.length;
-  return (
-    value !== '' && at >= 0 && tail.endsWith(value) && (at === 0 || /[\s“"']/.test(tail[at - 1]))
-  );
+  return values.length === 1 && typeof values[0] === 'string' && valueEchoed(values[0], summary);
 }

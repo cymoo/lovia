@@ -15,6 +15,7 @@ import {
   registerRenderer,
   unmountComponent,
 } from './components.js';
+import { renderLineDiff } from './diff.js';
 import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { store } from './store.js';
@@ -24,6 +25,7 @@ import {
   toolInfo,
   toolViewChain,
   toolViewField,
+  valueEchoed,
   watchToolViews,
 } from './tool-views.js';
 import { copyToClipboard, openImageLightbox } from './ui.js';
@@ -111,8 +113,7 @@ function argValue(v) {
   return JSON.stringify(v);
 }
 
-// old/new pairs (edit_file) ARE a diff: the arguments are already the two
-// sides of the change, so no diff algorithm is needed to present them as one.
+// old/new pairs (edit_file) are the two sides of one change.
 function isDiffArgs(obj) {
   return typeof obj.old === 'string' && typeof obj.new === 'string';
 }
@@ -192,19 +193,15 @@ export function fillParams(container, args) {
     addBlock(String(args));
     return;
   }
-  // Color the two sides of a diff so an approval is reviewed as a change,
-  // not as two look-alike walls of text.
+  // A diff pair reads as one change: the lines both sides share show once, so
+  // what an approval is asked about is what stands out.
   const isDiff = isDiffArgs(obj);
   for (const [k, v] of argEntries(obj)) {
-    if (isDiff && (k === 'old' || k === 'new')) {
-      const old = k === 'old';
-      const key = document.createElement('div');
-      key.className = 'lv-param-key';
-      key.textContent = old ? t('tool.old') : t('tool.new');
-      const value = document.createElement('div');
-      value.className = `lv-param-val lv-block ${old ? 'lv-diff-old' : 'lv-diff-new'}`;
-      value.textContent = v;
-      container.append(key, value);
+    if (isDiff && k === 'old') continue; // drawn with its other side, next
+    if (isDiff && k === 'new') {
+      const diff = renderLineDiff(obj.old, v, typeof obj.path === 'string' ? obj.path : '');
+      diff.className = 'lv-param-val lv-block lv-param-diff';
+      container.append(diff);
       continue;
     }
     let val = typeof v === 'string' ? v : JSON.stringify(v);
@@ -216,6 +213,10 @@ export function fillParams(container, args) {
     const value = document.createElement('div');
     value.className = block ? 'lv-param-val lv-block' : 'lv-param-val';
     value.textContent = val;
+    if (k === 'path') {
+      // Hidden on a card whose title already names it (applySummary).
+      for (const el of [key, value]) el.classList.add('lv-param-path');
+    }
     container.append(key, value);
   }
 }
@@ -356,7 +357,7 @@ function applySummary(node) {
   let el = summary.querySelector(':scope > .lv-tool-summary');
   if (text === null) {
     el?.remove();
-    node.classList.remove('lv-tool--summary', 'lv-tool--echoed');
+    node.classList.remove('lv-tool--summary', 'lv-tool--echoed', 'lv-tool--path-echoed');
     return;
   }
   if (!el) {
@@ -369,6 +370,9 @@ function applySummary(node) {
   node.classList.add('lv-tool--summary');
   // The title already shows the lone argument: skip the params row repeating it.
   node.classList.toggle('lv-tool--echoed', argEchoed(state.arguments, text));
+  // Likewise the path of a call that has more to show.
+  const path = toolPath(state.arguments);
+  node.classList.toggle('lv-tool--path-echoed', path !== null && valueEchoed(path, text));
 }
 
 // Re-apply a view registered late (a slow extension) to the cards on screen
@@ -542,6 +546,17 @@ function syncToolUi(node, live) {
   mountComponent(el, comp, { callId: node.dataset.callId ?? null, live });
 }
 
+// Whether a result is edit_file's plain success (workspace/tools.py
+// _render_edit_result) on the path it was given: no more than the card already
+// says. A failed edit, several replacements, or a path that resolved to
+// another one (a symlink) reads otherwise and keeps its text.
+function isPlainEdit(node, text) {
+  return (
+    node.dataset.tool === 'edit_file' &&
+    text === `edited ${node.dataset.toolPath} (1 replacement)`
+  );
+}
+
 /**
  * Settle a card with its call's result — the one renderer behind both the
  * live tool_result event and history replay: content (highlighted or
@@ -568,7 +583,7 @@ export function setToolResult(node, result, isError, images, live = false) {
   const pre = /** @type {HTMLElement | null} */ (node.querySelector('.lv-tool-result'));
   if (!pre) return;
   const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);
-  if (!text.trim()) {
+  if (!text.trim() || (!isError && isPlainEdit(node, text))) {
     pre.style.display = 'none';
     node.querySelector('.lv-tool-result-meta')?.remove();
     return;

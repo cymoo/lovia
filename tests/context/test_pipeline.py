@@ -3,6 +3,7 @@ and runner integration."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -12,6 +13,7 @@ from lovia import (
     ContextOverflowError,
     Compaction,
     InMemorySession,
+    RunCancelled,
     Runner,
 )
 from lovia.transcript import AssistantTextEntry, InputEntry
@@ -24,7 +26,12 @@ from lovia.context import (
 )
 from lovia.context.stages import TRUNCATION_NOTE
 from lovia.context.state import fingerprint
-from lovia.events import ContextCompacted
+from lovia.events import (
+    ContextCompacted,
+    ContextCompacting,
+    MessageCompleted,
+    RunFailed,
+)
 from lovia.transcript import ToolCallEntry, ToolResultEntry, entry_to_dict
 
 from lovia.context import TokenCounter
@@ -1337,6 +1344,137 @@ async def test_runner_persists_compaction_notice_to_segment_meta():
     assert notice["summary"].startswith("S.")
     # The token numbers ride along at the top level now (no nested metadata).
     assert notice["tokens_before"] >= notice["tokens_after"]
+
+
+class _GatedPolicy:
+    """Announces slow work, then waits on the test before answering."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.gate = asyncio.Event()
+        self.error = error
+        self.cancelled = False
+
+    async def compact(self, req):
+        req.announce_compacting()
+        req.announce_compacting()  # once per call, however often it is said
+        try:
+            await self.gate.wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        if self.error is not None:
+            raise self.error
+        return ContextResult(entries=req.entries)
+
+
+def _compacting(seen: list) -> list[bool]:
+    return [e.active for e in seen if isinstance(e, ContextCompacting)]
+
+
+async def test_runner_brackets_announced_slow_work_with_compacting_events():
+    policy = _GatedPolicy()
+    provider = ScriptedProvider([text("hi")])
+    seen: list = []
+    async for ev in Runner.stream(
+        Agent(name="t", model=provider), "go", context_policy=policy
+    ):
+        seen.append(ev)
+        if isinstance(ev, ContextCompacting) and ev.active:
+            assert not provider.calls  # said while the policy is still at it
+            policy.gate.set()
+    assert _compacting(seen) == [True, False]
+    closed = next(
+        i
+        for i, e in enumerate(seen)
+        if isinstance(e, ContextCompacting) and not e.active
+    )
+    assert all(not isinstance(e, MessageCompleted) for e in seen[:closed])
+    assert seen[-1].result.output == "hi"
+
+
+async def test_compacting_pair_closes_before_the_policy_error_surfaces():
+    policy = _GatedPolicy(error=RuntimeError("policy broke"))
+    seen: list = []
+    async for ev in Runner.stream(
+        Agent(name="t", model=ScriptedProvider([text("hi")])),
+        "go",
+        context_policy=policy,
+    ):
+        seen.append(ev)
+        if isinstance(ev, ContextCompacting):
+            policy.gate.set()
+    assert _compacting(seen) == [True, False]
+    assert isinstance(seen[-1], RunFailed)
+    assert str(seen[-1].error) == "policy broke"
+    assert isinstance(seen[-2], ContextCompacting)
+
+
+async def test_stop_during_compaction_ends_the_run_before_the_model_call():
+    policy = _GatedPolicy()
+    provider = ScriptedProvider([text("hi")])
+    handle = Runner.stream(Agent(name="t", model=provider), "go", context_policy=policy)
+    seen: list = []
+    async for ev in handle:
+        seen.append(ev)
+        if isinstance(ev, ContextCompacting) and ev.active:
+            handle.cancel("stop")
+            policy.gate.set()
+    assert _compacting(seen) == [True, False]
+    assert isinstance(seen[-1], RunFailed)
+    assert isinstance(seen[-1].error, RunCancelled)
+    assert not provider.calls
+
+
+async def test_cancelling_the_consumer_stops_the_policy_too():
+    policy = _GatedPolicy()
+    started = asyncio.Event()
+
+    async def consume() -> None:
+        async for ev in Runner.stream(
+            Agent(name="t", model=ScriptedProvider([text("hi")])),
+            "go",
+            context_policy=policy,
+        ):
+            if isinstance(ev, ContextCompacting):
+                started.set()
+
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(started.wait(), timeout=3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert policy.cancelled
+
+
+class _SlowSummarizer(FakeSummarizer):
+    async def summarize(self, entries, *, req, prior_summary=None):
+        await asyncio.sleep(0.01)
+        return await super().summarize(entries, req=req, prior_summary=prior_summary)
+
+
+async def test_a_slow_summary_is_announced_and_a_quick_compaction_is_not():
+    async def run(summarizer) -> list:
+        seen: list = []
+        async for ev in Runner.stream(
+            Agent(name="t", instructions="x", model=_OverflowOnceProvider()),
+            "go",
+            context_policy=Compaction(summarizer=summarizer),
+            session=await _seeded_session(),
+            session_id="s1",
+        ):
+            seen.append(ev)
+        return seen
+
+    slow = await run(_SlowSummarizer("S."))
+    assert _compacting(slow) == [True, False]  # one pair, however many folds
+    kinds = [
+        type(e) for e in slow if isinstance(e, (ContextCompacting, ContextCompacted))
+    ]
+    assert kinds == [ContextCompacting, ContextCompacting, ContextCompacted]
+
+    quick = await run(FakeSummarizer("S."))
+    assert _compacting(quick) == []
+    assert any(isinstance(e, ContextCompacted) for e in quick)
 
 
 async def test_runner_no_policy_keeps_existing_behavior():

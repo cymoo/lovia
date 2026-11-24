@@ -910,6 +910,7 @@ class RunLoop:
             last_view_id=state.calibration_view,
             overflow=False,
             scratch=state.context_state,
+            cancel_token=self.cancel_token,
         )
         # Consumed: the policy is about to estimate a new view, so this count
         # no longer pairs with anything. Only the call that view goes out in
@@ -917,7 +918,10 @@ class RunLoop:
         # can't leave a stale count to be paired with a later estimate, in
         # this run or, via the segment, the next.
         state.calibration_tokens = None
-        ctx_result = await self._compact(state, request)
+        results: list[ContextResult] = []
+        async for ev in self._compact(state, request, results):
+            yield ev
+        ctx_result = results.pop()
         turn.context_window = ctx_result.window
         view = await self._build_view(state, ctx_result)
         if ctx_result.compacted:
@@ -959,7 +963,9 @@ class RunLoop:
             request.last_view_id = None
             request.overflow = True
             request.reported_window = overflow.reported_window
-            ctx_result = await self._compact(state, request)
+            async for ev in self._compact(state, request, results):
+                yield ev
+            ctx_result = results.pop()
             turn.context_window = ctx_result.window  # now with what it learned
             # Retry only when the rebuilt view is meaningfully smaller than
             # the one that just failed (both numbers come from the same
@@ -1000,9 +1006,46 @@ class RunLoop:
             yield ev
 
     async def _compact(
+        self, state: RunState, request: CompactionRequest, into: list[ContextResult]
+    ) -> AsyncIterator[events.Event]:
+        """Run the context policy into ``into``, saying when it works slowly.
+
+        The policy runs in its own task so this generator can yield meanwhile:
+        ``ContextCompacting(active=True)`` once the policy announces slow work
+        it is still doing, ``active=False`` when it is done — before its
+        result or exception surfaces, so the pair always closes. A stop
+        requested meanwhile ends the run here rather than after the model
+        call this view was for.
+        """
+        announced = asyncio.Event()
+        request.announce_compacting = announced.set
+        work = asyncio.ensure_future(self._run_policy(state, request))
+        flag = asyncio.ensure_future(announced.wait())
+        shown = False
+        try:
+            await asyncio.wait({work, flag}, return_when=asyncio.FIRST_COMPLETED)
+            if not work.done():
+                shown = True
+                yield await self._emit(state, events.ContextCompacting(active=True))
+                await asyncio.wait({work})
+        finally:
+            flag.cancel()
+            if not work.done():
+                # Closed or cancelled mid-work: stop the policy, and wait for
+                # it — it saves what it already decided on the way out.
+                work.cancel()
+                await asyncio.wait({work})
+            if not work.cancelled():
+                work.exception()  # retrieved, whichever way this unwinds
+        if shown:
+            yield await self._emit(state, events.ContextCompacting(active=False))
+        self.cancel_token.check()
+        into.append(work.result())
+
+    async def _run_policy(
         self, state: RunState, request: CompactionRequest
     ) -> ContextResult:
-        """Run the context policy and settle the spend of its own model calls.
+        """Call the context policy and settle the spend of its own model calls.
 
         Summaries are real spend: folded into the run's usage — even when the
         policy raises partway — and checked against the budget before the

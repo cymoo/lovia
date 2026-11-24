@@ -259,6 +259,57 @@ async def test_reattach_snapshot_reads_in_order_over_mixed_history() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reattach_shows_a_compaction_only_while_it_is_running() -> None:
+    compacting, finish, answer = (asyncio.Event() for _ in range(3))
+
+    class _SlowPolicy:
+        async def compact(self, req: CompactionRequest) -> ContextResult:
+            req.announce_compacting()
+            compacting.set()
+            await finish.wait()
+            return ContextResult(entries=req.entries)
+
+    class _Gated:
+        name = "gated"
+        model = "fake-model"
+
+        async def stream(self, entries, **kwargs):
+            from lovia.transcript import FinishDelta
+
+            await answer.wait()
+            yield TextDelta(text="hi")
+            yield FinishDelta(reason="stop")
+
+    agent = Agent(name="bot", model=_Gated(), context_policy=_SlowPolicy())
+    async with _client(_app(agent)) as ac:
+        t0, live = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await asyncio.wait_for(compacting.wait(), timeout=3)
+        await asyncio.sleep(0.05)
+        t1, during = _spawn(ac, "/api/chat/reconnect", params={"session_id": "s1"})
+        await asyncio.sleep(0.1)
+        finish.set()
+        await asyncio.sleep(0.1)
+        t2, after = _spawn(ac, "/api/chat/reconnect", params={"session_id": "s1"})
+        await asyncio.sleep(0.1)
+        answer.set()
+        await asyncio.wait_for(asyncio.gather(t0, t1, t2), timeout=5)
+
+    def flags(lines: list[str]) -> list[bool]:
+        return [
+            d["active"]
+            for e, d in _parse_sse("\n".join(lines))
+            if e == "context_compacting"
+        ]
+
+    assert flags(live) == [True, False]
+    # Joined mid-summary: told so, then told it ended.
+    assert flags(during) == [True, False]
+    # Joined after: the notice is stale, and its closing frame was never kept.
+    assert flags(after) == []
+
+
 async def test_reattach_replays_a_retry_only_while_it_is_current() -> None:
     from lovia.transcript import FinishDelta, TextDelta
 

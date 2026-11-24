@@ -167,6 +167,7 @@ def _every_chat_event() -> list[events.Event | LegFrame]:
         events.ModelRetrying(
             error=ProviderError("x"), attempt=1, max_attempts=3, delay=1.0
         ),
+        events.ContextCompacting(active=True),
         events.ContextCompacted(
             session_id="s",
             entries_before=[],

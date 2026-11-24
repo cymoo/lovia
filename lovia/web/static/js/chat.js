@@ -3016,10 +3016,11 @@ let _lastReply = '';
 
 // ---- Waiting on the model ------------------------------------------------
 // From a send (and each model call's turn_started) until the model's first
-// sign of life, the bubble's tail breathes three dots — with a line while the
-// provider is being retried. Re-placed at the tail after every event, so a
-// notice landing meanwhile (a compaction) never buries it.
-/** @type {{ retry: { attempt: number, max_attempts: number, message?: string } | null } | null} */
+// sign of life, the bubble's tail breathes three dots — with a line saying
+// what else is being waited on (a provider retry, a context compaction).
+// Re-placed at the tail after every event, so a notice landing meanwhile (a
+// compaction card) never buries it.
+/** @type {{ text: string, title?: string } | null} */
 let _awaiting = null;
 const MODEL_RESPONDED = new Set([
   'text_delta', 'reasoning_delta', 'tool_call', 'approval_required',
@@ -3043,11 +3044,8 @@ function syncAwaiting() {
     text.className = 'lv-awaiting-text';
     el.append(dots, text);
   }
-  const retry = _awaiting.retry;
-  /** @type {HTMLElement} */ (el.querySelector('.lv-awaiting-text')).textContent = retry
-    ? t('chat.retrying', { n: retry.attempt + 1, max: retry.max_attempts })
-    : '';
-  el.title = retry?.message ?? '';
+  /** @type {HTMLElement} */ (el.querySelector('.lv-awaiting-text')).textContent = _awaiting.text;
+  el.title = _awaiting.title ?? '';
   // Last, or just above the footer an adopted (reconnected) bubble carries.
   const footer = store.bubble.querySelector(':scope > .lv-turn-footer');
   if (el.parentNode !== store.bubble || el.nextElementSibling !== footer) {
@@ -3149,7 +3147,7 @@ async function applyEvent({ event, data }) {
       store.reasoningEnd = 0;
       // The replacing attempt is under way: wait on it (keeping a retry line
       // that's showing; a reconnect's replayed deltas cleared any other).
-      if (!_awaiting) _awaiting = { retry: null };
+      if (!_awaiting) _awaiting = { text: '' };
       break;
 
     case 'message_completed':
@@ -3296,13 +3294,22 @@ async function applyEvent({ event, data }) {
       appendHandoff(data.from, data.to);
       break;
 
-    case 'retrying':
-      _awaiting = { retry: data };
-      announce(t('chat.retrying', { n: data.attempt + 1, max: data.max_attempts }));
+    case 'retrying': {
+      const text = t('chat.retrying', { n: data.attempt + 1, max: data.max_attempts });
+      _awaiting = { text, title: data.message };
+      announce(text);
       break;
+    }
 
     case 'turn_started':
-      _awaiting = { retry: null };
+      _awaiting = { text: '' };
+      break;
+
+    case 'context_compacting':
+      // Always a pair: the closing frame puts the plain dots back, for the
+      // model call that follows (no card comes when the summary failed).
+      _awaiting = { text: data.active ? t('context.compacting') : '' };
+      if (data.active) announce(_awaiting.text);
       break;
 
     case 'context_compacted':
@@ -3811,7 +3818,7 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
   _dropRecoveries = 0; // a fresh user action re-arms auto-recovery
   enterStreamingUI();
   startAssistantTurn();
-  _awaiting = { retry: null }; // dots from the send, not from the first frame
+  _awaiting = { text: '' }; // dots from the send, not from the first frame
   syncAwaiting();
   _lastErrorCode = '';
   _runStartedAt = Date.now() / 1000;

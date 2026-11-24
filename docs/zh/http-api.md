@@ -290,6 +290,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `handoff` | `{from, to}` |
 | `turn_started` | `{turn, agent}` |
 | `retrying` | `{attempt, max_attempts, delay, message}`：模型调用遇到暂时性错误，`delay` 秒后进行第 `attempt + 1` 次尝试 |
+| `context_compacting` | `{active}`：上下文策略开始（`true`）或结束（`false`）耗时的[压缩](context.md)工作；总是成对出现，`false` 先于 `context_compacted` |
 | `context_compacted` | `{session_id, reason, reactive, summary, tokens_before, tokens_after, detail}`：[上下文压缩](context.md)通知 |
 | `error` | `{type, message, code, status_code?, retryable?, hint?}`：Tool 错误，或聊天流终止前的运行错误 |
 | `refs` | `{refs}`：刚结束的 Run 中各条用户消息的 `ref`，按顺序排列；在 `done` 之前发送。未配置 checkpointer 时不发送；Run 中含有流里从未显示过的用户条目（结构化输出的修复提示）时也不发送，下次加载对话时会补上 |

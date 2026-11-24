@@ -373,6 +373,22 @@ class CompactionNotice:
 
 
 @dataclass
+class ContextCompacting(ContextEvent):
+    """The context policy is doing slow compaction work before the model call.
+
+    Emitted when a policy calls
+    :attr:`~lovia.context.CompactionRequest.announce_compacting` (the default
+    pipeline: before its first summary call) and is still working, so a UI can
+    say "compacting" instead of looking stalled. Always paired: ``active=True``
+    is followed by ``active=False`` once the policy returns or raises, before
+    any :class:`ContextCompacted` or terminal event. Quick compactions emit
+    neither.
+    """
+
+    active: bool
+
+
+@dataclass
 class ContextCompacted(ContextEvent):
     """Emitted when :class:`~lovia.ContextPolicy` produced a compacted view.
 

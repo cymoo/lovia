@@ -388,6 +388,8 @@ const MESSAGES = {
     'files.attach': '添加为对话附件',
     'files.wrap': '自动换行',
     'files.nowrap': '取消自动换行',
+    'files.hideList': '隐藏文件列表',
+    'files.showList': '显示文件列表',
     'files.noWorkspace': '当前 Agent 没有工作区',
     'files.openFailed': '无法在面板中打开该文件',
 
@@ -1253,6 +1255,8 @@ const EN = {
   'files.attach': 'Attach to chat',
   'files.wrap': 'Wrap long lines',
   'files.nowrap': 'Don’t wrap long lines',
+  'files.hideList': 'Hide file list',
+  'files.showList': 'Show file list',
 
   // ---- background processes (Files panel strip)
   'procs.title': 'Background processes',

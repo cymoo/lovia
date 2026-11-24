@@ -739,7 +739,7 @@ function appendTool(call) {
   // attaching fresh has no prior state, so reconciling is this client's job.
   // Only a card still waiting for its result: a settled one with this id is
   // an earlier call (some providers reuse ids, e.g. `call_0` every turn).
-  const existing = call.id ? findPendingToolNode(call.id) : null;
+  const existing = call.id ? findPendingToolNode(store.bubble, call.id) : null;
   const node = existing || buildToolNode(call);
   if (!existing) {
     appendBubbleContent(store.bubble, node);
@@ -763,9 +763,10 @@ function appendTool(call) {
  * @param {{ id: string, name: string, arguments?: string, is_error: boolean }} data
  */
 function drawRejected(data) {
+  if (!data.is_error || !store.bubble) return;
   const row = store.toolNodes.get(data.id);
-  if (!data.is_error || (row && store.approvals.get(data.id)?.refusedRow === row)) return;
-  if (row && row === findPendingToolNode(data.id)) return;
+  if (row && store.approvals.get(data.id)?.refusedRow === row) return;
+  if (row && row === findPendingToolNode(store.bubble, data.id)) return;
   finalizeReasoning();
   appendTool(data);
 }

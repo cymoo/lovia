@@ -748,10 +748,26 @@ function appendTool(call) {
   store.toolNodes.set(call.id, node);
   // Its approval was decided before it started: show how it was allowed.
   const approval = store.approvals.get(call.id);
-  if (approval?.outcome) setApprovalBadge(node, approval);
+  if (approval?.outcome && !approval.spent) setApprovalBadge(node, approval);
   store.body = null;
   store.rawText = '';
   scrollDown();
+}
+
+/**
+ * Draw the row of a call whose error result is all that arrives: one rejected
+ * before it started (denied by a rule, unknown tool, malformed arguments, …)
+ * has no `tool_call` frame. Not when a row is already there for the result —
+ * waiting for it, or drawRefused's. Any other row under this id is an earlier
+ * call's, which the result must not overwrite.
+ * @param {{ id: string, name: string, arguments?: string, is_error: boolean }} data
+ */
+function drawRejected(data) {
+  const row = store.toolNodes.get(data.id);
+  if (!data.is_error || (row && store.approvals.get(data.id)?.refusedRow === row)) return;
+  if (row && row === findPendingToolNode(data.id)) return;
+  finalizeReasoning();
+  appendTool(data);
 }
 
 function updateToolResult(id, result, isError, images) {
@@ -1328,7 +1344,9 @@ function drawRefused(id) {
   if (!entry?.outcome || ranAfter(entry.outcome) || findToolNode(id)) return;
   appendTool(entry.call); // adds the badge
   const row = findToolNode(id);
-  if (row) setToolResult(row, outcomeText(entry.outcome), true, undefined, true);
+  if (!row) return;
+  entry.refusedRow = row;
+  setToolResult(row, outcomeText(entry.outcome), true, undefined, true);
 }
 
 /**
@@ -3213,12 +3231,20 @@ async function applyEvent({ event, data }) {
       maybePlanCalls.delete(data.id);
       const cleared =
         asked?.length === 0 && !data.is_error && isPlanOutput(String(data.result ?? ''), []);
+      drawRejected(data);
       const card = store.toolNodes.get(data.id);
       if (cleared) {
         usePlanView(data.name);
         if (card) markPlanRow(toolKey(card));
       }
       updateToolResult(data.id, data.result, data.is_error, data.images);
+      // Its approval is this call's alone: a later one under the same id is
+      // another call, and its row takes neither the badge nor this result.
+      const approval = store.approvals.get(data.id);
+      if (approval) {
+        approval.spent = true;
+        approval.refusedRow = null;
+      }
       if (cleared) {
         if (card) fillPlanRow(card, []);
         showPlan([]);

@@ -613,6 +613,23 @@ def test_stream_emits_tool_events() -> None:
     kinds = [e[0] for e in events]
     assert "tool_call" in kinds
     assert "tool_result" in kinds
+    # Its arguments came with the tool_call.
+    assert all("arguments" not in d for e, d in events if e == "tool_result")
+
+
+def test_a_call_rejected_before_it_starts_carries_its_arguments() -> None:
+    """No `tool_call` precedes it, so its result is all a client has to draw."""
+    provider = ScriptedProvider(
+        [call("no_such_tool", {"city": "paris"}, call_id="c1"), text("done")]
+    )
+    c = TestClient(_app(Agent(name="bot", model=provider)))
+    with c.stream("POST", "/api/chat/stream", json={"message": "go"}) as res:
+        events = _parse_sse("".join(res.iter_text()))
+    assert "tool_call" not in [e for e, _ in events]
+    tr = next(d for e, d in events if e == "tool_result")
+    assert tr["is_error"] is True
+    assert (tr["id"], tr["name"]) == ("c1", "no_such_tool")
+    assert json.loads(tr["arguments"]) == {"city": "paris"}
 
 
 def test_tool_result_images_stream_history_and_route() -> None:

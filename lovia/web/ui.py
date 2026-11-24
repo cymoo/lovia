@@ -32,8 +32,8 @@ SURFACE_NOTE = (
     "A workspace file works the same way — reference it by its "
     "workspace-relative path: ![chart](charts/q3.png) shows the image, "
     "[report](report.md) links to the file. ```mermaid is the only fenced "
-    "block that is drawn; any other shows as code, and there is no ```chart "
-    "block. To chart numbers, call the show_chart tool if you have it."
+    "block that is drawn; any other shows as code. There is no ```chart "
+    "block — a chart comes from the show_chart tool, if you have it."
 )
 r"""What the bundled chat UI renders — tell the model, or it assumes plain text.
 

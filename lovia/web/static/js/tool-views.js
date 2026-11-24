@@ -169,14 +169,13 @@ export function toolInfo(state) {
  * ("List files src" for "src", `Search “q”`), so a params row would just
  * repeat it. Anchored at the end, where summaries put their subject, so a
  * short value can't match a stray substring.
- * @param {string} raw
+ * @param {string} value
  * @param {string} summary The summary a view drew for the call.
  * @returns {boolean}
  */
-export function valueEchoed(raw, summary) {
-  // A multi-line value keeps its row: the summary flattens its layout.
-  if (raw.includes('\n')) return false;
-  const value = raw.replace(/\s+/g, ' ').trim();
+export function valueEchoed(value, summary) {
+  // Line breaks and runs of spaces keep their row: one line can't show them.
+  if (value !== value.replace(/\s+/g, ' ').trim()) return false;
   const tail = summary.replace(/[”"']$/, '');
   const at = tail.length - value.length;
   return (

@@ -56,7 +56,7 @@ test('ToolInfo parses arguments and is frozen', () => {
 test('a lone argument that ends the summary as a word counts as echoed', () => {
   assert.ok(argEchoed('{"path": "src"}', 'List files src'));
   assert.ok(argEchoed('{"command": "npm test"}', '$ npm test'));
-  assert.ok(argEchoed('{"query": "lovia  docs"}', 'Search “lovia docs”'));
+  assert.ok(argEchoed('{"query": "lovia docs"}', 'Search “lovia docs”'));
   assert.ok(argEchoed('{"title": "Q3"}', 'Q3'));
   // more than one argument, or one the summary leaves out: the row stays
   assert.ok(!argEchoed('{"path": "src", "depth": "2"}', 'List files src'));
@@ -64,6 +64,9 @@ test('a lone argument that ends the summary as a word counts as echoed', () => {
   // a stray substring is not the subject
   assert.ok(!argEchoed('{"q": "s"}', 'List files'));
   assert.ok(!argEchoed('{"q": "rc"}', 'List files src'));
+  // spaces the one-line summary collapses: the row has the exact value
+  assert.ok(!argEchoed('{"path": "a  b.txt"}', 'Read file a b.txt'));
+  assert.ok(!argEchoed('{"path": "a.txt "}', 'Read file a.txt'));
   // non-strings, multi-line values, empty or unparsable args
   assert.ok(!argEchoed('{"n": 3}', 'Step 3'));
   assert.ok(!argEchoed('{"code": "a\\nb"}', 'a\nb'));

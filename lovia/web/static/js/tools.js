@@ -370,11 +370,9 @@ function applySummary(node) {
   node.classList.add('lv-tool--summary');
   // The title already shows the lone argument: skip the params row repeating it.
   node.classList.toggle('lv-tool--echoed', argEchoed(state.arguments, text));
-  // Likewise the path of a call that has more to show — unless the title can't
-  // show it exactly: a line collapses runs of spaces.
+  // Likewise the path of a call that has more to show.
   const path = toolPath(state.arguments);
-  const exact = path !== null && path === path.replace(/\s+/g, ' ').trim();
-  node.classList.toggle('lv-tool--path-echoed', exact && valueEchoed(path, text));
+  node.classList.toggle('lv-tool--path-echoed', path !== null && valueEchoed(path, text));
 }
 
 // Re-apply a view registered late (a slow extension) to the cards on screen

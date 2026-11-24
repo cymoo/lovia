@@ -370,9 +370,11 @@ function applySummary(node) {
   node.classList.add('lv-tool--summary');
   // The title already shows the lone argument: skip the params row repeating it.
   node.classList.toggle('lv-tool--echoed', argEchoed(state.arguments, text));
-  // Likewise the path of a call that has more to show.
+  // Likewise the path of a call that has more to show — unless the title can't
+  // show it exactly: a line collapses runs of spaces.
   const path = toolPath(state.arguments);
-  node.classList.toggle('lv-tool--path-echoed', path !== null && valueEchoed(path, text));
+  const exact = path !== null && path === path.replace(/\s+/g, ' ').trim();
+  node.classList.toggle('lv-tool--path-echoed', exact && valueEchoed(path, text));
 }
 
 // Re-apply a view registered late (a slow extension) to the cards on screen
@@ -546,10 +548,16 @@ function syncToolUi(node, live) {
   mountComponent(el, comp, { callId: node.dataset.callId ?? null, live });
 }
 
-// edit_file's plain success (workspace/tools.py _render_edit_result) says no
-// more than the title and the diff do. A failed edit, or several
-// replacements, reads otherwise and keeps its text.
-const EDIT_DONE = /^edited .+ \(1 replacement\)$/;
+// Whether a result is edit_file's plain success (workspace/tools.py
+// _render_edit_result) on the path it was given: no more than the card already
+// says. A failed edit, several replacements, or a path that resolved to
+// another one (a symlink) reads otherwise and keeps its text.
+function isPlainEdit(node, text) {
+  return (
+    node.dataset.tool === 'edit_file' &&
+    text === `edited ${node.dataset.toolPath} (1 replacement)`
+  );
+}
 
 /**
  * Settle a card with its call's result — the one renderer behind both the
@@ -577,8 +585,7 @@ export function setToolResult(node, result, isError, images, live = false) {
   const pre = /** @type {HTMLElement | null} */ (node.querySelector('.lv-tool-result'));
   if (!pre) return;
   const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);
-  const told = !isError && node.dataset.tool === 'edit_file' && EDIT_DONE.test(text);
-  if (told || !text.trim()) {
+  if (!text.trim() || (!isError && isPlainEdit(node, text))) {
     pre.style.display = 'none';
     node.querySelector('.lv-tool-result-meta')?.remove();
     return;

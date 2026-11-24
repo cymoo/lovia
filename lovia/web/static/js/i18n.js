@@ -283,6 +283,7 @@ const MESSAGES = {
     'question.answerLabel': '你的回答',
     'a11y.questionAsked': '助手提出了一个问题，正在等待你的回答',
     // ---- context notices / meter
+    'context.compacting': '正在压缩上下文…',
     'context.compacted': '上下文已压缩',
     'context.proactive': '主动',
     'context.reactive': '溢出恢复',
@@ -1152,6 +1153,7 @@ const EN = {
   'question.sendFailed': 'Sending the answer failed — try again',
   'question.answerLabel': 'Your answer',
   'a11y.questionAsked': 'The assistant asked a question and is waiting for your answer',
+  'context.compacting': 'Compacting context…',
   'context.compacted': 'Context compacted',
   'context.proactive': 'Proactive',
   'context.reactive': 'Overflow recovery',

@@ -499,7 +499,12 @@ class SummarizeHistory:
         folded = False
         start = 0
         retried_at = -1  # the chunk start already re-cut after a refusal
+        ctx.request.announce_compacting()
         while start < len(span):
+            # A stop keeps the folds already committed and pays for no more:
+            # the runner raises once the pipeline returns.
+            if ctx.request.cancel_token.is_cancelled:
+                return folded
             # Grow the chunk entry by entry, remembering the largest pair-safe
             # cut that still fits ``cap``. Stop at the first pair-safe cut that
             # overflows, falling back to that remembered fit — or, when even the

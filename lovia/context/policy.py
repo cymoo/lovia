@@ -13,14 +13,19 @@ The default implementation is :class:`~lovia.context.Compaction`; see
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence
 
 from ..messages import Usage
 from ..providers.base import Provider
+from ..reliability import CancelToken
 from ..transcript import TranscriptEntry
 
 if TYPE_CHECKING:
     from ..tools import Tool
+
+
+def _noop() -> None:
+    return None
 
 
 @dataclass
@@ -84,6 +89,16 @@ class CompactionRequest:
     it stored: a session can switch policies between runs, so the count may
     measure a view some other policy built. Pass it on when rebuilding a
     request — without it the default pipeline skips the sample."""
+
+    announce_compacting: Callable[[], None] = _noop
+    """Call right before slow work (a summary model call): while the policy
+    is still working, the runner brackets it with
+    :class:`~lovia.events.ContextCompacting`. Idempotent, and a no-op outside
+    a run; leave quick work unannounced."""
+
+    cancel_token: CancelToken = field(default_factory=CancelToken)
+    """The run's cancel token. Check it between slow steps and return early:
+    the runner raises :class:`~lovia.RunCancelled` once ``compact`` returns."""
 
 
 @dataclass

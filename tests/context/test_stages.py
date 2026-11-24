@@ -335,6 +335,40 @@ def _texts(n: int, chars: int = 400):
     return [user("x" * chars) for _ in range(n)]
 
 
+async def test_summarize_announces_once_before_its_first_call():
+    summarizer = FakeSummarizer("S1")
+    body = _texts(10)
+    ctx = make_ctx(body, protected_from=8)
+    said: list[int] = []
+    ctx.request.announce_compacting = lambda: said.append(len(summarizer.calls))
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is True
+    assert len(summarizer.calls) == 2
+    assert said == [0]
+
+    # Nothing to fold: nothing slow to announce.
+    idle = make_ctx(body, protected_from=0)
+    idle.request.announce_compacting = lambda: said.append(-1)
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, idle) is False
+    assert said == [0]
+
+
+async def test_summarize_stops_folding_once_the_run_is_cancelled():
+    class _StopsTheRun(FakeSummarizer):
+        async def summarize(self, entries, *, req, prior_summary=None):
+            req.cancel_token.cancel("stop")
+            return await super().summarize(
+                entries, req=req, prior_summary=prior_summary
+            )
+
+    summarizer = _StopsTheRun("S1")
+    body = _texts(10)
+    ctx = make_ctx(body, protected_from=8)
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is True
+    assert summarizer.calls == [body[:4]]  # the second chunk was never paid for
+    assert ctx.state.summary is not None
+    assert ctx.state.summary.covered == 4  # the fold already made is kept
+
+
 async def test_summarize_first_summary_covers_unprotected_prefix():
     # The 8-entry span exceeds half the 1000-token window, so it folds in
     # two capped chunks: the first from scratch, the second on top of it.

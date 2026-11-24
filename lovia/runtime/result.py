@@ -109,8 +109,8 @@ class RunHandle:
         """Request cooperative cancellation of this run.
 
         Same effect as cancelling the run's :class:`~lovia.CancelToken`: the
-        loop stops at the next safe point (a turn start, a tool call, a retry
-        backoff), the stream ends with :class:`~lovia.events.RunFailed`, and
+        loop stops at the next safe point (a turn start, the moment before a
+        model call, a tool call, a retry backoff), the stream ends with :class:`~lovia.events.RunFailed`, and
         :meth:`result` raises :class:`~lovia.exceptions.RunCancelled`. A
         cancel that lands during the final model turn has no later safe
         point; that run completes normally.

@@ -104,7 +104,9 @@ Three guarantees shape the design:
 Each compaction emits a
 [`ContextCompacted` event](streaming.md#transitions-and-context) with a
 `CompactionNotice` (reason, token before/after, human-readable detail) —
-the web UI renders these live and replays the last one on reload.
+the web UI renders these live and replays the last one on reload. While a
+summary is being written the stream carries a `ContextCompacting` pair, and
+the web UI says so beside its waiting dots.
 
 ## Configuration
 
@@ -218,6 +220,11 @@ rejecting the last prompt — remember it, it outranks every other window
 source), a `scratch` dict the runner round-trips through checkpoints for
 you, and a `usage` accumulator: add the spend of any model call the policy
 makes itself and the runner folds it into the run's usage and budget.
+Before slow work (a model call), call `req.announce_compacting()` — the
+runner then brackets it with `ContextCompacting` events — and check
+`req.cancel_token` between slow steps, returning early once it is cancelled:
+the runner raises `RunCancelled` when `compact` returns. Custom stages reach
+both through `ctx.request`.
 Return the view plus `changed`/`compacted` flags, optional token
 counts, and an optional `window` — the window the call was budgeted
 against, which the runner forwards as `MessageCompleted.context_window`

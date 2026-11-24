@@ -100,7 +100,11 @@ UI 最容易写错的地方：
 | 事件 | 字段 | 何时出现 |
 | --- | --- | --- |
 | `HandoffOccurred` | `from_agent`, `to_agent` | 控制权[移交](multi-agent.md)到另一个 agent |
+| `ContextCompacting` | `active` | [上下文策略](context.md)宣布了耗时工作（摘要调用）且仍在进行（`True`），随后完成或失败（`False`） |
 | `ContextCompacted` | `session_id`, `entries_before`, `entries_after`, `notice` | [上下文策略](context.md)为本轮生成了压缩后的 view |
+
+`ContextCompacting` 总是成对出现，并在 `ContextCompacted` 或终止事件之前关闭，UI 可以据此显示
+“正在压缩”，而不是看起来卡住。很快完成的压缩两个都不发。
 
 `ContextCompacted.notice` 是 JSON-safe 的 `CompactionNotice`（原因、是否 reactive、
 压缩前后 token、策略生成的 `detail` 行、可选 summary）。Web UI 重新加载已完成

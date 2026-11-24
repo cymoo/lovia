@@ -78,7 +78,8 @@ agent = Agent(..., context_policy=NoopContextPolicy())
 
 每次压缩都会发出 [`ContextCompacted` 事件](streaming.md#转移与上下文)，其中带有
 `CompactionNotice`（原因、压缩前后 token、便于阅读的 detail）。Web UI 会实时渲染它，并在重新加载时
-回放最后一个 notice。
+回放最后一个 notice。摘要生成期间，事件流会带一对 `ContextCompacting`，Web UI 在等待圆点旁
+显示“正在压缩上下文…”。
 
 ## 配置
 
@@ -171,6 +172,9 @@ required_sections=...)`，不要 fork 这段实现。
 请记住它，它的优先级压过所有其他窗口来源）、runner 会帮你在 checkpoint 中往返保存的
 `scratch` dict，以及一个 `usage` 累加器：策略自己发起的模型调用把开销加进去，runner 会并入
 本次运行的 usage 和预算。
+做耗时工作（模型调用）之前调用 `req.announce_compacting()`，runner 会用 `ContextCompacting`
+事件把它括起来；耗时步骤之间检查 `req.cancel_token`，已取消就提前返回，runner 会在 `compact`
+返回后抛出 `RunCancelled`。自定义阶段通过 `ctx.request` 拿到这两者。
 返回 view，加上 `changed`/`compacted` 标志、可选 token 数，以及可选的 `window`（这次预算
 所依据的窗口，runner 转发为 `MessageCompleted.context_window`，web 的上下文圆环据此显示）。
 要用真实 token 数校准，就返回一个新的 `view_id`，并把它和估算一起存进 `scratch`。runner 会把它作为 `last_view_id`，

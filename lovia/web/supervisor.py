@@ -749,11 +749,11 @@ class RunController:
     # -- snapshot mirror ------------------------------------------------- #
 
     def _ingest(self, ev: events.Event) -> None:
-        # A retry notice is current only until the next event, so the buffer
-        # holds at most the latest one, as its tail: a reconnect during the
-        # backoff shows the retry, one after it doesn't.
+        # A retry or compacting notice is current only until the next event,
+        # so the buffer holds at most the latest one, as its tail: a reconnect
+        # during the backoff (or the summary) shows it, one after it doesn't.
         if self.in_flight_buffer and isinstance(
-            self.in_flight_buffer[-1], events.ModelRetrying
+            self.in_flight_buffer[-1], (events.ModelRetrying, events.ContextCompacting)
         ):
             self.in_flight_buffer.pop()
         if isinstance(ev, events.TurnStarted):
@@ -782,7 +782,7 @@ class RunController:
                 events.RunCompleted,
                 events.RunFailed,
             ),
-        ):
+        ) or (isinstance(ev, events.ContextCompacting) and ev.active):
             self.in_flight_buffer.append(ev)
         if isinstance(ev, events.UserMessageInjected):
             self.current_turn_entries.append(

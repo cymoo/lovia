@@ -108,7 +108,12 @@ The fine print that UIs get wrong:
 | Event | Fields | When |
 | --- | --- | --- |
 | `HandoffOccurred` | `from_agent`, `to_agent` | control [transferred](multi-agent.md) to another agent |
+| `ContextCompacting` | `active` | the [context policy](context.md) announced slow work (a summary call) and is still at it (`True`), then finished or failed (`False`) |
 | `ContextCompacted` | `session_id`, `entries_before`, `entries_after`, `notice` | the [context policy](context.md) produced a compacted view for this turn |
+
+`ContextCompacting` always comes as a pair, closed before any
+`ContextCompacted` or terminal event, so a UI can say "compacting" instead
+of looking stalled. Quick compactions emit neither.
 
 `ContextCompacted.notice` is a JSON-safe `CompactionNotice` (reason,
 reactive flag, token before/after, policy-authored `detail` lines, optional

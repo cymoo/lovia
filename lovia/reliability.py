@@ -108,8 +108,9 @@ class CancelToken:
     """A cooperative cancellation signal.
 
     Pass one to :meth:`Runner.run` and call :meth:`cancel` from any task to
-    request termination. The runner checks the token between turns, at each
-    tool call's preflight, and after each completed tool result — raising
+    request termination. The runner checks the token between turns, before
+    each model call (once the context policy has returned), at each tool
+    call's preflight, and after each completed tool result — raising
     :class:`RunCancelled` at the next safe point (a mid-batch cancel also
     cancels the batch's still-running sibling calls).
     """

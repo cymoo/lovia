@@ -135,6 +135,10 @@ class TurnStartedData(TypedDict):
     agent: str
 
 
+class ContextCompactingData(TypedDict):
+    active: bool
+
+
 class ContextCompactedData(TypedDict):
     """``session_id`` plus the :class:`~lovia.events.CompactionNotice` fields."""
 
@@ -280,6 +284,7 @@ CHAT_EVENTS: dict[str, type] = {
     "handoff": HandoffData,
     "turn_started": TurnStartedData,
     "retrying": RetryingData,
+    "context_compacting": ContextCompactingData,
     "context_compacted": ContextCompactedData,
     "error": ErrorData,
     "refs": RefsData,
@@ -580,6 +585,8 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
                 message=str(ev.error) or type(ev.error).__name__,
             ),
         )
+    if isinstance(ev, events.ContextCompacting):
+        return frame("context_compacting", ContextCompactingData(active=ev.active))
     if isinstance(ev, events.ContextCompacted):
         # Forwarded whole, so a field added to CompactionNotice reaches the UI
         # without plumbing — the protocol test keeps ContextCompactedData in step.

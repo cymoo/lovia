@@ -26,6 +26,7 @@ from lovia.plugins.mcp import (
     normalize_schema,
     render_mcp_content,
 )
+from lovia.parts import ImagePart, TextPart, coerce_parts
 from lovia.run_context import RunContext
 from lovia.tools import Tool
 from lovia.tools.base import render_tool_result, run_tool
@@ -294,6 +295,54 @@ async def test_image_placeholder_never_base64() -> None:
     text = render_mcp_content([_image("image/png", big)])
     assert text.startswith("[image: image/png,")
     assert big not in text
+
+
+async def _invoke_pic(content: list[SimpleNamespace], **kwargs: Any) -> Any:
+    session = FakeSession(
+        pages=[_page([_tool("pic")], None)],
+        results={"pic": _result(content, is_error=kwargs.pop("is_error", False))},
+    )
+    conn = await _loaded(session, **kwargs)
+    return await conn.tools()[0].invoke({}, _ctx())
+
+
+async def test_image_result_reaches_the_model_as_parts() -> None:
+    result = await _invoke_pic(
+        [_text("before"), _image("image/png", "AAAA"), _embedded_text("after")]
+    )
+    # Block order survives, and the runner takes this shape as content parts.
+    assert coerce_parts(result) == [
+        TextPart("before"),
+        ImagePart(data="AAAA", mime_type="image/png"),
+        TextPart("after"),
+    ]
+
+
+async def test_image_the_model_cannot_take_stays_a_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svg = await _invoke_pic([_image("image/svg+xml", "AAAA")])
+    assert str(svg) == "[image: image/svg+xml, 3 B]"
+    monkeypatch.setattr("lovia.plugins.mcp._MAX_IMAGE_BYTES", 2)
+    assert str(await _invoke_pic([_image("image/png", "AAAA")])) == (
+        "[image: image/png, 3 B]"
+    )
+    # Beside one that qualifies, it keeps its place as text.
+    mixed = await _invoke_pic(
+        [_image("image/png", "AAAA"), _image("image/png", "AA==")]
+    )
+    assert mixed == [
+        TextPart("[image: image/png, 3 B]"),
+        ImagePart(data="AA==", mime_type="image/png"),
+    ]
+
+
+async def test_image_result_stays_raw_for_a_custom_renderer_or_an_error() -> None:
+    image = [_image("image/png", "AAAA")]
+    custom = await _invoke_pic(image, result_renderer=lambda result, ctx: "mine")
+    assert isinstance(custom, MCPToolResult)
+    failed = await _invoke_pic(image, is_error=True)
+    assert str(failed) == "[tool error] [image: image/png, 3 B]"
 
 
 async def test_embedded_text_resource_inlined() -> None:
@@ -662,6 +711,26 @@ async def test_call_honors_underlying_renderer_and_output_cap() -> None:
     assert "truncated" in out  # the per-server cap applied, not the agent's
 
 
+async def test_call_passes_an_image_result_through_as_parts() -> None:
+    def shot(args: dict[str, Any]) -> SimpleNamespace:
+        return _result([_text("x" * 50), _image("image/png", "AAAA")])
+
+    async def call(**kwargs: Any) -> Any:
+        session = FakeSession(pages=_issue_pages(), results={"get_pr": shot})
+        conn = await _loaded(session, defer=True, **kwargs)
+        inst = await MCP(conn).setup(_ctx())
+        call_tool = next(t for t in inst.tools if t.name == "call_mcp_tool")
+        return await run_tool(call_tool, {"tool": "get_pr"}, _ctx())
+
+    assert await call() == [
+        TextPart("x" * 50),
+        ImagePart(data="AAAA", mime_type="image/png"),
+    ]
+    # Text over the server's cap: the result degrades to the truncated text.
+    capped = await call(max_output_chars=40)
+    assert isinstance(capped, str) and "truncated" in capped
+
+
 async def test_deferred_name_clash_between_servers_raises() -> None:
     a = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]), defer=True)
     b = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]), defer=True)
@@ -707,7 +776,9 @@ async def test_stdio_round_trip_through_the_installed_sdk() -> None:
 
         assert await call("stub__add", {"a": 2, "b": 3}) == "5"
         assert await call("stub__fail", {}) == "[tool error] boom"
-        assert await call("stub__pic", {}) == "[image: image/png, 3 B]"
+        assert await run_tool(tools["stub__pic"], {}, ctx) == [
+            ImagePart(data="AAAA", mime_type="image/png")
+        ]
 
 
 async def test_a_stdio_server_starts_in_its_cwd() -> None:

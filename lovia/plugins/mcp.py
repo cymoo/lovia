@@ -69,6 +69,14 @@ from pydantic import Field
 from ..approvals import Verdict
 from ..types import JsonObject
 from ..exceptions import MCPError, ToolError, UserError
+from ..parts import (
+    IMAGE_MIME_BY_SUFFIX,
+    ContentPart,
+    ImagePart,
+    TextPart,
+    coerce_parts,
+    project_parts,
+)
 from ..run_context import RunContext
 from ..tools.base import (
     Permission,
@@ -100,6 +108,10 @@ class MCPToolResult:
     ``result_renderer``, which flattens this into a safe string. Pass a custom
     ``result_renderer`` on the server to receive this object untouched and
     decide exactly what the model sees.
+
+    One result never arrives in this shape: without a custom renderer, a
+    successful result carrying an image the model can see is returned as
+    content parts instead (see :func:`_image_parts`).
     """
 
     content: list[Any] = field(default_factory=list)
@@ -173,6 +185,40 @@ def render_mcp_content(content: list[Any], *, is_error: bool = False) -> str:
     if is_error:
         return f"[tool error] {text}" if text else "[tool error]"
     return text
+
+
+# Anthropic's documented per-image limit, the strictest current provider (the
+# cap ``view_image`` uses), in decoded bytes.
+_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+_IMAGE_MIMES = frozenset(IMAGE_MIME_BY_SUFFIX.values())
+
+
+def _image_parts(content: list[Any]) -> list[ContentPart] | None:
+    """``content`` as content parts, if it holds an image a model can see.
+
+    An image block in a format and size the providers accept becomes an
+    :class:`~lovia.parts.ImagePart`; every other block keeps its
+    :func:`render_mcp_content` text, in order. ``None`` when no image
+    qualifies, so a text-only result still flows through the renderer.
+    """
+    parts: list[ContentPart] = []
+    seen = False
+    for block in content:
+        if getattr(block, "type", None) == "image":
+            mime = _field(block, "mime_type", "mimeType")
+            data = getattr(block, "data", None)
+            if (
+                mime in _IMAGE_MIMES
+                and data
+                and _approx_bytes(data) <= _MAX_IMAGE_BYTES
+            ):
+                parts.append(ImagePart(data=data, mime_type=mime))
+                seen = True
+                continue
+        text = _render_block(block)
+        if text:
+            parts.append(TextPart(text))
+    return parts if seen else None
 
 
 def _default_mcp_renderer(result: Any, ctx: RunContext[Any]) -> str:
@@ -386,9 +432,16 @@ class MCPConnection:
     def _make_invoke(
         self, tool_name: str
     ) -> Callable[[dict[str, Any], RunContext[Any]], Any]:
-        async def invoke(args: dict[str, Any], ctx: RunContext[Any]) -> MCPToolResult:
+        async def invoke(
+            args: dict[str, Any], ctx: RunContext[Any]
+        ) -> MCPToolResult | list[ContentPart]:
             _ = ctx
-            return await self._call(tool_name, args)
+            result = await self._call(tool_name, args)
+            # Parts bypass renderers, so a custom one keeps the raw result:
+            # it was promised the last word on what the model sees.
+            if self.result_renderer is None and not result.is_error:
+                return _image_parts(result.content) or result
+            return result
 
         return invoke
 
@@ -736,7 +789,7 @@ def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
                 description="Arguments matching the tool's parameters schema.",
             ),
         ] = None,
-    ) -> str:
+    ) -> str | list[ContentPart]:
         target = catalog.get(tool)
         if target is None:
             near = difflib.get_close_matches(tool, list(catalog), n=3, cutoff=0.4)
@@ -759,12 +812,23 @@ def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
         # a deferred result is bounded by min(server cap, agent cap) — never
         # looser than either.
         raw = await run_tool(target, dict(arguments or {}), ctx)
-        rendered = await render_tool_result(
-            target, raw, ctx, default=getattr(ctx.agent, "tool_result_renderer", None)
-        )
-        if target.max_output_chars is not None:
-            rendered = truncate_tool_output(rendered, target.max_output_chars)
-        return rendered
+        # An image result passes through as parts, as it would from the
+        # exposed tool; one whose text trips the cap degrades to that text,
+        # the runner's own rule for an over-long parts result.
+        parts = coerce_parts(raw)
+        if parts is not None:
+            rendered = project_parts(parts)
+        else:
+            rendered = await render_tool_result(
+                target,
+                raw,
+                ctx,
+                default=getattr(ctx.agent, "tool_result_renderer", None),
+            )
+        cap = target.max_output_chars
+        if cap is not None and len(rendered) > cap:
+            return truncate_tool_output(rendered, cap)
+        return rendered if parts is None else parts
 
     return call_mcp_tool
 

@@ -87,6 +87,49 @@ candidate sources; fetch reads selected URLs. Only agents given this plugin use
 the server. From async code, use `await Runner.run(agent, ...)` instead of
 `run_sync()`.
 
+## A browser for a coding agent
+
+An agent that edits a web app can look at the page it just changed.
+[Playwright MCP](https://github.com/microsoft/playwright-mcp) drives the
+browser; lovia needs nothing beyond the server entry:
+
+```python
+browser = MCPServerStdio(
+    name="browser",
+    command="npx",
+    args=["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+)
+agent = Agent(name="coder", model="<model>", plugins=[MCP(browser)])
+```
+
+In `lovia web` the same entry goes into
+[Settings → MCP](web-ui.md#mcp-servers) or the project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "browser": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated"]
+    }
+  }
+}
+```
+
+With a [workspace](workspace.md), the agent starts the dev server with
+`shell(background=true)`, opens it with `browser__browser_navigate`, and then
+has two ways to look:
+
+- `browser__browser_snapshot` returns the page as text: an accessibility tree
+  whose element refs are what `browser__browser_click` takes. It costs far
+  fewer tokens than a picture, so it is the one to act on.
+- `browser__browser_take_screenshot` returns the rendered page as an image the
+  model sees (below), for layout and styling.
+
+`browser__browser_console_messages` and `browser__browser_network_requests`
+report what broke. A page is outside content: what it says is data for the
+agent, and the server's `permission` decides which calls ask first.
+
 ## Connection lifecycle
 
 **Per-run (default).** Passing a server *config* means each run opens the
@@ -123,9 +166,15 @@ single MCP session are unsupported; give each concurrent worker its own.
   `[tool error] ...` so it can self-correct — not raised. A
   transport/connection failure raises `MCPError` (carrying `tool_name`),
   which ends the call like any tool exception.
-- Tool *results* may carry resources: text is inlined; images/audio become
-  size-stamped placeholders (never raw base64); resource links become
-  `[resource link: uri]` lines.
+- Tool *results* may carry resources: text is inlined; audio and binary
+  resources become size-stamped placeholders (never raw base64); resource
+  links become `[resource link: uri]` lines.
+- **Images reach the model as images.** A jpeg, png, gif or webp block of up
+  to 5 MB is handed over as an [`ImagePart`](tools.md#returning-images), in
+  order with the result's text. Any other image, and every image for a model
+  without vision, is a size-stamped placeholder. Such a result is content
+  parts, which no renderer formats, so a server with a custom
+  `result_renderer` keeps placeholders, as does a result flagged `isError`.
 - **Scope is deliberately tools-only.** MCP prompts, resource browsing,
   sampling, OAuth, and subscriptions are non-goals; the plugin does one
   thing.

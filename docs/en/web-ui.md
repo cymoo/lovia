@@ -278,6 +278,8 @@ saves it switched off; other keys are ignored.
   offers **Always allow in this chat** for that tool, as for a command.
 - **No replays.** A call whose connection drops fails; the server may still
   have done it, and the error says so instead of trying again.
+- **An image a tool returns is shown.** A browser server's screenshot appears
+  on its tool card and [reaches the model as an image](mcp.md#how-mcp-tools-behave).
 - **A server that can't be reached is skipped.** It has 30 seconds to start
   and list its tools; past that, or on any error, the run goes on without
   it, the chat shows which server did not connect and why, and the model is

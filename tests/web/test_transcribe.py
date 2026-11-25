@@ -546,6 +546,28 @@ async def test_an_address_nothing_answers_at_may_have_been_a_root() -> None:
     with pytest.raises(TranscriptionError) as caught:
         await fn(TranscriptionRequest(audio=TAKE))
     assert caught.value.hint is None
+    # Nor of a route lovia chose itself.
+    fn = _engine(lambda r: httpx.Response(404), base_url="https://api.deepseek.com")
+    with pytest.raises(TranscriptionError) as caught:
+        await fn(TranscriptionRequest(audio=TAKE))
+    assert caught.value.hint is None
+
+
+def test_an_address_that_is_none_breaks_nothing_but_the_take(served: Any) -> None:
+    client, _ = served
+    # Saved, and the page still boots and Settings still loads to fix it.
+    voice = _voice(client, base_url="https://[oops/v1", model="m")
+    assert voice["base_url"] == "https://[oops/v1"
+    assert client.get("/api/info").status_code == 200
+    assert client.get("/api/config").status_code == 200
+    res = client.post("/api/transcribe", content=TAKE, headers=WAV)
+    assert res.status_code == 502, res.text
+
+
+@pytest.mark.parametrize("typed", ["https://", "//host/v1", "http:/typo"])
+def test_only_a_bare_host_gets_a_scheme(typed: str) -> None:
+    kept = WebConfig.model_validate({"voice": {"base_url": typed}}).voice.base_url
+    assert kept == typed.rstrip("/")
 
 
 def test_an_address_typed_without_a_scheme_is_https() -> None:

@@ -82,9 +82,15 @@ def transcription_endpoint(
     like — a chat model's connection always is. Resolving an address twice
     gives the same answer.
     """
-    parts = urlsplit(base_url.strip())
+    try:
+        parts = urlsplit(base_url.strip())
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        # Not an address at all (``https://[oops``). As typed: the take
+        # fails saying so, and nothing that only asks where it goes does.
+        return base_url.strip(), None
     path = parts.path.rstrip("/")
-    service = _SERVICES.get((parts.hostname or "").lower())
+    service = _SERVICES.get(host)
     limit = service[1] if service else None
     if path.endswith(OPENAI_PATH) or (service and path == service[0]):
         pass
@@ -124,7 +130,8 @@ def openai_transcriber(
     attempt, no retry: the person is waiting, and can press retry.
     """
     url, _ = transcription_endpoint(base_url)
-    as_typed = not urlsplit(url).path.endswith(OPENAI_PATH)
+    # Neither route is one lovia chose: the address was used as typed.
+    as_typed = transcription_endpoint(url, root=True)[0] != url
     fields: dict[str, str] = {"model": model} if model else {}
     if language:
         # gpt-transcribe replaced ``language`` with a list, and refuses both.

@@ -318,6 +318,8 @@ class AssistantConfig(BaseModel):
 
 
 _LANGUAGE = re.compile(r"^[a-z]{2,3}(-[a-z0-9]{2,8})*$")
+# An address with its scheme left off: a host, maybe a port, maybe a path.
+_BARE_HOST = re.compile(r"^[\w.-]+(:\d+)?(/|$)")
 
 
 class VoiceConfig(BaseModel):
@@ -350,7 +352,7 @@ class VoiceConfig(BaseModel):
         }
         if clean["base_url"]:
             clean["base_url"] = clean["base_url"].rstrip("/") or None
-        if clean["base_url"] and "://" not in clean["base_url"]:
+        if clean["base_url"] and _BARE_HOST.match(clean["base_url"]):
             # Typed the way an address is said: ``api.deepseek.com``.
             clean["base_url"] = "https://" + clean["base_url"]
         if clean["language"]:

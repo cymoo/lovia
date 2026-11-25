@@ -121,6 +121,19 @@ class SearchIn(BaseModel):
     tavily_api_key: str | None = None
 
 
+class VoiceIn(BaseModel):
+    """Voice input updates; only the fields present change, and an explicit
+    null clears — except ``api_key``, which follows the keep/clear
+    convention. Naming a ``connection`` drops the endpoint kept here, and
+    naming a ``base_url`` drops the connection: one or the other."""
+
+    connection: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    language: str | None = None
+
+
 class SkillsIn(BaseModel):
     """Full-list replacement for the global skill directories (order =
     precedence). A relative entry is refused here, even the project
@@ -378,6 +391,13 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             "mcp": _mcp_out(),
             "assistant": _assistant_out(),
             "permissions": _permissions_out(),
+            "voice": {
+                **cfg.voice.model_dump(exclude={"api_key"}),
+                "api_key": _mask(cfg.voice.api_key),
+                "enabled": cfg.voice_endpoint() is not None,
+                # Why a connection it names leads nowhere, if it does.
+                "problem": cfg.voice_problem(),
+            },
         }
 
     def _mcp_out() -> dict[str, object]:
@@ -530,6 +550,23 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         if body.tavily_api_key is not None:
             search["tavily_api_key"] = body.tavily_api_key or None  # "" clears
         await _apply(_copy(search=search))
+        return {"config": _config_out()}
+
+    @router.put("/voice")
+    async def update_voice(body: VoiceIn, request: Request) -> dict[str, object]:
+        _guard_write(request)
+        voice = runtime.config.voice.model_dump()
+        sent = body.model_fields_set
+        for name in sent - {"api_key"}:
+            voice[name] = getattr(body, name)
+        if body.api_key is not None:
+            voice["api_key"] = body.api_key or None  # "" clears
+        if "connection" in sent and body.connection:
+            voice["base_url"] = voice["api_key"] = None
+        elif "base_url" in sent and body.base_url:
+            voice["connection"] = None
+        # Names no chat model: it saves before one is configured, too.
+        await _apply(_copy(voice=voice), settings_only=True)
         return {"config": _config_out()}
 
     @router.put("/skills")

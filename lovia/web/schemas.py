@@ -810,6 +810,12 @@ class TodosResponse(BaseModel):
     todos: list[TodoItemOut] = Field(default_factory=list)
 
 
+class Transcription(BaseModel):
+    """A take's text; empty when nothing was recognised."""
+
+    text: str
+
+
 class FollowupsResponse(BaseModel):
     """Suggested next questions. Empty whenever nothing fits — a disabled
     feature, a conversation that reached its end, or a failed suggester."""

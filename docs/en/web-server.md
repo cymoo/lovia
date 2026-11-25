@@ -91,6 +91,7 @@ run the app under another ASGI server, skip `serve()`.
 | `tracer` | `None` | Span recorder for served Runs |
 | `titles` / `title_model` | `True` / Agent model | Generate conversation titles in the background |
 | `followups` / `followup_model` | `False` / Agent model | Suggest follow-up questions after a reply (see below) |
+| `transcribe` | `None` | Speech-to-text for [voice input](#voice-input) (experimental) |
 | `suspend_after` | `None` | Suspend a run whose approval card is unanswered after N seconds: it keeps its checkpoint and frees its slot, and answering the card resumes it |
 | `question_channel` | `None` | The `HumanChannel` your `ask_human` tool was built with; its questions render as cards in the chat (see [Questions from the Agent](web-ui.md#questions-from-the-agent)) |
 | `max_background_runs` | `8` | Concurrent supervised Runs; excess starts return 429 |
@@ -1012,6 +1013,56 @@ A suggester receives the session's conversation (`session_id`, `agent`, and the
 chat-shaped `messages`) and returns any number of strings. Returning `[]` shows
 nothing, which is also what a raising suggester degrades to — the chips are
 never load-bearing.
+
+## Voice input
+
+!!! note "Experimental"
+
+    The route and the Python names below may still change (see
+    [Stability](stability.md#not-covered)). The composer's microphone is not
+    in the bundled page yet; a custom front-end can already use the route.
+
+`transcribe` turns one recorded take into text. A client posts a WAV file to
+[`POST /api/transcribe`](http-api.md#endpoints) and inserts the text it gets
+back; the server keeps nothing, and the service's key never reaches the
+browser. Off by default: a take is uploaded to a third party and billed.
+
+```python
+from lovia.web import create_app
+from lovia.web.transcribe import openai_transcriber
+
+create_app(agent, transcribe=openai_transcriber(
+    base_url="https://api.openai.com/v1",
+    api_key=os.environ["OPENAI_API_KEY"],
+    model="gpt-transcribe",
+    language="zh",  # optional; omit to let the model detect it
+))
+```
+
+`openai_transcriber` works with any service that serves an OpenAI-compatible
+`/audio/transcriptions`. Set `language` when people mix languages in one
+sentence: without it, some Whisper models translate instead of transcribing.
+
+For another engine, pass your own function. It receives a
+`TranscriptionRequest` (`audio`: the WAV bytes) and returns the text; raise
+to fail the take, and the client gets 502 `transcription_failed` with your
+message.
+
+```python
+from lovia.web.transcribe import TranscriptionRequest
+
+async def my_engine(request: TranscriptionRequest) -> str:
+    return await recognise(request.audio)
+
+create_app(agent, transcribe=my_engine)
+```
+
+`default_app` takes no `transcribe`: `lovia web` reads the `voice` section of
+`config.json` (`connection` — a model's id, to borrow its endpoint and key —
+or `base_url` and `api_key`; `model`; `language`).
+
+A reverse proxy must let the take through: five minutes of speech is about
+10 MB, and nginx stops at 1 MB unless `client_max_body_size` says otherwise.
 
 ## Authentication
 

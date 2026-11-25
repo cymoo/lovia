@@ -88,6 +88,7 @@ ErrorCode = Literal[
     "unsupported_file_type",
     "too_many_runs",
     "run_failed",
+    "transcription_failed",
 ]
 
 

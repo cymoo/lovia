@@ -151,6 +151,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `unsupported_file_type` | 415 | 不支持内联预览，或扩展名不允许上传 |
 | `too_many_runs` | 429 | 已达到并发 Run 上限 |
 | `run_failed` | 500 | 阻塞式 Turn 的 Run 失败，`message` 为其错误 |
+| `transcription_failed` | 502 | 语音转写服务拒绝了这段录音、超时或连不上；`message` 说明是哪一种，并带上它的状态码和报错。不会透传服务自己的状态码：它的 401 说的是它的密钥，不是调用方的 |
 
 ## 端点
 
@@ -172,6 +173,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名、置顶、归档或切换 `workspace_mode`；删除（连同其后台任务和绑定它的定时任务）。`{"archived": true}` 把对话收起来而不删除任何内容（同时取消置顶）；置顶它，或用户再发一条消息，就会恢复。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null`。每次 Run 的最后一条回答带 `duration`（秒）；记录了用时的 Run，其消息时间戳为真实时间。来自另一个对话的聊天带 `origin`：`kind` 为 `"fork"`（分支）或 `"spawn"`（由那个对话的 agent 用 `start_session` 启动）；定时任务触发时新建的对话为 `"schedule"`（带 `schedule_id` 而不是 `session_id`，`title` 是任务名称）；列表中的 `origin_kind` 与之一致。存储里没有的 id（来自另一个数据库，或已删除）也返回一份空占位，带 `exists: false`；用它发第一条消息就是新开一个对话 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
 | `POST /api/sessions/{id}/followups` | 生成追问建议，返回 `{followups: [...]}`；功能未启用或建议器未返回内容时为 `[]`。该操作可能消耗模型 token，因此使用 POST |
+| `POST /api/transcribe` | 请求体直接是一个 WAV 文件，`Content-Type: audio/wav`，返回 `{text}`：把一段录音转成文字，供语音输入使用（实验性，见[稳定性](stability.md#不作承诺)）。上限 10 MiB，边接收边检查；服务端不保存录音。服务端没有配置转写时为 404 `feature_unavailable`（`/api/info` 的 `features.transcription`），其他媒体类型为 415，超过上限为 413，空请求体为 422，转写服务出错为 502 `transcription_failed` |
 | `POST /api/sessions/{id}/rewind` | 从某条用户消息起删除后续内容；用它的 `ref` 指定，或用 `user_turn`（它在用户消息中的索引，从 0 开始）；`ref` 已不在聊天中时返回 404，运行中返回 409，不支持 `rewind` 时返回 501 |
 | `POST /api/sessions/{id}/fork` | `{ref?}` → `{session_id}`：把聊天已完成的历史复制成一个新的独立聊天；给 `ref` 时只复制到该用户消息之前，不给则复制整个聊天。新聊天的详情带 `origin: {kind: "fork", session_id, ref, title, exists}`；删除任一聊天都不影响另一个。fork 复制的是对话，不是工作区：文件保持当前状态。有 Run 正在运行、正在收尾或可恢复时，复制整个聊天返回 409 |
 | `GET /api/sessions/{id}/grants` | 这个对话记住的授权：`[{scope, context, created_at, active}]`——在另一个 agent 或工作区根目录下给出的授权 `active` 为 false（列出但不生效）。后台子任务与它所在任务树最上层的对话共用授权：在任一处点的“总是允许”都记在那个对话上，子任务列出（和撤销）的也是那个对话的 |
@@ -198,7 +200,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/skills?agent=` | 一次 run 能看到的技能 → `[{name, description}]`，顺序同提示词索引：先按 run 的方式构造 agent（包括[工作区切换](web-ui.md#工作区)的项目钩子），再取每个 `Skills` 插件的 catalog，过滤和同名优先级照常生效。已有对话用 `?session=`，即将在某目录打开的草稿用 `?root=` |
 | `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget, dreamed_at}`） |
 | `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
-| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `PUT /api/config/assistant` · `POST /api/config/test` · `POST /api/config/mcp` · `PUT`/`DELETE /api/config/mcp/{name}` · `PUT /api/config/mcp/{name}/enabled` · `GET`/`PUT /api/config/project/mcp` · `POST /api/config/mcp/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 的[模型配置](web-ui.md#模型配置与切换)、[Skill 目录](web-ui.md#skills)、[MCP 服务器](web-ui.md#mcp-服务器)与[助手的设置](web-ui.md#助手)——仅当 `/api/info` 报告 `features.settings` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；MCP 的 `env` 和 `headers` 值读取时打码，原样发回的打码值保留已存的值。写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `PUT /api/config/assistant` · `PUT /api/config/voice` · `POST /api/config/test` · `POST /api/config/mcp` · `PUT`/`DELETE /api/config/mcp/{name}` · `PUT /api/config/mcp/{name}/enabled` · `GET`/`PUT /api/config/project/mcp` · `POST /api/config/mcp/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 的[模型配置](web-ui.md#模型配置与切换)、[Skill 目录](web-ui.md#skills)、[MCP 服务器](web-ui.md#mcp-服务器)与[助手的设置](web-ui.md#助手)——仅当 `/api/info` 报告 `features.settings` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；MCP 的 `env` 和 `headers` 值读取时打码，原样发回的打码值保留已存的值。写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
 
 `POST /api/chat` 和 `/api/chat/stream` 的请求体为 `{message, session_id?, agent?, attachments?, context?}`，
 `POST /api/schedules` 同样接受 `context`。`context` 是一个不超过 64 KB 的 JSON 对象，即

@@ -34,6 +34,7 @@ from .memory import build_memory_router, memory_plugin
 from .routing import GuardedRoute
 from .schedules import build_schedules_router
 from .sessions import build_sessions_router
+from .transcribe import build_transcribe_router
 from ..workspaces import files_config
 from .workspace import build_workspace_router
 from .workspaces import build_workspaces_router
@@ -86,6 +87,9 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 # Truthy for both `followups=True` and a custom FollowupFn, so
                 # the UI only asks for chips on servers that can produce them.
                 "followups": bool(deps.followups),
+                # Voice input, as configured at this moment (Settings can
+                # turn it on and off while the server runs).
+                "transcription": deps.transcriber() is not None,
                 "scheduling": True,
                 "workspace": any(
                     files_config(a) is not None for a in deps.agents.values()
@@ -130,4 +134,5 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
     router.include_router(build_workspace_router(deps))
     router.include_router(build_workspaces_router(deps))
     router.include_router(build_memory_router(deps))
+    router.include_router(build_transcribe_router(deps))
     return router

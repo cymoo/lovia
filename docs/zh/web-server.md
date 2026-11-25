@@ -81,6 +81,7 @@ customize=None, ...)`：前五个就是命令行的开关（`--home`、`DIR`（`
 | `tracer` | `None` | 托管 Run 的 Span 记录器 |
 | `titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
 | `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后生成追问建议（见下文） |
+| `transcribe` | `None` | [语音输入](#语音输入)用的语音转文字（实验性） |
 | `suspend_after` | `None` | 审批卡片超过指定秒数无人回答时暂停运行：保留 checkpoint、释放槽位，回答卡片后续跑 |
 | `question_channel` | `None` | 构造 `ask_human` 工具时用的那个 `HumanChannel`；它的提问会以卡片形式出现在对话里（见[来自 Agent 的提问](web-ui.md#来自-agent-的提问)） |
 | `max_background_runs` | `8` | 并发托管 Run；达到上限后，新请求返回 429 |
@@ -865,6 +866,52 @@ create_app(agent, followups=pricing_only)
 自定义建议器会收到 `FollowupRequest`，其中包含 `session_id`、Agent 的注册名称，以及由
 Transcript 转换而来的聊天消息列表 `messages`。返回字符串序列即可；返回 `[]` 时不显示
 建议。建议器抛出异常时，服务端会记录日志并返回空列表，不影响正常对话。
+
+## 语音输入
+
+!!! note "实验性"
+
+    下面的路由和 Python 名字还可能调整（见[稳定性](stability.md#不作承诺)）。内置页面的
+    输入框里还没有麦克风；自定义前端已经可以直接用这个路由。
+
+`transcribe` 把一段录音转成文字。客户端把 WAV 文件发到
+[`POST /api/transcribe`](http-api.md#端点)，再把返回的文字放进输入框；服务端不保存录音，
+转写服务的密钥也不会到浏览器。默认关闭：录音会上传给第三方并产生费用。
+
+```python
+from lovia.web import create_app
+from lovia.web.transcribe import openai_transcriber
+
+create_app(agent, transcribe=openai_transcriber(
+    base_url="https://api.openai.com/v1",
+    api_key=os.environ["OPENAI_API_KEY"],
+    model="gpt-transcribe",
+    language="zh",  # 可选；不填则由模型自动识别
+))
+```
+
+`openai_transcriber` 适用于任何提供 OpenAI 兼容 `/audio/transcriptions` 的服务。
+一句话里混说多种语言时请填 `language`：不填的话，有些 Whisper 模型会把内容翻译掉，
+而不是照原样转写。
+
+接别的引擎时传入自己的函数。它收到一个 `TranscriptionRequest`（`audio` 是 WAV 字节），
+返回文字；抛出异常表示这段录音失败，客户端收到 502 `transcription_failed` 和你的报错。
+
+```python
+from lovia.web.transcribe import TranscriptionRequest
+
+async def my_engine(request: TranscriptionRequest) -> str:
+    return await recognise(request.audio)
+
+create_app(agent, transcribe=my_engine)
+```
+
+`default_app` 没有 `transcribe` 参数：`lovia web` 读取 `config.json` 的 `voice` 段
+（`connection` 填某个模型的 id，沿用它的地址和密钥；或者填 `base_url` 和 `api_key`；
+另有 `model` 和 `language`）。
+
+反向代理要放行这段录音：五分钟的语音约 10 MB，而 nginx 默认只收 1 MB，需要调大
+`client_max_body_size`。
 
 ## 认证
 

@@ -31,6 +31,7 @@ from ...tools import HumanChannel, Tool
 from ...workspace import LocalWorkspace
 from ..followups import FollowupRequest, generate_followups
 from ..sse import ConfigChangedData
+from ..transcribe import TranscribeFn, openai_transcriber
 from .check import mask_key
 from .schema import DEFAULT_AGENT_ID, Connection, WebConfig
 from .storage import LoadedConfig, config_writable, save_config
@@ -280,6 +281,20 @@ class ConfigRuntime:
         if model is None:  # pragma: no cover - a served agent has a model
             return []
         return await generate_followups(request, model=model)
+
+    def transcriber(self) -> TranscribeFn | None:
+        """Voice input's transcriber, as configured now; None while it is off."""
+        endpoint = self.config.voice_endpoint()
+        voice = self.config.voice
+        if endpoint is None or voice.model is None:
+            return None
+        base_url, api_key = endpoint
+        return openai_transcriber(
+            base_url=base_url,
+            api_key=api_key,
+            model=voice.model,
+            language=voice.language,
+        )
 
     # ---------------------------------------------------------- applying -
 

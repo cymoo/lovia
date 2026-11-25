@@ -44,6 +44,7 @@ from ..sse import (
 )
 from ..store import ChatMeta, ChatStore
 from ..titles import generate_title, provisional_title
+from ..transcribe import TranscribeFn
 from ..workspaces import (
     ChatBinding,
     WorkspaceRef,
@@ -93,6 +94,9 @@ class RouterDeps:
     # presume it — the bundled ``lovia web`` CLI opts in on its own behalf.
     followups: bool | FollowupFn = False
     followup_model: str | Provider | None = None
+    # Voice input's speech-to-text (``POST /api/transcribe``); None: off.
+    # ``default_app`` leaves it unset — see :meth:`transcriber`.
+    transcribe: TranscribeFn | None = None
     # One limit for every agent, or one per registry key (see max_turns_for).
     max_turns: int | Mapping[str, int] = 50
     # Per-run limits. Used as a template: ``fresh_budget`` copies it per run so a
@@ -842,6 +846,17 @@ class RouterDeps:
                 )
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("title generation for %s failed: %s", session_id, exc)
+
+    def transcriber(self) -> TranscribeFn | None:
+        """The transcriber voice input uses right now; None when it is off.
+
+        One answer for the route and for ``features.transcription``. An app
+        configured in Settings asks its configuration each time, so a save
+        takes effect on the next take.
+        """
+        if self.config_runtime is not None:
+            return self.config_runtime.transcriber()
+        return self.transcribe
 
     async def suggest_followups(self, request: FollowupRequest) -> list[str]:
         """Run the configured suggester; ``[]`` when off or on any failure.

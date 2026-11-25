@@ -67,8 +67,10 @@ class _Watch:
     user_stops: set[str] = field(default_factory=set)
     # Added to the session's times to make them this machine's.
     skew: float | None = None
-    # Whether to keep looking; set anew by a mark while a look is under way.
+    # Whether to keep looking, and whether a mark came while a look was under
+    # way (which may have missed what the mark was for).
     active: bool = False
+    marked: bool = False
     closed: bool = False
     # Its chat was deleted: a look under way must leave no file behind.
     discarded: bool = False
@@ -135,7 +137,7 @@ class ProcessWatcher:
         """Something in the chat's workspace session may have changed."""
         watch = self._watch(session_id)
         if watch is not None:
-            watch.active = True
+            watch.active = watch.marked = True
             self._wake.set()
 
     def running(self, session_id: str) -> int:
@@ -160,8 +162,6 @@ class ProcessWatcher:
             await self._look(session_id)
         except Exception as exc:  # noqa: BLE001 — the next look tries again
             log.debug("looking at processes of %s failed: %r", session_id, exc)
-            if (watch := self._watches.get(session_id)) is not None:
-                watch.active = True
 
     async def _look(self, session_id: str) -> None:
         """Announce what changed and record what finished."""
@@ -170,7 +170,7 @@ class ProcessWatcher:
             self._watches.pop(session_id, None)
             return
         async with watch.lock:
-            watch.active = False
+            watch.marked = False
             statuses = await self._statuses(watch)
             if watch.closed:
                 return
@@ -188,8 +188,9 @@ class ProcessWatcher:
                     output = _Output()
                     await self._fetch(watch, status.process_id, output)
                     await self._settle(session_id, watch, status, output)
-            if any(s.process_id not in watch.settled for s in statuses):
-                watch.active = True
+            watch.active = watch.marked or any(
+                s.process_id not in watch.settled for s in statuses
+            )
 
     async def _statuses(self, watch: _Watch) -> list[ProcessStatus]:
         listed = watch.session.background_processes()
@@ -419,13 +420,20 @@ class ProcessWatcher:
         if record is not None:
             return record[1]
         session = self._live(session_id)
+        listed = session.background_processes()
+        if inspect.isawaitable(listed):
+            listed = await listed
+        # What is there by now: a busy command may write on for good.
+        goal = max(
+            (s.output_chars for s in listed if s.process_id == process_id), default=0
+        )
         output = _Output()
         while True:
             chunk = await session.peek_process_output(
                 process_id, after=output.end, limit=OUTPUT_PAGE_CHARS
             )
             output.add(chunk)
-            if len(chunk.text) < OUTPUT_PAGE_CHARS:  # caught up with it
+            if chunk.next >= goal:
                 return "".join(output.text)
 
     async def stop(self, session_id: str, process_id: str) -> None:

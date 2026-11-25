@@ -239,6 +239,21 @@ async def test_nothing_running_is_not_looked_at(tmp_path) -> None:
         await _until(lambda: looks)
 
 
+async def test_a_host_slower_than_the_watcher_is_still_watched(tmp_path) -> None:
+    async with _world(tmp_path) as w:
+        session = await w.session()
+        real = session.background_processes
+
+        async def slow():
+            await asyncio.sleep(0.2)  # several looks' worth
+            return real()
+
+        session.background_processes = slow
+        pid = await w.spawn("sleep 0.5; echo done")
+        await _until(lambda: load_records(w.folder))
+        assert w.record(pid)[1] == "done\n"
+
+
 async def test_a_chat_whose_id_cannot_name_a_folder_keeps_no_records(tmp_path) -> None:
     async with _world(tmp_path) as w:
         await w.deps.workspaces.bind("../evil", w.agent)

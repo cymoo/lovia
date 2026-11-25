@@ -158,7 +158,7 @@ API 路由抛出的错误都使用同一种响应体：
 | 方法与路径 | 用途 |
 | --- | --- |
 | `GET /healthz` | 存活检查（由 `create_app` 提供，不属于 `build_api_router`） |
-| `GET /api/info` | 标题、Agent 列表、默认 Agent、版本和功能开关；对话可以选择权限模式时（`create_app(workspaces=)`）还有 `workspace_modes: {modes, default}`，否则为 `null`；服务能在自己的桌面上显示文件时还有 `desktop: {reveal, edit}`（`reveal` 取 `finder`、`explorer` 或 `folder`），否则为 `null` |
+| `GET /api/info` | 标题、Agent 列表、默认 Agent、版本和功能开关；对话可以选择权限模式时（`create_app(workspaces=)`）还有 `workspace_modes: {modes, default}`，否则为 `null`；服务能在自己的桌面上显示文件时还有 `desktop: {reveal, edit}`（`reveal` 取 `finder`、`explorer` 或 `folder`），否则为 `null`。`take_seconds` 是转写服务接受的最长语音输入秒数，服务端不知道时为 `null` |
 | `GET /api/agents` · `GET /api/agents/{name}` | 查看 Agent 的 instructions、工具和能力（`workspace`、`vision`：模型能否看图） |
 | `POST /api/chat` | 执行一次**阻塞式** Turn → `{output, session_id, usage}`：托管 Run，请求等待其结束（[详见](#阻塞式-turn)） |
 | `POST /api/chat/stream` | **SSE**：启动 Run，或连接到 Session 中正在执行的 Run（新消息会作为追加指令注入） |

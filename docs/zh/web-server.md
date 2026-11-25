@@ -890,7 +890,9 @@ create_app(agent, transcribe=openai_transcriber(
 ))
 ```
 
-`openai_transcriber` 适用于任何提供 OpenAI 兼容 `/audio/transcriptions` 的服务。
+`openai_transcriber` 适用于任何提供 OpenAI 兼容 `/audio/transcriptions` 的服务，也适用于
+在别的路径上接收同样上传的服务：把 `base_url` 写成完整的接口地址
+（`https://api.deepseek.com/v1/tools/asr`），服务不分模型时省略 `model`。
 一句话里混说多种语言时请填 `language`：不填的话，有些 Whisper 模型会把内容翻译掉，
 而不是照原样转写。
 

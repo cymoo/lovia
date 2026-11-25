@@ -166,7 +166,7 @@ normalizes all three.
 | Method & path | Purpose |
 | --- | --- |
 | `GET /healthz` | liveness (served by `create_app`, not `build_api_router`) |
-| `GET /api/info` | title, agents, default agent, version, feature flags, `workspace_modes: {modes, default}` when chats can pick a permission mode (`create_app(workspaces=)`; else `null`), and `desktop: {reveal, edit}` when the server can show files on its own desktop (`reveal`: `finder`, `explorer` or `folder`; else `null`) |
+| `GET /api/info` | title, agents, default agent, version, feature flags, `workspace_modes: {modes, default}` when chats can pick a permission mode (`create_app(workspaces=)`; else `null`), and `desktop: {reveal, edit}` when the server can show files on its own desktop (`reveal`: `finder`, `explorer` or `folder`; else `null`). `take_seconds` is the longest voice-input take the transcription service accepts, where the server knows it (else `null`) |
 | `GET /api/agents` · `GET /api/agents/{name}` | agent introspection (instructions, tools, capabilities — `workspace`, `vision`: whether its model sees images) |
 | `POST /api/chat` | one **blocking** turn → `{output, session_id, usage}`: a supervised Run, waited for ([details](#blocking-turns)) |
 | `POST /api/chat/stream` | **SSE**: start a run, or attach to the session's live run (injecting the new message) |

@@ -85,7 +85,7 @@ export function buildVoicePane() {
     form.appendChild(field(t('voice.connection'), where));
 
     const baseUrl = input(voice.base_url ?? '', { mono: true, placeholder: 'https://api.openai.com/v1' });
-    const baseField = field(t('cfg.baseUrl'), baseUrl);
+    const baseField = field(t('voice.address'), baseUrl, t('voice.addressHint'));
     /** @type {'keep' | 'edit' | 'clear'} */
     let keyMode = voice.api_key.set ? 'keep' : 'edit';
     const keyIn = input('', { type: 'password', placeholder: t('cfg.apiKeyNone') });

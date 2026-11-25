@@ -555,14 +555,44 @@ body.lv-sidebar-resizing {
   font-size: 13px;
   text-align: center;
 }
-/* -- background tasks: topbar button + this-chat popover ----------------- */
+/* -- background work: the topbar button (background.js, `data-tone`) ------ */
 #tasks-btn {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  white-space: nowrap;
 }
-#tasks-btn.lv-attention {
+#tasks-btn[aria-expanded="true"] {
+  background: var(--lv-surface-2);
+}
+#tasks-btn[data-tone="approval"] {
   color: var(--lv-warn);
+}
+.lv-bg-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--lv-border-strong);
+}
+/* Only commands at work: a still dot. A dev server runs for hours. */
+[data-tone="running"] > .lv-bg-dot,
+[data-tone="steady"] > .lv-bg-dot {
+  background: var(--lv-ok);
+}
+[data-tone="running"] > .lv-bg-dot {
+  animation: lv-run-pulse 1.6s var(--lv-ease) infinite;
+}
+[data-tone="approval"] > .lv-bg-dot {
+  background: var(--lv-warn);
+}
+[data-tone="failed"] > .lv-bg-dot {
+  background: var(--lv-danger);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-tone="running"] > .lv-bg-dot {
+    animation: none;
+  }
 }
 /* -- a branch's (or a started chat's) link back to the chat it came from - */
 .lv-origin-link {
@@ -585,18 +615,7 @@ body.lv-sidebar-resizing {
     display: none; /* the icon alone; the title is in the tooltip */
   }
 }
-.lv-tasks-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 60;
-  min-width: 260px;
-  max-width: min(360px, 90vw);
-  padding: 6px;
-  border-radius: var(--lv-radius);
-}
 /* Every floating menu and popover: one frosted surface. */
-.lv-tasks-popover,
 .lv-popup-menu,
 .lv-model-chip-menu,
 .lv-context-popover {
@@ -606,33 +625,6 @@ body.lv-sidebar-resizing {
   -webkit-backdrop-filter: blur(20px) saturate(1.5);
   backdrop-filter: blur(20px) saturate(1.5);
 }
-.lv-tasks-popover-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  border-radius: var(--lv-radius-sm);
-  font-size: 13px;
-  color: var(--lv-ink);
-  text-align: left;
-  transition: background var(--lv-t-fast);
-}
-.lv-tasks-popover-row:hover {
-  background: var(--lv-surface-2);
-}
-.lv-tasks-popover-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.lv-tasks-popover-row .lv-task-elapsed {
-  color: var(--lv-muted-2);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
 .lv-task-tag {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 10px;
@@ -641,37 +633,6 @@ body.lv-sidebar-resizing {
   border-radius: 4px;
   background: var(--lv-surface-2);
   color: var(--lv-muted);
-}
-.lv-task-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.lv-task-dot.lv-running {
-  background: var(--lv-accent);
-  animation: lv-sched-pulse 1.6s ease-out infinite;
-}
-.lv-task-dot.lv-approval {
-  background: var(--lv-warn);
-  animation: lv-sched-pulse 1.6s ease-out infinite;
-}
-.lv-task-dot.lv-completed {
-  background: var(--lv-ok);
-}
-.lv-task-dot.lv-failed {
-  background: var(--lv-danger);
-}
-.lv-task-dot.lv-cancelled,
-.lv-task-dot.lv-interrupted,
-.lv-task-dot.lv-done {
-  background: var(--lv-border-strong);
-}
-@media (prefers-reduced-motion: reduce) {
-  .lv-task-dot.lv-running,
-  .lv-task-dot.lv-approval {
-    animation: none;
-  }
 }
 /* The row that widens the list's window: "Load more" under a flat list,
    "Show more" / "Show less" under a workspace group's chats. */
@@ -760,16 +721,16 @@ body.lv-sidebar-resizing {
 /* A live background run for this session (detach/reconnect): a dot after the
    title's text (and its mark), outside the title's ellipsis so a long title
    can't clip it, pushing what's left (agent, age) to the row's end. */
-.lv-session-item:is(.lv-running, .lv-waiting) .lv-session-title {
+.lv-session-item:is(.lv-running, .lv-waiting, .lv-commands) .lv-session-title {
   flex: 0 1 auto;
 }
-.lv-session-item:is(.lv-running, .lv-waiting) .lv-session-branch {
+.lv-session-item:is(.lv-running, .lv-waiting, .lv-commands) .lv-session-branch {
   margin-right: 0;
 }
 .lv-session-main > :is(.lv-session-agent, .lv-session-age, .lv-session-folder) {
   order: 2;
 }
-.lv-session-item:is(.lv-running, .lv-waiting) .lv-session-main::after {
+.lv-session-item:is(.lv-running, .lv-waiting, .lv-commands) .lv-session-main::after {
   content: "";
   order: 1;
   flex-shrink: 0;
@@ -784,6 +745,14 @@ body.lv-sidebar-resizing {
    the user — the task dot's approval color, without the pulse. */
 .lv-session-item.lv-waiting .lv-session-main::after {
   background: var(--lv-warn);
+  animation: none;
+}
+/* No run, but commands it started still are: a hollow, still dot. */
+.lv-session-item.lv-commands:not(.lv-running, .lv-waiting) .lv-session-main::after {
+  width: 5px;
+  height: 5px;
+  background: none;
+  border: 1px solid var(--lv-ok);
   animation: none;
 }
 @keyframes lv-run-pulse {
@@ -1431,9 +1400,7 @@ body.lv-view-open #files-btn {
   flex-shrink: 0;
 }
 
-/* Anchors the tasks popover to its button. */
 .lv-tasks-wrap {
-  position: relative;
   display: inline-flex;
 }
 @keyframes lv-pop-in {
@@ -5244,7 +5211,12 @@ body.lv-files-resizing {
    a column beside the preview, as a desktop file pane does — a grid over the
    panel's own children, so no wrapper is needed. */
 .lv-files-panel.lv-viewing:not(.lv-files-wide)
-  > :is(.lv-files-search, .lv-files-procs, .lv-files-list) {
+  > :is(.lv-files-search, .lv-files-list) {
+  display: none;
+}
+/* One list at a time: the files', or the Background tab's. */
+.lv-files-panel.lv-background > :is(.lv-files-search, #files-list),
+.lv-files-panel:not(.lv-background) > .lv-bg-list {
   display: none;
 }
 /* `.lv-open` is part of it: this outweighs the rule that shows the panel, and
@@ -5252,7 +5224,7 @@ body.lv-files-resizing {
 .lv-files-panel.lv-open.lv-files-wide.lv-viewing {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 .lv-files-wide.lv-viewing > .lv-files-head {
   grid-column: 1 / -1;
@@ -5264,8 +5236,8 @@ body.lv-files-resizing {
   border-right: 1px solid var(--lv-border);
 }
 .lv-files-wide.lv-viewing > .lv-files-search { grid-column: 2; grid-row: 2; }
-.lv-files-wide.lv-viewing > .lv-files-procs { grid-column: 2; grid-row: 3; }
-.lv-files-wide.lv-viewing > .lv-files-list { grid-column: 2; grid-row: 4; }
+.lv-files-wide.lv-viewing > .lv-files-list { grid-column: 2; grid-row: 3; }
+.lv-files-wide.lv-viewing > .lv-bg-list { grid-row: 2 / -1; }
 .lv-files-wide.lv-viewing > .lv-files-search {
   padding-top: 10px;
 }
@@ -5337,99 +5309,236 @@ body.lv-files-resizing {
   }
 }
 
-/* ---- Background processes strip ---- */
-.lv-files-procs {
-  flex-shrink: 0;
-  margin: 0 8px 6px;
-  padding: 4px 0 6px;
-  border-bottom: 1px solid var(--lv-border);
-}
-.lv-files-procs-head {
+/* ---- Background tab: tasks and commands (background.js) ---- */
+.lv-bg-row {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 2px 9px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--lv-muted-2);
-}
-.lv-files-procs-count {
-  min-width: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--lv-accent-soft);
-  color: var(--lv-accent-text);
-  font-size: 10.5px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-.lv-proc-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 5px 9px;
+  align-items: flex-start;
   border-radius: var(--lv-radius-sm);
+  transition: background var(--lv-t-fast);
 }
-.lv-proc-row:hover {
-  background: var(--lv-surface-2);
+.lv-bg-row:hover {
+  background: var(--lv-sidebar-hover);
 }
-.lv-proc-dot {
-  flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--lv-muted-2);
+.lv-bg-row.lv-active {
+  background: var(--lv-sidebar-active);
 }
-.lv-proc-dot.lv-running {
-  background: var(--lv-ok);
-  animation: lv-proc-pulse 2s ease-in-out infinite;
-}
-.lv-proc-dot.lv-killed {
-  background: var(--lv-warn);
-}
-@keyframes lv-proc-pulse {
-  50% {
-    opacity: 0.45;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lv-proc-dot.lv-running {
-    animation: none;
-  }
-}
-.lv-proc-main {
+.lv-bg-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--lv-radius-sm);
+  text-align: left;
+  cursor: pointer;
 }
-.lv-proc-cmd {
+.lv-bg-main:focus-visible {
+  outline-offset: -2px;
+}
+.lv-bg-icon {
+  display: flex;
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--lv-muted-2);
+}
+.lv-bg-row.lv-running .lv-bg-icon {
+  color: var(--lv-ok);
+}
+.lv-bg-row.lv-approval .lv-bg-icon {
+  color: var(--lv-warn);
+}
+.lv-bg-row.lv-failed .lv-bg-icon {
+  color: var(--lv-danger);
+}
+.lv-bg-body {
+  flex: 1;
+  min-width: 0;
   display: block;
-  font-size: 12px;
+}
+.lv-bg-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--lv-ink);
+}
+.lv-bg-title.lv-cmd {
   font-family: var(--lv-mono);
-  color: var(--lv-ink-2);
-  white-space: nowrap;
+  font-size: 12px;
+}
+.lv-bg-name,
+.lv-bg-line {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.lv-proc-meta {
+.lv-bg-title .lv-task-tag {
+  flex-shrink: 0;
+}
+.lv-bg-out {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-left: 5px;
+  color: var(--lv-muted-2);
+}
+.lv-bg-line {
   display: block;
-  font-size: 11px;
+  font-size: 11.5px;
+  line-height: 17px;
   color: var(--lv-muted-2);
   font-variant-numeric: tabular-nums;
 }
-.lv-proc-kill {
+.lv-bg-row.lv-running .lv-cmd + .lv-bg-line {
+  font-family: var(--lv-mono);
+  font-size: 11px;
+}
+.lv-bg-row.lv-approval .lv-bg-line {
+  color: var(--lv-warn);
+}
+.lv-bg-row.lv-failed .lv-bg-line {
+  color: var(--lv-danger);
+}
+.lv-bg-clock {
   flex-shrink: 0;
+  padding: 7px 8px 0 4px;
+  font-size: 11.5px;
+  line-height: 17px;
+  color: var(--lv-muted-2);
+  font-variant-numeric: tabular-nums;
+}
+/* The stop takes the clock's place while the row is pointed at. */
+.lv-bg-stop {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 26px;
+  height: 26px;
   opacity: 0;
 }
-.lv-proc-row:hover .lv-proc-kill,
-.lv-proc-kill:focus-visible {
+.lv-bg-row:hover .lv-bg-stop,
+.lv-bg-stop:focus-visible {
   opacity: 1;
 }
+.lv-bg-row:has(.lv-bg-stop):hover .lv-bg-clock,
+.lv-bg-row:has(.lv-bg-stop:focus-visible) .lv-bg-clock {
+  visibility: hidden;
+}
+.lv-bg-confirm {
+  flex-shrink: 0;
+  align-self: center;
+  margin-right: 6px;
+}
 @media (hover: none) {
-  .lv-proc-kill {
-    opacity: 1; /* no hover on touch — the control must be visible */
+  /* No hover on touch: the control stands beside the clock. */
+  .lv-bg-stop {
+    position: static;
+    flex-shrink: 0;
+    opacity: 1;
   }
+  .lv-bg-row:has(.lv-bg-stop):hover .lv-bg-clock {
+    visibility: visible;
+  }
+}
+
+/* A command in the viewer (process-view.js): what it was and how it stands,
+   over its log. */
+.lv-proc-info {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--lv-border);
+}
+.lv-proc-info-cmd {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.lv-proc-info-cmd code {
+  flex: 1;
+  min-width: 0;
+  max-height: 8.5em;
+  overflow: auto;
+  font-family: var(--lv-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lv-proc-info-cmd .lv-btn-icon {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  margin-top: -2px;
+}
+.lv-proc-info-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--lv-muted);
+  font-variant-numeric: tabular-nums;
+}
+.lv-proc-info-cwd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.lv-proc-info-meta .lv-danger {
+  color: var(--lv-danger);
+}
+.lv-proc-info-meta .lv-btn {
+  margin-left: auto;
+}
+.lv-proc-note {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--lv-muted-2);
+}
+.lv-log {
+  font-family: var(--lv-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+/* Blocks off screen are neither laid out nor painted; until one has been, its
+   lines stand for its height. */
+.lv-log-block {
+  content-visibility: auto;
+  contain-intrinsic-size: auto calc(var(--lv-log-lines, 1) * 1.6 * 12px);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lv-nowrap .lv-log-block {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.lv-nowrap .lv-log {
+  min-width: max-content;
+}
+.lv-log-note {
+  padding: 2px 0 6px;
+  font-family: var(--lv-sans);
+  font-size: 11.5px;
+  color: var(--lv-muted-2);
+}
+.lv-log-jump {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  margin: 8px auto 0;
+  border: 1px solid var(--lv-border);
+  background: var(--lv-surface);
+  box-shadow: var(--lv-shadow-sm);
+  font-family: var(--lv-sans);
+}
+.lv-log-jump[hidden] {
+  display: none;
 }
 
 .lv-files-list {

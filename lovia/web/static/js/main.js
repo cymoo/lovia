@@ -23,6 +23,7 @@ import {
 } from './sessions.js';
 import { enableSchedules } from './schedules.js';
 import { initFiles } from './files.js';
+import { initBackground } from './background.js';
 import { initModelConfig } from './model-config.js';
 import { initWorkspaceMode } from './workspace-mode.js';
 import { initWorkspaces } from './workspaces.js';
@@ -300,6 +301,7 @@ window.lovia = lovia;
   initComposer();
   initSessions();
   initFiles();
+  initBackground();
   initSettings();
   initKeyboardShortcuts();
   initViews();

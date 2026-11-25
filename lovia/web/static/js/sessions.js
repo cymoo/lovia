@@ -15,9 +15,6 @@ import { closeView, currentView, openView } from './views.js';
 import { OPEN_SESSION_EVENT } from './builtin-views.js';
 
 const sessionsList = document.getElementById('sessions-list');
-const tasksWrap = document.getElementById('tasks-wrap');
-const tasksBtn = document.getElementById('tasks-btn');
-const tasksPopover = document.getElementById('tasks-popover');
 const originBtn = /** @type {HTMLButtonElement | null} */ (
   document.getElementById('origin-btn')
 );
@@ -295,6 +292,16 @@ export function initEventStream() {
       store.emit('session-workspace-changed', JSON.parse(e.data));
     } catch { /* malformed payload — the next load resyncs */ }
   });
+  // A chat's background command started or ended.
+  es.addEventListener('processes_changed', (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      const row = store.sessions.find((s) => s.id === d.session_id);
+      if (row) row.processes_running = d.running;
+      renderSessions();
+      store.emit('processes-changed', d);
+    } catch { /* malformed payload — the next list load resyncs */ }
+  });
   // The model configuration changed (this tab or another): model-config.js
   // owns the reaction (chip label, config cache, agent refetch).
   es.addEventListener('config_changed', (e) => {
@@ -321,7 +328,7 @@ async function refreshRuns() {
   }
   if (!takeRuns(stamp, runs)) return; // a newer fetch's answer is shown
   renderSessions();
-  renderTasksButton();
+  tasksChanged();
 }
 
 /**
@@ -403,7 +410,7 @@ async function refreshTranscript() {
     if (store.sessionId !== id || store.streaming) return; // superseded
     store.currentParentId = data.parent_id || null;
     store.emit('session-meta', data);
-    renderTasksButton();
+    tasksChanged();
     renderOrigin(data.origin);
     if (chatTitleEl) chatTitleEl.textContent = data.title || t('session.newChat');
     store.emit('render-history', data.entries || []);
@@ -570,7 +577,7 @@ function sessionsSignature() {
     store.sessions.map((s) => [
       s.id, s.title ?? '', s.updated_at, s.pinned ? 1 : 0, s.agent ?? '',
       s.parent_id ?? '', s.last_run_status ?? '', s.origin_kind ?? '',
-      s.workspace_root ?? '', s.archived ? 1 : 0,
+      s.workspace_root ?? '', s.archived ? 1 : 0, s.processes_running ?? 0,
     ]),
     // The workspace list and which groups are folded (sidebarGroups reads both).
     _workspacesRev,
@@ -581,59 +588,14 @@ function sessionsSignature() {
 
 // ---- Background tasks (this chat's subagent sessions) --------------------
 // Task sessions never appear in the chat list; they belong to the chat that
-// spawned them, surfaced by the topbar Tasks button + popover.
+// spawned them, surfaced by the Background tab (background.js).
 
-/** Lifecycle bucket for a task session: live status wins, else last outcome. */
-function taskState(s) {
-  const live = store.runsBySession?.get(s.id);
-  if (live) return live.status === 'running' ? 'running' : 'approval';
-  return s.last_run_status || 'done';
-}
-
-function taskStatusLabel(state) {
-  const key = {
-    running: 'task.running',
-    approval: 'task.needsApproval',
-    completed: 'task.completed',
-    done: 'task.completed', // no-record fallback — never leak the raw state
-    failed: 'task.failed',
-    cancelled: 'task.cancelled',
-    interrupted: 'task.interrupted',
-  }[state];
-  return key ? t(key) : state;
-}
-
-/** `m:ss` for a task's running time (the task list, a report card). */
-export function fmtElapsed(sec) {
-  sec = Math.max(0, Math.floor(sec));
-  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
-}
-
-// One shared 1s ticker keeps running tasks' elapsed text fresh without
-// re-rendering the sidebar; it stops itself when no task is running.
-let _taskTicker = null;
-function syncTaskTicker() {
-  if (_taskTicker != null || !document.querySelector('.lv-task-elapsed[data-started]')) return;
-  _taskTicker = setInterval(() => {
-    const els = document.querySelectorAll('.lv-task-elapsed[data-started]');
-    if (!els.length) {
-      clearInterval(_taskTicker);
-      _taskTicker = null;
-      return;
-    }
-    const now = Date.now() / 1000;
-    for (const el of els)
-      el.textContent = fmtElapsed(now - Number(el.getAttribute('data-started')));
-  }, 1000);
-}
-
-/** Fetch and render the open chat's tasks into the topbar button. */
+/** Fetch the open chat's tasks. */
 export async function loadCurrentTasks() {
-  if (!tasksWrap) return;
   const sid = store.sessionId;
   if (!sid) {
     store.currentTasks = [];
-    renderTasksButton();
+    tasksChanged();
     return;
   }
   try {
@@ -643,112 +605,13 @@ export async function loadCurrentTasks() {
   } catch {
     store.currentTasks = [];
   }
-  renderTasksButton();
+  tasksChanged();
 }
 
-function renderTasksButton() {
-  // The open chat's tasks or their live runs moved: the task tray (chat.js)
-  // redraws from the same state.
+// The open chat's tasks, their live runs or its own parent moved: the
+// Background tab and the task tray (chat.js) redraw from the same state.
+function tasksChanged() {
   store.emit('tasks-changed');
-  if (!tasksWrap || !tasksBtn || !tasksPopover) return;
-  const tasks = store.currentTasks || [];
-  const parentId = store.currentParentId;
-  tasksWrap.style.display = tasks.length || parentId ? '' : 'none';
-  if (!tasks.length) {
-    tasksPopover.hidden = true;
-    tasksBtn.setAttribute('aria-expanded', 'false');
-    if (parentId) {
-      // Inside a task session: the same topbar slot becomes the way home —
-      // plain navigation, so drop the menu semantics along with the popover.
-      tasksBtn.dataset.parent = parentId;
-      tasksBtn.classList.remove('lv-attention');
-      tasksBtn.textContent = `← ${t('task.backToParent')}`;
-      tasksBtn.removeAttribute('aria-haspopup');
-      tasksBtn.removeAttribute('aria-controls');
-      tasksBtn.removeAttribute('aria-expanded');
-    }
-    return;
-  }
-  delete tasksBtn.dataset.parent;
-  tasksBtn.setAttribute('aria-haspopup', 'menu');
-  tasksBtn.setAttribute('aria-controls', 'tasks-popover');
-  if (!tasksBtn.hasAttribute('aria-expanded')) {
-    tasksBtn.setAttribute('aria-expanded', 'false');
-  }
-  const liveCount = tasks.filter((s) => store.activeRuns?.has(s.id)).length;
-  const attention = tasks.some((s) => taskState(s) === 'approval');
-  tasksBtn.classList.toggle('lv-attention', attention);
-  tasksBtn.innerHTML = '';
-  const dot = document.createElement('span');
-  dot.className = `lv-task-dot ${attention ? 'lv-approval' : liveCount ? 'lv-running' : 'lv-completed'}`;
-  const label = document.createElement('span');
-  label.textContent = liveCount
-    ? t('nav.tasksRunning', { n: liveCount })
-    : `${t('nav.tasks')} ${tasks.length}`;
-  tasksBtn.append(dot, label);
-  tasksPopover.innerHTML = '';
-  for (const s of tasks) {
-    tasksPopover.appendChild(buildTaskRow(s));
-  }
-  syncTaskTicker();
-}
-
-/** One popover row: [tN] chip + title + status dot + elapsed/outcome. */
-function buildTaskRow(s) {
-  const state = taskState(s);
-  const row = document.createElement('button');
-  row.type = 'button';
-  row.className = 'lv-tasks-popover-row';
-  row.setAttribute('role', 'menuitem');
-  const d = document.createElement('span');
-  d.className = `lv-task-dot lv-${state}`;
-  const m = /^\[([^\]]{1,8})\]\s*(.*)$/.exec(s.title || '');
-  const title = document.createElement('span');
-  title.className = 'lv-tasks-popover-title';
-  title.textContent = m ? m[2] || s.id : s.title || s.id;
-  row.append(d);
-  if (m) {
-    const tag = document.createElement('span');
-    tag.className = 'lv-task-tag';
-    tag.textContent = m[1];
-    row.append(tag);
-  }
-  row.append(title);
-  const trail = document.createElement('span');
-  trail.className = 'lv-task-elapsed';
-  const live = store.runsBySession?.get(s.id);
-  if (live?.started_at && live.status !== 'waiting') {
-    trail.dataset.started = String(live.started_at);
-    trail.textContent = fmtElapsed(Date.now() / 1000 - live.started_at);
-  } else {
-    trail.textContent = taskStatusLabel(state);
-  }
-  row.append(trail);
-  row.addEventListener('click', () => {
-    tasksPopover.hidden = true;
-    tasksBtn?.setAttribute('aria-expanded', 'false');
-    switchSession(s.id);
-  });
-  return row;
-}
-
-if (tasksBtn && tasksPopover) {
-  tasksBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (tasksBtn.dataset.parent) {
-      switchSession(tasksBtn.dataset.parent);
-      return;
-    }
-    tasksPopover.hidden = !tasksPopover.hidden;
-    tasksBtn.setAttribute('aria-expanded', String(!tasksPopover.hidden));
-  });
-  document.addEventListener('click', (e) => {
-    const target = e.target instanceof Node ? e.target : null;
-    if (!tasksPopover.hidden && !tasksPopover.contains(target)) {
-      tasksPopover.hidden = true;
-      tasksBtn.setAttribute('aria-expanded', 'false');
-    }
-  });
 }
 
 // The date groups move at midnight even when no data does: re-render then
@@ -770,7 +633,7 @@ function renderSessions() {
   sessionsList.innerHTML = '';
 
   // Task sessions (parent_id set) never render here — they belong to their
-  // chat's topbar Tasks popover, not the global list.
+  // chat's Background tab, not the global list.
   const chats = store.sessions.filter((s) => !s.parent_id);
   // Chats grouped by the directory they work in, where chats have one — a
   // search shows its matches flat (a chat whose directory left the list too),
@@ -831,6 +694,7 @@ function buildRow(s, { age = false, folder = false } = {}) {
     if (store.activeRuns?.has(s.id)) item.classList.add('lv-running');
     const waiting = store.runsBySession?.get(s.id)?.status === 'waiting';
     if (waiting) item.classList.add('lv-waiting');
+    if (s.processes_running) item.classList.add('lv-commands');
     if (s.pinned) item.classList.add('lv-pinned');
     item.dataset.id = s.id;
 
@@ -1092,7 +956,8 @@ function syncHeader() {
 
 /** A sidebar row's tooltip: its group says roughly when, this says exactly. */
 function sidebarTooltip(s) {
-  const tip = `${s.title || s.id} · ${formatDateTime(s.updated_at)}`;
+  let tip = `${s.title || s.id} · ${formatDateTime(s.updated_at)}`;
+  if (s.processes_running) tip += ` · ${t('bg.commandsRunning', { n: s.processes_running })}`;
   // Its run is suspended on a card: the dot alone doesn't say what it wants.
   return store.runsBySession?.get(s.id)?.status === 'waiting'
     ? `${tip} · ${t('task.needsApproval')}`
@@ -1415,7 +1280,7 @@ export async function switchSession(id) {
     }
     store.currentParentId = data.parent_id || null;
     store.emit('session-meta', data);
-    renderTasksButton();
+    tasksChanged();
     renderOrigin(data.origin);
     // Align the switcher with the chat's own agent BEFORE the history replay:
     // the sync may reset the Files panel, which must not eat the replayed

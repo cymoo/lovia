@@ -531,6 +531,23 @@ could read it. Chats from before 0.9.239 kept their attachments in the
 Workspace's `uploads/`; those messages still show them, and nothing moves or
 deletes that directory.
 
+### Background work
+
+The panel's **Background** tab lists what runs behind the chat, and what ran:
+its [subagent tasks](#background-subagents) and the commands the Agent started
+with `shell(background=true)` — a dev server, a test run. What waits on you
+comes first; what is over is folded below. The topbar button shows how many
+run (a red dot: something failed since you last looked) and opens the tab; a
+chat with commands running has a hollow dot in the sidebar. An agent without a
+Workspace has this tab alone.
+
+Click a command, or *View output* on its tool card, for its log: it follows the
+output while the command runs, in the panel or the larger reader. The panel
+shows the newest 5,000 lines; the download has everything kept. Reading it
+takes nothing from the Agent, which still reads the output itself, and after
+you stop a command it is told so and reads the rest. Stopping a task asks once
+more: the task loses what it has done. Click a task to open its chat.
+
 Background processes belong to the chat rather than one Run. Finishing a Run
 does not stop them; deleting the chat or stopping the Web server reaps them,
 and a server restart does not restore them. See

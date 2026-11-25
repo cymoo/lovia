@@ -35,7 +35,6 @@ function fixture() {
     icon: () => '',
     currentView: () => null,
     canAddWorkspace: () => false,
-    renderTasksButton: () => {},
     renderOrigin: () => {},
     t: (key) => key,
     toast: () => {},

@@ -350,6 +350,9 @@ class VoiceConfig(BaseModel):
         }
         if clean["base_url"]:
             clean["base_url"] = clean["base_url"].rstrip("/") or None
+        if clean["base_url"] and "://" not in clean["base_url"]:
+            # Typed the way an address is said: ``api.deepseek.com``.
+            clean["base_url"] = "https://" + clean["base_url"]
         if clean["language"]:
             clean["language"] = clean["language"].lower()
             if not _LANGUAGE.match(clean["language"]):
@@ -441,7 +444,7 @@ class WebConfig(BaseModel):
         if target is not None and voice.model is None:
             # The OpenAI route refuses a take that names no model; a
             # service with one route of its own has only the one.
-            if target[0].endswith(OPENAI_PATH):
+            if urlparse(target[0]).path.endswith(OPENAI_PATH):
                 return "model_missing"
         return None
 

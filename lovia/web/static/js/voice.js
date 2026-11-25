@@ -469,7 +469,7 @@ function listen(target, type, fn, opts) {
 export function enable(seconds) {
   // A little short of the service's limit: the clock here and the length
   // of the file it gets don't agree to the frame.
-  maxSeconds = Math.min(seconds ? seconds - 3 : MAX_SECONDS, MAX_SECONDS);
+  maxSeconds = Math.min(seconds > 10 ? seconds - 3 : MAX_SECONDS, MAX_SECONDS);
   if (ui) return;
   ui = build();
   if (!ui) return;

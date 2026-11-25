@@ -641,7 +641,7 @@ serve(create_app(agent, question_channel=channel, suspend_after=60))
 
 设置里的**连接**可以沿用某个已配置模型的地址和密钥（只列出 OpenAI 兼容的），也可以单独填
 接口地址和密钥。接口地址填 API 根地址（`https://api.openai.com/v1`）或完整的转写接口地址
-（`https://api.deepseek.com/v1/tools/asr`）都可以：没有路径、或路径以版本号结尾的当作根地址，
+（`https://api.deepseek.com/v1/tools/asr`）都可以：没有路径、或路径以版本号或 `/openai` 结尾的当作根地址，
 其余原样使用。然后填转写模型，例如 `gpt-transcribe`、`whisper-large-v3-turbo`；一句话里
 混着说几种语言时，再选主要的语言。DeepSeek 最省事：沿用它的聊天连接即可，模型留空。**试录一句**会把麦克风、密钥、模型和语言一起验证一遍。
 

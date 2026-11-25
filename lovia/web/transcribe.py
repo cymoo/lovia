@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -67,7 +67,8 @@ _SERVICES: dict[str, tuple[str, int]] = {
     "api.deepseek.com": ("/v1/tools/asr", 120),
 }
 # The last path segment of an API root: none, or a version (``v1``, ``v4``).
-_ROOT = re.compile(r"(^|/)v\d+\w*$")
+# or the ``openai`` a gateway hangs its compatible API under.
+_ROOT = re.compile(r"(^|/)(v\d+[\w.]*|openai)$", re.IGNORECASE)
 
 
 def transcription_endpoint(
@@ -78,17 +79,18 @@ def transcription_endpoint(
     One field takes both spellings: an API root (no path, or one ending in
     a version) gets the transcription path of its service, anything else is
     the endpoint itself. ``root=True`` says it is a root whatever it looks
-    like — a chat model's connection always is.
+    like — a chat model's connection always is. Resolving an address twice
+    gives the same answer.
     """
-    base = base_url.strip().rstrip("/")
-    parts = urlsplit(base)
+    parts = urlsplit(base_url.strip())
+    path = parts.path.rstrip("/")
     service = _SERVICES.get((parts.hostname or "").lower())
     limit = service[1] if service else None
-    if not (root or _ROOT.search(parts.path) or not parts.path):
-        return base, limit
-    if service:
-        return f"{parts.scheme}://{parts.netloc}{service[0]}", limit
-    return base + OPENAI_PATH, limit
+    if path.endswith(OPENAI_PATH) or (service and path == service[0]):
+        pass
+    elif root or not path or _ROOT.search(path):
+        path = service[0] if service else path + OPENAI_PATH
+    return urlunsplit(parts._replace(path=path)), limit
 
 
 def _detail(response: httpx.Response) -> str:
@@ -122,6 +124,7 @@ def openai_transcriber(
     attempt, no retry: the person is waiting, and can press retry.
     """
     url, _ = transcription_endpoint(base_url)
+    as_typed = not urlsplit(url).path.endswith(OPENAI_PATH)
     fields: dict[str, str] = {"model": model} if model else {}
     if language:
         # gpt-transcribe replaced ``language`` with a list, and refuses both.
@@ -172,7 +175,12 @@ def openai_transcriber(
             said = redact(_detail(response))
             raise TranscriptionError(
                 f"the transcription service answered HTTP {response.status_code}"
-                + (f": {said}" if said else "")
+                + (f": {said}" if said else ""),
+                # An address taken for the endpoint that nothing answers at
+                # was probably an API root of an unusual shape.
+                hint=f"if the address is an API root, add {OPENAI_PATH} to it"
+                if as_typed and response.status_code in (404, 405)
+                else None,
             )
         try:
             text = response.json()["text"]

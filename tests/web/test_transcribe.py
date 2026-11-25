@@ -499,6 +499,24 @@ def test_a_connection_with_no_base_url_is_the_official_endpoint(served: Any) -> 
             "https://stt.example/v1/audio/transcriptions",
         ),
         ("https://stt.example/recognize", "https://stt.example/recognize"),
+        # Roots of other shapes: a dotted or capital version, a gateway's
+        # ``openai``; a query stays where it was.
+        (
+            "https://stt.example/api/V1.1",
+            "https://stt.example/api/V1.1/audio/transcriptions",
+        ),
+        (
+            "https://gw.example/v1beta/openai/",
+            "https://gw.example/v1beta/openai/audio/transcriptions",
+        ),
+        (
+            "https://stt.example/v1?api-version=2",
+            "https://stt.example/v1/audio/transcriptions?api-version=2",
+        ),
+        (
+            "https://api.deepseek.com:8443/v1?x=1",
+            "https://api.deepseek.com:8443/v1/tools/asr?x=1",
+        ),
         (
             "https://api.deepseek.com/v1/tools/asr",
             "https://api.deepseek.com/v1/tools/asr",
@@ -510,6 +528,34 @@ def test_a_connection_with_no_base_url_is_the_official_endpoint(served: Any) -> 
 )
 def test_one_address_field_takes_a_root_or_the_endpoint(typed: str, url: str) -> None:
     assert transcription_endpoint(typed)[0] == url
+    # The configuration resolves it, then the transcriber does again.
+    assert transcription_endpoint(url)[0] == url
+    assert (
+        transcription_endpoint(transcription_endpoint(typed, root=True)[0])[0]
+        == (transcription_endpoint(typed, root=True)[0])
+    )
+
+
+async def test_an_address_nothing_answers_at_may_have_been_a_root() -> None:
+    fn = _engine(lambda r: httpx.Response(404), base_url="https://gw.example/compat")
+    with pytest.raises(TranscriptionError) as caught:
+        await fn(TranscriptionRequest(audio=TAKE))
+    assert "/audio/transcriptions" in (caught.value.hint or "")
+    # Not said of an address that already is the OpenAI route.
+    fn = _engine(lambda r: httpx.Response(404))
+    with pytest.raises(TranscriptionError) as caught:
+        await fn(TranscriptionRequest(audio=TAKE))
+    assert caught.value.hint is None
+
+
+def test_an_address_typed_without_a_scheme_is_https() -> None:
+    config = WebConfig.model_validate({"voice": {"base_url": "api.deepseek.com/"}})
+    assert config.voice.base_url == "https://api.deepseek.com"
+    assert config.voice_endpoint() == (
+        "https://api.deepseek.com/v1/tools/asr",
+        None,
+        120,
+    )
 
 
 def test_a_connection_is_a_root_whatever_it_looks_like() -> None:

@@ -311,7 +311,8 @@ class ServerInfo(BaseModel):
     configured: bool = True
     features: dict[str, bool] = Field(default_factory=dict)
     # The longest take voice input's service accepts, in seconds, where it
-    # is known: the page stops recording there. None: the page's own cap.
+    # is known: the page stops recording just short of it. None: the page's
+    # own cap.
     take_seconds: int | None = None
     # Per-chat permission modes; None when chats can't pick one.
     workspace_modes: WorkspaceModesInfo | None = None

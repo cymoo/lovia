@@ -916,7 +916,7 @@ already configured (OpenAI-compatible ones are listed), or takes an address
 and key of its own. The address is an API root (`https://api.openai.com/v1`)
 or the transcription endpoint's full address
 (`https://api.deepseek.com/v1/tools/asr`): one with no path, or a path ending
-in a version, is a root, and anything else is used as it is. Then name a
+in a version or `/openai`, is a root, and anything else is used as it is. Then name a
 transcription model — `gpt-transcribe`, `whisper-large-v3-turbo` — and, if you
 mix languages in one sentence, the main language. DeepSeek is the shortest
 setup: borrow its chat connection and leave the model empty. **Try a sentence** checks the microphone, key, model and language

@@ -536,6 +536,99 @@ def test_one_address_field_takes_a_root_or_the_endpoint(typed: str, url: str) ->
     )
 
 
+def _refuses_early(first: Any) -> Any:
+    """A service that judges the key before the upload ends: the take gets
+    ``first`` (a reset, a gateway's empty error), a bodiless ask the 401."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.content:
+            if isinstance(first, Exception):
+                raise first
+            return first
+        return httpx.Response(
+            401, json={"error": {"message": "key sk-secret-1234567890 is invalid"}}
+        )
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        httpx.Response(550),
+        httpx.RemoteProtocolError("Server disconnected without sending a response."),
+        httpx.WriteError("Broken pipe"),
+        httpx.ReadError("Connection reset by peer"),
+    ],
+)
+async def test_a_take_cut_off_over_the_key_says_it_was_the_key(first: Any) -> None:
+    fn = _engine(_refuses_early(first))
+    with pytest.raises(TranscriptionError) as caught:
+        await fn(TranscriptionRequest(audio=TAKE))
+    said = str(caught.value)
+    assert "refused the API key (HTTP 401)" in said and "is invalid" in said
+    assert "sk-secret-1234567890" not in said
+
+
+async def test_a_refusal_that_is_not_about_the_key_stays_what_it_was() -> None:
+    asked: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(bool(request.content))
+        return httpx.Response(550 if request.content else second)
+
+    # A 403 may be about anything: only a 401 is the key's.
+    for second in (400, 403):
+        asked.clear()
+        with pytest.raises(TranscriptionError, match="answered HTTP 550$"):
+            await _engine(handler)(TranscriptionRequest(audio=TAKE))
+        assert asked == [True, False]
+
+    # The service's own refusal, empty or not, and a timeout: not asked.
+    for status in (404, 413, 429):
+        asked.clear()
+        with pytest.raises(TranscriptionError, match=f"answered HTTP {status}$"):
+            await _engine(lambda r: asked.append(True) or httpx.Response(status))(
+                TranscriptionRequest(audio=TAKE)
+            )
+        assert asked == [True]
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        asked.append(True)
+        raise httpx.ReadTimeout("slow", request=request)
+
+    asked.clear()
+    with pytest.raises(TranscriptionError, match="did not answer"):
+        await _engine(slow)(TranscriptionRequest(audio=TAKE))
+    assert asked == [True]
+
+
+async def test_a_take_cut_off_with_no_key_set_says_one_is_wanted() -> None:
+    fn = _engine(_refuses_early(httpx.Response(550)), api_key=None)
+    with pytest.raises(TranscriptionError, match="asked for an API key"):
+        await fn(TranscriptionRequest(audio=TAKE))
+
+
+async def test_asked_services_stay_as_they_were() -> None:
+    asked: list[bool] = []
+
+    # An answer in the service's own words needs no second opinion, and a
+    # service never reached is not asked again.
+    asked.clear()
+    with pytest.raises(TranscriptionError, match="HTTP 429: slow down"):
+        await _engine(
+            lambda r: asked.append(True) or httpx.Response(429, text="slow down")
+        )(TranscriptionRequest(audio=TAKE))
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        asked.append(True)
+        raise httpx.ConnectError("refused", request=request)
+
+    with pytest.raises(TranscriptionError, match="could not reach"):
+        await _engine(unreachable)(TranscriptionRequest(audio=TAKE))
+    assert asked == [True, True]
+
+
 async def test_an_address_nothing_answers_at_may_have_been_a_root() -> None:
     fn = _engine(lambda r: httpx.Response(404), base_url="https://gw.example/compat")
     with pytest.raises(TranscriptionError) as caught:

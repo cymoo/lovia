@@ -63,8 +63,7 @@ def _detail(response: httpx.Response) -> str:
         text = error.get("message") if isinstance(error, dict) else error
     except (ValueError, AttributeError):
         text = None
-    text = " ".join(str(text or response.text).split())
-    return text[:_DETAIL_MAX]
+    return " ".join(str(text or response.text).split())
 
 
 def openai_transcriber(
@@ -93,7 +92,10 @@ def openai_transcriber(
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     def redact(text: str) -> str:
-        return text.replace(api_key, "***") if api_key else text
+        # The key first, the cut second: a cut through the key would leave
+        # a prefix no replace could find.
+        text = text.replace(api_key, "***") if api_key else text
+        return text[:_DETAIL_MAX]
 
     async def transcribe(request: TranscriptionRequest) -> str:
         try:
@@ -113,7 +115,10 @@ def openai_transcriber(
             raise TranscriptionError(
                 f"the transcription service did not answer in {timeout:g}s"
             ) from exc
-        except httpx.TransportError as exc:
+        except Exception as exc:  # noqa: BLE001 — see below
+            # Not only transport errors: a key with a character no header
+            # can carry fails inside httpx with the key in its message, and
+            # nothing may leave here unredacted.
             raise TranscriptionError(
                 f"could not reach the transcription service: "
                 f"{redact(str(exc)) or type(exc).__name__}"

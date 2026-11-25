@@ -283,6 +283,40 @@ async def test_the_key_and_a_long_body_stay_out_of_the_message() -> None:
     assert len(message) < 400
 
 
+async def test_a_key_cut_by_the_length_limit_leaves_no_prefix() -> None:
+    key = "sk-secret-1234567890"
+    body = "x" * 185 + " " + key  # the cut at 200 falls inside the key
+
+    with pytest.raises(TranscriptionError) as caught:
+        await _engine(lambda request: httpx.Response(400, text=body))(
+            TranscriptionRequest(audio=TAKE)
+        )
+    assert "sk-" not in str(caught.value)
+
+
+async def test_a_key_no_header_can_carry_fails_without_being_shown() -> None:
+    key = "sk-secret-1234567890”"  # a pasted smart quote
+    engine = _engine(
+        lambda request: httpx.Response(200, json={"text": "ok"}), api_key=key
+    )
+
+    with pytest.raises(TranscriptionError) as caught:
+        await engine(TranscriptionRequest(audio=TAKE))
+    assert "sk-secret" not in str(caught.value)
+
+    res = _client(transcribe=engine).post("/api/transcribe", content=TAKE, headers=WAV)
+    assert res.status_code == 502 and "sk-secret" not in res.text
+
+
+def test_any_engine_exception_reads_as_its_message() -> None:
+    async def broken(request: TranscriptionRequest) -> str:
+        raise UnicodeEncodeError("ascii", "é", 0, 1, "ordinal not in range")
+
+    res = _client(transcribe=broken).post("/api/transcribe", content=TAKE, headers=WAV)
+    # The message, not the exception's argument tuple.
+    assert res.json()["detail"]["message"].startswith("'ascii' codec can't encode")
+
+
 # --------------------------------------------------------- the settings -
 
 
@@ -351,6 +385,38 @@ def test_the_key_keeps_or_clears_by_the_usual_convention(served: Any) -> None:
     _voice(client, api_key="", language=None)
     assert runtime.config.voice.api_key is None
     assert runtime.config.voice.language is None
+
+
+def test_a_blank_connection_or_endpoint_costs_nothing_kept(served: Any) -> None:
+    client, runtime = served
+    profile = _add_model(client)
+    _voice(client, model="m", base_url="https://stt.example/v1", api_key="sk-stt")
+    _voice(client, connection="  ")
+    assert runtime.config.voice.base_url == "https://stt.example/v1"
+    assert runtime.config.voice.api_key == "sk-stt"
+
+    _voice(client, connection=profile)
+    _voice(client, base_url=" / ")
+    assert runtime.config.voice.connection == profile
+
+
+def test_a_borrowed_connection_brings_its_environment_key(
+    served: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, runtime = served
+    made: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "lovia.web.config.runtime.openai_transcriber",
+        lambda **kw: made.append(kw) or _echo,
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    # A keyless profile chats on the provider's environment key; so does a
+    # take sent through it — but an endpoint of voice's own gets none.
+    profile = _add_model(client, api_key=None)
+    _voice(client, connection=profile, model="gpt-transcribe")
+    assert runtime.transcriber() and made[-1]["api_key"] == "sk-from-env"
+    _voice(client, base_url="https://stt.example/v1")
+    assert runtime.transcriber() and made[-1]["api_key"] is None
 
 
 def test_a_connection_lends_its_endpoint_and_key(

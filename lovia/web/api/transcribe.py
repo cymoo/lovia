@@ -61,10 +61,15 @@ def build_transcribe_router(deps: RouterDeps) -> APIRouter:
             # Never upstream's own status: the page reads a 401 as "signed
             # out of lovia", and it was the engine's key that was refused.
             log.warning("transcription failed: %s", exc)
-            hint = exc.hint if isinstance(exc, LoviaError) else None
-            message = Exception.__str__(exc) or type(exc).__name__
+            if isinstance(exc, LoviaError):
+                message, hint = Exception.__str__(exc), exc.hint
+            else:
+                message, hint = str(exc), None
             raise WebError(
-                502, "transcription_failed", message, hint=hint or _SETTINGS_HINT
+                502,
+                "transcription_failed",
+                message or type(exc).__name__,
+                hint=hint or _SETTINGS_HINT,
             ) from exc
         return Transcription(text=str(text).strip())
 

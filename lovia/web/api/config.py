@@ -561,9 +561,11 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             voice[name] = getattr(body, name)
         if body.api_key is not None:
             voice["api_key"] = body.api_key or None  # "" clears
-        if "connection" in sent and body.connection:
+        # Judged as they will be stored: a blank names nothing, and must not
+        # cost the endpoint already kept.
+        if (body.connection or "").strip():
             voice["base_url"] = voice["api_key"] = None
-        elif "base_url" in sent and body.base_url:
+        elif (body.base_url or "").strip().rstrip("/"):
             voice["connection"] = None
         # Names no chat model: it saves before one is configured, too.
         await _apply(_copy(voice=voice), settings_only=True)

@@ -355,12 +355,15 @@ async def test_a_dropped_connection_leaves_the_record_without_output(tmp_path) -
             done = await w.spawn("echo one")
             await _until(lambda: load_records(w.folder))
             live = await w.spawn("echo two; sleep 30")
-            await _until(lambda: w.events[-1]["running"] == 1)
+            watch = w.deps.processes._watches[CHAT]
+            await _until(lambda: live in watch.known and watch.known[live].output_chars)
             os.kill(host._conn.ready["pid"], 9)
             await _until(lambda: len(load_records(w.folder)) == 2)
             assert w.record(done)[1] == "one\n"
             record, body = w.record(live)
             assert (record.status, record.ended_by, body) == ("killed", "lost", "")
+            # A reader that had got that far does not go back to 0.
+            assert record.base == len("two\n")
             assert w.events[-1] == {"session_id": CHAT, "running": 0}
             # Asking again, as a page told of the change does, changes nothing.
             heard = len(w.events)

@@ -318,7 +318,8 @@ class ProcessWatcher:
     async def _wind_up_one(
         self, session_id: str, watch: _Watch, status: ProcessStatus, reason: EndedBy
     ) -> None:
-        output = _Output()
+        # Nothing to fetch from a lost session: all it wrote counts as dropped.
+        output = _Output(base=status.output_chars if reason == "lost" else 0)
         if reason != "lost":
             try:
                 status_after = await asyncio.wait_for(

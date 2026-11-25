@@ -10,6 +10,7 @@
  * @property {string} tag A task's `t1`; '' for a command.
  * @property {string} title
  * @property {'approval' | 'running' | 'completed' | 'failed' | 'stopped' | 'interrupted' | 'lost'} state
+ * @property {string | null} waitsFor What a task in `approval` waits on: `approval`, `question`, `call`.
  * @property {boolean} live
  * @property {boolean} failed
  * @property {number} startedAt Unix seconds; 0 when not known.
@@ -49,6 +50,7 @@ function taskItem(task, run) {
     id: task.id,
     ...taskLabel(task),
     state,
+    waitsFor: state === 'approval' ? (run.waits_on?.kind ?? 'approval') : null,
     live: !!run,
     failed: state === 'failed',
     startedAt: run?.started_at || task.created_at || 0,
@@ -80,6 +82,7 @@ function commandItem(p) {
     tag: '',
     title: p.command.split(/\s+/).join(' ').trim(),
     state,
+    waitsFor: null,
     live,
     failed,
     startedAt: p.started_at || 0,

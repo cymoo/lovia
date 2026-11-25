@@ -100,6 +100,12 @@ async function openProcess(id) {
 
 // ---- Tasks ------------------------------------------------------------------
 
+/** A task's own chat. On a phone the panel covers it: out of the way. */
+function openTask(id) {
+  if (window.matchMedia('(max-width: 720px)').matches) setPanel(null);
+  void switchSession(id);
+}
+
 /** A task's stop asks once more: it ends where it is, and reports nothing. */
 async function stopTask(item) {
   if (_armed !== item.key) {
@@ -130,8 +136,9 @@ function renderButton() {
   const total = list.live.length + list.ended.length;
   const parentId = store.currentParentId;
   wrap.style.display = total || parentId ? '' : 'none';
-  if (parentId) {
-    // Inside a task's chat the slot is the way home: plain navigation.
+  if (parentId && ![...list.live, ...list.ended].some((i) => i.kind === 'task')) {
+    // Inside a task's chat the slot is the way home, unless that task has
+    // tasks of its own: plain navigation.
     btn.dataset.parent = parentId;
     btn.dataset.tone = '';
     btn.textContent = `← ${t('task.backToParent')}`;
@@ -162,7 +169,10 @@ let _lastSig = '';
 function render() {
   const list = items();
   _failures.take(store.sessionId, list);
-  if (onScreen()) _failures.seen();
+  if (onScreen() && _failures.unseen.size) {
+    _endedOpen = true; // where the failures are
+    _failures.seen();
+  }
   renderButton();
   renderList();
 }
@@ -235,7 +245,9 @@ const TASK_OUTCOME = {
 
 /** The second line: what it is doing, or how it ended and how long it took. */
 function detailText(item) {
-  if (item.state === 'approval') return t('task.needsApproval');
+  if (item.state === 'approval') {
+    return t(item.waitsFor === 'question' ? 'bg.needsAnswer' : 'task.needsApproval');
+  }
   if (item.live) return item.kind === 'cmd' ? plainText(item.line) : t('task.running');
   const how =
     item.kind === 'task'
@@ -292,7 +304,7 @@ function row(item, active) {
   }
   main.append(glyph, body);
   main.addEventListener('click', () => {
-    if (item.kind === 'task') void switchSession(item.id);
+    if (item.kind === 'task') openTask(item.id);
     else void openProcess(item.id);
   });
   el.append(main);

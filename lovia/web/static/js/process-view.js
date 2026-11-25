@@ -118,8 +118,10 @@ export function processGuest(sessionId, proc, { stop }) {
     if (mounted && !over && !document.hidden) timer = setTimeout(fetchPage, ms);
   }
 
-  /** On screen: not behind a closed panel or a full-page view. */
-  const shown = () => content.getClientRects().length > 0;
+  /** On screen: not behind a closed panel (a phone's is there, but not
+   * visible) or a full-page view. */
+  const shown = () =>
+    content.getClientRects().length > 0 && getComputedStyle(content).visibility === 'visible';
 
   async function fetchPage() {
     if (busy) return;

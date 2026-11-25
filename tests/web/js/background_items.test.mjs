@@ -80,6 +80,7 @@ test('what waits on the user leads, then newest first', () => {
     ),
   );
   assert.deepEqual(keys(live), ['task:w', 'cmd:a', 'task:r']);
+  assert.deepEqual(live.map((i) => i.waitsFor), ['approval', null, null]);
   assert.deepEqual(keys(ended), ['cmd:c', 'task:z', 'cmd:b']);
 });
 

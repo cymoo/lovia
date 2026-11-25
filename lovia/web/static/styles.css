@@ -6668,8 +6668,12 @@ body.lv-files-resizing {
 }
 /* Open-in-files sits at the summary's right edge, revealed on hover. */
 .lv-tool summary .lv-tool-open-file {
-  opacity: 0;
   flex-shrink: 0;
+}
+@media (hover: hover) {
+  .lv-tool summary .lv-tool-open-file {
+    opacity: 0;
+  }
 }
 .lv-tool summary:hover .lv-tool-open-file,
 .lv-tool summary .lv-tool-open-file:focus-visible {

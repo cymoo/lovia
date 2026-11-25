@@ -145,6 +145,35 @@ def openai_transcriber(
         text = text.replace(api_key, "***") if api_key else text
         return text[:_DETAIL_MAX]
 
+    def client() -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=timeout,
+            transport=transport,
+            trust_env=resolve_trust_env(None),
+            verify=resolve_verify(),
+        )
+
+    async def key_refused() -> str | None:
+        """The service's word that the key is wrong, asked without the take.
+
+        A service that judges the key before the upload ends closes the
+        connection under it, and what arrives is a reset or a gateway's
+        empty error (DeepSeek: HTTP 550) instead of its 401. The same
+        request with no body is small enough to get the real answer.
+        """
+        try:
+            async with client() as http:
+                probe = await http.post(url, headers=headers, timeout=min(timeout, 10))
+        except Exception:  # noqa: BLE001 — a second opinion, never an error
+            return None
+        if probe.status_code not in (401, 403):
+            return None
+        said = redact(_detail(probe))
+        what = "refused the API key" if api_key else "asked for an API key"
+        return f"the transcription service {what} (HTTP {probe.status_code})" + (
+            f": {said}" if said else ""
+        )
+
     async def transcribe(request: TranscriptionRequest) -> str:
         if api_key and not (api_key.isascii() and api_key.isprintable()):
             # Refused here, in fixed words: the HTTP stack would refuse it
@@ -154,13 +183,8 @@ def openai_transcriber(
                 hint="paste the key again: a line break or a smart quote got in",
             )
         try:
-            async with httpx.AsyncClient(
-                timeout=timeout,
-                transport=transport,
-                trust_env=resolve_trust_env(None),
-                verify=resolve_verify(),
-            ) as client:
-                response = await client.post(
+            async with client() as http:
+                response = await http.post(
                     url,
                     headers=headers,
                     data=fields,
@@ -174,12 +198,18 @@ def openai_transcriber(
             # Not only transport errors: a key with a character no header
             # can carry fails inside httpx with the key in its message, and
             # nothing may leave here unredacted.
+            # A connection cut mid-request was reached: ask why.
+            cut = isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError))
+            cut = cut and not isinstance(exc, httpx.ConnectError)
             raise TranscriptionError(
-                f"could not reach the transcription service: "
+                (await key_refused() if cut else None)
+                or f"could not reach the transcription service: "
                 f"{redact(str(exc)) or type(exc).__name__}"
             ) from exc
         if not response.is_success:
             said = redact(_detail(response))
+            if not said and (why := await key_refused()):
+                raise TranscriptionError(why)
             raise TranscriptionError(
                 f"the transcription service answered HTTP {response.status_code}"
                 + (f": {said}" if said else ""),

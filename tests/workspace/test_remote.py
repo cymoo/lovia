@@ -303,7 +303,10 @@ async def test_commands_and_background_processes(host, tmp_path) -> None:
     assert await _dead(started.pid)
 
     started = await session.spawn("echo 日志🎉; sleep 30")
-    while not (listed := (await session.background_processes())[-1]).output_chars:
+    for _ in range(250):
+        listed = (await session.background_processes())[-1]
+        if listed.output_chars:
+            break
         await asyncio.sleep(0.02)
     assert (listed.last_line, listed.ended_at) == ("日志🎉", None)
     assert listed.cwd == tmp_path.resolve().as_posix()

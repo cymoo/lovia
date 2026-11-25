@@ -229,11 +229,6 @@ class WorkspaceLimits:
     clipped independently). Also what one ``read_process_output`` returns at
     most: the newest this-many of the characters not read yet."""
 
-    max_process_buffer_chars: int = 1_000_000
-    """Characters of output kept per background process, newest first, while
-    its output is open and for a minute after. Then only what the model has
-    not read is kept, up to ``max_shell_output_chars``."""
-
     max_grep_file_bytes: int = 5_000_000
     """Files larger than this are skipped by grep."""
 
@@ -245,6 +240,11 @@ class WorkspaceLimits:
 
     max_grep_matches: int = 100
     """Default cap on matches returned by ``grep``."""
+
+    max_process_buffer_chars: int = 1_000_000
+    """Characters of output kept per background process, newest first, until
+    a minute after it has ended and closed its output. From then on only what
+    the model has not read is kept, up to ``max_shell_output_chars``."""
 
 
 class ClippedList(list[_ItemT]):

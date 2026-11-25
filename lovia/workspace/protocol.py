@@ -208,8 +208,8 @@ class WorkspaceSession(Protocol):
         consuming nothing: a UI can follow a process next to the model.
 
         The whole output is there while the process runs, up to the session's
-        buffer, and for a minute after its output closes; then what the model
-        has not read.
+        buffer, and for a minute after it has ended and closed its output;
+        then what the model has not read.
         """
         ...
 

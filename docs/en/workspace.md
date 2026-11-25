@@ -244,7 +244,7 @@ Outputs are bounded at the tool layer by `WorkspaceLimits` (pass
 | `max_file_read_chars` | `50_000` | Characters one read returns (page with `start`/`end`) |
 | `max_file_read_bytes` | `10_000_000` | Bytes loaded from one file; a bigger one is read only up to this prefix |
 | `max_shell_output_chars` | `30_000` | Characters kept from each of a command's stdout and stderr (head + tail); also what one read of a background process returns |
-| `max_process_buffer_chars` | `1_000_000` | Characters of output held per background process while its output is open and for a minute after |
+| `max_process_buffer_chars` | `1_000_000` | Characters of output held per background process, until a minute after it has ended and closed its output |
 | `max_grep_file_bytes` | `5_000_000` | Files bigger than this are skipped by grep |
 | `max_grep_line_chars` | `400` | Characters of each matched line |
 | `max_grep_matches` | `100` | Matches one grep returns |
@@ -292,9 +292,10 @@ Semantics:
   last read, plus status (`running` / `exited` with code / `killed`).
   One read returns the newest `max_shell_output_chars` of it — older
   unread output is dropped and the drop is announced.
-- The buffer holds the newest `max_process_buffer_chars`. A minute after the
-  output closes it shrinks to what the model has not read, so memory follows
-  the processes that run, not the ones that ran.
+- The buffer holds the newest `max_process_buffer_chars`. A minute after
+  the process has ended and closed its output it shrinks to what the model
+  has not read, so memory follows the processes that run, not the ones that
+  ran.
 - Reads never turn into errors: polling an exited process reports its exit
   code and drains the remainder. An *unknown* id raises with the live ids
   listed in the message (there is no separate list tool).

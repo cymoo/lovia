@@ -1713,8 +1713,7 @@ async def test_close_is_not_held_by_escaped_stragglers(
         tasks.append(asyncio.create_task(session.run(command, timeout=60)))
         await _await_escape(pid_file, tasks[-1])
         # The child can be up before run() has noted the shell.
-        while len(session._procs) < len(tasks):
-            await asyncio.sleep(0.01)
+        await _until(lambda: len(session._procs) == len(tasks))
     loop = asyncio.get_running_loop()
     start = loop.time()
     await asyncio.wait_for(session.close(), 10)
@@ -2172,9 +2171,21 @@ async def test_peek_ends_with_the_output_not_the_process(tmp_path) -> None:
     await session.close()
 
 
+async def test_peek_ends_when_a_running_process_closes_its_output(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    start = await session.spawn("echo done; exec >/dev/null 2>&1; sleep 30")
+    await _until(lambda: session.background_processes()[0].output_closed)
+    chunk = await session.peek_process_output(start.process_id, limit=100)
+    assert (chunk.text, chunk.eof) == ("done\n", True)
+    (bp,) = session._bg.values()
+    # Still running, so still worth looking at: the buffer stays whole.
+    assert bp.status == "running" and bp.shrink is None
+    await session.close()
+
+
 async def test_a_burst_before_the_exit_is_all_there_to_page_through(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
-    start = await session.spawn("echo first; read_me=1; seq 1 60000")
+    start = await session.spawn("echo first; seq 1 60000")
     await _until(lambda: session.background_processes()[0].output_closed)
     text, after = "", 0
     while True:

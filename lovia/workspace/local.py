@@ -518,6 +518,9 @@ class _BackgroundProcess:
     # reaps the child. Always draining matters beyond bookkeeping: an
     # unread pipe fills up and blocks the process.
     reader: asyncio.Task[None] = field(init=False, repr=False)
+    # All the output is in ``buffer``. The reader finishes with the process,
+    # which may go on after closing its output.
+    drained: bool = False
     killed: bool = False
     # Whether a read/kill has delivered the exit to its caller. The per-turn
     # status reminder announces an exited process until this flips — sturdier
@@ -542,11 +545,10 @@ class _BackgroundProcess:
         if self.ended_at is None and self.proc.returncode is not None:
             self.ended_at = time.time()
 
-    def on_drained(self, reader: "asyncio.Task[None]") -> None:
-        if not reader.cancelled():  # cancelled: the session is closing
-            self.shrink = asyncio.get_running_loop().call_later(
-                _SHRINK_DELAY, self.buffer.keep_unread, self.read_chars
-            )
+    def shrink_later(self) -> None:
+        self.shrink = asyncio.get_running_loop().call_later(
+            _SHRINK_DELAY, self.buffer.keep_unread, self.read_chars
+        )
 
     def release(self) -> None:
         """Let go of the tasks and timers that run for this process."""
@@ -566,7 +568,7 @@ class _BackgroundProcess:
             started_at=self.started_at,
             ended_at=self.ended_at,
             output_chars=self.buffer.end,
-            output_closed=self.reader.done(),
+            output_closed=self.drained,
             last_line=self.buffer.last_line(),
         )
 
@@ -1688,7 +1690,6 @@ class LocalWorkspaceSession:
         bp.reader = asyncio.create_task(
             _drain_background(bp), name=f"lovia-bg-{process_id}"
         )
-        bp.reader.add_done_callback(bp.on_drained)
         self._bg[process_id] = bp
         # Same close() race as run(): registration may have happened after
         # close() snapshotted the registry — self-reap in that case.
@@ -1730,7 +1731,7 @@ class LocalWorkspaceSession:
             text=text,
             base=bp.buffer.base,
             next=next_,
-            eof=bp.reader.done() and next_ == bp.buffer.end,
+            eof=bp.drained and next_ == bp.buffer.end,
         )
 
     async def kill_process(self, process_id: str) -> ProcessOutput:
@@ -1826,9 +1827,11 @@ async def _drain_background(bp: _BackgroundProcess) -> None:
         raise
     except Exception as exc:  # noqa: BLE001 — a pipe error just ends the stream
         logger.debug("background %s: output pipe closed (%s)", bp.id, exc)
+    bp.drained = True
     with contextlib.suppress(Exception):
         await bp.proc.wait()
     bp.note_end()
+    bp.shrink_later()
 
 
 # How long to keep waiting on a shell's pipes once the shell itself is gone.

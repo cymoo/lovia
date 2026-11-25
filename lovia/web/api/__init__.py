@@ -81,6 +81,7 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
             # False only in the CLI's not-yet-configured state (no served
             # agents): the UI then shows the first-run setup instead of chat.
             configured=bool(deps.agents),
+            take_seconds=deps.take_seconds(),
             features={
                 "checkpointing": deps.store.checkpointer is not None,
                 "titles": deps.titles,

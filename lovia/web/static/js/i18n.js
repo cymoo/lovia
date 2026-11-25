@@ -671,7 +671,10 @@ const MESSAGES = {
     'voice.borrow': '沿用 {name} 的连接',
     'voice.custom': '自定义',
     'voice.model': '转写模型',
-    'voice.modelHint': '能转写语音的模型，例如 gpt-transcribe、whisper-large-v3-turbo',
+    'voice.modelHint': '能转写语音的模型，例如 gpt-transcribe、whisper-large-v3-turbo。DeepSeek 语音识别不分模型，留空即可',
+    'voice.address': '接口地址',
+    'voice.addressHint': 'API 根地址（https://api.openai.com/v1）或完整的转写接口地址（https://api.deepseek.com/v1/tools/asr），都可以',
+    'voice.problem.model_missing': '这个接口需要指定转写模型，填好之前语音输入处于停用状态。',
     'voice.language': '语言',
     'voice.languageAuto': '自动识别',
     'voice.languageHint': '一句话里混着说几种语言时请选主要的那种：自动识别可能把内容翻译掉',
@@ -1587,7 +1590,12 @@ const EN = {
   'voice.borrow': 'Use {name}’s connection',
   'voice.custom': 'Custom',
   'voice.model': 'Transcription model',
-  'voice.modelHint': 'A model that transcribes speech, such as gpt-transcribe or whisper-large-v3-turbo',
+  'voice.modelHint':
+    'A model that transcribes speech, such as gpt-transcribe or whisper-large-v3-turbo. DeepSeek’s speech recognition has only one: leave it empty',
+  'voice.address': 'Address',
+  'voice.addressHint':
+    'An API root (https://api.openai.com/v1) or the transcription endpoint’s full address (https://api.deepseek.com/v1/tools/asr): either works',
+  'voice.problem.model_missing': 'This endpoint needs a transcription model: voice input is off until one is named.',
   'voice.language': 'Language',
   'voice.languageAuto': 'Detect',
   'voice.languageHint':

@@ -858,6 +858,12 @@ class RouterDeps:
             return self.config_runtime.transcriber()
         return self.transcribe
 
+    def take_seconds(self) -> int | None:
+        """The longest take the configured service accepts, where known."""
+        if self.config_runtime is not None:
+            return self.config_runtime.take_seconds()
+        return None
+
     async def suggest_followups(self, request: FollowupRequest) -> list[str]:
         """Run the configured suggester; ``[]`` when off or on any failure.
 

@@ -24,6 +24,7 @@ from ...providers.anthropic import _DEFAULT_VERSION as _ANTHROPIC_VERSION
 from ...providers.anthropic import _OFFICIAL_HOSTS as _ANTHROPIC_HOSTS
 from ...providers.openai_chat import _DEFAULT_BASE_URL as _OPENAI_BASE_URL
 from ...providers.openai_chat import _OFFICIAL_HOSTS as _OPENAI_HOSTS
+from ..transcribe import OPENAI_PATH, transcription_endpoint
 
 
 @dataclass(frozen=True)
@@ -323,11 +324,12 @@ class VoiceConfig(BaseModel):
     """Voice input: where a recorded take goes to become text.
 
     Not a model profile: a transcription model can't chat, so it must not
-    show in the chat's model picker. The endpoint is OpenAI-compatible
-    (``{base_url}/audio/transcriptions``) and comes from a model profile's
-    connection (``connection``, its id) or from ``base_url`` + ``api_key``
-    here. Off until a ``model`` and an endpoint are both set — see
-    :meth:`WebConfig.voice_endpoint`.
+    show in the chat's model picker. The endpoint comes from a model
+    profile's connection (``connection``, its id) or from ``base_url`` +
+    ``api_key`` here; ``base_url`` is an API root or the endpoint's full
+    address (:func:`~lovia.web.transcribe.transcription_endpoint`). Off
+    until an endpoint is set, and a ``model`` where the endpoint needs one
+    — see :meth:`WebConfig.voice_endpoint`.
     """
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
@@ -361,7 +363,7 @@ class VoiceConfig(BaseModel):
         return self
 
 
-VoiceProblem = Literal["connection_missing", "connection_not_openai"]
+VoiceProblem = Literal["connection_missing", "connection_not_openai", "model_missing"]
 
 
 class WebConfig(BaseModel):
@@ -422,34 +424,47 @@ class WebConfig(BaseModel):
         return self.profile(self.roles.aux)
 
     def voice_problem(self) -> VoiceProblem | None:
-        """Why ``voice.connection`` leads nowhere, for Settings to say.
+        """Why voice input is set up and still off, for Settings to say.
 
         Deliberately not a load error, unlike a wrong ``roles`` reference:
         deleting or re-pointing a model must not be refused over, or have
         to know about, a setting that only borrows its endpoint.
         """
-        ref = self.voice.connection
-        if ref is None:
-            return None
-        profile = self.profile(ref)
-        if profile is None:
-            return "connection_missing"
-        return "connection_not_openai" if profile.flavor != "openai" else None
-
-    def voice_endpoint(self) -> tuple[str, str | None] | None:
-        """``(base_url, api_key)`` voice input transcribes at; None: it is off."""
         voice = self.voice
-        if voice.model is None:
-            return None
+        if voice.connection is not None:
+            profile = self.profile(voice.connection)
+            if profile is None:
+                return "connection_missing"
+            if profile.flavor != "openai":
+                return "connection_not_openai"
+        target = self._voice_target()
+        if target is not None and voice.model is None:
+            # The OpenAI route refuses a take that names no model; a
+            # service with one route of its own has only the one.
+            if target[0].endswith(OPENAI_PATH):
+                return "model_missing"
+        return None
+
+    def _voice_target(self) -> tuple[str, str | None, int | None] | None:
+        voice = self.voice
         if voice.connection is not None:
             profile = self.profile(voice.connection)
             if profile is None or profile.flavor != "openai":
                 return None
             conn = Connection.from_profile(profile)
-            return (conn.base_url or OPENAI_FLAVOR.default_base_url, conn.api_key)
+            url, limit = transcription_endpoint(
+                conn.base_url or OPENAI_FLAVOR.default_base_url, root=True
+            )
+            return (url, conn.api_key, limit)
         if voice.base_url is not None:
-            return (voice.base_url, voice.api_key)
+            url, limit = transcription_endpoint(voice.base_url)
+            return (url, voice.api_key, limit)
         return None
+
+    def voice_endpoint(self) -> tuple[str, str | None, int | None] | None:
+        """``(url, api_key, longest take in seconds)`` voice input
+        transcribes at; None: it is off."""
+        return None if self.voice_problem() else self._voice_target()
 
 
 @dataclass

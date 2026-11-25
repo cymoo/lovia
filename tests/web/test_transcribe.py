@@ -28,6 +28,7 @@ from lovia.web.transcribe import (  # noqa: E402
     TranscriptionError,
     TranscriptionRequest,
     openai_transcriber,
+    transcription_endpoint,
 )
 
 from ..scripted_provider import ScriptedProvider  # noqa: E402
@@ -448,7 +449,7 @@ def test_a_connection_lends_its_endpoint_and_key(
     res = client.post("/api/transcribe", content=TAKE, headers=WAV)
     assert res.status_code == 200, res.text
     assert made[-1] == {
-        "base_url": "https://gw.example/v1",
+        "base_url": "https://gw.example/v1/audio/transcriptions",
         "api_key": "sk-chat-1234567890",
         "model": "gpt-transcribe",
         "language": "zh",
@@ -476,9 +477,91 @@ def test_a_connection_with_no_base_url_is_the_official_endpoint(served: Any) -> 
     profile = _add_model(client, base_url=None)
     _voice(client, connection=profile, model="gpt-transcribe")
     assert runtime.config.voice_endpoint() == (
-        "https://api.openai.com/v1",
+        "https://api.openai.com/v1/audio/transcriptions",
         "sk-chat-1234567890",
+        None,
     )
+
+
+@pytest.mark.parametrize(
+    "typed, url",
+    [
+        # An API root: no path, or one ending in a version.
+        ("https://stt.example", "https://stt.example/audio/transcriptions"),
+        ("https://stt.example/v1/", "https://stt.example/v1/audio/transcriptions"),
+        (
+            "https://open.example/api/paas/v4",
+            "https://open.example/api/paas/v4/audio/transcriptions",
+        ),
+        # Anything else is the endpoint itself.
+        (
+            "https://stt.example/v1/audio/transcriptions",
+            "https://stt.example/v1/audio/transcriptions",
+        ),
+        ("https://stt.example/recognize", "https://stt.example/recognize"),
+        (
+            "https://api.deepseek.com/v1/tools/asr",
+            "https://api.deepseek.com/v1/tools/asr",
+        ),
+        # A known service's root leads to its own route.
+        ("https://api.deepseek.com", "https://api.deepseek.com/v1/tools/asr"),
+        ("https://API.DeepSeek.com/v1", "https://API.DeepSeek.com/v1/tools/asr"),
+    ],
+)
+def test_one_address_field_takes_a_root_or_the_endpoint(typed: str, url: str) -> None:
+    assert transcription_endpoint(typed)[0] == url
+
+
+def test_a_connection_is_a_root_whatever_it_looks_like() -> None:
+    # A chat model's base URL need not end in a version.
+    assert transcription_endpoint("https://gw.example/openai", root=True) == (
+        "https://gw.example/openai/audio/transcriptions",
+        None,
+    )
+    assert transcription_endpoint("https://api.deepseek.com/beta", root=True) == (
+        "https://api.deepseek.com/v1/tools/asr",
+        120,
+    )
+
+
+async def test_a_take_names_no_model_where_none_was_given() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["body"] = request.content
+        return httpx.Response(200, json={"text": "ok", "duration_ms": 1})
+
+    fn = _engine(handler, base_url="https://api.deepseek.com/v1/tools/asr", model=None)
+    assert await fn(TranscriptionRequest(audio=TAKE)) == "ok"
+    assert seen["url"] == "https://api.deepseek.com/v1/tools/asr"
+    assert b'name="model"' not in seen["body"]
+
+
+def test_a_borrowed_deepseek_connection_needs_nothing_else(served: Any) -> None:
+    client, runtime = served
+    profile = _add_model(
+        client, model="deepseek-chat", base_url="https://api.deepseek.com"
+    )
+    voice = _voice(client, connection=profile)
+    assert voice["enabled"] and voice["problem"] is None and _on(client)
+    assert runtime.config.voice_endpoint() == (
+        "https://api.deepseek.com/v1/tools/asr",
+        "sk-chat-1234567890",
+        120,
+    )
+    # The page stops a take where the service would refuse it.
+    assert client.get("/api/info").json()["take_seconds"] == 120
+
+
+def test_the_openai_route_is_off_until_a_model_is_named(served: Any) -> None:
+    client, _ = served
+    voice = _voice(client, base_url="https://stt.example/v1")
+    assert not voice["enabled"] and voice["problem"] == "model_missing"
+    assert not _on(client)
+    voice = _voice(client, model="whisper-1")
+    assert voice["enabled"] and voice["problem"] is None
+    assert client.get("/api/info").json()["take_seconds"] is None
 
 
 def test_a_connection_that_leads_nowhere_turns_voice_off_quietly(

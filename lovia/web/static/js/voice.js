@@ -27,7 +27,10 @@ const HOLD_MS = 400;
 // A slip of the finger, not a take.
 const MIN_SECONDS = 0.3;
 const MAX_SECONDS = 300;
-const WARN_SECONDS = 270;
+// The service's own limit where the server knows one (enable()), else ours.
+let maxSeconds = MAX_SECONDS;
+// The clock counts down over the last stretch.
+const WARN_SECONDS = 30;
 // How long a cancelled take can still be brought back.
 const RESTORE_MS = 5000;
 const TICK_MS = 100;
@@ -210,12 +213,12 @@ function tick() {
   const take = live;
   if (!ui || take?.phase !== 'recording' || !take.capture) return;
   const seconds = (performance.now() - take.capture.startedAt) / 1000;
-  if (seconds >= MAX_SECONDS) {
+  if (seconds >= maxSeconds) {
     void finish(false); // into the composer, never sent: nobody chose to
     return;
   }
-  const warn = seconds >= WARN_SECONDS;
-  ui.clock.textContent = warn ? `-${clockText(MAX_SECONDS - seconds + 1)}` : clockText(seconds);
+  const warn = seconds >= maxSeconds - WARN_SECONDS;
+  ui.clock.textContent = warn ? `-${clockText(maxSeconds - seconds + 1)}` : clockText(seconds);
   ui.clock.classList.toggle('lv-voice-warn', warn);
   const level = take.capture.level();
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -459,8 +462,14 @@ function listen(target, type, fn, opts) {
   teardown.push(() => target.removeEventListener(type, fn, opts));
 }
 
-/** Put the microphone in the composer. Safe to call again. */
-export function enable() {
+/**
+ * Put the microphone in the composer. Safe to call again, which is also how
+ * a changed limit arrives. `seconds`: the longest take the service accepts.
+ */
+export function enable(seconds) {
+  // A little short of the service's limit: the clock here and the length
+  // of the file it gets don't agree to the frame.
+  maxSeconds = Math.min(seconds ? seconds - 3 : MAX_SECONDS, MAX_SECONDS);
   if (ui) return;
   ui = build();
   if (!ui) return;

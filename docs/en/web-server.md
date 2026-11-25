@@ -1040,7 +1040,10 @@ create_app(agent, transcribe=openai_transcriber(
 ```
 
 `openai_transcriber` works with any service that serves an OpenAI-compatible
-`/audio/transcriptions`. Set `language` when people mix languages in one
+`/audio/transcriptions`, and with one that takes the same upload elsewhere:
+give `base_url` the endpoint's full address
+(`https://api.deepseek.com/v1/tools/asr`) and leave `model` out if the service
+has only one. Set `language` when people mix languages in one
 sentence: without it, some Whisper models translate instead of transcribing.
 
 For another engine, pass your own function. It receives a

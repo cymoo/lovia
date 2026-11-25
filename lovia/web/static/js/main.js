@@ -210,11 +210,11 @@ function isTyping(target) {
 let _voiceOn = false;
 async function syncVoice(info) {
   const on = !!info?.features?.transcription;
-  if (on === _voiceOn) return;
+  if (!on && !_voiceOn) return;
   _voiceOn = on;
   const voice = await import('./voice.js');
   // Asked again: two answers may have raced, and the last one stands.
-  if (_voiceOn) voice.enable();
+  if (_voiceOn) voice.enable(info.take_seconds);
   else voice.disable();
 }
 

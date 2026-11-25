@@ -316,6 +316,9 @@ class VoiceConfig(BaseModel):
 - **沿用连接时，文件里没有密钥就用 `OPENAI_API_KEY`**，和聊天的 provider 一致（评审发现）。
 - **密钥里有请求头放不下的字符（换行、弯引号）时，发请求之前就拒绝**：HTTP 库的报错会把密钥原样带出来（评审发现）。
 - **麦克风按钮没有 `data-part`**：那是公开契约，实验期不加。
+- **一个地址栏认两种写法**（DeepSeek 的 `/v1/tools/asr` 不在 OpenAI 路径上）：没有路径或以版本号结尾的是 API 根，其余原样使用；沿用的连接一律当根。已知服务的根地址直接映射到它自己的路径和录音上限（`transcribe.py` 的 `_SERVICES`），所以沿用 DeepSeek 连接不用再填任何东西。不靠试探：各家对未知路径的回法不一（DeepSeek 回 550）。
+- **`model` 可以留空**：只有落在 `/audio/transcriptions` 上又没填模型时才算没配好（`model_missing`）。
+- **`/api/info` 多了 `take_seconds`**：页面在服务的上限处停止录音，而不是录满五分钟再被拒绝。
 - **未验证**：真实麦克风、真实转写服务、Safari、Edge 的 Ctrl+M、5 分钟录音、回声消除能否挡住提示音。自动化验证用的是合成音源和假转写服务（这个环境里 Chromium 的假麦克风不响应）。
 
 已做的小实验：用合成音源跑"录音 → WAV"，Chromium 145（webm/opus）和 WebKit 26（mp4/aac）的 2 秒录音转换各约 15 ms，`execCommand` 插入后可撤销。真实麦克风、转写接口和 5 分钟录音都没测。

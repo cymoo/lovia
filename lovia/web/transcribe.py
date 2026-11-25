@@ -7,7 +7,8 @@ reaches the browser.
 
 ``create_app(transcribe=...)`` takes any :data:`TranscribeFn`.
 :func:`openai_transcriber` is the built-in one, for an OpenAI-compatible
-``/audio/transcriptions`` endpoint::
+``/audio/transcriptions`` endpoint, or any that takes the same upload (a
+``file`` form field, answered with ``{"text": ...}``)::
 
     from lovia.web import create_app
     from lovia.web.transcribe import openai_transcriber
@@ -21,8 +22,10 @@ reaches the browser.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -34,6 +37,7 @@ __all__ = [
     "TranscriptionError",
     "TranscriptionRequest",
     "openai_transcriber",
+    "transcription_endpoint",
 ]
 
 # Upstream's own words, shortened: enough to act on, never a page of HTML.
@@ -56,6 +60,37 @@ class TranscriptionError(LoviaError):
     """The engine refused the take, or could not be reached."""
 
 
+OPENAI_PATH = "/audio/transcriptions"
+# Services whose transcription is not at the OpenAI path of their API root:
+# host -> (path, longest take in seconds).
+_SERVICES: dict[str, tuple[str, int]] = {
+    "api.deepseek.com": ("/v1/tools/asr", 120),
+}
+# The last path segment of an API root: none, or a version (``v1``, ``v4``).
+_ROOT = re.compile(r"(^|/)v\d+\w*$")
+
+
+def transcription_endpoint(
+    base_url: str, *, root: bool = False
+) -> tuple[str, int | None]:
+    """``(url, longest take in seconds or None)`` for a typed address.
+
+    One field takes both spellings: an API root (no path, or one ending in
+    a version) gets the transcription path of its service, anything else is
+    the endpoint itself. ``root=True`` says it is a root whatever it looks
+    like — a chat model's connection always is.
+    """
+    base = base_url.strip().rstrip("/")
+    parts = urlsplit(base)
+    service = _SERVICES.get((parts.hostname or "").lower())
+    limit = service[1] if service else None
+    if not (root or _ROOT.search(parts.path) or not parts.path):
+        return base, limit
+    if service:
+        return f"{parts.scheme}://{parts.netloc}{service[0]}", limit
+    return base + OPENAI_PATH, limit
+
+
 def _detail(response: httpx.Response) -> str:
     """Why upstream refused: its error message if it sent one, else the body."""
     try:
@@ -69,7 +104,7 @@ def _detail(response: httpx.Response) -> str:
 def openai_transcriber(
     *,
     base_url: str,
-    model: str,
+    model: str | None = None,
     api_key: str | None = None,
     language: str | None = None,
     timeout: float = 60.0,
@@ -77,17 +112,20 @@ def openai_transcriber(
 ) -> TranscribeFn:
     """A :data:`TranscribeFn` for an OpenAI-compatible endpoint.
 
-    ``base_url`` is the API root (``.../v1``); the take goes to
-    ``{base_url}/audio/transcriptions``. ``language`` is an ISO 639-1 code,
-    or ``None`` to let the model detect it. TLS and proxy settings follow
+    ``base_url`` is the API root (``.../v1``: the take goes to
+    ``{base_url}/audio/transcriptions``) or the endpoint's full address
+    (``https://api.deepseek.com/v1/tools/asr``), told apart by
+    :func:`transcription_endpoint`. ``model`` may be left out for a service
+    that has only one. ``language`` is an ISO 639-1 code, or ``None`` to
+    let the model detect it. TLS and proxy settings follow
     the providers' (``LOVIA_HTTP_*``, ``LOVIA_PROVIDER_TRUST_ENV``). One
     attempt, no retry: the person is waiting, and can press retry.
     """
-    url = f"{base_url.rstrip('/')}/audio/transcriptions"
-    fields: dict[str, str] = {"model": model}
+    url, _ = transcription_endpoint(base_url)
+    fields: dict[str, str] = {"model": model} if model else {}
     if language:
         # gpt-transcribe replaced ``language`` with a list, and refuses both.
-        key = "languages[]" if "gpt-transcribe" in model else "language"
+        key = "languages[]" if "gpt-transcribe" in (model or "") else "language"
         fields[key] = language
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
@@ -131,9 +169,10 @@ def openai_transcriber(
                 f"{redact(str(exc)) or type(exc).__name__}"
             ) from exc
         if not response.is_success:
+            said = redact(_detail(response))
             raise TranscriptionError(
-                f"the transcription service answered HTTP {response.status_code}: "
-                f"{redact(_detail(response))}"
+                f"the transcription service answered HTTP {response.status_code}"
+                + (f": {said}" if said else "")
             )
         try:
             text = response.json()["text"]

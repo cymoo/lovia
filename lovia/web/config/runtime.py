@@ -286,20 +286,22 @@ class ConfigRuntime:
     def transcriber(self) -> TranscribeFn | None:
         """Voice input's transcriber, as configured now; None while it is off."""
         endpoint = self.config.voice_endpoint()
-        voice = self.config.voice
-        if endpoint is None or voice.model is None:
+        if endpoint is None:
             return None
-        base_url, api_key = endpoint
+        url, api_key, _ = endpoint
+        voice = self.config.voice
         if voice.connection is not None:
             # A borrowed connection brings the key its chats run on: one left
             # out of the file is the provider's own environment lookup.
             api_key = api_key or os.environ.get("OPENAI_API_KEY")
         return openai_transcriber(
-            base_url=base_url,
-            api_key=api_key,
-            model=voice.model,
-            language=voice.language,
+            base_url=url, api_key=api_key, model=voice.model, language=voice.language
         )
+
+    def take_seconds(self) -> int | None:
+        """The longest take voice input's service accepts, where known."""
+        endpoint = self.config.voice_endpoint()
+        return endpoint[2] if endpoint else None
 
     # ---------------------------------------------------------- applying -
 

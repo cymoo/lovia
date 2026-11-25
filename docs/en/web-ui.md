@@ -905,16 +905,21 @@ While a take records, the composer's own send key means ✓, never "send": text
 in the composer can be undone, a sent message cannot. The composer stays
 typeable throughout, and Stop stays where it is during a run.
 
-A take runs up to five minutes and is transcribed as a whole when it ends.
+A take runs up to five minutes — less where the service's own limit is
+shorter, like DeepSeek's two — and is transcribed as a whole when it ends.
 Switching to another chat ends it; its text is added to the draft of the chat
 it began in. If the microphone goes away mid-take, what was recorded is
 transcribed.
 
 In Settings, **Connection** borrows the endpoint and key of a model you
-already configured (OpenAI-compatible ones are listed), or takes a base URL
-and key of its own. Then name a transcription model — `gpt-transcribe`,
-`whisper-large-v3-turbo` — and, if you mix languages in one sentence, the main
-language. **Try a sentence** checks the microphone, key, model and language
+already configured (OpenAI-compatible ones are listed), or takes an address
+and key of its own. The address is an API root (`https://api.openai.com/v1`)
+or the transcription endpoint's full address
+(`https://api.deepseek.com/v1/tools/asr`): one with no path, or a path ending
+in a version, is a root, and anything else is used as it is. Then name a
+transcription model — `gpt-transcribe`, `whisper-large-v3-turbo` — and, if you
+mix languages in one sentence, the main language. DeepSeek is the shortest
+setup: borrow its chat connection and leave the model empty. **Try a sentence** checks the microphone, key, model and language
 together.
 
 Good to know:

@@ -68,7 +68,7 @@ class _Watch:
     # Added to the session's times to make them this machine's.
     skew: float | None = None
     # Whether to keep looking; set anew by a mark while a look is under way.
-    active: bool = True
+    active: bool = False
     closed: bool = False
     # Its chat was deleted: a look under way must leave no file behind.
     discarded: bool = False
@@ -306,15 +306,13 @@ class ProcessWatcher:
                 statuses = await asyncio.wait_for(self._statuses(watch), _CLOSE_TIMEOUT)
             except Exception as exc:  # noqa: BLE001 — record what is known
                 log.debug("listing processes of %s failed: %s", session_id, exc)
+        left = [s for s in statuses if s.process_id not in watch.settled]
         await asyncio.gather(
-            *(
-                self._wind_up_one(session_id, watch, status, reason)
-                for status in statuses
-                if status.process_id not in watch.settled
-            )
+            *(self._wind_up_one(session_id, watch, s, reason) for s in left)
         )
         watch.known = {}
-        self._announce(session_id, watch)
+        if left:
+            self._announce(session_id, watch)
 
     async def _wind_up_one(
         self, session_id: str, watch: _Watch, status: ProcessStatus, reason: EndedBy

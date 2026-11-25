@@ -347,6 +347,12 @@ async def test_a_dropped_connection_leaves_the_record_without_output(tmp_path) -
             record, body = w.record(live)
             assert (record.status, record.ended_by, body) == ("killed", "lost", "")
             assert w.events[-1] == {"session_id": CHAT, "running": 0}
+            # Asking again, as a page told of the change does, changes nothing.
+            heard = len(w.events)
+            for _ in range(3):
+                assert len(await w.deps.processes.infos(CHAT)) == 2
+                await asyncio.sleep(0.1)
+            assert len(w.events) == heard
     finally:
         await host.aclose()
 

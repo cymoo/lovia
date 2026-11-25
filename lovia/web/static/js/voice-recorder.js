@@ -149,11 +149,17 @@ export async function startCapture({ lost = () => {} } = {}) {
   /** @type {Float32Array<ArrayBuffer> | null} */
   let frame = null;
   if (ctx) {
-    ctx.resume?.().catch(() => {});
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 1024;
-    frame = new Float32Array(analyser.fftSize);
-    ctx.createMediaStreamSource(stream).connect(analyser);
+    try {
+      ctx.resume?.().catch(() => {});
+      const node = ctx.createAnalyser();
+      node.fftSize = 1024;
+      ctx.createMediaStreamSource(stream).connect(node);
+      analyser = node;
+      frame = new Float32Array(node.fftSize);
+    } catch {
+      // No meter (Firefox refuses a source whose sample rate differs from
+      // the output's): the take records all the same.
+    }
   }
 
   let recorder;

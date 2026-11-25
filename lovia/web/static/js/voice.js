@@ -53,6 +53,8 @@ let live = null; // asking or recording
 const kept = new Map(); // working, failed or dropped, by chat
 /** The press that began the live take, while it is still down. @type {{ at: number, by: 'key' | 'pointer' } | null} */
 let press = null;
+/** When the pointer that began a take last came up (performance.now()). */
+let pressEnded = -Infinity;
 /** @type {ReturnType<typeof setInterval> | undefined} */
 let ticker;
 /** @type {number[]} */
@@ -109,8 +111,22 @@ function build() {
   strip.append(cancelBtn, wave, label, clock);
   bar.insertBefore(strip, end);
 
-  const done = button('lv-voice-btn lv-voice-done', 'check', t('voice.done'), () => void finish(false));
-  const send = button('lv-btn-send lv-voice-send', 'arrow-up', t('voice.send'), () => void finish(true));
+  // ✓ appears where the microphone was. On touch, the click of the very tap
+  // that began the take is hit-tested when the finger lifts — and lands here.
+  // A click from the keyboard (no pointer type) is always meant.
+  const meant = (e) => !e.pointerType || performance.now() - pressEnded > 350;
+  const done = button('lv-voice-btn lv-voice-done', 'check', t('voice.done'), (e) => {
+    if (meant(e)) void finish(false);
+  });
+  const send = button('lv-btn-send lv-voice-send', 'arrow-up', t('voice.send'), (e) => {
+    if (meant(e)) void finish(true);
+  });
+  for (const b of [done, send]) {
+    // Enter held down on the microphone repeats onto ✓, which took the focus.
+    b.addEventListener('keydown', (e) => {
+      if (e.repeat) e.preventDefault();
+    });
+  }
   const text = (cls, key, onClick) => {
     const b = document.createElement('button');
     b.type = 'button';
@@ -276,6 +292,7 @@ function release(by) {
   if (press?.by !== by) return;
   const held = performance.now() - press.at;
   press = null;
+  if (by === 'pointer') pressEnded = performance.now();
   // Let go while the browser still asks: that was a tap, and it records on.
   if (held >= HOLD_MS && live?.phase === 'recording') void finish(false);
 }
@@ -461,6 +478,13 @@ export function enable() {
     store.on('new-chat', leave),
     store.on('reset-chat-view', leave),
     store.on('session-deleted', (id) => {
+      // Still recording in it: there is no chat left for the text to go to.
+      if (live?.chat === id) {
+        live.capture?.discard();
+        live = press = null;
+        clearInterval(ticker);
+        render();
+      }
       const take = kept.get(id);
       if (take) {
         take.abort?.abort();

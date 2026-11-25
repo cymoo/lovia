@@ -20,6 +20,7 @@ from ..errors import WebError
 from ..schemas import AgentInfo, SkillInfo
 from .deps import RouterDeps
 from .memory import memory_plugin, splits_by_project
+from .routing import GuardedRoute
 from ..workspaces import files_config
 
 
@@ -74,7 +75,7 @@ def agent_info(
 
 
 def build_agents_router(deps: RouterDeps) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=GuardedRoute)
 
     def info(name: str, agent: Agent[Any]) -> AgentInfo:
         out = agent_info(

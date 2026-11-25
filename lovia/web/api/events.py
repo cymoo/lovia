@@ -32,10 +32,11 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ..supervisor import _Overflow
 from .deps import RouterDeps
+from .routing import GuardedRoute
 
 
 def build_events_router(deps: RouterDeps) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=GuardedRoute)
 
     @router.get("/api/events")
     async def events_stream() -> EventSourceResponse:

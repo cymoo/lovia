@@ -36,6 +36,7 @@ from ..run_deps import chat_project
 from ..schemas import MemoryDreamResult, MemoryNotes, MemoryUpdate
 from ..workspaces import ChatBinding
 from .deps import RouterDeps
+from .routing import GuardedRoute
 
 Layer = Literal["user", "project"]
 
@@ -62,7 +63,7 @@ class _Layer:
 
 
 def build_memory_router(deps: RouterDeps) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=GuardedRoute)
 
     async def target(
         agent: str | None = Query(None),

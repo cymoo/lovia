@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from typing import Any
 
 try:
     from fastapi import APIRouter, File, Query, Request, UploadFile
     from fastapi.responses import Response
+    from starlette.types import Message
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
 
@@ -35,13 +38,45 @@ from ...workspace.workspace import WorkspaceSessionBinding
 from ..schemas import UploadedFile
 from ..workspaces import files_config
 from .deps import RouterDeps
+from .routing import GuardedRoute
 from .workspace import serve_local
 
 _NO_CAP = 1 << 62
+# What a form may add to its file: boundaries and part headers.
+_FORM_OVERHEAD = 1 << 20
+
+
+class _CappedRoute(GuardedRoute):
+    """Refuses a body past the upload cap as it arrives, whoever reads it: the
+    form parser spools every part to disk, and has no limit on a file's size."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handle = super().get_route_handler()
+
+        async def capped(request: Request) -> Response:
+            left = max_upload_bytes() + _FORM_OVERHEAD
+
+            async def receive() -> Message:
+                nonlocal left
+                message = await request.receive()
+                left -= len(message.get("body", b""))
+                if left < 0:
+                    raise WebError(413, "file_too_large", "file too large")
+                return message
+
+            wrapped = Request(request.scope, receive)
+            try:
+                return await handle(wrapped)
+            finally:
+                # A form the guard read, then refused: FastAPI closes only
+                # the one its endpoint gets.
+                await wrapped.close()
+
+        return capped
 
 
 def build_attachments_router(deps: RouterDeps) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=_CappedRoute)
 
     async def folder_of(session_id: str) -> Path:
         folder = await deps.store.attachment_folder(session_id)
@@ -68,10 +103,10 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
         agent without a workspace has no file tools to read with: it takes
         images only, which its model sees inline. The extension is checked
         against an allowlist (``LOVIA_UPLOAD_ALLOWED_EXT``) and the size
-        against a cap (``LOVIA_MAX_UPLOAD_MB``) enforced while reading, so a
-        disallowed or huge upload is rejected without exhausting memory. The
-        bytes are written at a collision-free name, returned for the message
-        to name.
+        against a cap (``LOVIA_MAX_UPLOAD_MB``) enforced while the body
+        arrives, so a huge upload exhausts neither disk nor memory. The bytes
+        are written at a collision-free name, returned for the message to
+        name.
         """
         meta = await deps.store.get(session_id)
         picked = deps.pick(deps.agent_of(meta) if meta else agent)

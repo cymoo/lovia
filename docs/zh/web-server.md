@@ -898,12 +898,14 @@ async def my_auth(request: Request) -> None:
 serve(create_app(agent, auth=my_auth), host="0.0.0.0")
 ```
 
-它保护的范围和 token 完全相同，由此带来三点影响：
+它保护的范围和 token 完全相同，由此带来四点影响：
 
 - **内置 UI 需要 cookie。** `EventSource`、`<img>` 预览和下载链接都无法携带自定义请求头，
   只读取 `Authorization` 的依赖会把它们挡在外面，因此还要接受你的会话 cookie。
 - **自己添加的路由需要自己保护。** 挂载时加上 `dependencies=[Depends(my_auth)]`。
   UI 页面和 `/api/docs` 仍然公开；如需保护整个站点，请使用中间件或反向代理。
+- **它在读取请求体之前运行**，被拒绝的请求不会读取请求体。依赖需要请求体时（例如验签），
+  请使用 `await request.body()`，不要用 `request.stream()` 或 `Body()` 参数。
 - **跨域前端使用 cookie 认证时**，需要允许携带凭据的 CORS，而 `cors_origins` 不会开启这一项
   （见下文）。
 

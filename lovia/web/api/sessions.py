@@ -54,6 +54,7 @@ from ..titles import provisional_title
 from ..waiting import RESUMABLE, find_waiting
 from ..workspaces import ChatBinding
 from .deps import RouterDeps
+from .routing import GuardedRoute
 from .serialization import (
     Run,
     export_md,
@@ -161,7 +162,7 @@ async def _session_view(
 
 
 def build_sessions_router(deps: RouterDeps) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=GuardedRoute)
     store = deps.store
     session = deps.session
 

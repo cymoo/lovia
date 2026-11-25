@@ -76,6 +76,7 @@ from ..schemas import (
 )
 from ..workspaces import ChatBinding, WorkspaceRef, files_config, open_view
 from .deps import RouterDeps
+from .routing import GuardedRoute
 
 FilesConfig = LocalWorkspace | RemoteWorkspace
 
@@ -263,7 +264,7 @@ def serve_local(
 
 
 def build_workspace_router(deps: RouterDeps) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=GuardedRoute)
 
     async def require_cfg(
         agent_name: str | None, session: str | None = None, root: str | None = None

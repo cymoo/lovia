@@ -31,6 +31,7 @@ from .chat import build_chat_router
 from .deps import RouterDeps
 from .events import build_events_router
 from .memory import build_memory_router, memory_plugin
+from .routing import GuardedRoute
 from .schedules import build_schedules_router
 from .sessions import build_sessions_router
 from ..workspaces import files_config
@@ -67,7 +68,7 @@ def _workspace_modes(deps: RouterDeps) -> WorkspaceModesInfo | None:
 
 def build_api_router(deps: RouterDeps) -> APIRouter:
     """Assemble the complete JSON + SSE API (no HTML UI)."""
-    router = APIRouter()
+    router = APIRouter(route_class=GuardedRoute)
 
     @router.get("/api/info", response_model=ServerInfo)
     async def info() -> ServerInfo:

@@ -37,6 +37,7 @@ from ..schemas import (
 )
 from ..store import RunRow, ScheduleRow
 from .deps import RouterDeps
+from .routing import GuardedRoute
 from .serialization import run_record
 
 _PREVIEW_FIRES = 3
@@ -113,7 +114,7 @@ def _name(value: str | None) -> str | None:
 
 
 def build_schedules_router(deps: RouterDeps) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=GuardedRoute)
     store = deps.store
     # Fire-now shares the polling loop's machinery (inject/skip/defer rules)
     # without needing that loop to run — this instance is never start()ed.

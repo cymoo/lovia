@@ -2,15 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
+import re
+from collections.abc import AsyncIterator
+from pathlib import Path as FilePath
+
 import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi import HTTPException, Request  # noqa: E402
+from fastapi import (  # noqa: E402
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Path,
+    Request,
+    Response,
+)
+from fastapi.routing import APIRoute  # noqa: E402
+from fastapi.security import HTTPBearer  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent  # noqa: E402
-from lovia.web import create_app  # noqa: E402
+from lovia.web import RouterDeps, build_api_router, create_app  # noqa: E402
+from lovia.web.default import default_app  # noqa: E402
 from lovia.web.auth import TOKEN_COOKIE, generate_token, is_loopback  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -109,6 +126,119 @@ def test_custom_auth_dependency() -> None:
     c = _client(auth=deny_unless_header)
     assert c.get("/api/agents").status_code == 401
     assert c.get("/api/agents", headers={"x-magic": "yes"}).status_code == 200
+
+
+# ------------------------------------------------- guard before the body -
+
+
+async def _statuses_unread(app: FastAPI) -> dict[str, int]:
+    """Each API route's answer to a request whose body must not be read."""
+
+    async def receive() -> dict[str, object]:
+        raise AssertionError("the body was read")
+
+    async def status(route: APIRoute) -> int:
+        sent: list[dict] = []
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        path = re.sub(r"{[^}]+}", "x", route.path)
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": min(route.methods),
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 1),
+            "server": ("127.0.0.1", 80),
+        }
+        await app(scope, receive, send)  # type: ignore[arg-type]
+        return sent[0]["status"]
+
+    routes = [
+        r
+        for r in app.routes
+        if isinstance(r, APIRoute) and r.path.startswith("/api/") and r.body_field
+    ]
+    return {f"{min(r.methods)} {r.path}": await status(r) for r in routes}
+
+
+async def _raises() -> None:
+    raise HTTPException(401)
+
+
+async def _validates(x_key: str = Header()) -> None:
+    pass
+
+
+@pytest.mark.parametrize(
+    "guard, refusal",
+    [({"token": TOKEN}, 401), ({"auth": _raises}, 401), ({"auth": _validates}, 422)],
+)
+async def test_a_refused_requests_body_is_not_read(
+    tmp_path: FilePath, guard: dict, refusal: int
+) -> None:
+    (tmp_path / "ws").mkdir()
+    app = default_app(home=tmp_path / "home", workspace=tmp_path / "ws", **guard)
+    statuses = await _statuses_unread(app)
+    assert len(statuses) > 10 and set(statuses.values()) == {refusal}, statuses
+
+
+async def test_the_guard_comes_first_on_an_app_the_router_is_mounted_into() -> None:
+    agent = Agent(name="bot", model=ScriptedProvider([]))
+    deps = RouterDeps(agents={"bot": agent}, store=ChatStore.in_memory())
+    app = FastAPI(dependencies=[Depends(_raises)])
+    app.include_router(build_api_router(deps))
+    assert set((await _statuses_unread(app)).values()) == {401}
+
+
+def test_a_custom_auth_is_still_a_whole_dependency() -> None:
+    """Running ahead of the body costs a custom auth nothing FastAPI gives a
+    dependency — and it runs once."""
+    events: list[str] = []
+
+    async def user() -> str:
+        raise AssertionError("overridden")
+
+    async def auth(
+        request: Request,
+        response: Response,
+        background: BackgroundTasks,
+        session_id: str = Path(),
+        name: str = Depends(user),
+    ) -> AsyncIterator[None]:
+        events.append(f"{name} {session_id} {(await request.json())['pinned']}")
+        response.set_cookie("sliding", "1")
+        response.status_code = 202
+        background.add_task(events.append, "background")
+        yield
+        events.append("exit")
+
+    store = ChatStore.in_memory()
+    agent = Agent(name="bot", model=ScriptedProvider([]))
+    app = create_app(agent, store=store, titles=False, auth=auth)
+    app.dependency_overrides[user] = lambda: "ada"
+    asyncio.run(store.upsert("s1", agent="bot"))
+    r = TestClient(app).patch("/api/sessions/s1", json={"pinned": True})
+    assert r.status_code == 202, r.text
+    assert r.cookies["sliding"] == "1"
+    assert sorted(events) == ["ada s1 True", "background", "exit"]
+    # A body that doesn't validate is the endpoint's own 422, as ever.
+    bad = TestClient(app).patch("/api/sessions/s1", json={"pinned": "maybe"})
+    assert bad.status_code == 422
+    assert bad.json()["detail"][0]["loc"] == ["body", "pinned"]
+
+
+def test_the_schema_still_names_the_auth() -> None:
+    app = _client(auth=HTTPBearer()).app
+    post = app.openapi()["paths"]["/api/chat"]["post"]  # type: ignore[attr-defined]
+    assert post["security"] == [{"HTTPBearer": []}] and post["requestBody"]
 
 
 def test_token_and_auth_are_mutually_exclusive() -> None:

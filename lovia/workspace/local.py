@@ -476,6 +476,15 @@ class _BackgroundProcess:
             return "running"
         return "killed" if self.killed else "exited"
 
+    def passive_status(self) -> ProcessStatus:
+        return ProcessStatus(
+            process_id=self.id,
+            command=self.command,
+            status=self.status,
+            exit_code=self.proc.returncode,
+            exit_seen=self.exit_seen,
+        )
+
     def snapshot(self) -> ProcessOutput:
         """Drain the buffer into a read result reflecting current status."""
         output, dropped = self.buffer.take()
@@ -1626,6 +1635,19 @@ class LocalWorkspaceSession:
         Idempotent: killing an already-exited process just drains and
         reports its final status.
         """
+        return (await self._terminate(process_id)).snapshot()
+
+    async def stop_process(self, process_id: str) -> ProcessStatus:
+        """Kill a background process (its whole group) and consume nothing.
+
+        For whoever stops a process without being its reader — a UI. The
+        unread output and the exit stay for :meth:`read_process_output`, so
+        the status reminder still announces the exit. Idempotent, like
+        :meth:`kill_process`.
+        """
+        return (await self._terminate(process_id)).passive_status()
+
+    async def _terminate(self, process_id: str) -> _BackgroundProcess:
         self._check_open()
         bp = self._bg.get(process_id)
         if bp is None:
@@ -1633,10 +1655,13 @@ class LocalWorkspaceSession:
         if bp.proc.returncode is None:
             bp.killed = True
             _kill_process_group(bp.proc)
+        elif not bp.reader.done():
+            # The shell is gone, but something it started holds the output.
+            _kill_process_group(bp.proc)
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(asyncio.shield(bp.reader), timeout=2.0)
         await _reap(bp.proc)
-        return bp.snapshot()
+        return bp
 
     def background_processes(self) -> list[ProcessStatus]:
         """Passive status of every background process, in spawn order.
@@ -1646,16 +1671,7 @@ class LocalWorkspaceSession:
         reminder reads; UI/API consumers can list live processes the same
         way.
         """
-        return [
-            ProcessStatus(
-                process_id=bp.id,
-                command=bp.command,
-                status=bp.status,
-                exit_code=bp.proc.returncode,
-                exit_seen=bp.exit_seen,
-            )
-            for bp in self._bg.values()
-        ]
+        return [bp.passive_status() for bp in self._bg.values()]
 
     def _unknown_process_error(self, process_id: str) -> WorkspaceError:
         if not self._bg:

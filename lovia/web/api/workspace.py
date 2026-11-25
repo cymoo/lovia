@@ -568,7 +568,9 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     # Keyed by web session id, not agent: processes belong to the chat's live
     # workspace session (lovia/web/workspaces.py). Listing is passive; kill is
     # the one user-side control — "stop the dev server without asking the
-    # model". The model's next status reminder shows the process as killed.
+    # model". The model's next status reminder announces the process as
+    # killed, and its tail is left for the model to read: stop_process, not
+    # kill_process.
 
     async def _process_list(session_id: str) -> list[ProcessInfo]:
         session = deps.workspaces.get(session_id)
@@ -608,7 +610,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         if session is None:
             raise WebError(404, "process_not_found", "no live workspace session")
         try:
-            await session.kill_process(process_id)
+            await session.stop_process(process_id)
         except WorkspaceError as exc:  # unknown id (or a closed session)
             raise WebError.from_exc(404, "process_not_found", exc) from exc
         return await _process_list(session_id)

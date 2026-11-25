@@ -202,6 +202,9 @@ class RemoteWorkspaceSession:
     async def kill_process(self, process_id: str) -> ProcessOutput:
         return await self._call("kill_process", process_id=process_id)
 
+    async def stop_process(self, process_id: str) -> ProcessStatus:
+        return await self._call("stop_process", process_id=process_id)
+
     async def background_processes(self) -> list[ProcessStatus]:
         # Passive, like the local one: nothing to list is not an error, and
         # neither is a session that is gone (its processes went with it).

@@ -310,9 +310,11 @@ Semantics:
   wired yet).
 
 The same surface is available on the session for library use and custom
-tools: `spawn` / `read_process_output` / `kill_process`, plus
-`background_processes()` — a passive status list (nothing consumed) that
-feeds the reminder and suits UI listings.
+tools: `spawn` / `read_process_output` / `kill_process`, plus two calls that
+consume nothing, for a UI next to the model: `background_processes()` — a
+passive status list, which also feeds the reminder — and
+`stop_process(process_id)`, which kills the group but leaves the unread
+output and the exit for the model to read.
 
 **Session lifetime is the serving layer's dial.** By default the runner
 opens a session per run and closes it at the run's end — fine for one-shot
@@ -389,7 +391,8 @@ Custom tools reach the active run's session as `ctx.workspace` and get the
 same gate: `read_text` / `read_bytes` (whole, or a piece with `offset=` /
 `length=`) / `stat` / `write_text` / `write_bytes` / `edit_text` /
 `list_files` /
-`grep` / `run` / `spawn` / `read_process_output` / `kill_process`, plus
+`grep` / `run` / `spawn` / `read_process_output` / `kill_process` /
+`stop_process`, plus
 `decide_path(path, write=...)` and
 `decide_command(command)` for tools that want to *check* before acting.
 Both return a `Verdict` (`action`, `reason`, `scopes`); the file and shell

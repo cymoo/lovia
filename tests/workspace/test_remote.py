@@ -302,6 +302,11 @@ async def test_commands_and_background_processes(host, tmp_path) -> None:
     assert (await session.kill_process(started.process_id)).status == "killed"
     assert await _dead(started.pid)
 
+    started = await session.spawn("sleep 30")
+    stopped = await session.stop_process(started.process_id)
+    assert (stopped.status, stopped.exit_seen) == ("killed", False)
+    assert await _dead(started.pid)
+
 
 async def test_a_stale_edit_is_refused_over_there_too(host, tmp_path) -> None:
     f = tmp_path / "f.txt"

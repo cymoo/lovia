@@ -191,7 +191,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/sessions/{id}/attachments` | multipart 的 `file` → `{name, mime, kind, size}`：把一个附件存进对话的附件目录（和聊天记录放在一起，不在工作区里）；受扩展名白名单和大小上限约束，重名时换一个 `name`，消息再以 `attachments: [{name, mime, kind}]` 引用它。`{id}` 可以是还不存在的对话——草稿的 id，第一次发送时用它新建对话——必须是 32 位小写十六进制（否则 422）。对话的 Agent（草稿用 `?agent=` 指明）没有工作区时只接受图片（PNG、JPEG、GIF、WebP，否则 415 `unsupported_file_type`），因为没有文件工具，图片直接发给模型；工作区绑定的是调用方自己打开的 session 时，返回 404 `feature_unavailable`：那个 session 由所有对话共用，没法只让某一个对话的附件保持只读 |
 | `GET /api/sessions/{id}/attachments/{name}?download=` | 按 `name` 取一个附件：图片和 PDF 内联显示，`download=1` 时任何文件都作为下载（同 `/api/workspace/raw`）。fork 和子任务读的是源对话的（共用同一个目录）；对话删除后返回 404 |
 | `GET /api/sessions/{id}/processes` | 对话的[后台进程](workspace.md#后台进程) → `[{process_id, command, status, exit_code}]`，`status` 为 `running` / `exited` / `killed`。列出时不读取输出，不影响模型自己的读取。对话没有活动的工作区会话时返回 `[]`（还没运行过，或服务器重启过：后台进程不会跨重启保留） |
-| `POST /api/sessions/{id}/processes/{process_id}/kill` | 结束一个后台进程 → 刷新后的列表；模型下一次的状态提醒会显示它已被结束。进程不存在或没有活动会话时返回 404 `process_not_found` |
+| `POST /api/sessions/{id}/processes/{process_id}/kill` | 结束一个后台进程 → 刷新后的列表。没读过的输出和退出状态留给模型：下一次的状态提醒会告诉它进程已被结束。进程不存在或没有活动会话时返回 404 `process_not_found` |
 | `GET /api/workspaces` | 启用 `create_app(workspaces=)` 时：新对话可选的目录，`{workspaces: [{id, root, name, kind, last_used_at}], default, can_add, roots}`。`kind` 为 `"default"`（Agent 自己的目录，新标签页从这里开始）、`"general"`（通用工作区）或 `"added"`；前两种没有 `id`，始终在列表里。`can_add` 表示能否添加其他目录；只允许部分目录时，`roots` 列出允许的目录树 |
 | `POST /api/workspaces` · `DELETE /api/workspaces/{id}` | `{path}` → 该项：添加一个存在且允许的目录（解析符号链接）· 从列表移除一项（文件和对话都保留；之后在那里新建对话会重新加入列表） |
 | `PATCH /api/workspaces` | `{root, name}` → 该项：给列表里的目录起一个显示名（不动目录本身；`""` 恢复目录自己的名字）。通用目录的名字由页面决定，不能改 |

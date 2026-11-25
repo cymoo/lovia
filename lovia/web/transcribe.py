@@ -22,6 +22,7 @@ reaches the browser.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -159,14 +160,15 @@ def openai_transcriber(
         A service that judges the key before the upload ends closes the
         connection under it, and what arrives is a reset or a gateway's
         empty error (DeepSeek: HTTP 550) instead of its 401. The same
-        request with no body is small enough to get the real answer.
+        request with no body is small enough to get the real answer. Only
+        a 401 is taken as one: a 403 may be about anything.
         """
         try:
             async with client() as http:
-                probe = await http.post(url, headers=headers, timeout=min(timeout, 10))
+                probe = await asyncio.wait_for(http.post(url, headers=headers), 10)
         except Exception:  # noqa: BLE001 — a second opinion, never an error
             return None
-        if probe.status_code not in (401, 403):
+        if probe.status_code != 401:
             return None
         said = redact(_detail(probe))
         what = "refused the API key" if api_key else "asked for an API key"
@@ -208,7 +210,9 @@ def openai_transcriber(
             ) from exc
         if not response.is_success:
             said = redact(_detail(response))
-            if not said and (why := await key_refused()):
+            # A gateway's empty error; a 4xx is the service's own answer.
+            unexplained = not said and response.status_code >= 500
+            if unexplained and (why := await key_refused()):
                 raise TranscriptionError(why)
             raise TranscriptionError(
                 f"the transcription service answered HTTP {response.status_code}"

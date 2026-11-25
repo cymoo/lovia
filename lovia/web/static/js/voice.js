@@ -113,8 +113,9 @@ function build() {
 
   // ✓ appears where the microphone was. On touch, the click of the very tap
   // that began the take is hit-tested when the finger lifts — and lands here.
-  // A click from the keyboard (no pointer type) is always meant.
-  const meant = (e) => !e.pointerType || performance.now() - pressEnded > 350;
+  // A click from the keyboard is always meant: no click count and no pointer
+  // type (a touch click has no count either; an older Safari's has no type).
+  const meant = (e) => (e.detail === 0 && !e.pointerType) || performance.now() - pressEnded > 350;
   const done = button('lv-voice-btn lv-voice-done', 'check', t('voice.done'), (e) => {
     if (meant(e)) void finish(false);
   });
@@ -124,7 +125,7 @@ function build() {
   for (const b of [done, send]) {
     // Enter held down on the microphone repeats onto ✓, which took the focus.
     b.addEventListener('keydown', (e) => {
-      if (e.repeat) e.preventDefault();
+      if (e.repeat && (e.key === 'Enter' || e.key === ' ')) e.preventDefault();
     });
   }
   const text = (cls, key, onClick) => {

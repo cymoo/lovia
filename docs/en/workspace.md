@@ -243,7 +243,8 @@ Outputs are bounded at the tool layer by `WorkspaceLimits` (pass
 | --- | --- | --- |
 | `max_file_read_chars` | `50_000` | Characters one read returns (page with `start`/`end`) |
 | `max_file_read_bytes` | `10_000_000` | Bytes loaded from one file; a bigger one is read only up to this prefix |
-| `max_shell_output_chars` | `30_000` | Characters kept from each of a command's stdout and stderr (head + tail); also a background process's buffer between reads |
+| `max_shell_output_chars` | `30_000` | Characters kept from each of a command's stdout and stderr (head + tail); also what one read of a background process returns |
+| `max_process_buffer_chars` | `1_000_000` | Characters of output held per background process while its output is open and for a minute after |
 | `max_grep_file_bytes` | `5_000_000` | Files bigger than this are skipped by grep |
 | `max_grep_line_chars` | `400` | Characters of each matched line |
 | `max_grep_matches` | `100` | Matches one grep returns |
@@ -286,11 +287,14 @@ gate** as a foreground command; backgrounding never softens the verdict.
 
 Semantics:
 
-- stdout and stderr are **merged** and spooled to a bounded per-process
+- stdout and stderr are **merged** and kept in a bounded per-process
   buffer; `read_process_output(process_id)` returns what arrived since the
   last read, plus status (`running` / `exited` with code / `killed`).
-  Between reads only the newest `max_shell_output_chars` are kept — older
+  One read returns the newest `max_shell_output_chars` of it — older
   unread output is dropped and the drop is announced.
+- The buffer holds the newest `max_process_buffer_chars`. A minute after the
+  output closes it shrinks to what the model has not read, so memory follows
+  the processes that run, not the ones that ran.
 - Reads never turn into errors: polling an exited process reports its exit
   code and drains the remainder. An *unknown* id raises with the live ids
   listed in the message (there is no separate list tool).
@@ -310,11 +314,16 @@ Semantics:
   wired yet).
 
 The same surface is available on the session for library use and custom
-tools: `spawn` / `read_process_output` / `kill_process`, plus two calls that
-consume nothing, for a UI next to the model: `background_processes()` — a
-passive status list, which also feeds the reminder — and
-`stop_process(process_id)`, which kills the group but leaves the unread
-output and the exit for the model to read.
+tools: `spawn` / `read_process_output` / `kill_process`, plus three calls that
+consume nothing, for a UI next to the model:
+
+- `background_processes()` — a passive status list (times, directory, last
+  line of output), which also feeds the reminder;
+- `peek_process_output(process_id, after=0, limit=…)` — one page of the
+  buffer by character offset: `text`, the `next` offset, `base` (the oldest
+  still held) and `eof`;
+- `stop_process(process_id)` — kills the group but leaves the unread output
+  and the exit for the model to read.
 
 **Session lifetime is the serving layer's dial.** By default the runner
 opens a session per run and closes it at the run's end — fine for one-shot
@@ -391,8 +400,8 @@ Custom tools reach the active run's session as `ctx.workspace` and get the
 same gate: `read_text` / `read_bytes` (whole, or a piece with `offset=` /
 `length=`) / `stat` / `write_text` / `write_bytes` / `edit_text` /
 `list_files` /
-`grep` / `run` / `spawn` / `read_process_output` / `kill_process` /
-`stop_process`, plus
+`grep` / `run` / `spawn` / `read_process_output` / `peek_process_output` /
+`kill_process` / `stop_process`, plus
 `decide_path(path, write=...)` and
 `decide_command(command)` for tools that want to *check* before acting.
 Both return a `Verdict` (`action`, `reason`, `scopes`); the file and shell

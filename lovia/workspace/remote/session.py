@@ -28,6 +28,7 @@ from ..types import (
     FileContent,
     GrepMatch,
     InstructionFile,
+    ProcessChunk,
     ProcessOutput,
     ProcessStart,
     ProcessStatus,
@@ -198,6 +199,13 @@ class RemoteWorkspaceSession:
 
     async def read_process_output(self, process_id: str) -> ProcessOutput:
         return await self._call("read_process_output", process_id=process_id)
+
+    async def peek_process_output(
+        self, process_id: str, *, after: int = 0, limit: int
+    ) -> ProcessChunk:
+        return await self._call(
+            "peek_process_output", process_id=process_id, after=after, limit=limit
+        )
 
     async def kill_process(self, process_id: str) -> ProcessOutput:
         return await self._call("kill_process", process_id=process_id)

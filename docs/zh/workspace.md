@@ -169,7 +169,8 @@ policy = replace(WorkspacePolicy.coding(), read_outside="deny", allow_shell=Fals
 | --- | --- | --- |
 | `max_file_read_chars` | `50_000` | 一次读取返回的字符数（用 `start`/`end` 分页） |
 | `max_file_read_bytes` | `10_000_000` | 从一个文件读入的字节数；更大的文件只读这么长的开头 |
-| `max_shell_output_chars` | `30_000` | 命令 stdout 和 stderr 各自保留的字符数（保留头尾）；也是后台进程两次读取之间的缓冲上限 |
+| `max_shell_output_chars` | `30_000` | 命令 stdout 和 stderr 各自保留的字符数（保留头尾）；也是后台进程一次读取返回的上限 |
+| `max_process_buffer_chars` | `1_000_000` | 每个后台进程保留的输出字符数：输出未关闭时，以及关闭后的一分钟内 |
 | `max_grep_file_bytes` | `5_000_000` | 超过这个大小的文件，grep 直接跳过 |
 | `max_grep_line_chars` | `400` | 每条匹配行保留的字符数 |
 | `max_grep_matches` | `100` | 一次 grep 返回的匹配数 |
@@ -203,8 +204,10 @@ process id —— 这是运行 dev server、watcher、长构建/长测试的方�
 语义：
 
 - stdout 和 stderr **合并**后写入每进程的有界缓冲；`read_process_output(process_id)` 返回
-  自上次读取以来的新输出，附带状态（`running` / `exited` 及退出码 / `killed`）。两次读取之间
-  只保留最新的 `max_shell_output_chars` 个字符——更早的未读输出被丢弃，丢弃会在结果中说明。
+  自上次读取以来的新输出，附带状态（`running` / `exited` 及退出码 / `killed`）。一次读取
+  最多返回最新的 `max_shell_output_chars` 个字符——更早的未读输出被丢弃，丢弃会在结果中说明。
+- 缓冲保留最新的 `max_process_buffer_chars` 个字符。输出关闭一分钟后，缓冲缩到模型还没读的那一段，
+  所以内存只和正在运行的进程有关，和跑过多少无关。
 - 读取永远不会变成错误：轮询一个已退出的进程会报告退出码并排空剩余输出。*未知* id 才会报错，
   错误信息里列出当前存活的 id（没有单独的 list 工具）。
 - `kill_process(process_id)` 杀掉整个 process group（包括子进程）并返回最后的输出尾部。
@@ -219,9 +222,12 @@ process id —— 这是运行 dev server、watcher、长构建/长测试的方�
   （executor 的后台支持尚未接入）。
 
 同一套能力也在 session 上供库用法和自定义工具使用：`spawn` / `read_process_output` /
-`kill_process`。另有两个不消费任何输出的调用，供模型之外的 UI 使用：
-`background_processes()` 返回被动的状态列表（状态提醒也用它）；
-`stop_process(process_id)` 杀掉整个 process group，但把没读过的输出和退出状态留给模型读。
+`kill_process`。另有三个不消费任何输出的调用，供模型之外的 UI 使用：
+
+- `background_processes()` 返回被动的状态列表（起止时间、目录、最后一行输出），状态提醒也用它；
+- `peek_process_output(process_id, after=0, limit=…)` 按字符偏移量读缓冲的一页：`text`、下一页的
+  偏移量 `next`、缓冲里最早的偏移量 `base`，以及 `eof`；
+- `stop_process(process_id)` 杀掉整个 process group，但把没读过的输出和退出状态留给模型读。
 
 **session 的生命周期由服务层决定。**默认情况下 runner 每次 run 打开新 session、run 结束即关闭——
 对一次性的 `Runner.run` 脚本正合适（run 就是整个对话）。持有长对话的服务层应该用
@@ -277,7 +283,7 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 `read_text` / `read_bytes`（整个文件，或用 `offset=` / `length=` 读其中一段）/ `stat` /
 `write_text` / `write_bytes` / `edit_text` / `list_files` /
 `grep` / `run` / `spawn` /
-`read_process_output` / `kill_process` / `stop_process`，以及
+`read_process_output` / `peek_process_output` / `kill_process` / `stop_process`，以及
 `decide_path(path, write=...)` 和 `decide_command(command)`，供工具在行动前检查。两者都返回
 `Verdict`（`action`、`reason`、`scopes`）；文件和命令方法遇到 `deny` 会抛异常，你自己的
 `permission` 谓词可以把判定原样返回。

@@ -460,7 +460,7 @@ def _make_start_tool() -> Tool:
             except BaseException as exc:
                 # Undo the empty chat, as a subagent's failed start does —
                 # also when a tool timeout cancels the start part way.
-                await deps.workspaces.close(sid)
+                await deps.workspaces.close(sid, keep_records=False)
                 await deps.store.delete(sid)
                 if isinstance(exc, WebError) and exc.code == "too_many_runs":
                     raise ToolError(

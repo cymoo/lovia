@@ -30,7 +30,7 @@ from ..store import ChatMeta, RunRow
 
 
 def session_info(
-    meta: ChatMeta, *, last_run_status: str | None = None
+    meta: ChatMeta, *, last_run_status: str | None = None, processes_running: int = 0
 ) -> ChatSessionInfo:
     """Project a metadata row onto the public session-list shape."""
     return ChatSessionInfo(
@@ -48,6 +48,7 @@ def session_info(
         workspace_mode_rev=meta.workspace_mode_rev,
         workspace_root=meta.workspace_root,
         model=meta.model,
+        processes_running=processes_running,
     )
 
 

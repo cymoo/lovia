@@ -367,7 +367,7 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 # No-op for today's 409/429 (both raise before the workspace
                 # binding), but keeps "delete session ⇒ close its workspace"
                 # airtight if start()'s failure points ever move.
-                await deps.workspaces.close(child_sid)
+                await deps.workspaces.close(child_sid, keep_records=False)
                 await deps.store.delete(child_sid)
                 if exc.code == "too_many_runs":
                     raise RuntimeError(

@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import glob
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
@@ -47,6 +47,9 @@ from ..workspace.workspace import WorkspaceSessionBinding
 log = logging.getLogger(__name__)
 
 __all__ = ["ChatBinding", "WorkspaceRef", "WorkspaceSessions", "WorkspaceSwitch"]
+
+# Why a chat's session closes while the chat lives on.
+CloseReason = Literal["shutdown", "closed"]
 
 # Narrowest first: a mode may only ever be capped toward the front.
 MODE_ORDER: tuple[str, ...] = get_args(WorkspaceMode)
@@ -530,6 +533,12 @@ class WorkspaceSessions:
     # Each chat's attachment folder, which every config of its session is
     # judged with (:func:`guard_workspace`) — a mode switch's too.
     _folders: dict[str, AttachmentFolder] = field(default_factory=dict)
+    # Told of a session before it closes, whatever closes it, and why — None
+    # when its chat is being deleted (:meth:`ProcessWatcher.closing
+    # <lovia.web.processes.ProcessWatcher.closing>`).
+    on_close: (
+        Callable[[str, WorkspaceSession, "CloseReason | None"], Awaitable[None]] | None
+    ) = None
     # Serializes opens so two concurrent runs of one chat share a session
     # instead of racing two into existence (the loser would leak unclosed).
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -568,13 +577,13 @@ class WorkspaceSessions:
             if held is not None and getattr(held[1], "closed", False):
                 # The session ended under us — a remote one whose connection
                 # dropped, taking its processes along. This run starts over.
-                await _close_quietly(session_id, held[1])
+                await self._close(session_id, held[1], "closed")
                 held = None
             if held is not None and not self._retune(session_id, cfg):
                 # A different workspace (root, env, ...): the old session
                 # must not keep serving — close it (killing its background
                 # processes) and reopen.
-                await _close_quietly(session_id, held[1])
+                await self._close(session_id, held[1], "closed")
                 held = None
             if held is None:
                 held = (cfg, await cfg.open())
@@ -614,20 +623,37 @@ class WorkspaceSessions:
         held = self._live.get(session_id)
         return held[1] if held is not None else None
 
-    async def close(self, session_id: str) -> None:
+    async def close(self, session_id: str, *, keep_records: bool = True) -> None:
         """Close and drop the chat's session (reaps its background processes).
 
         Idempotent; a later :meth:`bind` simply opens a fresh session.
+        ``keep_records=False``: the chat is being deleted, and what its
+        processes wrote goes with it.
         """
         async with self._lock:
             held = self._live.pop(session_id, None)
             self._folders.pop(session_id, None)
         if held is not None:
-            await _close_quietly(session_id, held[1])
+            await self._close(session_id, held[1], "closed" if keep_records else None)
 
-    async def aclose(self) -> None:
-        """Close every live session (app shutdown)."""
+    async def aclose(self, *, keep_records: bool = True) -> None:
+        """Close every live session (app shutdown, or every chat deleted)."""
         async with self._lock:
             live, self._live = self._live, {}
-        for session_id, (_, session) in live.items():
-            await _close_quietly(session_id, session)
+        reason: CloseReason | None = "shutdown" if keep_records else None
+        await asyncio.gather(
+            *(
+                self._close(session_id, session, reason)
+                for session_id, (_, session) in live.items()
+            )
+        )
+
+    async def _close(
+        self, session_id: str, session: WorkspaceSession, reason: CloseReason | None
+    ) -> None:
+        if self.on_close is not None:
+            try:
+                await self.on_close(session_id, session, reason)
+            except Exception as exc:  # noqa: BLE001 — teardown goes on
+                log.warning("winding up %s failed: %r", session_id, exc)
+        await _close_quietly(session_id, session)

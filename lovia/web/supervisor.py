@@ -49,6 +49,7 @@ from ..transcript import (
     entry_to_dict,
     input_to_entries,
 )
+from ..workspace import ProcessOutput, ProcessStart
 from .attachments import attachments_for_run
 from .api.serialization import (
     Run,
@@ -816,6 +817,10 @@ class RunController:
             ]
 
     def _publish(self, ev: events.Event) -> None:
+        if isinstance(ev, events.ToolCallCompleted) and isinstance(
+            ev.result, (ProcessStart, ProcessOutput)
+        ):
+            self.deps.processes.mark(self.session_id)
         self._ingest(ev)
         self.hub.publish(ev)
 

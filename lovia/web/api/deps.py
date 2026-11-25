@@ -36,6 +36,7 @@ from ..followups import (
     coerce_suggestions,
     generate_followups,
 )
+from ..processes import ProcessWatcher
 from ..sse import (
     RunStatusData,
     SessionRetitledData,
@@ -63,7 +64,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# How often a running server sweeps attachment folders no chat claims.
+# How often a running server sweeps the chats' folders (attachments, process
+# records).
 _SWEEP_EVERY = 3600.0
 
 
@@ -164,6 +166,13 @@ class RouterDeps:
         default_factory=asyncio.Lock, init=False, repr=False
     )
 
+    # Watches what runs in ``workspaces`` and keeps the records of what ended.
+    processes: ProcessWatcher = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.processes = ProcessWatcher(self)
+        self.workspaces.on_close = self.processes.closing
+
     @property
     def session(self) -> Session:
         return self.store.session
@@ -250,8 +259,8 @@ class RouterDeps:
         """Run the API's background machinery for the app's lifetime.
 
         On entry: settles runs a dead process left "running", removes the
-        attachment folders no chat claims, starts the schedule poller and the
-        ``ask_human`` bridge. On exit: winds down live
+        folders no chat claims, starts the schedule poller, the process
+        watcher and the ``ask_human`` bridge. On exit: winds down live
         runs cooperatively (leaving resumable checkpoints), closes chat
         workspaces with their background processes, ends ``/api/events``
         streams, and gives memory curation a bounded window to land.
@@ -267,8 +276,9 @@ class RouterDeps:
         from .memory import memory_plugin
 
         await self.store.sweep_stale_runs()
-        await self.store.sweep_attachments()
-        sweeper = asyncio.create_task(self._sweep_attachments())
+        await self._sweep_folders()
+        sweeper = asyncio.create_task(self._sweep_hourly())
+        watcher = asyncio.create_task(self.processes.run())
         scheduler = Scheduler(self, poll_interval=self.scheduler_poll)
         scheduler.start()
         if self.questions is not None:
@@ -291,8 +301,12 @@ class RouterDeps:
                 await self.questions.aclose()
             await scheduler.stop()
             await self.supervisor.shutdown()
+            watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await watcher
             # After the runs: workspace processes deliberately outlive run
-            # ends, so only this closes them (kill -9 orphans them).
+            # ends, so only this closes them (kill -9 orphans them) — and
+            # records what they wrote.
             await self.workspaces.aclose()
             if self.workspace_switch is not None:
                 # After their sessions: the connections chats there shared.
@@ -307,16 +321,21 @@ class RouterDeps:
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(plugin.drain(), timeout=15.0)
 
-    async def _sweep_attachments(self) -> None:
-        """Sweep unclaimed attachment folders every hour (the lifespan swept
-        once before serving): a server that never restarts still lets go of
-        drafts never sent, and of folders a held file kept from a delete."""
+    async def _sweep_folders(self) -> None:
+        await self.store.sweep_attachments()
+        await self.store.sweep_process_logs()
+
+    async def _sweep_hourly(self) -> None:
+        """Sweep the chats' folders every hour (the lifespan swept once before
+        serving): a server that never restarts still lets go of drafts never
+        sent, of folders a held file kept from a delete, and of the oldest
+        process records."""
         while True:
             await asyncio.sleep(_SWEEP_EVERY)
             try:
-                await self.store.sweep_attachments()
+                await self._sweep_folders()
             except Exception as exc:  # noqa: BLE001 — the next hour tries again
-                log.warning("sweeping attachment folders failed: %s", exc)
+                log.warning("sweeping the chats' folders failed: %s", exc)
 
     def fresh_budget(self) -> RunBudget | None:
         """A per-run copy of ``budget`` (``None`` when unset), so a ``RunBudget``'s

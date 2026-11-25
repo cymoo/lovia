@@ -41,6 +41,7 @@ from ..stores import (
 from ..stores._sqlite import Migration, SQLiteStore
 from ..stores.session import _rewind_split
 from ..transcript import InputEntry
+from .process_logs import max_total_bytes, trim_total
 
 __all__ = ["ChatMeta", "ChatStore", "RunRow", "ScheduleRow"]
 
@@ -385,14 +386,17 @@ def _remove_folders(root: Path, names: Sequence[str]) -> None:
         shutil.rmtree(root / name, ignore_errors=True)
 
 
-def _remove_all_folders(root: Path) -> None:
-    """Every attachment folder under ``root`` — only those: a deployer's
+def _folder_names(root: Path) -> list[str]:
+    """Every chat's folder under ``root`` — only those: a deployer's
     ``attachments_dir`` may hold more."""
     try:
-        names = [p.name for p in root.iterdir() if ATTACHMENTS_ID.fullmatch(p.name)]
-    except OSError:
-        return
-    _remove_folders(root, names)
+        return [p.name for p in root.iterdir() if ATTACHMENTS_ID.fullmatch(p.name)]
+    except OSError:  # nothing there yet, or a root we can't read
+        return []
+
+
+def _remove_all_folders(root: Path) -> None:
+    _remove_folders(root, _folder_names(root))
 
 
 @dataclass(frozen=True)
@@ -698,7 +702,10 @@ class ChatStore:
     to ``meta_path`` (a temporary folder for ``:memory:``) — pass
     ``attachments_dir`` to put them elsewhere. One folder per
     ``attachments_id``, which a chat's forks and tasks share with it; the
-    store deletes the folder with the last chat that uses it.
+    store deletes the folder with the last chat that uses it. The records of
+    finished background commands sit there the same way, in
+    ``process-logs/`` (``process_logs_dir``): one folder per chat, gone with
+    it. They are a cache: that directory may be deleted at any time.
     """
 
     def __init__(
@@ -709,14 +716,19 @@ class ChatStore:
         checkpointer: Checkpointer | None = None,
         wal: bool = False,
         attachments_dir: str | Path | None = None,
+        process_logs_dir: str | Path | None = None,
     ) -> None:
         self.session = session
-        if attachments_dir is not None:
-            self._attachments: Path | None = Path(attachments_dir)
-        elif str(meta_path) == ":memory:":
-            self._attachments = None  # a temporary folder, made on first use
-        else:
-            self._attachments = Path(meta_path).parent / "attachments"
+
+        def _beside(given: str | Path | None, name: str) -> Path | None:
+            if given is not None:
+                return Path(given)
+            if str(meta_path) == ":memory:":
+                return None  # a temporary folder, made on first use
+            return Path(meta_path).parent / name
+
+        self._attachments = _beside(attachments_dir, "attachments")
+        self._process_logs = _beside(process_logs_dir, "process-logs")
         # ``wal`` covers only the metadata store owned here; a caller-supplied
         # Session/Checkpointer configures its own (see ChatStore.sqlite, which
         # sets all three consistently).
@@ -736,10 +748,14 @@ class ChatStore:
         """The root every chat's attachment folder sits under (created by the
         first upload, not here)."""
         if self._attachments is None:
-            self._attachments = Path(tempfile.mkdtemp(prefix="lovia-attachments-"))
-            # Volatile like the rest of the store: gone with it.
-            weakref.finalize(self, shutil.rmtree, self._attachments, True)
+            self._attachments = self._volatile("lovia-attachments-")
         return self._attachments
+
+    def _volatile(self, prefix: str) -> Path:
+        path = Path(tempfile.mkdtemp(prefix=prefix))
+        # Volatile like the rest of the store: gone with it.
+        weakref.finalize(self, shutil.rmtree, path, True)
+        return path
 
     async def attachment_folder(self, session_id: str) -> Path | None:
         """Where ``session_id``'s attachments live: its ``attachments_id``'s
@@ -766,16 +782,58 @@ class ChatStore:
         by then, or — sent but not yet created — a fresh mtime, since a send
         touches the folder first (:func:`~lovia.web.attachments.user_content`).
         """
-        root = self._attachments
+        if self._attachments is not None:
+            await self._sweep_unclaimed(
+                self._attachments,
+                max_age,
+                claims="SELECT DISTINCT COALESCE(attachments_id, id) FROM chat_sessions",
+                claim="SELECT 1 FROM chat_sessions "
+                "WHERE ? IN (attachments_id, id) LIMIT 1",
+            )
+
+    # ---- records of finished background commands -------------------------
+
+    def process_log_folder(self, session_id: str) -> Path | None:
+        """Where ``session_id``'s process records live; None for an id that
+        can't name a folder (:data:`ATTACHMENTS_ID`)."""
+        if not ATTACHMENTS_ID.fullmatch(session_id):
+            return None
+        if self._process_logs is None:
+            self._process_logs = self._volatile("lovia-process-logs-")
+        return self._process_logs / session_id
+
+    async def sweep_process_logs(
+        self, *, max_age: float = _UNCLAIMED_AGE, max_bytes: int | None = None
+    ) -> None:
+        """Remove the record folders of chats that are gone, once older than
+        ``max_age`` seconds, then the oldest records of all chats until the
+        rest fit in ``max_bytes`` (default
+        :func:`~lovia.web.process_logs.max_total_bytes`)."""
+        root = self._process_logs
         if root is None:
             return
-        claimed = set(
-            await self._read_all(
-                "SELECT DISTINCT COALESCE(attachments_id, id) FROM chat_sessions",
-                (),
-                lambda row: cast(str, row[0]),
-            )
+        await self._sweep_unclaimed(
+            root,
+            max_age,
+            claims="SELECT id FROM chat_sessions",
+            claim="SELECT 1 FROM chat_sessions WHERE id = ?",
         )
+
+        def _trim() -> None:
+            trim_total(
+                [root / name for name in _folder_names(root)],
+                max_total_bytes() if max_bytes is None else max_bytes,
+            )
+
+        await asyncio.to_thread(_trim)
+
+    async def _sweep_unclaimed(
+        self, root: Path, max_age: float, *, claims: str, claim: str
+    ) -> None:
+        """Remove the folders under ``root`` that no chat claims, once older
+        than ``max_age`` seconds. ``claims`` selects every name a chat claims,
+        ``claim`` asks for one."""
+        claimed = set(await self._read_all(claims, (), lambda row: cast(str, row[0])))
         cutoff = time.time() - max_age
 
         def _stale(entry: Path) -> bool:
@@ -789,24 +847,14 @@ class ChatStore:
                 return False
 
         def _candidates() -> list[str]:
-            try:
-                entries = list(root.iterdir())
-            except OSError:  # no attachment yet, or a root we can't read
-                return []
             return [
-                e.name
-                for e in entries
-                if e.name not in claimed
-                and ATTACHMENTS_ID.fullmatch(e.name)
-                and _stale(e)
+                name
+                for name in _folder_names(root)
+                if name not in claimed and _stale(root / name)
             ]
 
         for name in await asyncio.to_thread(_candidates):
-            still = await self._read_one(
-                "SELECT 1 FROM chat_sessions WHERE attachments_id = ? OR id = ? LIMIT 1",
-                (name, name),
-                lambda row: True,
-            )
+            still = await self._read_one(claim, (name,), lambda row: True)
             if still is None and await asyncio.to_thread(_stale, root / name):
                 await asyncio.to_thread(_remove_folders, root, [name])
 
@@ -1312,6 +1360,9 @@ class ChatStore:
         freed = await self._meta._run(_impl)
         if freed and self._attachments is not None:
             await asyncio.to_thread(_remove_folders, self._attachments, freed)
+        logs = [sid for sid in ids if ATTACHMENTS_ID.fullmatch(sid)]
+        if logs and self._process_logs is not None:
+            await asyncio.to_thread(_remove_folders, self._process_logs, logs)
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, metadata and attachments —
@@ -1330,8 +1381,9 @@ class ChatStore:
         await self._write("DELETE FROM chat_runs")
         await self._write("DELETE FROM chat_ui_data")
         await self._write("DELETE FROM chat_grants")
-        if self._attachments is not None:
-            await asyncio.to_thread(_remove_all_folders, self._attachments)
+        for root in (self._attachments, self._process_logs):
+            if root is not None:
+                await asyncio.to_thread(_remove_all_folders, root)
 
     # ---- remembered approvals ("always allow" grants) -------------------
 

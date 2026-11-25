@@ -9,6 +9,7 @@ its mode. Design: docs/design/web-attachments.md.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -19,6 +20,7 @@ import pytest
 
 pytest.importorskip("fastapi")
 
+from fastapi import FastAPI, Header, HTTPException, Request  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent  # noqa: E402
@@ -442,6 +444,159 @@ def test_upload_limits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         assert _upload(c, sid, "weird.xyz").status_code == 200
         monkeypatch.setenv("LOVIA_MAX_UPLOAD_MB", "1")
         assert _upload(c, sid, "big.txt", b"x" * (1024 * 1024 + 1)).status_code == 413
+
+
+MB = 1024 * 1024
+
+
+async def _stream_upload(
+    app: FastAPI,
+    size: int,
+    *,
+    part: str = 'name="file"; filename="a.txt"',
+    headers: dict[str, str] | None = None,
+) -> tuple[int, object, int]:
+    """Upload one ``size``-byte part in 64 KiB chunks, no Content-Length.
+    Returns the status, the JSON answer, and the body bytes the app took."""
+    chunks = [f"--b\r\nContent-Disposition: form-data; {part}\r\n\r\n".encode()]
+    chunks += [b"x" * 65536] * (size // 65536) + [b"x" * (size % 65536)]
+    chunks.append(b"\r\n--b--\r\n")
+    pending, taken, sent = iter(chunks), 0, []
+
+    async def receive() -> dict[str, object]:
+        nonlocal taken
+        chunk = next(pending, None)
+        taken += len(chunk or b"")
+        return {
+            "type": "http.request",
+            "body": chunk or b"",
+            "more_body": chunk is not None,
+        }
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    path = f"/api/sessions/{_sid()}/attachments"
+    all_headers = {"content-type": "multipart/form-data; boundary=b", **(headers or {})}
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [(k.encode(), v.encode()) for k, v in all_headers.items()],
+        "client": ("127.0.0.1", 1),
+        "server": ("127.0.0.1", 80),
+    }
+    await app(scope, receive, send)  # type: ignore[arg-type]
+    answer = b"".join(m.get("body", b"") for m in sent)
+    return sent[0]["status"], json.loads(answer), taken
+
+
+def _guarded(tmp_path: Path, **kw: object) -> FastAPI:
+    (tmp_path / "ws").mkdir(exist_ok=True)
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider([text("ok")]),
+        workspace=Workspace.local(str(tmp_path / "ws")),
+    )
+    store = ChatStore.sqlite(tmp_path / "data" / "chat.db")
+    return create_app(agent, store=store, titles=False, **kw)  # type: ignore[arg-type]
+
+
+async def test_a_refused_upload_is_not_read(tmp_path: Path) -> None:
+    app = _guarded(tmp_path, token="secret")
+    status, answer, taken = await _stream_upload(app, 2 * MB)
+    assert status == 401 and answer["detail"]["code"] == "server_token"  # type: ignore[index]
+    assert taken == 0
+    ok = {"authorization": "Bearer secret"}
+    assert (await _stream_upload(app, 2 * MB, headers=ok))[0] == 200
+
+
+async def _raises(request: Request) -> None:
+    if request.headers.get("x-key") != "k":
+        raise HTTPException(403, "no")
+
+
+async def _validates(x_key: str = Header()) -> None:
+    # A missing header is a validation error: FastAPI collects it and still
+    # solves the other dependencies before it answers.
+    pass
+
+
+@pytest.mark.parametrize("auth, refusal", [(_raises, 403), (_validates, 422)])
+async def test_an_upload_a_custom_auth_refuses_is_not_read(
+    tmp_path: Path, auth: object, refusal: int
+) -> None:
+    app = _guarded(tmp_path, auth=auth)
+    status, _, taken = await _stream_upload(app, 2 * MB)
+    assert (status, taken) == (refusal, 0)
+    assert (await _stream_upload(app, 2 * MB, headers={"x-key": "k"}))[0] == 200
+
+
+async def _reads_form(request: Request) -> None:
+    await request.form()
+
+
+async def _reads_body(request: Request) -> None:
+    await request.body()
+
+
+@pytest.mark.parametrize("auth", [_reads_form, _reads_body])
+async def test_an_auth_that_reads_the_body_leaves_it_to_the_upload(
+    tmp_path: Path, auth: object
+) -> None:
+    app = _guarded(tmp_path, auth=auth)
+    assert (await _stream_upload(app, 2 * MB))[0] == 200
+    status, _, taken = await _stream_upload(app, 60 * MB)
+    assert status == 413 and taken < 27 * MB
+
+
+@pytest.mark.parametrize(
+    "part", ['name="file"; filename="a.txt"', 'name="other"; filename="a.txt"']
+)
+async def test_an_upload_over_the_cap_is_refused_as_it_arrives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, part: str
+) -> None:
+    monkeypatch.setenv("LOVIA_MAX_UPLOAD_MB", "1")
+    app = _guarded(tmp_path)
+    status, answer, taken = await _stream_upload(app, 60 * MB, part=part)
+    assert status == 413 and answer["detail"]["code"] == "file_too_large"  # type: ignore[index]
+    assert taken < 3 * MB
+
+
+async def test_an_upload_of_exactly_the_cap_is_saved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOVIA_MAX_UPLOAD_MB", "1")
+    app = _guarded(tmp_path)
+    status, answer, _ = await _stream_upload(app, MB)
+    assert status == 200 and answer["size"] == MB  # type: ignore[index]
+    assert (await _stream_upload(app, MB + 1))[0] == 413
+
+
+def test_a_form_without_a_file_is_a_validation_error(tmp_path: Path) -> None:
+    form = "multipart/form-data"
+    with _client(tmp_path) as c:
+        url = f"/api/sessions/{_sid()}/attachments"
+        for kw in ({}, {"data": {"file": "x"}}, {"files": {"file": (None, "x")}}):
+            r = c.post(url, **kw)  # type: ignore[arg-type]
+            assert r.status_code == 422
+            assert r.json()["detail"][0]["loc"] == ["body", "file"]
+        for kind in (form, f"{form}; boundary=b"):
+            r = c.post(url, content=b"junk", headers={"content-type": kind})
+            assert r.status_code == 400
+            assert isinstance(r.json()["detail"], str)
+        # The schema still says what to send.
+        spec = c.app.openapi()  # type: ignore[attr-defined]
+    body = spec["paths"]["/api/sessions/{session_id}/attachments"]["post"][
+        "requestBody"
+    ]
+    assert body["required"] is True and form in body["content"]
 
 
 def test_svg_is_downloaded_never_shown(tmp_path: Path) -> None:

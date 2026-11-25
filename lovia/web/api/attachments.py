@@ -11,11 +11,17 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from typing import Any
 
 try:
-    from fastapi import APIRouter, File, Query, Request, UploadFile
+    from fastapi import APIRouter, HTTPException, Query, Request
+    from fastapi.exceptions import RequestValidationError
     from fastapi.responses import Response
+    from fastapi.routing import APIRoute
+    from starlette.datastructures import UploadFile
+    from starlette.types import Message
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
 
@@ -38,10 +44,81 @@ from .deps import RouterDeps
 from .workspace import serve_local
 
 _NO_CAP = 1 << 62
+# What a form may add to its file: boundaries and part headers.
+_FORM_OVERHEAD = 1 << 20
+
+
+class _CappedRoute(APIRoute):
+    """Refuses a body past the upload cap as it arrives, whoever reads it: the
+    form parser spools every part to disk, and has no limit on a file's size."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handle = super().get_route_handler()
+
+        async def capped(request: Request) -> Response:
+            left = max_upload_bytes() + _FORM_OVERHEAD
+
+            async def receive() -> Message:
+                nonlocal left
+                message = await request.receive()
+                left -= len(message.get("body", b""))
+                if left < 0:
+                    raise WebError(413, "file_too_large", "file too large")
+                return message
+
+            wrapped = Request(request.scope, receive)
+            try:
+                return await handle(wrapped)
+            finally:
+                await wrapped.close()  # the form's temp files
+
+        return capped
+
+
+async def _form_file(request: Request) -> UploadFile:
+    """The form's ``file``, its errors answered as FastAPI's ``File(...)``
+    would. Not declared as one: FastAPI parses a declared form before any
+    dependency runs, so a request the auth guard refuses would be read and
+    spooled to disk first."""
+    try:
+        form = await request.form()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(400, "There was an error parsing the body") from exc
+    file = form.get("file")
+    if not isinstance(file, UploadFile):
+        raise RequestValidationError(
+            [
+                {
+                    "type": "missing",
+                    "loc": ("body", "file"),
+                    "msg": "Field required",
+                    "input": file,
+                }
+            ]
+        )
+    return file
+
+
+_FORM_SCHEMA = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "required": ["file"],
+                    "properties": {"file": {"type": "string", "format": "binary"}},
+                }
+            }
+        },
+    }
+}
 
 
 def build_attachments_router(deps: RouterDeps) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=_CappedRoute)
 
     async def folder_of(session_id: str) -> Path:
         folder = await deps.store.attachment_folder(session_id)
@@ -55,11 +132,13 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
             )
         return folder
 
-    @router.post("/api/sessions/{session_id}/attachments", response_model=UploadedFile)
+    @router.post(
+        "/api/sessions/{session_id}/attachments",
+        response_model=UploadedFile,
+        openapi_extra=_FORM_SCHEMA,
+    )
     async def upload_attachment(
-        session_id: str,
-        file: UploadFile = File(...),
-        agent: str | None = Query(None),
+        session_id: str, request: Request, agent: str | None = Query(None)
     ) -> UploadedFile:
         """Save one file into the chat's attachment folder.
 
@@ -68,11 +147,12 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
         agent without a workspace has no file tools to read with: it takes
         images only, which its model sees inline. The extension is checked
         against an allowlist (``LOVIA_UPLOAD_ALLOWED_EXT``) and the size
-        against a cap (``LOVIA_MAX_UPLOAD_MB``) enforced while reading, so a
-        disallowed or huge upload is rejected without exhausting memory. The
-        bytes are written at a collision-free name, returned for the message
-        to name.
+        against a cap (``LOVIA_MAX_UPLOAD_MB``) enforced while the body
+        arrives, so a huge upload exhausts neither disk nor memory. The bytes
+        are written at a collision-free name, returned for the message to
+        name.
         """
+        file = await _form_file(request)
         meta = await deps.store.get(session_id)
         picked = deps.pick(deps.agent_of(meta) if meta else agent)
         name = safe_upload_name(file.filename or "upload")
@@ -104,20 +184,17 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
             # Only inline reaches the model then: no larger than it inlines.
             max_bytes = min(max_bytes, WorkspaceLimits().max_file_read_bytes)
         ext = Path(name).suffix.lower().lstrip(".")
-        try:
-            if allowed is not None and ext and ext not in allowed:
-                raise WebError(
-                    415, "unsupported_file_type", f"file type '.{ext}' is not allowed"
-                )
-            data = bytearray()
-            while chunk := await file.read(1 << 20):
-                data.extend(chunk)
-                if len(data) > max_bytes:
-                    raise WebError(413, "file_too_large", "file too large")
-            if not data:
-                raise WebError(422, "invalid_request", "empty file")
-        finally:
-            await file.close()
+        if allowed is not None and ext and ext not in allowed:
+            raise WebError(
+                415, "unsupported_file_type", f"file type '.{ext}' is not allowed"
+            )
+        data = bytearray()
+        while chunk := await file.read(1 << 20):
+            data.extend(chunk)
+            if len(data) > max_bytes:
+                raise WebError(413, "file_too_large", "file too large")
+        if not data:
+            raise WebError(422, "invalid_request", "empty file")
         try:
             name = await asyncio.to_thread(save_attachment, folder, name, bytes(data))
         except OSError as exc:  # a full disk, a folder we can't write

@@ -294,15 +294,23 @@ async def test_a_key_cut_by_the_length_limit_leaves_no_prefix() -> None:
     assert "sk-" not in str(caught.value)
 
 
-async def test_a_key_no_header_can_carry_fails_without_being_shown() -> None:
-    key = "sk-secret-1234567890”"  # a pasted smart quote
-    engine = _engine(
-        lambda request: httpx.Response(200, json={"text": "ok"}), api_key=key
-    )
+@pytest.mark.parametrize(
+    # A pasted smart quote; a line wrap or a NUL inside the key.
+    "key",
+    ["sk-secret-1234567890”", "sk-secret-12345\n67890", "sk-secret-12345\x0067890"],
+)
+async def test_a_key_no_header_can_carry_fails_without_being_shown(key: str) -> None:
+    sent: list[httpx.Request] = []
 
-    with pytest.raises(TranscriptionError) as caught:
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={"text": "ok"})
+
+    engine = _engine(handler, api_key=key)
+    with pytest.raises(TranscriptionError, match="a header cannot carry") as caught:
         await engine(TranscriptionRequest(audio=TAKE))
-    assert "sk-secret" not in str(caught.value)
+    # Refused before the HTTP stack could quote it in an error of its own.
+    assert "sk-secret" not in str(caught.value) and not sent
 
     res = _client(transcribe=engine).post("/api/transcribe", content=TAKE, headers=WAV)
     assert res.status_code == 502 and "sk-secret" not in res.text

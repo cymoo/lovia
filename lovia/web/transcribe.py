@@ -98,6 +98,13 @@ def openai_transcriber(
         return text[:_DETAIL_MAX]
 
     async def transcribe(request: TranscriptionRequest) -> str:
+        if api_key and not (api_key.isascii() and api_key.isprintable()):
+            # Refused here, in fixed words: the HTTP stack would refuse it
+            # too, quoting the key in a spelling no redaction can match.
+            raise TranscriptionError(
+                "the API key has a character a header cannot carry",
+                hint="paste the key again: a line break or a smart quote got in",
+            )
         try:
             async with httpx.AsyncClient(
                 timeout=timeout,

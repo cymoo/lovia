@@ -33,6 +33,7 @@ from .questions import QuestionRegistry
 from .auth import generate_token, is_loopback, token_dependency
 from .followups import FollowupFn
 from .store import ChatStore
+from .transcribe import TranscribeFn
 
 if TYPE_CHECKING:
     from .config import ConfigRuntime
@@ -191,6 +192,7 @@ def create_app(
     titles: bool = True,
     followups: bool | FollowupFn = False,
     followup_model: str | Provider | None = None,
+    transcribe: TranscribeFn | None = None,
     title: str = "lovia",
     max_turns: int | Mapping[str, int] = 50,
     budget: RunBudget | None = None,
@@ -229,6 +231,12 @@ def create_app(
     replaces it wholesale (see :mod:`lovia.web.followups`). Off by default
     because — unlike a title — it costs one model call per *run*;
     ``followup_model`` points that call at a cheaper model than the agent's.
+
+    ``transcribe`` turns on voice input: the composer records a take and
+    ``POST /api/transcribe`` hands it to this
+    ``async def f(TranscriptionRequest) -> str``. For an OpenAI-compatible
+    endpoint, pass :func:`lovia.web.transcribe.openai_transcriber`. ``None``
+    (default): no microphone, and the route answers 404.
 
     ``context_policy`` is a server-level override applied to every served
     agent; ``None`` (default) lets each agent's own ``context_policy`` — or
@@ -359,6 +367,7 @@ def create_app(
         titles=titles,
         followups=followups,
         followup_model=followup_model,
+        transcribe=transcribe,
         max_turns=max_turns,
         budget=budget,
         retry=retry,

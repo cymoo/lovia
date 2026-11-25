@@ -72,6 +72,10 @@ live Runs, approvals, SSE subscribers, and scheduling coordination are held in
 that process. Use `workers=1`; scale by running isolated application instances
 with deliberate routing and storage ownership.
 
+A reverse proxy needs room for request bodies: attachments (up to
+`LOVIA_MAX_UPLOAD_MB`) and voice-input takes (up to 10 MiB) both exceed
+nginx's 1 MB default, so raise `client_max_body_size` to match.
+
 ## Failure and recovery
 
 - Retry transient Provider failures inside a Run with `RetryPolicy`.

@@ -5,7 +5,7 @@ The web UI's Settings is the one write path (over ``/api/config``); the
 through this package. Hand-editing the file stays possible — it is
 validated wholesale on load.
 
-- :mod:`.schema` — what the file says (profiles, roles, search, skills).
+- :mod:`.schema` — what the file says (profiles, roles, search, skills, voice).
 - :mod:`.storage` — where it lives (lovia's home), and atomic owner-only writes.
 - :mod:`.probe` — endpoint validation shared by every front-end.
 - :mod:`.runtime` — building and hot-swapping the served agent.
@@ -44,6 +44,7 @@ from .schema import (
     Roles,
     SearchConfig,
     SkillsConfig,
+    VoiceConfig,
     WebConfig,
     flavor_for_model,
     slugify,
@@ -86,6 +87,7 @@ __all__ = [
     "SearchConfig",
     "SkillsConfig",
     "ValidationOutcome",
+    "VoiceConfig",
     "WebConfig",
     "build_provider",
     "config_path",

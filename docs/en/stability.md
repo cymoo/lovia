@@ -65,6 +65,8 @@ These may change in any release:
   modules, `api.js` among them.
 - The `/api/config` and `/api/config/*` routes: they serve the CLI's built-in
   settings UI.
+- Voice input, while it is experimental: `POST /api/transcribe`,
+  `create_app(transcribe=)` and `lovia.web.transcribe`.
 - Text written for the model or for people: built-in prompts, tool
   descriptions, compaction markers and log messages.
 

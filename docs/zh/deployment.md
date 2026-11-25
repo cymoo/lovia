@@ -66,6 +66,9 @@ result = await agent.run(
 协调状态都保存在进程内。请使用 `workers=1`；需要扩展时，应运行相互隔离的应用实例，并明确
 设计路由和存储所有权。
 
+反向代理要给请求体留够空间：附件（上限 `LOVIA_MAX_UPLOAD_MB`）和语音输入的录音（上限
+10 MiB）都超过 nginx 默认的 1 MB，请相应调大 `client_max_body_size`。
+
 ## 失败与恢复
 
 - 使用 `RetryPolicy` 在 Run 内重试 Provider 的瞬时故障。

@@ -316,6 +316,54 @@ class AssistantConfig(BaseModel):
         return self
 
 
+_LANGUAGE = re.compile(r"^[a-z]{2,3}(-[a-z0-9]{2,8})*$")
+
+
+class VoiceConfig(BaseModel):
+    """Voice input: where a recorded take goes to become text.
+
+    Not a model profile: a transcription model can't chat, so it must not
+    show in the chat's model picker. The endpoint is OpenAI-compatible
+    (``{base_url}/audio/transcriptions``) and comes from a model profile's
+    connection (``connection``, its id) or from ``base_url`` + ``api_key``
+    here. Off until a ``model`` and an endpoint are both set — see
+    :meth:`WebConfig.voice_endpoint`.
+    """
+
+    model_config = ConfigDict(extra="ignore", validate_assignment=True)
+
+    connection: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    # ISO 639-1 (``zh``), a regional form where the model takes one
+    # (``zh-cn``); None lets the model detect it.
+    language: str | None = None
+
+    @model_validator(mode="after")
+    def _normalise(self) -> "VoiceConfig":
+        clean = {
+            name: (getattr(self, name) or "").strip() or None
+            for name in ("connection", "base_url", "api_key", "model", "language")
+        }
+        if clean["base_url"]:
+            clean["base_url"] = clean["base_url"].rstrip("/") or None
+        if clean["language"]:
+            clean["language"] = clean["language"].lower()
+            if not _LANGUAGE.match(clean["language"]):
+                raise ValueError(
+                    f"voice.language {self.language!r} is not a language code "
+                    "(like 'zh' or 'en')"
+                )
+        if clean["connection"] and clean["base_url"]:
+            raise ValueError("voice takes a connection or a base_url, not both")
+        self.__dict__.update(clean)
+        return self
+
+
+VoiceProblem = Literal["connection_missing", "connection_not_openai"]
+
+
 class WebConfig(BaseModel):
     """The whole ``config.json`` document.
 
@@ -335,6 +383,7 @@ class WebConfig(BaseModel):
     # The enabled ones load in every chat; order is display order.
     mcp: list[MCPServerConfig] = Field(default_factory=list)
     assistant: AssistantConfig = Field(default_factory=AssistantConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
 
     @model_validator(mode="after")
     def _check_references(self) -> "WebConfig":
@@ -371,6 +420,36 @@ class WebConfig(BaseModel):
 
     def aux_profile(self) -> ModelProfile | None:
         return self.profile(self.roles.aux)
+
+    def voice_problem(self) -> VoiceProblem | None:
+        """Why ``voice.connection`` leads nowhere, for Settings to say.
+
+        Deliberately not a load error, unlike a wrong ``roles`` reference:
+        deleting or re-pointing a model must not be refused over, or have
+        to know about, a setting that only borrows its endpoint.
+        """
+        ref = self.voice.connection
+        if ref is None:
+            return None
+        profile = self.profile(ref)
+        if profile is None:
+            return "connection_missing"
+        return "connection_not_openai" if profile.flavor != "openai" else None
+
+    def voice_endpoint(self) -> tuple[str, str | None] | None:
+        """``(base_url, api_key)`` voice input transcribes at; None: it is off."""
+        voice = self.voice
+        if voice.model is None:
+            return None
+        if voice.connection is not None:
+            profile = self.profile(voice.connection)
+            if profile is None or profile.flavor != "openai":
+                return None
+            conn = Connection.from_profile(profile)
+            return (conn.base_url or OPENAI_FLAVOR.default_base_url, conn.api_key)
+        if voice.base_url is not None:
+            return (voice.base_url, voice.api_key)
+        return None
 
 
 @dataclass

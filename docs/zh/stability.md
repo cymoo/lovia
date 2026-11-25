@@ -53,6 +53,8 @@ transcript，工具视图、审批规则和评测也按名字匹配，所以给�
 - 以 `_` 开头的名字。
 - 页面的 DOM 结构、CSS 类名、元素 id 和 JavaScript 模块（包括 `api.js`）。
 - `/api/config` 与 `/api/config/*` 路由：它们服务于 CLI 内置的设置界面。
+- 仍在实验阶段的语音输入：`POST /api/transcribe`、`create_app(transcribe=)` 和
+  `lovia.web.transcribe`。
 - 写给模型或人看的文字：内置提示词、工具描述、压缩标记和日志消息。
 
 ## 已存数据

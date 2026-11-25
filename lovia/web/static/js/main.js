@@ -205,6 +205,19 @@ function isTyping(target) {
   );
 }
 
+// The one place that knows voice.js exists: loaded on first need, and only
+// where the server reports features.transcription.
+let _voiceOn = false;
+async function syncVoice(info) {
+  const on = !!info?.features?.transcription;
+  if (on === _voiceOn) return;
+  _voiceOn = on;
+  const voice = await import('./voice.js');
+  // Asked again: two answers may have raced, and the last one stands.
+  if (_voiceOn) voice.enable();
+  else voice.disable();
+}
+
 function initKeyboardShortcuts() {
   // No key stops a run: a stop is final, and Esc — what closes things — is
   // pressed on reflex, on a task page that is only being watched too. The
@@ -324,6 +337,10 @@ window.lovia = lovia;
   // Push instead of poll: the lifecycle stream replaces the sidebar's run
   // polling wherever the server (and browser) support it.
   if (info?.features?.events) initEventStream();
+  // Voice input, where the server can transcribe. Settings turns that on and
+  // off while the page is open, so the answer is asked again on every change.
+  void syncVoice(info);
+  store.on('config-changed', () => api.info().then(syncVoice, () => {}));
 
   // Restore session from URL query string (?session=xxx).
   // Wait for the initial session list to land so the sidebar

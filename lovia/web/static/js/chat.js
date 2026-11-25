@@ -30,6 +30,7 @@ import {
   isImagePath,
   renderMarkdownInto,
   sanitizedFragment,
+  spaced,
   toDate,
   uploadFailedText,
 } from './util.js';
@@ -4183,6 +4184,71 @@ export function setDraft(text) {
   promptEl.focus();
 }
 
+/**
+ * Insert `text` at the composer's caret (over a selection), spaced from the
+ * words around it. Undoable, and the composer follows as if it were typed.
+ * Takes the focus only from neutral ground — the page body, or the composer
+ * itself: a search box or a dialog is somebody's work in progress, and there
+ * the text goes in without an undo step.
+ * @param {string} text
+ */
+export function insertText(text) {
+  if (!promptEl || !text) return;
+  const { selectionStart: start, selectionEnd: end, value } = promptEl;
+  const padded = spaced(value.slice(0, start), text, value.slice(end));
+  const ae = document.activeElement;
+  if (!ae || ae === document.body || composer?.contains(ae)) {
+    promptEl.focus();
+    // Deprecated and irreplaceable: the one insertion the undo stack records.
+    if (document.execCommand('insertText', false, padded)) return;
+  }
+  promptEl.setRangeText(padded, start, end, 'end');
+  promptEl.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/**
+ * Add `text` to the end of the draft of a chat that is not on screen.
+ * @param {string} chatId As `composerChat` named it.
+ * @param {string} text
+ * @returns {boolean} False when the browser keeps no drafts.
+ */
+export function appendDraft(chatId, text) {
+  const key = DRAFT_PREFIX + (chatId === _draftId ? 'new' : chatId);
+  try {
+    const kept = JSON.parse(localStorage.getItem(key) || '{}').text || '';
+    const draft = kept + spaced(kept, text, '');
+    localStorage.setItem(key, JSON.stringify({ text: draft, ts: Date.now() }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The id of the chat the composer writes to. A new chat has none until its
+ * first send; `mint` gives it the one that send will then create it with
+ * (as an upload does), so work begun in the draft stays with its chat.
+ * @param {{ mint?: boolean }} [opts]
+ * @returns {string | null}
+ */
+export function composerChat({ mint = false } = {}) {
+  return mint ? attachOwner() : store.sessionId || _draftId;
+}
+
+/** @type {Set<() => boolean>} */
+const _sendGates = new Set();
+/**
+ * Stand in front of the composer's submit — Enter, the send button, a steer.
+ * `gate` is asked first each time; returning true takes the submit, which
+ * then sends nothing.
+ * @param {() => boolean} gate
+ * @returns {() => void} Removes it.
+ */
+export function gateSend(gate) {
+  _sendGates.add(gate);
+  return () => _sendGates.delete(gate);
+}
+
 // ---- Drafts --------------------------------------------------------------
 // The composer's unsent text survives reloads and follows its chat: one
 // localStorage slot per session (plus one for the new-chat state), written on
@@ -5196,6 +5262,10 @@ export function initComposer() {
 
   composer?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if ([..._sendGates].some((gate) => gate())) {
+      _steerOnce = false;
+      return;
+    }
     let message = promptEl.value.trim();
 
     // A slash command is the page's to run, at once — mid-run too — and is

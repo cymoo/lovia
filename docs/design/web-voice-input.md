@@ -1,6 +1,6 @@
 # 语音输入：录一段，转成文字，放进输入框
 
-> 状态：设计定稿，未实现 · 2026-11-25 · 范围：`lovia/web`（新增 `transcribe.py`、`api/transcribe.py`、`static/js/voice.js`、`static/js/voice-settings.js`；改 `config/schema.py`、`config/runtime.py`、`api/config.py`、`api/__init__.py`、`api/deps.py`、`app.py`、`default.py`、`errors.py`、`static/js/chat.js`、`settings.js`、`main.js`、`i18n.js`、`static/styles.css`）。core 与 workspace 不改，不加依赖。
+> 状态：第 1、2 步已实现（#535、v0.9.277；界面 v0.9.278），第 3 步未做。与本文的出入见文末"实现时的出入" · 2026-11-25 · 范围：`lovia/web`（新增 `transcribe.py`、`api/transcribe.py`、`static/js/voice.js`、`static/js/voice-settings.js`；改 `config/schema.py`、`config/runtime.py`、`api/config.py`、`api/__init__.py`、`api/deps.py`、`app.py`、`default.py`、`errors.py`、`static/js/chat.js`、`settings.js`、`main.js`、`i18n.js`、`static/styles.css`）。core 与 workspace 不改，不加依赖。
 >
 > 行号指向 `main`（`be384429`，v0.9.275）。
 
@@ -307,5 +307,15 @@ class VoiceConfig(BaseModel):
 - **拿掉检验**：不加载 `voice.js` 时，`chat.js` 的三个导出没有调用方，其余行为和 `main` 一致。
 - 5 分钟录音的内存和转换时间；4:30 倒计时；到时只放进输入框，不发送。
 - 局域网 HTTP：按钮在，点了有说明。
+
+## 实现时的出入
+
+- **`default_app` 不向 `create_app` 传转写函数**。`RouterDeps.transcriber()` 在有 `config_runtime` 时直接问它，少一个"永远为真"的值。
+- **导出的是 `composerChat({ mint })`，不是 `attachOwner()`**。判断"正显示"只需要看一眼 id；直接调 `attachOwner()` 会给每个新聊天预生成 id，改变所有人首次发送的方式。只有开始录音时才 `mint`。
+- **多了一个 `voice-recorder.js`**：采集和转 WAV 不依赖页面，输入框和设置页的"试录一句"共用。`api.js` 加了 `transcribe`、`setVoice` 两个方法。
+- **沿用连接时，文件里没有密钥就用 `OPENAI_API_KEY`**，和聊天的 provider 一致（评审发现）。
+- **密钥里有请求头放不下的字符（换行、弯引号）时，发请求之前就拒绝**：HTTP 库的报错会把密钥原样带出来（评审发现）。
+- **麦克风按钮没有 `data-part`**：那是公开契约，实验期不加。
+- **未验证**：真实麦克风、真实转写服务、Safari、Edge 的 Ctrl+M、5 分钟录音、回声消除能否挡住提示音。自动化验证用的是合成音源和假转写服务（这个环境里 Chromium 的假麦克风不响应）。
 
 已做的小实验：用合成音源跑"录音 → WAV"，Chromium 145（webm/opus）和 WebKit 26（mp4/aac）的 2 秒录音转换各约 15 ms，`execCommand` 插入后可撤销。真实麦克风、转写接口和 5 分钟录音都没测。

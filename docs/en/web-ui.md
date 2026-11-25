@@ -681,6 +681,7 @@ finishes with what it started with.
 | **Assistant** → Long-term memory | `assistant.memory` | On, kept in `<home>/memory` |
 | **Assistant** → Background tasks | `assistant.subagents` | On |
 | **Assistant** → Suggest follow-up questions | `assistant.followups` | On |
+| **Voice input** | `voice` (`connection` or `base_url` + `api_key`, `model`, `language`) | Off — see [Voice input](#voice-input) |
 | — (the file only; restart to apply) | `assistant.max_turns` / `assistant.max_retries` | `150` / `5` |
 
 When `config.json` isn't writable (a read-only mount, say), the server still
@@ -885,6 +886,49 @@ Turn them off in **Settings → Assistant** to avoid that extra call, or point t
 cheaper model by assigning it the aux role ([Models and
 switching](#models-and-switching)). They are opt-in for a custom Agent served
 through `create_app()`; see [Web server](web-server.md#follow-up-suggestions).
+
+## Voice input
+
+Dictate a message instead of typing it. Off until you choose a transcription
+service in **Settings → Voice input**; then a microphone appears in the
+composer.
+
+| Action | Result |
+| --- | --- |
+| Click the microphone, or press Ctrl+M | Start recording; Ctrl+M again finishes |
+| Hold the microphone or Ctrl+M | Talk, then let go to finish |
+| ✓, or the send key | Transcribe and put the text at the caret, to review |
+| ↑ | Transcribe and send |
+| ✕, or Esc | Cancel; **Restore** brings the take back for 5 seconds |
+
+While a take records, the composer's own send key means ✓, never "send": text
+in the composer can be undone, a sent message cannot. The composer stays
+typeable throughout, and Stop stays where it is during a run.
+
+A take runs up to five minutes and is transcribed as a whole when it ends.
+Switching to another chat ends it; its text is added to the draft of the chat
+it began in. If the microphone goes away mid-take, what was recorded is
+transcribed.
+
+In Settings, **Connection** borrows the endpoint and key of a model you
+already configured (OpenAI-compatible ones are listed), or takes a base URL
+and key of its own. Then name a transcription model — `gpt-transcribe`,
+`whisper-large-v3-turbo` — and, if you mix languages in one sentence, the main
+language. **Try a sentence** checks the microphone, key, model and language
+together.
+
+Good to know:
+
+- Recordings go to the service you chose and may be billed. lovia keeps none:
+  not on disk, not in the chat.
+- Browsers allow the microphone only on HTTPS or `localhost`. On a plain-HTTP
+  LAN address the button says so when clicked.
+- Behind a reverse proxy, a long take needs room: see
+  [Deployment](deployment.md#serving-safely).
+- An unsent take is lost on reload; the page asks before leaving.
+
+Voice input is experimental: the HTTP route and Python names behind it may
+still change (see [Web server](web-server.md#voice-input)).
 
 ## Run and connection boundaries
 

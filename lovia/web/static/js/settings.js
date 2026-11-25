@@ -13,6 +13,7 @@ import { icon } from './icons.js';
 import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
 import { buildAssistantPane } from './assistant-config.js';
 import { mcpPane } from './mcp-config.js';
+import { buildVoicePane } from './voice-settings.js';
 import { hasMemory, memoryPane } from './memory.js';
 
 const NOTIF_KEY = 'lovia-notify';
@@ -311,6 +312,7 @@ export function openSettings(initialTab = 'general', opts = {}) {
           { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
           { id: 'mcp', label: t('settings.tabMcp'), build: mcpPane(opts) },
           { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
+          { id: 'voice', label: t('settings.tabVoice'), build: buildVoicePane },
         ]
       : [],
     [{ id: 'about', label: t('settings.tabAbout'), build: buildAboutPane }],

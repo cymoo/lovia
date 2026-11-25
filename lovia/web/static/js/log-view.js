@@ -15,7 +15,7 @@ const NEAR_END = 24;
  */
 export function createLogView({ maxLines = 5000 } = {}) {
   const text = createLogText();
-  /** @type {{ el: HTMLElement, lines: number }[]} */
+  /** @type {{ el: HTMLElement, lines: number, sealed?: boolean }[]} */
   let blocks = [];
   let total = 0;
   let omitted = 0; // characters dropped before the first one shown
@@ -38,7 +38,8 @@ export function createLogView({ maxLines = 5000 } = {}) {
   el.append(note, tail, jump);
 
   /** What scrolls: the viewer's body, or the reader's while it shows there. */
-  const scroller = () => /** @type {HTMLElement | null} */ (el.parentElement);
+  const scroller = () =>
+    /** @type {HTMLElement | null} */ (el.closest('.lv-files-viewer-body'));
 
   function toEnd() {
     const box = scroller();
@@ -67,7 +68,7 @@ export function createLogView({ maxLines = 5000 } = {}) {
   function addLines(lines) {
     for (let i = 0; i < lines.length; ) {
       let block = blocks[blocks.length - 1];
-      if (!block || block.lines >= BLOCK_LINES) {
+      if (!block || block.sealed || block.lines >= BLOCK_LINES) {
         const div = document.createElement('div');
         div.className = 'lv-log-block';
         div.append('');
@@ -115,7 +116,7 @@ export function createLogView({ maxLines = 5000 } = {}) {
       line.className = 'lv-log-note';
       line.textContent = t('log.gap', { n: n.toLocaleString() });
       tail.before(line);
-      blocks.push({ el: line, lines: 0 });
+      blocks.push({ el: line, lines: 0, sealed: true });
     },
     /** Attach to where `el` was put: call again after moving it. */
     watch() {

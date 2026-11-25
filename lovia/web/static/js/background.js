@@ -33,8 +33,12 @@ const items = () =>
     (store.currentTasks || []).filter((s) => s.parent_id === store.sessionId),
     store.runsBySession,
   );
-/** The list is what the user sees right now. */
+/** The tab is on. */
 const inView = () => panelState().open && panelState().mode === 'background';
+/** The list itself is before the user's eyes: not behind a log, a full-page
+ * view or another browser tab. */
+const onScreen = () =>
+  inView() && !document.hidden && els.list.getClientRects().length > 0;
 
 // ---- Commands ---------------------------------------------------------------
 
@@ -92,12 +96,11 @@ async function openProcess(id) {
   }
   setPanel('background');
   openGuest(processGuest(sid, row, { stop: stopCommand }));
-  render(); // marks the row
 }
 
 // ---- Tasks ------------------------------------------------------------------
 
-/** A task's stop asks once more: it would lose all it has done. */
+/** A task's stop asks once more: it ends where it is, and reports nothing. */
 async function stopTask(item) {
   if (_armed !== item.key) {
     arm(item.key);
@@ -159,7 +162,7 @@ let _lastSig = '';
 function render() {
   const list = items();
   _failures.take(store.sessionId, list);
-  if (inView()) _failures.seen();
+  if (onScreen()) _failures.seen();
   renderButton();
   renderList();
 }
@@ -363,6 +366,7 @@ export function initBackground() {
     if (shown) void loadProcs(); // their last lines, as of now
   });
   store.on('open-process', ({ id }) => void openProcess(id));
-  store.on('viewer-changed', renderList);
+  store.on('viewer-changed', render);
+  document.addEventListener('visibilitychange', render);
   if (store.sessionId) void loadProcs();
 }

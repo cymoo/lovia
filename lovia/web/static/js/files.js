@@ -1221,10 +1221,11 @@ function closeViewer({ forget = true } = {}) {
  * @property {string} name
  * @property {string} title The full name, as the header's tooltip.
  * @property {string} download
+ * @property {{ label: string, text: string }} copy A "⋯" entry that copies `text`.
  * @property {HTMLElement} info A block between the header and the body.
  * @property {HTMLElement} content What the body holds, and the reader while it is open.
  * @property {() => string} text What Copy copies.
- * @property {(body: HTMLElement) => void} mount
+ * @property {() => void} mount `content` is in the body.
  * @property {() => void} unmount
  * @property {() => void} leaving `content` is about to move to or from the reader …
  * @property {() => void} moved … and has.
@@ -1250,7 +1251,8 @@ export function openGuest(guest) {
   syncViewerViews();
   els.viewerInfo.replaceChildren(guest.info);
   renderViewerContent();
-  guest.mount(els.viewerBody);
+  els.viewerBody.replaceChildren(guest.content);
+  guest.mount();
   renderList(); // a file's row is no longer the open one
   store.emit('viewer-changed');
 }
@@ -2105,8 +2107,19 @@ export function initFiles() {
       if (folded(els.download)) {
         items.push({ label: t('files.download'), icon: icon('download', { size: 15 }), onSelect: () => els.download.click() });
       }
-      if (v.guest) return void openMenu(els.more, items);
       if (items.length) items.push(null);
+      if (v.guest) {
+        const { label, text } = v.guest.copy;
+        items.push({
+          label,
+          icon: icon('copy', { size: 15 }),
+          onSelect: async () => {
+            if (await copyToClipboard(text)) toast(t('toast.contentCopied'));
+          },
+        });
+        openMenu(els.more, items);
+        return;
+      }
       if (!v.path.startsWith('/')) {
         items.push({
           label: t('files.revealInTree'),

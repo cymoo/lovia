@@ -2,6 +2,7 @@
 // and its log — fetched by pages, followed while more may come. The viewer is
 // files.js's; this is a guest in it (see `openGuest`).
 import { t } from './i18n.js';
+import { store } from './store.js';
 import { api } from './api.js';
 import { icon } from './icons.js';
 import { toast } from './toast.js';
@@ -41,6 +42,8 @@ export function processGuest(sessionId, proc, { stop }) {
   const status = document.createElement('div');
   status.className = 'lv-proc-note';
   status.hidden = true;
+  const content = document.createElement('div');
+  content.append(status, log.el);
 
   // ---- the header block
   const info = document.createElement('div');
@@ -115,8 +118,12 @@ export function processGuest(sessionId, proc, { stop }) {
     if (mounted && !over && !document.hidden) timer = setTimeout(fetchPage, ms);
   }
 
+  /** On screen: not behind a closed panel or a full-page view. */
+  const shown = () => content.getClientRects().length > 0;
+
   async function fetchPage() {
     if (busy) return;
+    if (!shown()) return schedule(POLL_MAX_MS);
     busy = true;
     try {
       const page = await api.processOutput(sessionId, p.process_id, {
@@ -155,22 +162,24 @@ export function processGuest(sessionId, proc, { stop }) {
   }
 
   const onVisible = () => {
-    if (!document.hidden && timer === null && !busy) schedule(0);
+    if (!busy && shown()) schedule(0);
   };
+  let offPanel = null;
 
   return {
     key: `cmd:${p.process_id}`,
     name: p.command.split('\n')[0],
     title: p.command,
+    copy: { label: t('bg.copyCommand'), text: p.command },
     download: api.processLogUrl(sessionId, p.process_id),
     info,
-    content: log.el,
+    content,
     text: () => log.text(),
-    mount(body) {
+    mount() {
       mounted = true;
-      body.append(status, log.el);
       log.watch();
       document.addEventListener('visibilitychange', onVisible);
+      offPanel = store.on('panel-changed', onVisible);
       schedule(0);
     },
     moved: () => log.watch(),
@@ -181,6 +190,7 @@ export function processGuest(sessionId, proc, { stop }) {
       timer = null;
       log.unwatch();
       document.removeEventListener('visibilitychange', onVisible);
+      offPanel?.();
     },
     /** The command as just listed: its state, and maybe more output. */
     update(row) {

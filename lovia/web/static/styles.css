@@ -5279,8 +5279,20 @@ body.lv-files-resizing {
 [data-theme="dark"] .lv-files-tab.lv-active {
   background: var(--lv-surface-3);
 }
+/* Three tabs beside three buttons, on a panel 300px wide. */
+.lv-files-head .lv-files-tabs {
+  min-width: 0;
+}
+.lv-files-head .lv-files-tab {
+  min-width: 0;
+  padding: 4px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .lv-files-head-actions {
   display: inline-flex;
+  flex-shrink: 0;
   gap: 2px;
 }
 /* the refresh button grows a dot when a shell run may have changed files */

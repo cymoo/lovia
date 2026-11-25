@@ -99,7 +99,8 @@ the directory you started from; `lovia web ~/code/app` picks another.
 
 - **It works in your folders.** It reads and edits files, runs commands, plans
   with a todo list, searches the web, draws charts and tables, and hands
-  independent work to background subagents.
+  independent work to background subagents. A panel follows what runs in the
+  background, with each command's output.
 - **Many projects at once.** The sidebar groups chats by workspace. Each chat
   has its own folder, model and permission mode, and the folder can be on an
   SSH host or in a container. Ask the assistant about your workspaces or an

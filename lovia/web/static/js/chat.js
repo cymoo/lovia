@@ -7,8 +7,8 @@ import { draftWorkspaceRoot, ensureLinked, scopeRoot, workspaceName } from './wo
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
 import { addCodeBlockControls, copyToClipboard, openImageLightbox, showDialog } from './ui.js';
+import { fmtElapsed } from './elapsed.js';
 import {
-  fmtElapsed,
   forkChat,
   loadSessions,
   offerToStopTasks,

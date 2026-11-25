@@ -444,13 +444,24 @@ export const api = {
     url(
       `/api/sessions/${encodeURIComponent(sessionId)}/tool-images/${encodeURIComponent(callId)}/${index}`,
     ),
-  // ---- background processes (chat-scoped; the panel's Processes strip) ----
-  // Keyed by session id: processes belong to the chat's live workspace
-  // session, not to the agent. `[]` when nothing ran yet (or after a server
-  // restart — background processes never survive one).
+  // ---- background commands (chat-scoped; the panel's Background tab) ----
+  // Keyed by session id: they belong to the chat, not to the agent. The live
+  // ones, and the records of those that are over.
   /** @param {string} sessionId */
   sessionProcesses: (sessionId) =>
     request(`/api/sessions/${encodeURIComponent(sessionId)}/processes`).then(_json),
+  // One page of a command's output → { text, base, next, eof }; offsets count
+  // characters (code points). 404 once nothing is kept of it.
+  /** @param {string} sessionId @param {string} processId @param {{ after: number, limit: number }} page */
+  processOutput: (sessionId, processId, page) =>
+    request(
+      `/api/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/output${qs(page)}`,
+    ).then(_json),
+  /** @param {string} sessionId @param {string} processId @returns {string} */
+  processLogUrl: (sessionId, processId) =>
+    url(
+      `/api/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/log`,
+    ),
   // Kill one process; resolves to the refreshed process list.
   /** @param {string} sessionId @param {string} processId */
   killProcess: (sessionId, processId) =>

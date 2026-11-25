@@ -1,4 +1,6 @@
-// Files panel — a read-only window into the agent's workspace.
+// The right panel: the Files panel — a read-only window into the agent's
+// workspace — and the shell around the Background tab, whose list is
+// background.js's.
 //
 // lovia is a personal assistant, so the panel leads with "Changes": the files
 // this chat wrote or brought in, newest first, then — in a git work tree — the
@@ -6,6 +8,9 @@
 // place) is the secondary view. The viewer renders documents as documents:
 // markdown rich by default, images inline, CSV as a table; code gets
 // highlighting; a changed tracked file also offers its diff against HEAD.
+// "Background" needs no workspace, so it is what the panel shows for an agent
+// without one. The viewer takes guests besides files (`openGuest`): a
+// command's log (process-view.js).
 //
 // Wiring: chat.js emits `workspace-file-touched` for successful
 // write_file/edit_file calls and for a sent message's attachments (live and
@@ -56,7 +61,8 @@ const els = {};
 const state = {
   available: false, // current agent has a workspace
   open: false,
-  mode: 'changes', // 'changes' | 'browse'
+  mode: 'changes', // 'changes' | 'browse' | 'background'
+  fileMode: 'changes', // the tab of the two file ones that was last on
   entries: [], // the change list (Browse keeps its listings in `tree`)
   // The last change list, by path — what the viewer asks whether a file has
   // a diff to show (also while browsing). `git` says whether there is one at all.
@@ -64,7 +70,6 @@ const state = {
   git: false,
   truncated: false, // git listed more than the list shows
   othersOpen: false, // "other uncommitted changes" unfolded
-  procs: [], // background processes of this chat's workspace session
   touched: new Set(), // paths this chat wrote, or attached to a message
   // Per-path edit counter — busts the browser's in-page image cache only when
   // the agent actually touched the file. First opens use the bare URL, so the
@@ -78,7 +83,7 @@ const state = {
   filter: '', // case-insensitive substring over listed paths
   wrap: localStorage.getItem('lovia-files-wrap') !== '0', // wrap long lines
   listBeside: localStorage.getItem('lovia-files-list') !== '0', // beside an open file, given room
-  viewing: null, // { path, kind, raw, name, end, totalLines, truncated, view, diff }
+  viewing: null, // { path, kind, raw, name, end, totalLines, truncated, view, diff }, or { name, guest }
   listScroll: 0, // the list's scroll when a file covered it
 };
 
@@ -204,31 +209,53 @@ function syncListToggle() {
 
 function toggleList() {
   // A hidden list loses its scroll: keep it for when the list is back.
-  if (isWide()) state.listScroll = els.list.scrollTop;
+  if (isWide()) state.listScroll = listEl().scrollTop;
   state.listBeside = !state.listBeside;
   localStorage.setItem('lovia-files-list', state.listBeside ? '1' : '0');
   syncListToggle();
   syncLayout();
-  if (isWide()) els.list.scrollTop = state.listScroll;
+  if (isWide()) listEl().scrollTop = state.listScroll;
 }
 
+/** The list of the tab that is on. */
+const listEl = () => (state.mode === 'background' ? els.background : els.list);
+
 // ---- Panel open/close -----------------------------------------------------
+/** The file tabs are what the user sees. */
+const filesShown = () => state.open && state.mode !== 'background';
+
 // `persist: false` is for forced closes (agent without a workspace) — they
-// must not overwrite the user's remembered open/closed preference.
+// must not overwrite the user's remembered open/closed preference. Nor does
+// what only the Background tab can be opened for.
 function setOpen(open, { persist = true } = {}) {
-  state.open = open && state.available;
+  if (open && !state.available) selectTab('background');
+  state.open = open;
   els.panel.classList.toggle('lv-open', state.open);
-  els.btn?.setAttribute('aria-expanded', String(state.open));
-  if (persist) localStorage.setItem('lovia-files-open', state.open ? '1' : '0');
+  els.btn?.setAttribute('aria-expanded', String(filesShown()));
+  if (persist && state.available) {
+    localStorage.setItem('lovia-files-open', state.open ? '1' : '0');
+  }
   claimSpace();
-  if (state.open) {
+  if (filesShown()) {
     clearUnseen(); // the badge's job is done — the user is looking
     refresh();
-    refreshProcs();
-  } else {
-    clearTimeout(_procsTimer); // no polling behind a closed panel
-    _procsTimer = null;
   }
+  store.emit('panel-changed');
+}
+
+/** @returns {{ open: boolean, mode: string, files: boolean }} `files`: whether the file tabs are there. */
+export function panelState() {
+  return { open: state.open, mode: state.mode, files: state.available };
+}
+
+/**
+ * Show the panel at a tab, or close it (null).
+ * @param {'background' | null} mode
+ */
+export function setPanel(mode) {
+  if (mode === null) return setOpen(false);
+  if (state.mode !== mode) setMode(mode);
+  if (!state.open) setOpen(true);
 }
 
 // "n files written since you last looked" — a small count on the Files button.
@@ -289,10 +316,12 @@ function updateVisibility() {
   const agent = store.agents.find((a) => a.name === store.agent);
   state.available = !!agent?.workspace;
   els.btn?.classList.toggle('lv-hidden', !state.available);
+  els.tabChanges.classList.toggle('lv-hidden', !state.available);
+  els.tabBrowse.classList.toggle('lv-hidden', !state.available);
   if (state.available) scratchDirFor(store.agent); // warm it for the first write
   const phone = window.matchMedia('(max-width: 720px)').matches;
   if (!state.available) {
-    setOpen(false, { persist: false });
+    if (filesShown()) setOpen(false, { persist: false });
   } else if (
     !phone && // on phones the panel is a transient drawer — never auto-open
     localStorage.getItem('lovia-files-open') === '1' &&
@@ -319,7 +348,7 @@ let _refreshTimer = null;
 let _slowTimer = null;
 
 function queueRefresh() {
-  if (!state.open || _refreshTimer) return;
+  if (!filesShown() || _refreshTimer) return;
   if (_refreshing) {
     _refreshAgain = true;
     return;
@@ -335,7 +364,7 @@ function queueRender() {
   _renderQueued = true;
   queueMicrotask(() => {
     _renderQueued = false;
-    if (state.open) renderList();
+    if (filesShown()) renderList();
   });
 }
 
@@ -343,7 +372,7 @@ async function refresh() {
   clearTimeout(_refreshTimer);
   _refreshTimer = null;
   _refreshAgain = false;
-  if (!state.open) return;
+  if (!filesShown()) return;
   const seq = ++_refreshSeq;
   _refreshing = true;
   state.stale = false;
@@ -408,10 +437,10 @@ function applyChangeMap(changes) {
   syncViewerViews(); // a file on screen may just have gained (or lost) a diff
 }
 
-// Browsing refreshes only the directory, so the change map would stay as the
-// Changes tab last left it — or empty, for a panel that opened on Browse —
-// and a changed file would open with no Diff tab. Opening (or reloading) a
-// file there asks for the map in the background; the file shows meanwhile.
+// The other tabs don't ask for the change list, so the change map would stay
+// as the Changes tab last left it — or empty, for a panel that opened on
+// another — and a changed file would open with no Diff tab. Opening (or
+// reloading) a file there asks for the map meanwhile; the file shows at once.
 let _mapSeq = 0;
 async function refreshChangeMap() {
   const seq = ++_mapSeq;
@@ -423,7 +452,7 @@ async function refreshChangeMap() {
     return; // the map stays as it was: at worst a tab missing, as before
   }
   // A newer ask, another agent or folder, or the Changes tab took over.
-  if (seq !== _mapSeq || scope !== viewingScope() || state.mode !== 'browse') return;
+  if (seq !== _mapSeq || scope !== viewingScope() || state.mode === 'changes') return;
   applyChangeMap(changes);
 }
 
@@ -443,132 +472,41 @@ function emptyNode(text) {
   return div;
 }
 
-// ---- Background processes ---------------------------------------------------
-// A strip above the file list: what this chat's workspace session still has
-// running (dev servers, watchers), with a kill button — "stop the server"
-// must not require asking the model. Server-side these live for the chat
-// (lovia/web/workspaces.py), so the strip is the user's only window into
-// them between runs. Polls only while something is running and the panel is
-// open; refetches ride the same signals the file list uses.
-let _procsTimer = null;
-
-function refreshProcs() {
-  clearTimeout(_procsTimer);
-  _procsTimer = null;
-  if (!state.open || !store.sessionId) {
-    state.procs = [];
-    renderProcs();
-    return;
-  }
-  const sid = store.sessionId;
-  api
-    .sessionProcesses(sid)
-    .then((procs) => {
-      // The chat (or agent) may have changed while the request was in flight.
-      if (!state.open || store.sessionId !== sid) return;
-      state.procs = procs;
-      renderProcs();
-    })
-    .catch(() => {}); // transient (e.g. mid-restart) — keep the last render
-}
-
-function renderProcs() {
-  if (!els.procs) return;
-  clearTimeout(_procsTimer);
-  _procsTimer = null;
-  const procs = state.procs;
-  els.procs.classList.toggle('lv-hidden', !procs.length);
-  if (!procs.length) {
-    els.procs.replaceChildren();
-    return;
-  }
-  const frag = document.createDocumentFragment();
-  const running = procs.filter((p) => p.status === 'running').length;
-  const head = document.createElement('div');
-  head.className = 'lv-files-procs-head';
-  head.textContent = t('procs.title');
-  if (running) {
-    const count = document.createElement('span');
-    count.className = 'lv-files-procs-count';
-    count.textContent = String(running);
-    head.appendChild(count);
-  }
-  frag.appendChild(head);
-  for (const p of procs) frag.appendChild(procRow(p));
-  els.procs.replaceChildren(frag);
-  // Live processes exit on their own schedule — poll while any are running.
-  if (running && state.open) _procsTimer = setTimeout(refreshProcs, 8000);
-}
-
-function procRow(p) {
-  const row = document.createElement('div');
-  row.className = 'lv-proc-row';
-
-  const dot = document.createElement('span');
-  dot.className = `lv-proc-dot lv-${p.status}`;
-
-  const main = document.createElement('span');
-  main.className = 'lv-proc-main';
-  const cmd = document.createElement('span');
-  cmd.className = 'lv-proc-cmd';
-  cmd.textContent = p.command;
-  const meta = document.createElement('span');
-  meta.className = 'lv-proc-meta';
-  meta.textContent =
-    p.status === 'running'
-      ? t('procs.running')
-      : p.status === 'killed'
-        ? t('procs.killedStatus')
-        : t('procs.exited', { code: p.exit_code == null ? '?' : p.exit_code });
-  main.append(cmd, meta);
-  row.append(dot, main);
-  row.title = p.command;
-
-  if (p.status === 'running') {
-    const kill = document.createElement('button');
-    kill.type = 'button';
-    kill.className = 'lv-btn-icon lv-proc-kill';
-    kill.innerHTML = icon('x', { size: 14 });
-    kill.title = t('procs.kill');
-    kill.setAttribute('aria-label', t('procs.kill'));
-    kill.addEventListener('click', async () => {
-      // Capture the id: if the user switches chats while the kill is in
-      // flight, the response is the OLD chat's list — don't paint it onto
-      // the new one (the switch handler already refetched for it).
-      const sid = store.sessionId;
-      kill.disabled = true;
-      try {
-        const procs = await api.killProcess(sid, p.process_id);
-        if (store.sessionId === sid) {
-          state.procs = procs;
-          renderProcs();
-          // The process may have written files right up to its death.
-          store.emit('workspace-maybe-stale');
-        }
-        toast(t('procs.killed'));
-      } catch (err) {
-        kill.disabled = false;
-        toast(err.message || t('procs.killFailed'), { type: 'error' });
-      }
-    });
-    row.appendChild(kill);
-  }
-  return row;
-}
-
-function setMode(mode) {
-  // A tab is also the way back to its list from a file covering the panel.
-  if (state.viewing && !isWide()) closeViewer();
+/** Put a tab on, without loading what it lists. */
+function selectTab(mode) {
   state.mode = mode;
+  if (mode !== 'background') state.fileMode = mode;
   _mapSeq++; // a Browse map ask still out predates whatever this tab loads
-  els.tabChanges.classList.toggle('lv-active', mode === 'changes');
-  els.tabChanges.setAttribute('aria-selected', String(mode === 'changes'));
-  els.tabBrowse.classList.toggle('lv-active', mode === 'browse');
-  els.tabBrowse.setAttribute('aria-selected', String(mode === 'browse'));
+  for (const [tab, name] of [
+    [els.tabChanges, 'changes'],
+    [els.tabBrowse, 'browse'],
+    [els.tabBackground, 'background'],
+  ]) {
+    tab.classList.toggle('lv-active', mode === name);
+    tab.setAttribute('aria-selected', String(mode === name));
+  }
+  els.panel.classList.toggle('lv-background', mode === 'background');
+  els.btn?.setAttribute('aria-expanded', String(filesShown()));
   if (els.filter) els.filter.placeholder = t(mode === 'browse' ? 'files.filterTree' : 'files.filter');
   if (mode === 'browse') els.list.setAttribute('role', 'tree');
   else els.list.removeAttribute('role');
-  return refresh();
+  if (mode === 'background') {
+    // Whatever file listing is on its way is no longer asked for.
+    _refreshSeq++;
+    _refreshing = false;
+    clearTimeout(_slowTimer);
+    els.refresh.classList.remove('lv-loading', 'lv-stale');
+    els.collapse?.classList.add('lv-hidden');
+  }
+}
+
+async function setMode(mode) {
+  // A tab is also the way back to its list from a file covering the panel.
+  if (state.viewing && !isWide()) closeViewer();
+  selectTab(mode);
+  if (filesShown()) clearUnseen();
+  store.emit('panel-changed');
+  await refresh();
 }
 
 // ---- Browse: the folder tree -------------------------------------------------
@@ -1138,6 +1076,7 @@ function othersToggle(count) {
 }
 
 function renderList() {
+  if (state.mode === 'background') return; // background.js's list
   if (state.failed) return; // the list is the failure and its retry until one works
   const frag = document.createDocumentFragment();
   const needle = state.filter.toLowerCase();
@@ -1258,15 +1197,92 @@ async function restoreViewing() {
 
 /** @param {{ forget?: boolean }} [opts] `forget: false` for a close the user didn't ask for. */
 function closeViewer({ forget = true } = {}) {
-  if (forget) rememberViewing(null);
+  if (forget && !state.viewing?.guest) rememberViewing(null);
+  dropGuest();
   state.viewing = null;
   els.viewer.classList.add('lv-hidden');
   els.panel.classList.remove('lv-viewing');
   els.viewerBody.replaceChildren();
   renderList(); // drop the active highlight
+  store.emit('viewer-changed');
   // A narrow panel hid the list behind the file: back where the user left it.
   // (Wide, the list stayed in view and its scroll is the user's own.)
-  if (!isWide()) els.list.scrollTop = state.listScroll || 0;
+  if (!isWide()) listEl().scrollTop = state.listScroll || 0;
+}
+
+// ---- Guests ---------------------------------------------------------------------
+// The viewer's place and frame, for something that is not a workspace file: a
+// command's log. It keeps the viewer's name, wrap, copy, download and reader;
+// what only a file has (its diff, its source view, attaching it) is off.
+
+/**
+ * @typedef {object} ViewerGuest
+ * @property {string} key
+ * @property {string} name
+ * @property {string} title The full name, as the header's tooltip.
+ * @property {string} download
+ * @property {{ label: string, text: string }} copy A "⋯" entry that copies `text`.
+ * @property {HTMLElement} info A block between the header and the body.
+ * @property {HTMLElement} content What the body holds, and the reader while it is open.
+ * @property {() => string} text What Copy copies.
+ * @property {() => void} mount `content` is in the body.
+ * @property {() => void} unmount
+ * @property {() => void} leaving `content` is about to move to or from the reader …
+ * @property {() => void} moved … and has.
+ */
+
+/** @returns {ViewerGuest | null} */
+export function viewedGuest() {
+  return state.viewing?.guest ?? null;
+}
+
+/** @param {ViewerGuest} guest */
+export function openGuest(guest) {
+  coverList();
+  dropGuest();
+  rememberViewing(null); // a reload brings the file back, not the log
+  state.viewing = { name: guest.name, guest };
+  const name = document.createElement('span');
+  name.className = 'lv-files-viewer-stem';
+  name.textContent = guest.name;
+  els.viewerName.replaceChildren(name);
+  els.viewerName.title = guest.title;
+  els.download.href = guest.download;
+  syncViewerViews();
+  els.viewerInfo.replaceChildren(guest.info);
+  renderViewerContent();
+  els.viewerBody.replaceChildren(guest.content);
+  guest.mount();
+  renderList(); // a file's row is no longer the open one
+  store.emit('viewer-changed');
+}
+
+/**
+ * Move a guest's content into the reader: the thing itself, not a copy as for
+ * a file (syncModal) — it is still being written to. It moves back on close.
+ * @param {ViewerGuest} guest
+ */
+function guestToReader(guest) {
+  guest.leaving();
+  const body = document.createElement('div');
+  body.className = els.viewerBody.className;
+  body.append(guest.content);
+  els.modalBody.replaceChildren(body);
+}
+
+function dropGuest() {
+  const guest = viewedGuest();
+  if (!guest) return;
+  guest.unmount();
+  if (els.modal.open) els.modal.close();
+  els.viewerInfo.replaceChildren();
+}
+
+/** Put the viewer up, over the list unless there is room beside it. */
+function coverList() {
+  if (!els.panel.classList.contains('lv-viewing')) state.listScroll = listEl().scrollTop;
+  els.viewer.classList.remove('lv-hidden');
+  els.panel.classList.add('lv-viewing');
 }
 
 // The panel reads through a session locked to the workspace root (see
@@ -1581,7 +1597,7 @@ function syncViewerViews() {
     b.setAttribute('aria-selected', String(v.view === view));
   }
   els.viewFile.disabled = deleted;
-  els.attach.classList.toggle('lv-hidden', deleted);
+  els.attach.classList.toggle('lv-hidden', deleted || !!v.guest);
 }
 
 async function loadDiff(v) {
@@ -1669,9 +1685,13 @@ function renderDiff(d, path) {
 async function openFile(path, { silent = false, view = undefined } = {}) {
   const name = basename(path);
   rememberViewing(path);
-  if (!els.panel.classList.contains('lv-viewing')) state.listScroll = els.list.scrollTop;
-  els.viewer.classList.remove('lv-hidden');
-  els.panel.classList.add('lv-viewing');
+  coverList();
+  if (viewedGuest()) {
+    dropGuest();
+    els.viewerBody.replaceChildren();
+    state.viewing = null;
+    store.emit('viewer-changed');
+  }
   // The header names the file; its folder is in the tooltip, and "⋯" shows
   // it in the tree. A long name gives way in its middle, so the extension —
   // what kind of file this is — stays in view. An absolute path (outside the
@@ -1724,7 +1744,7 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
   const diff = shown === 'diff' ? same?.diff : undefined;
   state.viewing = { path, kind, name, raw: same?.raw ?? false, view: shown, diff };
   if (!silent) renderList();
-  if (!silent && state.mode === 'browse') void refreshChangeMap();
+  if (!silent && state.mode !== 'changes') void refreshChangeMap();
   syncViewerViews();
   if (shown === 'diff') {
     const v = state.viewing;
@@ -1861,8 +1881,14 @@ function syncWrapButton() {
 function renderViewerContent() {
   const v = state.viewing;
   if (!v) return;
-  els.viewerBody.replaceChildren();
   els.viewerBody.classList.toggle('lv-nowrap', !state.wrap);
+  if (v.guest) {
+    els.mdToggle.classList.add('lv-hidden');
+    els.wrapToggle.classList.remove('lv-hidden');
+    els.copyContent.classList.remove('lv-hidden');
+    return;
+  }
+  els.viewerBody.replaceChildren();
   if (v.view === 'diff') {
     if (!v.diff) return; // still loading
     els.mdToggle.classList.add('lv-hidden');
@@ -1961,14 +1987,14 @@ async function loadMore() {
 let _reloadTimer = null;
 function maybeReloadViewing(touchedPath) {
   const v = state.viewing;
-  if (!v) return;
+  if (!v?.path) return;
   if (!(v.path === touchedPath || touchedPath.endsWith(`/${v.path}`))) return;
   clearTimeout(_reloadTimer);
   _reloadTimer = setTimeout(() => {
     if (state.viewing?.path !== v.path) return;
     openFile(v.path, { silent: true });
     // The write may have given the file a diff (Changes refreshes on its own).
-    if (state.mode === 'browse') void refreshChangeMap();
+    if (state.mode !== 'changes') void refreshChangeMap();
   }, 400);
 }
 
@@ -1983,11 +2009,13 @@ export function initFiles() {
   els.viewDiff = document.getElementById('files-view-diff');
   els.viewFile = document.getElementById('files-view-file');
   els.tabBrowse = document.getElementById('files-tab-browse');
+  els.tabBackground = document.getElementById('files-tab-background');
   els.refresh = document.getElementById('files-refresh');
   els.close = document.getElementById('files-close');
   els.collapse = document.getElementById('files-collapse');
   els.list = document.getElementById('files-list');
-  els.procs = document.getElementById('files-procs');
+  els.background = document.getElementById('background-list');
+  els.viewerInfo = document.getElementById('files-viewer-info');
   els.viewer = document.getElementById('files-viewer');
   els.viewerName = document.getElementById('files-viewer-name');
   els.viewerBody = document.getElementById('files-viewer-body');
@@ -2080,6 +2108,18 @@ export function initFiles() {
         items.push({ label: t('files.download'), icon: icon('download', { size: 15 }), onSelect: () => els.download.click() });
       }
       if (items.length) items.push(null);
+      if (v.guest) {
+        const { label, text } = v.guest.copy;
+        items.push({
+          label,
+          icon: icon('copy', { size: 15 }),
+          onSelect: async () => {
+            if (await copyToClipboard(text)) toast(t('toast.contentCopied'));
+          },
+        });
+        openMenu(els.more, items);
+        return;
+      }
       if (!v.path.startsWith('/')) {
         items.push({
           label: t('files.revealInTree'),
@@ -2102,14 +2142,21 @@ export function initFiles() {
   if (els.resizer) initResizer();
   initLayout();
 
-  els.btn.addEventListener('click', () => setOpen(!state.open));
+  // The Files button is for the file tabs, as the topbar's background button
+  // is for that one: each shows its own, and closes the panel showing it.
+  els.btn.addEventListener('click', () => {
+    if (filesShown()) return setOpen(false);
+    if (state.mode === 'background') void setMode(state.fileMode);
+    if (!state.open) setOpen(true);
+  });
   els.close.addEventListener('click', () => setOpen(false));
   els.refresh.addEventListener('click', () => {
-    refresh();
-    refreshProcs();
+    if (state.mode === 'background') store.emit('panel-changed'); // lists anew
+    else refresh();
   });
   els.tabChanges.addEventListener('click', () => setMode('changes'));
   els.tabBrowse.addEventListener('click', () => setMode('browse'));
+  els.tabBackground.addEventListener('click', () => setMode('background'));
   for (const [b, view] of [
     [els.viewDiff, 'diff'],
     [els.viewFile, 'file'],
@@ -2140,7 +2187,7 @@ export function initFiles() {
   });
   els.copyContent.addEventListener('click', async () => {
     const v = state.viewing;
-    const content = v?.view === 'diff' ? v.diff?.diff : v?.content;
+    const content = v?.guest ? v.guest.text() : v?.view === 'diff' ? v.diff?.diff : v?.content;
     if (typeof content !== 'string') return;
     if (await copyToClipboard(content)) toast(t('toast.contentCopied'));
   });
@@ -2148,8 +2195,10 @@ export function initFiles() {
     const v = state.viewing;
     if (!v) return;
     els.modalName.textContent = v.name || v.path;
-    syncModal();
+    if (v.guest) guestToReader(v.guest);
+    else syncModal();
     els.modal.showModal();
+    v.guest?.moved();
   });
   // The reader holds a clone, and clones carry no listeners — delegate its
   // live controls back to the panel, then re-mirror. "Load more" extends the
@@ -2189,7 +2238,15 @@ export function initFiles() {
   els.modal.addEventListener('click', (e) => {
     if (e.target === els.modal) els.modal.close(); // backdrop click
   });
-  els.modal.addEventListener('close', () => els.modalBody.replaceChildren());
+  els.modal.addEventListener('close', () => {
+    const guest = viewedGuest();
+    if (guest && els.modalBody.contains(guest.content)) {
+      guest.leaving();
+      els.viewerBody.append(guest.content);
+      guest.moved();
+    }
+    els.modalBody.replaceChildren();
+  });
   // The reverse of the tool card's "open in Files panel": put the viewed file
   // on the next message. chat.js owns the composer tray and answers.
   els.attach.addEventListener('click', () => {
@@ -2237,10 +2294,7 @@ export function initFiles() {
     closeViewer({ forget: false });
     clearList();
     updateVisibility();
-    if (state.open) {
-      refresh();
-      refreshProcs();
-    }
+    refresh();
   });
   // The panel shows the directory the chat on screen works in (a draft's,
   // for a new chat): a different one is a different tree — start over.
@@ -2252,19 +2306,17 @@ export function initFiles() {
     clearList();
     if (state.open) refresh();
   });
-  // "touched" (and the edit revisions) are scoped to the chat on screen —
-  // and so are background processes. The list drops at once what the chat
-  // just left wrote; the replay of the new one's history asks for its own.
+  // "touched" (and the edit revisions) are scoped to the chat on screen, and
+  // so is a guest in the viewer. The list drops at once what the chat just
+  // left wrote; the replay of the new one's history asks for its own.
   const chatChanged = () => {
+    if (viewedGuest()) closeViewer();
     state.touched.clear();
     state.revs.clear();
     clearUnseen();
     state.entries = state.entries.filter((e) => !e.touched);
     queueRender();
     queueRefresh();
-    state.procs = [];
-    renderProcs();
-    refreshProcs();
   };
   store.on('session-switched', chatChanged);
   store.on('reset-chat-view', chatChanged);
@@ -2279,19 +2331,16 @@ export function initFiles() {
     // Badge only live-run writes of deliverables: replayed history re-emits
     // old touches, and a scratch write never reaches the change list the
     // badge invites the user to open. Decided once the scratch dir is known.
-    if (state.open || !store.streaming) return;
+    if (filesShown() || !store.streaming) return;
     const agent = store.agent;
     const scratch = await scratchDirFor(agent);
-    if (store.agent !== agent || state.open || isScratch(key, scratch)) return;
+    if (store.agent !== agent || filesShown() || isScratch(key, scratch)) return;
     state.unseen.add(key);
     renderBadge();
   });
   store.on('workspace-maybe-stale', () => {
     state.stale = true;
-    if (state.open) els.refresh.classList.add('lv-stale');
-    // The same tool completions that can change files (shell, output polls,
-    // kills) are exactly the moments the process list can change.
-    if (state.open) refreshProcs();
+    if (filesShown()) els.refresh.classList.add('lv-stale');
   });
   // A tool card's "open in Files panel" action (chat.js) — open the panel and
   // jump straight to the file the tool touched.

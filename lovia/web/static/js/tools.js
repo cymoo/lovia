@@ -557,6 +557,24 @@ function isPlainEdit(node, text) {
   );
 }
 
+// What shell(background=true) answers (workspace/tools.py _render_command_result).
+const STARTED_PROCESS = /^started background process (\S+) \(pid /;
+
+/** A card that started a background command opens its log. */
+function offerOutput(node, result) {
+  const id = node.dataset.tool === 'shell' ? STARTED_PROCESS.exec(result)?.[1] : null;
+  if (!id || node.querySelector('.lv-tool-open-output')) return;
+  const open = toolActionBtn('terminal', t('bg.viewOutput'));
+  open.classList.add('lv-tool-open-file', 'lv-tool-open-output');
+  open.addEventListener('click', (e) => {
+    // Inside <summary>: don't let the click also toggle the card.
+    e.preventDefault();
+    e.stopPropagation();
+    store.emit('open-process', { id });
+  });
+  node.querySelector('summary')?.appendChild(open);
+}
+
 /**
  * Settle a card with its call's result — the one renderer behind both the
  * live tool_result event and history replay: content (highlighted or
@@ -580,6 +598,7 @@ export function setToolResult(node, result, isError, images, live = false) {
   node.dataset.status = isError ? 'error' : 'done';
   renderToolImages(node, images);
   refreshTool(node, live);
+  if (!isError) offerOutput(node, String(result ?? ''));
   const pre = /** @type {HTMLElement | null} */ (node.querySelector('.lv-tool-result'));
   if (!pre) return;
   const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);

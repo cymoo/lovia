@@ -219,8 +219,9 @@ process id —— 这是运行 dev server、watcher、长构建/长测试的方�
   （executor 的后台支持尚未接入）。
 
 同一套能力也在 session 上供库用法和自定义工具使用：`spawn` / `read_process_output` /
-`kill_process`，另有 `background_processes()`——被动状态列表（不消费任何输出），
-供状态提醒和 UI 列表使用。
+`kill_process`。另有两个不消费任何输出的调用，供模型之外的 UI 使用：
+`background_processes()` 返回被动的状态列表（状态提醒也用它）；
+`stop_process(process_id)` 杀掉整个 process group，但把没读过的输出和退出状态留给模型读。
 
 **session 的生命周期由服务层决定。**默认情况下 runner 每次 run 打开新 session、run 结束即关闭——
 对一次性的 `Runner.run` 脚本正合适（run 就是整个对话）。持有长对话的服务层应该用
@@ -276,7 +277,7 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 `read_text` / `read_bytes`（整个文件，或用 `offset=` / `length=` 读其中一段）/ `stat` /
 `write_text` / `write_bytes` / `edit_text` / `list_files` /
 `grep` / `run` / `spawn` /
-`read_process_output` / `kill_process`，以及
+`read_process_output` / `kill_process` / `stop_process`，以及
 `decide_path(path, write=...)` 和 `decide_command(command)`，供工具在行动前检查。两者都返回
 `Verdict`（`action`、`reason`、`scopes`）；文件和命令方法遇到 `deny` 会抛异常，你自己的
 `permission` 谓词可以把判定原样返回。

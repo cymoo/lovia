@@ -58,6 +58,7 @@ _SESSION_METHODS = frozenset(
         "run",
         "spawn",
         "stat",
+        "stop_process",
         "write_bytes",
         "write_text",
     }

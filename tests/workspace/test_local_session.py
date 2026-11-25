@@ -1871,6 +1871,40 @@ async def test_kill_after_natural_exit_reports_exited(tmp_path) -> None:
     assert result.status == "exited" and result.exit_code == 0
 
 
+async def test_stop_process_leaves_the_exit_and_the_tail_to_the_reader(
+    tmp_path,
+) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    start = await session.spawn("echo tail; touch ready; sleep 30")
+    while not (tmp_path / "ready").exists():
+        await asyncio.sleep(0.02)
+    stopped = await session.stop_process(start.process_id)
+    assert (stopped.status, stopped.exit_code) == ("killed", -9)
+    assert stopped.exit_seen is False
+    # Stopping again changes nothing.
+    assert await session.stop_process(start.process_id) == stopped
+    out = await session.read_process_output(start.process_id)
+    assert (out.status, out.exit_code, out.output) == ("killed", -9, "tail\n")
+    (status,) = session.background_processes()
+    assert status.exit_seen is True
+    with pytest.raises(WorkspaceError, match="Unknown process id"):
+        await session.stop_process("bg-zzzzzz")
+    await session.close()
+
+
+async def test_stop_process_kills_what_an_exited_shell_left_behind(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    marker = tmp_path / "marker"
+    start = await session.spawn(f"(sleep 1 && touch {marker}) & exit 0")
+    while session.background_processes()[0].status == "running":
+        await asyncio.sleep(0.02)
+    stopped = await session.stop_process(start.process_id)
+    assert (stopped.status, stopped.exit_code) == ("exited", 0)
+    await asyncio.sleep(1.2)
+    assert not marker.exists()
+    await session.close()
+
+
 async def test_close_kills_background_processes(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
     marker = tmp_path / "marker"

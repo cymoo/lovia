@@ -204,6 +204,15 @@ class WorkspaceSession(Protocol):
         """Kill a background process's whole group; report its final tail."""
         ...
 
+    async def stop_process(self, process_id: str) -> ProcessStatus:
+        """Kill a background process's whole group, consuming nothing.
+
+        Unlike :meth:`kill_process`, the unread output and the exit stay for
+        :meth:`read_process_output`: a UI can stop a process without hiding
+        its end from the model.
+        """
+        ...
+
     def background_processes(
         self,
     ) -> "list[ProcessStatus] | Awaitable[list[ProcessStatus]]":

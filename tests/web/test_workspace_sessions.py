@@ -134,6 +134,40 @@ def test_kill_endpoint_kills_and_reports(tmp_path) -> None:
         assert c.get(f"/api/sessions/{sid}/processes").json()[0]["status"] == "killed"
 
 
+def test_a_process_the_user_stopped_is_still_the_models_to_read(tmp_path) -> None:
+    agent = _ws_agent(
+        tmp_path,
+        [
+            call(
+                "shell",
+                {"command": "echo tail; touch up; sleep 60", "background": True},
+            ),
+            text("started"),
+        ],
+    )
+    provider = agent.model
+    with TestClient(_app(agent)) as c:
+        sid = c.post("/api/chat", json={"message": "go"}).json()["session_id"]
+        deadline = time.time() + 5
+        while not (tmp_path / "up").exists() and time.time() < deadline:
+            time.sleep(0.02)
+        (proc,) = c.get(f"/api/sessions/{sid}/processes").json()
+        pid = proc["process_id"]
+        c.post(f"/api/sessions/{sid}/processes/{pid}/kill")
+        # The id is known only now, so the rest of the script is too.
+        provider._script += [
+            call("read_process_output", {"process_id": pid}, call_id="read"),
+            text("seen"),
+        ]
+        c.post("/api/chat", json={"message": "well?", "session_id": sid})
+
+    reminded, read = provider.calls[2], provider.calls[3]
+    assert any(f"{pid} killed" in str(m.content) for m in reminded)
+    result = read[-1]
+    assert result.role == "tool"
+    assert result.content == f"process {pid}: killed\ntail"
+
+
 def test_processes_empty_without_live_session(tmp_path) -> None:
     agent = _ws_agent(tmp_path, [text("hi")])
     with TestClient(_app(agent)) as c:

@@ -2125,6 +2125,7 @@ async def test_peeking_consumes_nothing(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
     start = await session.spawn("printf '日志🎉\\nend\\n'", cwd=".")
     await _until(lambda: session.background_processes()[0].output_closed)
+    await _until(lambda: session.background_processes()[0].ended_at)
 
     first = await session.peek_process_output(start.process_id, limit=3)
     assert (first.text, first.base, first.next, first.eof) == ("日志🎉", 0, 3, False)
@@ -2148,7 +2149,9 @@ async def test_peeking_consumes_nothing(tmp_path) -> None:
 
 async def test_peek_ends_with_the_output_not_the_process(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
-    start = await session.spawn("(sleep 0.7; echo late) & echo early")
+    start = await session.spawn(
+        "(while [ ! -e go ]; do sleep 0.05; done; echo late) & echo early"
+    )
     status = await _until(
         lambda: next(
             (p for p in session.background_processes() if p.status == "exited"), None
@@ -2161,6 +2164,7 @@ async def test_peek_ends_with_the_output_not_the_process(tmp_path) -> None:
     chunk = await session.peek_process_output(start.process_id, limit=100)
     assert (chunk.text, chunk.eof) == ("early\n", False)
 
+    (tmp_path / "go").touch()
     await _until(lambda: session.background_processes()[0].output_closed)
     chunk = await session.peek_process_output(
         start.process_id, after=chunk.next, limit=100

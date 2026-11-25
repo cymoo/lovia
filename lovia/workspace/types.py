@@ -114,7 +114,7 @@ class ProcessOutput:
 
     ``output`` is everything the process wrote (stdout and stderr merged)
     since the previous read; ``truncated`` reports that older unread output
-    was dropped to the buffer cap. After the process ends, ``status`` and
+    was left out, over the cap of one read. After the process ends, ``status`` and
     ``exit_code`` carry the outcome — reads never turn into errors.
     """
 
@@ -132,6 +132,8 @@ class ProcessStatus:
     ``exit_seen`` reports whether a ``read_process_output``/``kill_process``
     already delivered the exit to its caller; the per-turn status reminder
     announces an exited process until that flips.
+
+    Times are Unix seconds by the clock of the machine the process runs on.
     """
 
     process_id: str
@@ -139,6 +141,37 @@ class ProcessStatus:
     status: Literal["running", "exited", "killed"]
     exit_code: int | None = None
     exit_seen: bool = False
+    cwd: str = ""
+    """The directory it started in: absolute, POSIX."""
+    started_at: float = 0.0
+    ended_at: float | None = None
+    """When the exit was noticed."""
+    output_chars: int = 0
+    """Characters written so far: the offset the next one will have."""
+    output_closed: bool = False
+    """Whether nothing more can be written. Later than the exit while a
+    process it started still holds the output."""
+    last_line: str = ""
+    """The last line of output that is not blank, clipped."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProcessChunk:
+    """One page of a background process's output, read without consuming it.
+
+    Offsets count characters from the start of the process.
+    """
+
+    process_id: str
+    text: str
+    base: int
+    """The oldest offset still held. Past the one asked for: what lies
+    between was dropped, and ``text`` starts here."""
+    next: int
+    """The offset to read from next."""
+    eof: bool
+    """The output is closed and ``next`` is its end. This follows the output,
+    not the process, which may exit first."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -193,8 +226,8 @@ class WorkspaceLimits:
 
     max_shell_output_chars: int = 30_000
     """Max characters of one command's stdout/stderr captured (each stream
-    clipped independently). Also the per-process buffer cap for background
-    output: between reads only the newest this-many characters are kept."""
+    clipped independently). Also what one ``read_process_output`` returns at
+    most: the newest this-many of the characters not read yet."""
 
     max_grep_file_bytes: int = 5_000_000
     """Files larger than this are skipped by grep."""
@@ -207,6 +240,11 @@ class WorkspaceLimits:
 
     max_grep_matches: int = 100
     """Default cap on matches returned by ``grep``."""
+
+    max_process_buffer_chars: int = 1_000_000
+    """Characters of output kept per background process, newest first, until
+    a minute after it has ended and closed its output. From then on only what
+    the model has not read is kept, up to ``max_shell_output_chars``."""
 
 
 class ClippedList(list[_ItemT]):
@@ -235,6 +273,7 @@ __all__ = [
     "FileChange",
     "FileContent",
     "GrepMatch",
+    "ProcessChunk",
     "ProcessOutput",
     "ProcessStart",
     "ProcessStatus",

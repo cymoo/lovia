@@ -302,7 +302,16 @@ async def test_commands_and_background_processes(host, tmp_path) -> None:
     assert (await session.kill_process(started.process_id)).status == "killed"
     assert await _dead(started.pid)
 
-    started = await session.spawn("sleep 30")
+    started = await session.spawn("echo 日志🎉; sleep 30")
+    for _ in range(250):
+        listed = (await session.background_processes())[-1]
+        if listed.output_chars:
+            break
+        await asyncio.sleep(0.02)
+    assert (listed.last_line, listed.ended_at) == ("日志🎉", None)
+    assert listed.cwd == tmp_path.resolve().as_posix()
+    chunk = await session.peek_process_output(started.process_id, after=1, limit=2)
+    assert (chunk.text, chunk.base, chunk.next, chunk.eof) == ("志🎉", 0, 3, False)
     stopped = await session.stop_process(started.process_id)
     assert (stopped.status, stopped.exit_seen) == ("killed", False)
     assert await _dead(started.pid)

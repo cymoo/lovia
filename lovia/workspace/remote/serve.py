@@ -51,6 +51,7 @@ _SESSION_METHODS = frozenset(
         "grep",
         "kill_process",
         "list_files",
+        "peek_process_output",
         "read_bytes",
         "read_instructions",
         "read_process_output",

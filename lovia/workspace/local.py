@@ -23,6 +23,7 @@ import signal
 import stat as stat_module
 import subprocess
 import tempfile
+import time
 import uuid
 import weakref
 from collections import deque
@@ -54,6 +55,7 @@ from .types import (
     FileContent,
     GrepMatch,
     InstructionFile,
+    ProcessChunk,
     ProcessOutput,
     ProcessStart,
     ProcessStatus,
@@ -406,47 +408,97 @@ def _venv_bin_dir(root: Path) -> tuple[Path, Path] | None:
     return None
 
 
-class _TailBuffer:
-    """Unread output of one background process, capped to the newest chars.
+class _OutputRing:
+    """The newest output of one background process, at most ``cap`` chars.
 
-    Appends between reads accumulate; once the cap is exceeded the *oldest*
-    unread text is dropped — for a long-running process the tail is what a
-    poll cares about, and earlier reads already delivered the head.
-    ``take`` drains the buffer and reports whether anything was dropped
-    since the previous take. Single-threaded by construction (only touched
-    from the event loop), so no locking.
+    Addressed by absolute offset: characters since the process started, which
+    stay valid while older text is dropped. Any number of readers page with
+    :meth:`read`; the model's reads (:meth:`take`) have a cursor of their own.
+    Single-threaded by construction (only touched from the event loop), so no
+    locking.
     """
 
-    __slots__ = ("_cap", "_parts", "_size", "_dropped")
+    __slots__ = ("_cap", "_parts", "_start", "end", "cursor", "_unread_only")
 
     def __init__(self, cap: int) -> None:
         self._cap = max(0, cap)
         self._parts: deque[str] = deque()
-        self._size = 0
-        self._dropped = False
+        # Offset of the first part, which may reach back past ``base``: parts
+        # are dropped whole, so an append never copies one.
+        self._start = 0
+        self.end = 0
+        self.cursor = 0
+        self._unread_only = False
+
+    @property
+    def base(self) -> int:
+        """Offset of the oldest character still held."""
+        return max(self._start, self.end - self._cap)
 
     def append(self, text: str) -> None:
         if not text:
             return
-        self._parts.append(text)
-        self._size += len(text)
-        while self._size > self._cap:
-            head = self._parts[0]
-            excess = self._size - self._cap
-            if len(head) <= excess:
-                self._parts.popleft()
-                self._size -= len(head)
-            else:
-                self._parts[0] = head[excess:]
-                self._size -= excess
-            self._dropped = True
+        # A process printing line by line must not leave a string per line.
+        if self._parts and len(self._parts[-1]) + len(text) <= _RING_MERGE_CHARS:
+            self._parts[-1] += text
+        else:
+            self._parts.append(text)
+        self.end += len(text)
+        base = self.base
+        while self._parts and self._start + len(self._parts[0]) <= base:
+            self._start += len(self._parts.popleft())
 
-    def take(self) -> tuple[str, bool]:
-        text, dropped = "".join(self._parts), self._dropped
-        self._parts.clear()
-        self._size = 0
-        self._dropped = False
+    def read(self, after: int, limit: int) -> tuple[str, int]:
+        """Up to ``limit`` characters from ``after``, or from ``base`` when
+        that is later; and the offset that follows them."""
+        lo = min(max(after, self.base), self.end)
+        hi = min(self.end, lo + max(0, limit))
+        out, at = [], self._start
+        for part in self._parts:
+            if at >= hi:
+                break
+            if at + len(part) > lo:
+                out.append(part[max(0, lo - at) : hi - at])
+            at += len(part)
+        return "".join(out), hi
+
+    def take(self, limit: int) -> tuple[str, bool]:
+        """The newest ``limit`` characters past the cursor, which moves to the
+        end; and whether older unread text was left out."""
+        lo = max(self.cursor, self.base, self.end - max(0, limit))
+        dropped = lo > self.cursor
+        text, self.cursor = self.read(lo, self.end - lo)
+        if self._unread_only:
+            self._keep(self.end)
         return text, dropped
+
+    def keep_unread(self, limit: int) -> None:
+        """Hold only what a :meth:`take` has yet to return, from now on."""
+        self._unread_only = True
+        self._keep(max(self.cursor, self.base, self.end - max(0, limit)))
+
+    def _keep(self, after: int) -> None:
+        text, _ = self.read(after, self.end - after)
+        self._parts = deque([text] if text else [])
+        self._start = after
+
+    def last_line(self) -> str:
+        tail, _ = self.read(self.end - _LAST_LINE_WINDOW, _LAST_LINE_WINDOW)
+        # splitlines() also splits at "\r": of a redrawn progress bar, the
+        # latest state.
+        lines = [line for line in tail.splitlines() if line.strip()]
+        return lines[-1].strip()[:_LAST_LINE_CHARS] if lines else ""
+
+
+# Appends are merged into the newest part up to this size.
+_RING_MERGE_CHARS = 4096
+# How far back last_line() looks, and how much of the line it returns.
+_LAST_LINE_WINDOW = 4096
+_LAST_LINE_CHARS = 300
+
+# How long a finished process keeps its whole buffer, for a UI to fetch,
+# before it shrinks to what the model has not read.
+_SHRINK_DELAY = 60.0
 
 
 @dataclass
@@ -455,18 +507,28 @@ class _BackgroundProcess:
 
     id: str
     command: str
+    cwd: str
     proc: asyncio.subprocess.Process
-    buffer: _TailBuffer
+    buffer: _OutputRing
+    # How much of the buffer one model read returns at most.
+    read_chars: int
+    started_at: float = field(default_factory=time.time)
+    ended_at: float | None = None
     # Drains the merged stdout/stderr pipe into ``buffer`` until EOF, then
     # reaps the child. Always draining matters beyond bookkeeping: an
     # unread pipe fills up and blocks the process.
     reader: asyncio.Task[None] = field(init=False, repr=False)
+    # All the output is in ``buffer``. The reader finishes with the process,
+    # which may go on after closing its output.
+    drained: bool = False
     killed: bool = False
     # Whether a read/kill has delivered the exit to its caller. The per-turn
     # status reminder announces an exited process until this flips — sturdier
     # than notifying exactly once, which an injected (never persisted) entry
     # cannot promise across resumes.
     exit_seen: bool = False
+    # Pending buffer shrink, see _SHRINK_DELAY.
+    shrink: asyncio.TimerHandle | None = field(default=None, repr=False)
 
     @property
     def status(self) -> Literal["running", "exited", "killed"]:
@@ -476,18 +538,44 @@ class _BackgroundProcess:
             return "running"
         return "killed" if self.killed else "exited"
 
+    def note_end(self) -> None:
+        # Nothing calls back at the exit itself (asyncio's wait() also waits
+        # for the pipes), so it is timed when first noticed: at the latest by
+        # the reader, which in the usual case finishes right after it.
+        if self.ended_at is None and self.proc.returncode is not None:
+            self.ended_at = time.time()
+
+    def shrink_later(self) -> None:
+        self.shrink = asyncio.get_running_loop().call_later(
+            _SHRINK_DELAY, self.buffer.keep_unread, self.read_chars
+        )
+
+    def release(self) -> None:
+        """Let go of the tasks and timers that run for this process."""
+        self.reader.cancel()
+        if self.shrink is not None:
+            self.shrink.cancel()
+
     def passive_status(self) -> ProcessStatus:
+        self.note_end()
         return ProcessStatus(
             process_id=self.id,
             command=self.command,
             status=self.status,
             exit_code=self.proc.returncode,
             exit_seen=self.exit_seen,
+            cwd=self.cwd,
+            started_at=self.started_at,
+            ended_at=self.ended_at,
+            output_chars=self.buffer.end,
+            output_closed=self.drained,
+            last_line=self.buffer.last_line(),
         )
 
     def snapshot(self) -> ProcessOutput:
-        """Drain the buffer into a read result reflecting current status."""
-        output, dropped = self.buffer.take()
+        """Take the unread output into a read result with current status."""
+        self.note_end()
+        output, dropped = self.buffer.take(self.read_chars)
         status = self.status
         if status != "running":
             self.exit_seen = True
@@ -541,7 +629,7 @@ class LocalWorkspaceSession:
         default_factory=set, init=False, repr=False
     )
     # Background processes by process_id. Entries survive exit as cheap
-    # tombstones (buffer drained) so a read after exit reports the outcome
+    # tombstones (see _SHRINK_DELAY) so a read after exit reports the outcome
     # instead of "unknown id"; the whole registry dies with the session.
     _bg: "dict[str, _BackgroundProcess]" = field(
         default_factory=dict, init=False, repr=False
@@ -585,7 +673,7 @@ class LocalWorkspaceSession:
             # Idempotent with an earlier kill_process: killing an already
             # dead group is suppressed inside _kill_process_group.
             _kill_process_group(bp.proc)
-            bp.reader.cancel()
+            bp.release()
         # One by one is fine: once a reap has sat out its grace period, every
         # other killed shell has exited too and its wait() returns at once.
         for proc in procs:
@@ -1560,8 +1648,9 @@ class LocalWorkspaceSession:
         """Start ``command`` as a session-owned background process.
 
         Judged by the same policy gate as :meth:`run`. Returns immediately;
-        stdout and stderr are merged and spooled to a bounded tail buffer
-        read incrementally via :meth:`read_process_output`. The process (its
+        stdout and stderr are merged and kept in a bounded buffer: the model
+        reads it incrementally (:meth:`read_process_output`), a UI pages
+        through it (:meth:`peek_process_output`). The process (its
         whole group) dies with the session — or via :meth:`kill_process`.
         """
         self._check_open()
@@ -1593,8 +1682,10 @@ class LocalWorkspaceSession:
         bp = _BackgroundProcess(
             id=process_id,
             command=command,
+            cwd=run_cwd.as_posix(),
             proc=proc,
-            buffer=_TailBuffer(self.limits.max_shell_output_chars),
+            buffer=_OutputRing(self.limits.max_process_buffer_chars),
+            read_chars=self.limits.max_shell_output_chars,
         )
         bp.reader = asyncio.create_task(
             _drain_background(bp), name=f"lovia-bg-{process_id}"
@@ -1605,7 +1696,7 @@ class LocalWorkspaceSession:
         if self._closed:
             self._bg.pop(process_id, None)
             _kill_process_group(proc)
-            bp.reader.cancel()
+            bp.release()
             await _reap(proc)
             raise WorkspaceClosedError(f"Workspace session {self.id} is closed.")
         return ProcessStart(process_id=process_id, pid=proc.pid, command=command)
@@ -1616,10 +1707,7 @@ class LocalWorkspaceSession:
         Never an error for a known process: reading after exit reports the
         exit code and drains what remains — poll it freely.
         """
-        self._check_open()
-        bp = self._bg.get(process_id)
-        if bp is None:
-            raise self._unknown_process_error(process_id)
+        bp = self._known_process(process_id)
         if bp.proc.returncode is not None and not bp.reader.done():
             # The child exited but the reader may still be flushing the last
             # chunk; wait briefly so the exit-reporting read carries the full
@@ -1628,6 +1716,23 @@ class LocalWorkspaceSession:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(asyncio.shield(bp.reader), timeout=1.0)
         return bp.snapshot()
+
+    async def peek_process_output(
+        self, process_id: str, *, after: int = 0, limit: int
+    ) -> ProcessChunk:
+        """Up to ``limit`` characters of output from offset ``after``.
+
+        Consumes nothing: the model's reads and ``exit_seen`` are unaffected.
+        """
+        bp = self._known_process(process_id)
+        text, next_ = bp.buffer.read(after, limit)
+        return ProcessChunk(
+            process_id=bp.id,
+            text=text,
+            base=bp.buffer.base,
+            next=next_,
+            eof=bp.drained and next_ == bp.buffer.end,
+        )
 
     async def kill_process(self, process_id: str) -> ProcessOutput:
         """Kill a background process (its whole group) and report the tail.
@@ -1648,10 +1753,7 @@ class LocalWorkspaceSession:
         return (await self._terminate(process_id)).passive_status()
 
     async def _terminate(self, process_id: str) -> _BackgroundProcess:
-        self._check_open()
-        bp = self._bg.get(process_id)
-        if bp is None:
-            raise self._unknown_process_error(process_id)
+        bp = self._known_process(process_id)
         if bp.proc.returncode is None:
             bp.killed = True
             _kill_process_group(bp.proc)
@@ -1672,6 +1774,13 @@ class LocalWorkspaceSession:
         way.
         """
         return [bp.passive_status() for bp in self._bg.values()]
+
+    def _known_process(self, process_id: str) -> _BackgroundProcess:
+        self._check_open()
+        bp = self._bg.get(process_id)
+        if bp is None:
+            raise self._unknown_process_error(process_id)
+        return bp
 
     def _unknown_process_error(self, process_id: str) -> WorkspaceError:
         if not self._bg:
@@ -1699,7 +1808,7 @@ def _brief(command: str, limit: int = 40) -> str:
 
 
 async def _drain_background(bp: _BackgroundProcess) -> None:
-    """Pump the merged output pipe into the tail buffer, then reap.
+    """Pump the merged output pipe into the buffer, then reap.
 
     Runs for the process's whole life: an undrained pipe fills up and blocks
     the child. Decodes incrementally so multi-byte UTF-8 sequences split
@@ -1718,8 +1827,11 @@ async def _drain_background(bp: _BackgroundProcess) -> None:
         raise
     except Exception as exc:  # noqa: BLE001 — a pipe error just ends the stream
         logger.debug("background %s: output pipe closed (%s)", bp.id, exc)
+    bp.drained = True
     with contextlib.suppress(Exception):
         await bp.proc.wait()
+    bp.note_end()
+    bp.shrink_later()
 
 
 # How long to keep waiting on a shell's pipes once the shell itself is gone.

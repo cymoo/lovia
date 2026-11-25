@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -1711,6 +1712,8 @@ async def test_close_is_not_held_by_escaped_stragglers(
         command, pid_file = escaping_command(name)
         tasks.append(asyncio.create_task(session.run(command, timeout=60)))
         await _await_escape(pid_file, tasks[-1])
+        # The child can be up before run() has noted the shell.
+        await _until(lambda: len(session._procs) == len(tasks))
     loop = asyncio.get_running_loop()
     start = loop.time()
     await asyncio.wait_for(session.close(), 10)
@@ -2021,16 +2024,233 @@ async def test_background_processes_lists_status_passively(tmp_path) -> None:
     assert session.background_processes() == []
 
 
-def test_tail_buffer_semantics() -> None:
-    buf = local_module._TailBuffer(10)
-    buf.append("abcde")
-    assert buf.take() == ("abcde", False)
-    buf.append("0123456789ABCDE")  # 15 chars -> only the newest 10 kept
-    assert buf.take() == ("56789ABCDE", True)
-    assert buf.take() == ("", False)  # the dropped flag resets on take
+def _ring(cap: int, *chunks: str):
+    ring = local_module._OutputRing(cap)
+    for chunk in chunks:
+        ring.append(chunk)
+    return ring
+
+
+def _held(ring) -> int:
+    return sum(len(part) for part in ring._parts)
+
+
+def _pages(ring, limit: int, after: int = 0) -> list[str]:
+    out = []
+    while after < ring.end:
+        text, after = ring.read(after, limit)
+        out.append(text)
+    return out
+
+
+def test_output_ring_takes_the_newest_unread() -> None:
+    ring = _ring(10, "abcde")
+    assert ring.take(10) == ("abcde", False)
+    ring.append("0123456789ABCDE")  # 15 chars -> only the newest 10 held
+    assert ring.take(10) == ("56789ABCDE", True)
+    assert ring.take(10) == ("", False)
     for chunk in ("aaaa", "bbbb", "cccc"):
-        buf.append(chunk)
-    assert buf.take() == ("aabbbbcccc", True)
+        ring.append(chunk)
+    assert ring.take(10) == ("aabbbbcccc", True)
+    # One take returns less than the ring holds: the rest counts as read.
+    ring.append("0123456789")
+    assert ring.take(4) == ("6789", True)
+    assert ring.take(4) == ("", False)
+
+
+def test_output_ring_reads_by_absolute_offset() -> None:
+    ring = _ring(10, "abcde")
+    assert ring.read(0, 3) == ("abc", 3)
+    assert ring.read(3, 100) == ("de", 5)
+    assert ring.read(5, 100) == ("", 5)
+    assert ring.read(99, 100) == ("", 5)  # past the end
+    ring.append("0123456789ABCDE")
+    assert (ring.base, ring.end) == (10, 20)
+    assert ring.read(0, 4) == ("5678", 14)  # what is gone is skipped
+    assert ring.read(14, 4) == ("9ABC", 18)
+    # Reading moves no cursor: the model still gets all it can.
+    assert ring.take(100) == ("56789ABCDE", True)
+
+
+def test_output_ring_counts_characters_not_bytes() -> None:
+    text = "日志🎉é" * 50  # 200 characters of 1 to 4 bytes each
+    ring = _ring(1000, *text)  # one character per chunk
+    assert ring.end == len(text)
+    assert "".join(_pages(ring, 7)) == text
+    small = _ring(33, *(text[i : i + 5] for i in range(0, len(text), 5)))
+    assert small.base == len(text) - 33
+    assert "".join(_pages(small, 7)) == text[-33:]
+    assert small.take(10) == (text[-10:], True)
+
+
+def test_output_ring_bounds_its_strings_and_its_memory() -> None:
+    ring = _ring(50_000, *(f"line {i}\n" for i in range(20_000)))
+    assert len(ring._parts) < 30  # merged, not one per line
+    assert _held(ring) <= 50_000 + local_module._RING_MERGE_CHARS
+    assert "".join(_pages(ring, 1000))[-11:] == "line 19999\n"
+    assert len("".join(_pages(ring, 1000))) == 50_000
+    ring.append("x" * 200_000)  # one chunk larger than the whole ring
+    assert ring.read(0, 10**6) == ("x" * 50_000, ring.end)
+
+
+def test_output_ring_shrinks_to_what_is_unread() -> None:
+    ring = _ring(1000, "a" * 500)
+    ring.take(1000)
+    ring.append("0123456789")
+    ring.keep_unread(6)
+    assert _held(ring) == 6 and ring.base == 504
+    # What is left out still shows as dropped, and once read nothing is held.
+    assert ring.take(1000) == ("456789", True)
+    assert _held(ring) == 0 and (ring.base, ring.end) == (510, 510)
+    assert ring.read(0, 10) == ("", 510)
+
+
+def test_output_ring_last_line() -> None:
+    assert _ring(100).last_line() == ""
+    assert _ring(100, "one\ntwo\n\n  \n").last_line() == "two"
+    assert _ring(100, " 10%\r 20%\r 30%").last_line() == "30%"
+    long = _ring(100_000, "x" * 50_000).last_line()
+    assert long == "x" * local_module._LAST_LINE_CHARS
+
+
+async def _until(check, timeout: float = 10.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not (value := check()):
+        assert asyncio.get_running_loop().time() < deadline, "not in time"
+        await asyncio.sleep(0.02)
+    return value
+
+
+async def test_peeking_consumes_nothing(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    start = await session.spawn("printf '日志🎉\\nend\\n'", cwd=".")
+    await _until(lambda: session.background_processes()[0].output_closed)
+    await _until(lambda: session.background_processes()[0].ended_at)
+
+    first = await session.peek_process_output(start.process_id, limit=3)
+    assert (first.text, first.base, first.next, first.eof) == ("日志🎉", 0, 3, False)
+    rest = await session.peek_process_output(
+        start.process_id, after=first.next, limit=100
+    )
+    assert (rest.text, rest.next, rest.eof) == ("\nend\n", 8, True)
+
+    (status,) = session.background_processes()
+    assert status.exit_seen is False
+    assert status.cwd == tmp_path.resolve().as_posix()
+    assert (status.output_chars, status.last_line) == (8, "end")
+    assert status.started_at <= status.ended_at <= time.time()
+    # The model's own read still gets everything.
+    out = await session.read_process_output(start.process_id)
+    assert out.output == "日志🎉\nend\n" and not out.truncated
+    with pytest.raises(WorkspaceError, match="Unknown process id"):
+        await session.peek_process_output("bg-zzzzzz", limit=1)
+    await session.close()
+
+
+async def test_peek_ends_with_the_output_not_the_process(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    start = await session.spawn(
+        "(while [ ! -e go ]; do sleep 0.05; done; echo late) & echo early"
+    )
+    status = await _until(
+        lambda: next(
+            (p for p in session.background_processes() if p.status == "exited"), None
+        )
+    )
+    assert status.output_closed is False
+    ended_at = status.ended_at
+    assert ended_at is not None
+    await _until(lambda: session.background_processes()[0].output_chars >= 6)
+    chunk = await session.peek_process_output(start.process_id, limit=100)
+    assert (chunk.text, chunk.eof) == ("early\n", False)
+
+    (tmp_path / "go").touch()
+    await _until(lambda: session.background_processes()[0].output_closed)
+    chunk = await session.peek_process_output(
+        start.process_id, after=chunk.next, limit=100
+    )
+    assert (chunk.text, chunk.eof) == ("late\n", True)
+    (status,) = session.background_processes()
+    assert status.ended_at == ended_at  # the exit's time, not the output's
+    await session.close()
+
+
+async def test_peek_ends_when_a_running_process_closes_its_output(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    start = await session.spawn("echo done; exec >/dev/null 2>&1; sleep 30")
+    await _until(lambda: session.background_processes()[0].output_closed)
+    chunk = await session.peek_process_output(start.process_id, limit=100)
+    assert (chunk.text, chunk.eof) == ("done\n", True)
+    (bp,) = session._bg.values()
+    # Still running, so still worth looking at: the buffer stays whole.
+    assert bp.status == "running" and bp.shrink is None
+    await session.close()
+
+
+async def test_a_burst_before_the_exit_is_all_there_to_page_through(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    start = await session.spawn("echo first; seq 1 60000")
+    await _until(lambda: session.background_processes()[0].output_closed)
+    text, after = "", 0
+    while True:
+        chunk = await session.peek_process_output(
+            start.process_id, after=after, limit=100_000
+        )
+        text, after = text + chunk.text, chunk.next
+        if chunk.eof:
+            break
+    assert text == "first\n" + "".join(f"{i}\n" for i in range(1, 60_001))
+    # The model reads at most one read's worth of it.
+    out = await session.read_process_output(start.process_id)
+    assert out.truncated and out.output == text[-30_000:]
+    await session.close()
+
+
+async def test_finished_processes_shrink_to_what_the_model_has_not_read(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(local_module, "_SHRINK_DELAY", 0.2)
+    session = await _session(
+        tmp_path,
+        policy=WorkspacePolicy.trusted(),
+        limits=WorkspaceLimits(max_shell_output_chars=50),
+    )
+    starts = [await session.spawn(f"seq 1 400; echo end{i}") for i in range(100)]
+    await _until(
+        lambda: all(p.output_closed for p in session.background_processes()), 60
+    )
+    read = await session.read_process_output(starts[0].process_id)
+    assert read.output.endswith("end0\n")
+    held = [bp.buffer for bp in session._bg.values()]
+    await _until(lambda: sum(_held(ring) for ring in held) <= 99 * 50)
+    assert _held(held[0]) == 0  # read: nothing but its status is left
+    out = await session.read_process_output(starts[1].process_id)
+    assert out.truncated and out.output.endswith("end1\n") and len(out.output) == 50
+    await session.close()
+
+
+async def test_an_open_output_does_not_shrink(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(local_module, "_SHRINK_DELAY", 0.05)
+    session = await _session(
+        tmp_path,
+        policy=WorkspacePolicy.trusted(),
+        limits=WorkspaceLimits(max_shell_output_chars=5),
+    )
+    start = await session.spawn("(sleep 30) & echo early-output")
+    await _until(lambda: session.background_processes()[0].ended_at)
+    await asyncio.sleep(0.3)
+    chunk = await session.peek_process_output(start.process_id, limit=100)
+    assert chunk.text == "early-output\n"
+    await session.close()
+
+
+async def test_closing_cancels_a_pending_shrink(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    await session.spawn("echo done")
+    (bp,) = session._bg.values()
+    await _until(lambda: bp.shrink)
+    await session.close()
+    assert bp.shrink.cancelled()
 
 
 # ---------------------------------------------------------------------------

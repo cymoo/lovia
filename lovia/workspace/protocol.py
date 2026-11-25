@@ -14,6 +14,7 @@ from .types import (
     FileChange,
     FileContent,
     GrepMatch,
+    ProcessChunk,
     ProcessOutput,
     ProcessStart,
     ProcessStatus,
@@ -197,6 +198,18 @@ class WorkspaceSession(Protocol):
 
         Reading a known-but-exited process reports its outcome (never an
         error); an unknown id raises with the live ids in the message.
+        """
+        ...
+
+    async def peek_process_output(
+        self, process_id: str, *, after: int = 0, limit: int
+    ) -> ProcessChunk:
+        """Up to ``limit`` characters of output from offset ``after``,
+        consuming nothing: a UI can follow a process next to the model.
+
+        The whole output is there while the process runs, up to the session's
+        buffer, and for a minute after it has ended and closed its output;
+        then what the model has not read.
         """
         ...
 

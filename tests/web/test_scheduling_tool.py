@@ -655,7 +655,8 @@ async def test_start_session_cancelled_mid_start_leaves_no_chat() -> None:
             await asyncio.sleep(10)
         return await bind(sid, agent, attachments)
 
-    async def close(sid):
+    async def close(sid, *, keep_records):
+        assert not keep_records
         closed.append(sid)
 
     workspaces.bind, workspaces.close = slow_bind, close

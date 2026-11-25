@@ -337,6 +337,13 @@ class SessionAppendedData(TypedDict):
     session_id: str
 
 
+class ProcessesChangedData(TypedDict):
+    """A background command of the chat started or ended; refetch its list."""
+
+    session_id: str
+    running: int
+
+
 class SessionWorkspaceChangedData(TypedDict):
     session_id: str
     workspace_mode: str | None
@@ -359,6 +366,7 @@ LIFECYCLE_EVENTS: dict[str, type] = {
     "session_retitled": SessionRetitledData,
     "session_appended": SessionAppendedData,
     "session_workspace_changed": SessionWorkspaceChangedData,
+    "processes_changed": ProcessesChangedData,
     "config_changed": ConfigChangedData,
 }
 

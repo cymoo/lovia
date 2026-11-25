@@ -190,7 +190,9 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/workspace/diff?path=&old=` | `{path, diff, binary, truncated}`：该文件相对 `HEAD` 的 unified diff（`old` 是重命名前的路径，这样移动按一次改名比较），按工作区的 shell 输出上限截断。不在 git 仓库里或仓库还没有提交时返回 404 `feature_unavailable` |
 | `POST /api/sessions/{id}/attachments` | multipart 的 `file` → `{name, mime, kind, size}`：把一个附件存进对话的附件目录（和聊天记录放在一起，不在工作区里）；受扩展名白名单和大小上限约束，重名时换一个 `name`，消息再以 `attachments: [{name, mime, kind}]` 引用它。`{id}` 可以是还不存在的对话——草稿的 id，第一次发送时用它新建对话——必须是 32 位小写十六进制（否则 422）。对话的 Agent（草稿用 `?agent=` 指明）没有工作区时只接受图片（PNG、JPEG、GIF、WebP，否则 415 `unsupported_file_type`），因为没有文件工具，图片直接发给模型；工作区绑定的是调用方自己打开的 session 时，返回 404 `feature_unavailable`：那个 session 由所有对话共用，没法只让某一个对话的附件保持只读 |
 | `GET /api/sessions/{id}/attachments/{name}?download=` | 按 `name` 取一个附件：图片和 PDF 内联显示，`download=1` 时任何文件都作为下载（同 `/api/workspace/raw`）。fork 和子任务读的是源对话的（共用同一个目录）；对话删除后返回 404 |
-| `GET /api/sessions/{id}/processes` | 对话的[后台进程](workspace.md#后台进程) → `[{process_id, command, status, exit_code}]`，`status` 为 `running` / `exited` / `killed`。列出时不读取输出，不影响模型自己的读取。对话没有活动的工作区会话时返回 `[]`（还没运行过，或服务器重启过：后台进程不会跨重启保留） |
+| `GET /api/sessions/{id}/processes` | 对话的[后台进程](workspace.md#后台进程) ，最早的在前 → `[{process_id, command, status, exit_code, cwd, started_at, ended_at, ended_by, output_chars, last_line}]`，`status` 为 `running` / `exited` / `killed`；`ended_by` 为 `exit`、`user`（下面的 kill 接口）、`model`、`shutdown`（服务停止）、`closed`（工作区会话关闭，比如对话换了目录）或 `lost`（到主机的连接断开）。已结束的进程留有记录，服务重启后仍会列出（每个对话保留最新 30 条）。列出时不读取输出，不影响模型自己的读取 |
+| `GET /api/sessions/{id}/processes/{process_id}/output?after=&limit=` | 进程输出的一页 → `{text, base, next, eof}`。偏移量按字符计，从进程启动算起；`base` 是还保留的最早的偏移量，大于 `after` 时 `text` 从 `base` 开始。跟随运行中的进程：从 `next` 继续请求，直到 `eof`。`limit` 最大 262144（默认值）。404 `process_not_found` |
+| `GET /api/sessions/{id}/processes/{process_id}/log` | 保留的全部输出，以文本文件下载。404 `process_not_found` |
 | `POST /api/sessions/{id}/processes/{process_id}/kill` | 结束一个后台进程 → 刷新后的列表。没读过的输出和退出状态留给模型：下一次的状态提醒会告诉它进程已被结束。进程不存在或没有活动会话时返回 404 `process_not_found` |
 | `GET /api/workspaces` | 启用 `create_app(workspaces=)` 时：新对话可选的目录，`{workspaces: [{id, root, name, kind, last_used_at}], default, can_add, roots}`。`kind` 为 `"default"`（Agent 自己的目录，新标签页从这里开始）、`"general"`（通用工作区）或 `"added"`；前两种没有 `id`，始终在列表里。`can_add` 表示能否添加其他目录；只允许部分目录时，`roots` 列出允许的目录树 |
 | `POST /api/workspaces` · `DELETE /api/workspaces/{id}` | `{path}` → 该项：添加一个存在且允许的目录（解析符号链接）· 从列表移除一项（文件和对话都保留；之后在那里新建对话会重新加入列表） |
@@ -238,6 +240,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `session_retitled` | `{session_id, title}` |
 | `session_appended` | `{session_id}`：没有 run 时向对话追加了内容（停止后暂存的子任务报告）；重新拉取该会话即可 |
 | `session_workspace_changed` | `{session_id, workspace_mode, workspace_mode_rev, workspace_root}` |
+| `processes_changed` | `{session_id, running}` — 对话有后台进程启动或结束，重新获取进程列表 |
 | `config_changed` | `{configured, model, profile_id, name}`：重新拉取 `/api/config` 即可同步 |
 
 事件流不重放历史；客户端每次连接或重连时，

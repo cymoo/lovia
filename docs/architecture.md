@@ -103,7 +103,9 @@ lovia/
                     #   (decoupled from core; only loaded when lovia[web] is used)
                     #   workspaces.py scopes one workspace session per chat via
                     #   LocalWorkspace.bind() — background processes survive
-                    #   run ends and die on chat deletion / app shutdown
+                    #   run ends and die on chat deletion / app shutdown;
+                    #   processes.py watches them and keeps the records of
+                    #   finished ones (process_logs.py: files, a cache)
 ```
 
 Three layers, each strictly downstream of the previous: **core** (everything

@@ -62,10 +62,12 @@ from .. import changes, desktop
 from ..auth import is_local_name
 from ..errors import WebError
 from ..media import is_preview_image, preview_image_mime
+from ..processes import OUTPUT_PAGE_CHARS
 from ..schemas import (
     ChangesRequest,
     DesktopRequest,
     ProcessInfo,
+    ProcessOutputPage,
     WorkspaceChanges,
     WorkspaceDiff,
     WorkspaceEntry,
@@ -566,39 +568,60 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
 
     # ---- background processes (chat-scoped) --------------------------------
     # Keyed by web session id, not agent: processes belong to the chat's live
-    # workspace session (lovia/web/workspaces.py). Listing is passive; kill is
-    # the one user-side control — "stop the dev server without asking the
-    # model". The model's next status reminder announces the process as
+    # workspace session (lovia/web/workspaces.py), and the records of those
+    # that are over to the chat (lovia/web/processes.py). Reading is passive;
+    # kill is the one user-side control — "stop the dev server without asking
+    # the model". The model's next status reminder announces the process as
     # killed, and its tail is left for the model to read: stop_process, not
     # kill_process.
-
-    async def _process_list(session_id: str) -> list[ProcessInfo]:
-        session = deps.workspaces.get(session_id)
-        if session is None:
-            return []
-        statuses = session.background_processes()
-        if inspect.isawaitable(statuses):  # a remote session asks its host
-            statuses = await statuses
-        return [
-            ProcessInfo(
-                process_id=s.process_id,
-                command=s.command,
-                status=s.status,
-                exit_code=s.exit_code,
-            )
-            for s in statuses
-        ]
 
     @router.get(
         "/api/sessions/{session_id}/processes", response_model=list[ProcessInfo]
     )
     async def list_processes(session_id: str) -> list[ProcessInfo]:
-        """Background processes of the chat's workspace session.
+        """The chat's background processes, oldest first: those of its live
+        workspace session and the records of those that are over."""
+        return await deps.processes.infos(session_id)
 
-        ``[]`` when the chat has no live session (nothing ran yet, or the
-        server restarted — processes never survive a restart).
-        """
-        return await _process_list(session_id)
+    @router.get(
+        "/api/sessions/{session_id}/processes/{process_id}/output",
+        response_model=ProcessOutputPage,
+    )
+    async def process_output(
+        session_id: str,
+        process_id: str,
+        after: int = Query(0, ge=0),
+        limit: int = Query(OUTPUT_PAGE_CHARS, ge=1, le=OUTPUT_PAGE_CHARS),
+    ) -> ProcessOutputPage:
+        """One page of a process's output, from offset ``after``. Follow a
+        running one by asking again from ``next`` until ``eof``."""
+        try:
+            chunk = await deps.processes.page(
+                session_id, process_id, after=after, limit=limit
+            )
+        except WorkspaceError as exc:
+            raise WebError.from_exc(404, "process_not_found", exc) from exc
+        return ProcessOutputPage(
+            text=chunk.text, base=chunk.base, next=chunk.next, eof=chunk.eof
+        )
+
+    @router.get("/api/sessions/{session_id}/processes/{process_id}/log")
+    async def process_log(session_id: str, process_id: str) -> Response:
+        """Everything kept of a process's output, as a text file."""
+        try:
+            text = await deps.processes.whole_log(session_id, process_id)
+        except WorkspaceError as exc:
+            raise WebError.from_exc(404, "process_not_found", exc) from exc
+        return Response(
+            text.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            # Percent-encoded, since the id is the client's own text.
+            headers={
+                "content-disposition": "attachment; filename*=utf-8''"
+                + quote(f"{process_id}.log", safe=""),
+                "x-content-type-options": "nosniff",
+            },
+        )
 
     @router.post(
         "/api/sessions/{session_id}/processes/{process_id}/kill",
@@ -606,13 +629,10 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     )
     async def kill_process(session_id: str, process_id: str) -> list[ProcessInfo]:
         """Kill one background process; returns the refreshed process list."""
-        session = deps.workspaces.get(session_id)
-        if session is None:
-            raise WebError(404, "process_not_found", "no live workspace session")
         try:
-            await session.stop_process(process_id)
-        except WorkspaceError as exc:  # unknown id (or a closed session)
+            await deps.processes.stop(session_id, process_id)
+        except WorkspaceError as exc:  # unknown id (or no live session)
             raise WebError.from_exc(404, "process_not_found", exc) from exc
-        return await _process_list(session_id)
+        return await deps.processes.infos(session_id)
 
     return router

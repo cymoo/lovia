@@ -195,7 +195,14 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         # badge finished tasks without per-task follow-up requests.
         task_ids = [m.id for m in metas if m.parent_id]
         statuses = await store.latest_run_statuses(task_ids)
-        return [session_info(m, last_run_status=statuses.get(m.id)) for m in metas]
+        return [
+            session_info(
+                m,
+                last_run_status=statuses.get(m.id),
+                processes_running=deps.processes.running(m.id),
+            )
+            for m in metas
+        ]
 
     @router.get("/api/runs", response_model=list[RunInfo])
     async def list_runs() -> list[RunInfo]:
@@ -301,7 +308,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             deps.supervisor.last_client.clear()
             deps.supervisor.forget_all()  # runs suspended there end too
             # Reap every chat's workspace session (and its background processes).
-            await deps.workspaces.aclose()
+            await deps.workspaces.aclose(keep_records=False)
             await store.delete_all()
         return {"ok": True}
 
@@ -502,7 +509,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             )
         if mode is not None:
             deps.emit_workspace(meta)
-        return session_info(meta)
+        return session_info(meta, processes_running=deps.processes.running(session_id))
 
     @router.get("/api/sessions/{session_id}/grants", response_model=list[GrantInfo])
     async def list_grants(session_id: str) -> list[GrantInfo]:
@@ -574,7 +581,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 # Deleting the chat is what ends its workspace session —
                 # background processes deliberately survive run ends, so this
                 # is where they die.
-                await deps.workspaces.close(sid)
+                await deps.workspaces.close(sid, keep_records=False)
             await store.delete(session_id)
         return {"ok": True}
 

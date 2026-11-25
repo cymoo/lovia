@@ -195,8 +195,8 @@ class WorkspaceFile(BaseModel):
 
 
 class ProcessInfo(BaseModel):
-    """One background process of a chat's workspace session (mirrors
-    ``lovia.workspace.ProcessStatus``).
+    """One background process of a chat: live in its workspace session, or
+    the record of one that is over.
 
     Passive: listing consumes no output and flips no state — the model's own
     ``read_process_output`` cursor is unaffected by the panel looking.
@@ -206,6 +206,30 @@ class ProcessInfo(BaseModel):
     command: str
     status: Literal["running", "exited", "killed"]
     exit_code: int | None = None
+    cwd: str = ""
+    # Unix seconds by this server's clock.
+    started_at: float = 0.0
+    ended_at: float | None = None
+    # What ended it: itself, the user (the kill route), the model, the server
+    # going down, its workspace session closing, or a lost connection.
+    ended_by: Literal["exit", "user", "model", "shutdown", "closed", "lost"] | None = (
+        None
+    )
+    output_chars: int = 0
+    last_line: str = ""
+
+
+class ProcessOutputPage(BaseModel):
+    """One page of a background process's output. Offsets count characters
+    from the start of the process."""
+
+    text: str
+    # The oldest offset still kept; past the one asked for, what lies between
+    # is gone and ``text`` starts here.
+    base: int
+    next: int
+    # Nothing more will follow ``text``.
+    eof: bool
 
 
 class UploadedFile(BaseModel):
@@ -575,6 +599,8 @@ class ChatSessionInfo(BaseModel):
     workspace_root: str | None = None
     # See SessionDetail.model.
     model: str | None = None
+    # Background commands running in the chat's workspace session.
+    processes_running: int = 0
 
 
 class WaitsOn(BaseModel):

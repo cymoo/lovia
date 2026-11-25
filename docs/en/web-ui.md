@@ -536,6 +536,12 @@ does not stop them; deleting the chat or stopping the Web server reaps them,
 and a server restart does not restore them. See
 [Workspace](workspace.md#background-processes) for the full lifecycle.
 
+What a process wrote outlives it: its record goes to `process-logs/` next to
+the chat database, one file per process, the newest 30 per chat, deleted with
+the chat. All of them together are held to 300 MB
+(`LOVIA_MAX_PROCESS_LOGS_MB`), oldest first. They are a cache: delete the
+folder whenever you like, and the chats just show no history.
+
 ### Attachments at a glance
 
 Using `lovia web`:

@@ -871,8 +871,8 @@ Transcript 转换而来的聊天消息列表 `messages`。返回字符串序列�
 
 !!! note "实验性"
 
-    下面的路由和 Python 名字还可能调整（见[稳定性](stability.md#不作承诺)）。内置页面的
-    输入框里还没有麦克风；自定义前端已经可以直接用这个路由。
+    下面的路由和 Python 名字还可能调整（见[稳定性](stability.md#不作承诺)）。它在内置
+    页面里的样子见 [Web UI](web-ui.md#语音输入)。
 
 `transcribe` 把一段录音转成文字。客户端把 WAV 文件发到
 [`POST /api/transcribe`](http-api.md#端点)，再把返回的文字放进输入框；服务端不保存录音，

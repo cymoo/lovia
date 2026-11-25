@@ -3433,6 +3433,103 @@ button.lv-question-option:hover {
   display: none;
 }
 
+/* ---- Voice input ---------------------------------------------------------------------- */
+/* All of it hangs off data-voice on the composer form, which voice.js sets
+   to a take's phase: while one is on screen its strip stands in for the
+   tools, the context ring and the microphone. Stop is never touched. */
+.lv-voice-mic,
+.lv-voice-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--lv-muted);
+  transition:
+    background var(--lv-t-fast),
+    color var(--lv-t-fast);
+}
+.lv-voice-mic {
+  touch-action: none; /* a press is "hold to talk", not a scroll */
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+.lv-voice-mic:hover,
+.lv-voice-btn:hover {
+  background: var(--lv-surface-3);
+  color: var(--lv-ink);
+}
+.lv-voice-done {
+  color: var(--lv-ink);
+}
+.lv-voice-strip {
+  display: none;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.lv-voice-strip [hidden],
+.lv-voice-btn[hidden],
+.lv-voice-retry[hidden],
+.lv-voice-restore[hidden] {
+  display: none;
+}
+.lv-voice-wave {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  color: var(--lv-muted);
+}
+.lv-voice-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  color: var(--lv-muted);
+}
+/* The browser answers at once when it has been allowed before: say
+   "waiting" only when the wait is real. */
+.lv-composer[data-voice="asking"] .lv-voice-label {
+  animation: lv-voice-late 0.4s step-end both;
+}
+@keyframes lv-voice-late {
+  from {
+    visibility: hidden;
+  }
+}
+.lv-voice-label.lv-voice-error {
+  color: var(--lv-danger);
+}
+.lv-voice-clock {
+  flex: none;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--lv-muted);
+}
+.lv-voice-clock.lv-voice-warn {
+  color: var(--lv-danger);
+}
+.lv-composer[data-voice] .lv-voice-strip {
+  display: flex;
+}
+.lv-composer[data-voice] .lv-composer-tools,
+.lv-composer[data-voice] .lv-context-ring,
+.lv-composer[data-voice] .lv-composer-end .lv-model-chip,
+.lv-composer[data-voice] .lv-voice-mic,
+.lv-composer[data-voice="asking"] #send,
+.lv-composer[data-voice="recording"] #send,
+.lv-composer[data-voice="working"] #send {
+  display: none;
+}
+.lv-composer[data-voice] .lv-composer-end {
+  flex: 0 0 auto;
+}
+
 /* ---- Composer attachments ------------------------------------------------------------ */
 /* The "+" button sits on the composer's left edge, mirroring .lv-btn-send's slot. */
 .lv-btn-attach {

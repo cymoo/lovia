@@ -423,6 +423,21 @@ export function isImagePath(path) {
  * @param {any} err
  * @returns {string}
  */
+/**
+ * `text` as it reads between `before` and `after`: a space is added where a
+ * Latin word or a number would otherwise run into its neighbour. Chinese and
+ * Japanese text takes none.
+ * @param {string} before
+ * @param {string} text
+ * @param {string} after
+ * @returns {string}
+ */
+export function spaced(before, text, after) {
+  const lead = /[A-Za-z0-9.,;:!?)\]"']$/.test(before) && /^[A-Za-z0-9]/.test(text);
+  const trail = /[A-Za-z0-9.,;:!?]$/.test(text) && /^[A-Za-z0-9]/.test(after);
+  return (lead ? ' ' : '') + text + (trail ? ' ' : '');
+}
+
 export function uploadFailedText(name, err) {
   const base = t('composer.uploadFailed', { name });
   return err?.message ? `${base} — ${err.message}` : base;

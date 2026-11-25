@@ -113,6 +113,15 @@ export const api = {
   listAgents: () => request('/api/agents').then(_json),
   getAgent: (name) => request(`/api/agents/${encodeURIComponent(name)}`).then(_json),
   info: () => request('/api/info').then(_json),
+  // One recorded take → { text }. `wav`: 16 kHz mono 16-bit, at most 10 MiB.
+  /** @param {Blob} wav @param {{ signal?: AbortSignal }} [opts] */
+  transcribe: (wav, { signal } = {}) =>
+    request('/api/transcribe', {
+      method: 'POST',
+      headers: { 'content-type': 'audio/wav' },
+      body: wav,
+      signal,
+    }).then(_json),
 
   // ---- chat ----
   // Non-streaming turn. `body`: { message, agent?, session_id? }.
@@ -593,6 +602,13 @@ export const api = {
   // Probe a connection (a real /models request server-side). Either free-form
   // fields or { profile_id } — the stored key is reused server-side, so the
   // page never holds it.
+  // Voice input's settings. `api_key`: null keeps, '' clears.
+  setVoice: (body) =>
+    request('/api/config/voice', {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
   testConnection: (body) =>
     request('/api/config/test', {
       method: 'POST',

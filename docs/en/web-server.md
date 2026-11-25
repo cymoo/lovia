@@ -1019,8 +1019,8 @@ never load-bearing.
 !!! note "Experimental"
 
     The route and the Python names below may still change (see
-    [Stability](stability.md#not-covered)). The composer's microphone is not
-    in the bundled page yet; a custom front-end can already use the route.
+    [Stability](stability.md#not-covered)). What it looks like in the
+    bundled page is in [Web UI](web-ui.md#voice-input).
 
 `transcribe` turns one recorded take into text. A client posts a WAV file to
 [`POST /api/transcribe`](http-api.md#endpoints) and inserts the text it gets

@@ -215,6 +215,7 @@ def test_a_custom_auth_is_still_a_whole_dependency() -> None:
     ) -> AsyncIterator[None]:
         events.append(f"{name} {session_id} {(await request.json())['pinned']}")
         response.set_cookie("sliding", "1")
+        response.status_code = 202
         background.add_task(events.append, "background")
         yield
         events.append("exit")
@@ -225,7 +226,7 @@ def test_a_custom_auth_is_still_a_whole_dependency() -> None:
     app.dependency_overrides[user] = lambda: "ada"
     asyncio.run(store.upsert("s1", agent="bot"))
     r = TestClient(app).patch("/api/sessions/s1", json={"pinned": True})
-    assert r.status_code == 200, r.text
+    assert r.status_code == 202, r.text
     assert r.cookies["sliding"] == "1"
     assert sorted(events) == ["ada s1 True", "background", "exit"]
     # A body that doesn't validate is the endpoint's own 422, as ever.

@@ -20,7 +20,7 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi import FastAPI, Header, HTTPException, Request  # noqa: E402
+from fastapi import FastAPI, Header, HTTPException, Request, UploadFile  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent  # noqa: E402
@@ -554,6 +554,18 @@ async def test_an_auth_that_reads_the_body_leaves_it_to_the_upload(
     assert (await _stream_upload(app, 2 * MB))[0] == 200
     status, _, taken = await _stream_upload(app, 60 * MB)
     assert status == 413 and taken < 27 * MB
+
+
+async def test_a_form_the_auth_read_and_refused_is_closed(tmp_path: Path) -> None:
+    held: list[UploadFile] = []
+
+    async def auth(request: Request) -> None:
+        held.append((await request.form())["file"])  # type: ignore[arg-type]
+        raise HTTPException(403, "no")
+
+    app = _guarded(tmp_path, auth=auth)
+    assert (await _stream_upload(app, 2 * MB))[0] == 403
+    assert held[0].file.closed
 
 
 @pytest.mark.parametrize(

@@ -37,9 +37,11 @@ class GuardedRoute(APIRoute):
 
         async def guarded(request: Request, response: Response) -> Response:
             answered = await answer(request)
-            # What a dependency set (a cookie): FastAPI adds it to an
+            # What a dependency set (a cookie, a status): FastAPI adds it to an
             # endpoint's value, never to a Response it returns.
             answered.headers.raw.extend(response.headers.raw)
+            if response.status_code:
+                answered.status_code = response.status_code
             return answered
 
         return APIRoute(

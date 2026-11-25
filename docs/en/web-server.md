@@ -1048,7 +1048,7 @@ async def my_auth(request: Request) -> None:
 serve(create_app(agent, auth=my_auth), host="0.0.0.0")
 ```
 
-It guards exactly what the token would, which has three consequences:
+It guards exactly what the token would, which has four consequences:
 
 - **The bundled UI needs a cookie.** `EventSource`, `<img>` previews, and
   download links cannot send custom headers, so a dependency that reads only
@@ -1056,6 +1056,9 @@ It guards exactly what the token would, which has three consequences:
 - **Routes you add are yours to guard.** Include them with
   `dependencies=[Depends(my_auth)]`. The UI shell and `/api/docs` stay
   public; to gate the whole site, use middleware or your reverse proxy.
+- **It runs before the body is read**, so a refused request's body never is. A
+  dependency that needs it (to check a signature) uses `await request.body()`,
+  not `request.stream()` or a `Body()` parameter.
 - **A front end on another origin** that authenticates with cookies needs
   credentialed CORS, which `cors_origins` does not enable (see below).
 

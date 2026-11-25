@@ -64,7 +64,13 @@ class _CappedRoute(GuardedRoute):
                     raise WebError(413, "file_too_large", "file too large")
                 return message
 
-            return await handle(Request(request.scope, receive))
+            wrapped = Request(request.scope, receive)
+            try:
+                return await handle(wrapped)
+            finally:
+                # A form the guard read, then refused: FastAPI closes only
+                # the one its endpoint gets.
+                await wrapped.close()
 
         return capped
 

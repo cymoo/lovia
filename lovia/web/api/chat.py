@@ -51,6 +51,7 @@ from ..waiting import (
 )
 from ..workspaces import ChatBinding, own_root
 from .deps import RouterDeps
+from .routing import GuardedRoute
 from .serialization import Run, segments_runs
 
 log = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ def _busy() -> WebError:
 
 
 def build_chat_router(deps: RouterDeps) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=GuardedRoute)
     store = deps.store
     session = deps.session
 

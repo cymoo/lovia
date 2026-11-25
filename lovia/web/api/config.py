@@ -54,6 +54,7 @@ from ..mcp import CONNECT_TIMEOUT, MCPStatus, probe
 from ..project_mcp import ProjectServer, read_project_servers
 from ..workspaces import WorkspaceRef
 from .deps import RouterDeps
+from .routing import GuardedRoute
 
 
 def _mask(secret: str | None) -> dict[str, object]:
@@ -279,7 +280,7 @@ def _with_secrets(
 
 
 def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
-    router = APIRouter(prefix="/api/config")
+    router = APIRouter(prefix="/api/config", route_class=GuardedRoute)
 
     def _guard_host(request: Request) -> None:
         """Refuse unauthenticated config writes with a non-local Host header.

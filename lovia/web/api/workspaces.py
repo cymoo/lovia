@@ -35,6 +35,7 @@ from ...workspace import WorkspaceError
 from ...workspace.paths import complete_dirs
 from ..workspaces import WorkspaceRef, own_root
 from .deps import RouterDeps
+from .routing import GuardedRoute
 
 
 def _require_switch(deps: RouterDeps) -> None:
@@ -145,7 +146,7 @@ async def workspace_list(deps: RouterDeps) -> WorkspaceList:
 
 
 def build_workspaces_router(deps: RouterDeps) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=GuardedRoute)
     store = deps.store
 
     @router.get("/api/workspaces", response_model=WorkspaceList)

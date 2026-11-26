@@ -29,6 +29,7 @@ no browser, and therefore no client-side rendering::
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import re
 import time
@@ -273,6 +274,12 @@ class _MarkdownExtractor(HTMLParser):
             if tag == self._scope:
                 self._scope_depth += 1
             elif not self._scope_depth:
+                # Outside the main content no Markdown is written, but the
+                # images=True list stays page-wide.
+                if tag == "img":
+                    self._record_image(*self._img_source(values))
+                elif tag == "source":
+                    self._record_image(self._pick_srcset(values.get("srcset", "")), "")
                 return
         if tag == "img":
             self._handle_img(values)
@@ -480,9 +487,13 @@ class _MarkdownExtractor(HTMLParser):
         if prop in ("og:image", "og:image:url", "twitter:image"):
             self._record_image(values.get("content", ""), "")
 
-    def _handle_img(self, values: dict[str, str]) -> None:
+    def _img_source(self, values: dict[str, str]) -> tuple[str, str]:
+        """An <img>'s source and alt text."""
         src = values.get("src") or self._pick_srcset(values.get("srcset", ""))
-        alt = " ".join(values.get("alt", "").split())[:_MAX_ALT_CHARS]
+        return src, " ".join(values.get("alt", "").split())[:_MAX_ALT_CHARS]
+
+    def _handle_img(self, values: dict[str, str]) -> None:
+        src, alt = self._img_source(values)
         # The structured PageImage keeps the alt text as written; only the
         # Markdown copy needs escaping.
         url = self._record_image(src, alt)
@@ -582,15 +593,23 @@ def _parse(
 
 
 class _Landmarks(HTMLParser):
-    """Counts a document's <main> and <article> elements."""
+    """Counts a document's live <main> and <article> elements — not those
+    inside what extraction skips (a <template>'s, say)."""
 
     def __init__(self) -> None:
         super().__init__()
         self.counts = {"main": 0, "article": 0}
+        self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag in self.counts:
+        if tag in _SKIPPED_ELEMENTS:
+            self._skip_depth += 1
+        elif tag in self.counts and not self._skip_depth:
             self.counts[tag] += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _SKIPPED_ELEMENTS:
+            self._skip_depth = max(0, self._skip_depth - 1)
 
 
 def _main_content(html: str) -> str | None:
@@ -612,17 +631,22 @@ def _main_content(html: str) -> str | None:
 
 def _parse_page(
     html: str, *, base_url: str, collect_images: bool
-) -> _MarkdownExtractor:
-    """The page's main content when it marks one with enough text in it,
-    else the whole document."""
+) -> tuple[_MarkdownExtractor, int]:
+    """The page's main content when it marks one, else the whole document —
+    and how much text the page's own content holds, landmark or not, to tell
+    a script's empty shell by."""
     if scope := _main_content(html):
         doc = _parse(
             html, base_url=base_url, collect_images=collect_images, scope=scope
         )
-        # A landmark a script fills in later holds nothing yet.
-        if len(doc.text.strip()) >= _SCRIPT_SHELL_CHARS:
-            return doc
-    return _parse(html, base_url=base_url, collect_images=collect_images)
+        own = len(doc.text.strip())
+        # A landmark a script fills in later holds nothing yet: the rest of
+        # the page is all there is to read.
+        if own:
+            return doc, own
+        return _parse(html, base_url=base_url, collect_images=collect_images), own
+    doc = _parse(html, base_url=base_url, collect_images=collect_images)
+    return doc, len(doc.text.strip())
 
 
 def _looks_like_html(body: bytes) -> bool:
@@ -641,7 +665,7 @@ def page_from_response(raw: RawResponse, *, collect_images: bool = False) -> Pag
     if "html" in raw.media_type or (not raw.media_type and _looks_like_html(raw.body)):
         # Sniff <meta charset>: a headerless GBK page is mojibake without it.
         html = decode_body(raw.body, raw.charset, sniff_meta=True)
-        doc = _parse_page(html, base_url=raw.url, collect_images=collect_images)
+        doc, own = _parse_page(html, base_url=raw.url, collect_images=collect_images)
         page.title = doc.title
         # An extraction that came back empty (framework shell, exotic markup)
         # is less useful than the markup itself.
@@ -649,7 +673,7 @@ def page_from_response(raw: RawResponse, *, collect_images: bool = False) -> Pag
         page.images = doc.images
         if (
             raw.status_code == 200
-            and len(doc.text.strip()) < _SCRIPT_SHELL_CHARS
+            and own < _SCRIPT_SHELL_CHARS
             and "<script" in html.lower()
         ):
             # Say it, or the model refetches the same empty shell.
@@ -707,7 +731,10 @@ class HttpReader:
         self._cache: OrderedDict[str, tuple[float, RawResponse]] = OrderedDict()
 
     async def read(self, url: str, *, images: bool = False) -> Page:
-        return page_from_response(await self._fetch(url), collect_images=images)
+        raw = await self._fetch(url)
+        # Off the event loop: a 10 MB PDF, or a megabyte of markup, takes a
+        # while to read, and a web app has other chats to stream meanwhile.
+        return await asyncio.to_thread(page_from_response, raw, collect_images=images)
 
     async def _fetch(self, url: str) -> RawResponse:
         if (cached := self._cache_get(url)) is not None:

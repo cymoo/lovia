@@ -439,8 +439,16 @@ async def test_web_fetch_reads_the_main_content_a_page_marks(
         "/one-article": f"<nav>Menu</nav><article><p>{body}</p></article>",
         # Two of them: no landmark to trust, the whole page.
         "/two": f"<nav>Menu</nav><article><p>{body}</p></article><article>B</article>",
-        # A landmark a script fills in later: the whole page.
+        # One inside a <template> is inert: the live one still marks it.
+        "/template": f"<nav>Menu</nav><article><p>{body}</p></article>"
+        "<template><article>card</article></template>",
+        # Short but whole: kept, not swapped for the navigation around it.
+        "/short": "<nav>" + "Menu entry " * 30 + "</nav><main>Gone fishing.</main>",
+        # A landmark a script fills in later: the whole page — and the note.
         "/shell": "<nav>" + "Menu entry " * 30 + "</nav><main></main><script></script>",
+        # Images outside the main content still count for images=true.
+        "/images": f"<header><img src='/logo.png' alt='Logo'></header>"
+        f"<main><p>{body}</p><img src='/fig.png' alt='Fig'></main>",
     }
     _mock_http(
         monkeypatch,
@@ -451,15 +459,23 @@ async def test_web_fetch_reads_the_main_content_a_page_marks(
         ),
     )
 
-    async def read(path: str) -> Any:
-        return await page_tool.invoke({"url": f"https://example.com{path}"}, _ctx())
+    async def read(path: str, **args: Any) -> Any:
+        url = f"https://example.com{path}"
+        return await page_tool.invoke({"url": url, **args}, _ctx())
 
     page = await read("/one-main")
     assert page.title == "T" and page.text.startswith("# Topic")
     assert "Menu" not in page.text and "Footer" not in page.text
     assert "Menu" not in (await read("/one-article")).text
     assert "Menu" in (await read("/two")).text
-    assert "Menu entry" in (await read("/shell")).text
+    assert "Menu" not in (await read("/template")).text
+    short = await read("/short")
+    assert short.text == "Gone fishing." and short.note is None
+    shell = await read("/shell")
+    assert "Menu entry" in shell.text and shell.note is not None
+    page = await read("/images", images=True)
+    assert "logo.png" not in page.text  # the Markdown is the main content's
+    assert [i.alt for i in page.images] == ["Logo", "Fig"]
 
 
 @pytest.mark.asyncio
@@ -559,19 +575,29 @@ async def test_a_pdf_gets_its_own_download_cap(
 ) -> None:
     pytest.importorskip("pypdf")
     pdf = _pdf("x" * 100)
+    # Typed as a PDF, or a download that only its first bytes say is one.
+    types = {"/a.pdf": "application/pdf", "/dl": "application/octet-stream"}
     _mock_http(
         monkeypatch,
         lambda request: httpx.Response(
-            200, content=pdf, headers={"content-type": "application/pdf"}
+            200, content=pdf, headers={"content-type": types[request.url.path]}
         ),
     )
-    # Over the page cap, within the PDF cap: read whole.
-    roomy = web_fetch(HttpReader(max_bytes=100, cache_ttl=0))
-    page = await roomy.invoke({"url": "https://example.com/a.pdf"}, _ctx())
-    assert page.text == "x" * 100
-    # Over the PDF cap too: said, not parsed — a PDF cut short reads as nothing.
-    tight = web_fetch(HttpReader(max_bytes=100, pdf_max_bytes=200, cache_ttl=0))
-    page = await tight.invoke({"url": "https://example.com/a.pdf"}, _ctx())
+
+    async def read(reader: HttpReader, path: str) -> Any:
+        url = f"https://example.com{path}"
+        return await web_fetch(reader).invoke({"url": url}, _ctx())
+
+    # Over the page cap, within the PDF cap: read whole, either way.
+    for path in types:
+        page = await read(HttpReader(max_bytes=100, cache_ttl=0), path)
+        assert page.text == "x" * 100
+    # Exactly the PDF cap is whole; one byte under it is cut short — said,
+    # not parsed: a PDF cut short reads as nothing.
+    exact = HttpReader(max_bytes=100, pdf_max_bytes=len(pdf), cache_ttl=0)
+    assert (await read(exact, "/a.pdf")).text == "x" * 100
+    tight = HttpReader(max_bytes=100, pdf_max_bytes=len(pdf) - 1, cache_ttl=0)
+    page = await read(tight, "/a.pdf")
     assert page.size_capped and "larger than the download cap" in page.text
 
 

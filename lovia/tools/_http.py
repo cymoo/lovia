@@ -118,15 +118,18 @@ async def fetch_raw(
                 resp.headers.get("content-type", "").split(";")[0].strip().lower()
             )
             cap = max_bytes
-            if pdf_max_bytes is not None and media_type == "application/pdf":
-                cap = pdf_max_bytes
             chunks: list[bytes] = []
             received = 0
             size_capped = False
             async for chunk in resp.aiter_bytes():
+                if not chunks and pdf_max_bytes is not None:
+                    # By its type, or — served as a download — its first bytes.
+                    if media_type == "application/pdf" or chunk.startswith(b"%PDF-"):
+                        cap = pdf_max_bytes
                 chunks.append(chunk)
                 received += len(chunk)
-                if received >= cap:
+                # Past the cap, not at it: a file exactly that long is whole.
+                if received > cap:
                     size_capped = True
                     break
             return RawResponse(

@@ -56,7 +56,12 @@ from ._content import (
     openai_tool_to_anthropic as _openai_tool_to_anthropic,
     text_only as _text_only,
 )
-from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
+from ._http import (
+    host_matches,
+    proxy_route,
+    raise_for_provider_status,
+    raise_for_transport_error,
+)
 from ._windows import (
     WindowResolver,
     fetch_model_window,
@@ -137,6 +142,7 @@ class AnthropicProvider:
         self._default_max_tokens = default_max_tokens
         self._extra_headers = dict(default_headers or {})
         self._trust_env = resolve_trust_env(trust_env)
+        self._route = proxy_route(trust_env, owns_client=client is None)
         self._extra_body = dict(extra_body or {})
 
     async def aclose(self) -> None:
@@ -151,10 +157,6 @@ class AnthropicProvider:
                 **client_options(self._trust_env),
             )
         return self._client
-
-    def _proxy_setting(self) -> bool | None:
-        """The client's ``trust_env``; ``None`` for one the caller passed in."""
-        return self._trust_env if self._owns_client else None
 
     def context_window(self) -> int | None:
         return self._windows.window()
@@ -375,7 +377,7 @@ class AnthropicProvider:
                     label="Anthropic",
                     is_context_overflow=_is_context_overflow,
                     window_from_body=window_from_error,
-                    trust_env=self._proxy_setting(),
+                    route=self._route,
                 )
                 async for event in iter_sse_json(response):
                     etype = event.get("type")
@@ -526,7 +528,7 @@ class AnthropicProvider:
                 model=self.model,
                 label="Anthropic",
                 url=self.base_url,
-                trust_env=self._proxy_setting(),
+                route=self._route,
             )
 
         # A stream that ends with neither a stop_reason nor a ``message_stop``

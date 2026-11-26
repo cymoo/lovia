@@ -38,7 +38,12 @@ from ._content import (
     content_to_openai_chat as _content_to_openai,
     merge_openai_chat_content as _merge_openai_content,
 )
-from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
+from ._http import (
+    host_matches,
+    proxy_route,
+    raise_for_provider_status,
+    raise_for_transport_error,
+)
 from ._windows import (
     WindowResolver,
     fetch_reported_window,
@@ -314,6 +319,7 @@ class OpenAIChatProvider:
         self._extra_headers = dict(default_headers or {})
         self._supports_json_schema = supports_json_schema
         self._trust_env = resolve_trust_env(trust_env)
+        self._route = proxy_route(trust_env, owns_client=client is None)
         self._replay_reasoning = replay_reasoning
         self._official_dialect = official_dialect
         self._supports_vision = supports_vision
@@ -381,10 +387,6 @@ class OpenAIChatProvider:
                 **client_options(self._trust_env),
             )
         return self._client
-
-    def _proxy_setting(self) -> bool | None:
-        """The client's ``trust_env``; ``None`` for one the caller passed in."""
-        return self._trust_env if self._owns_client else None
 
     def _headers(self) -> dict[str, str]:
         # Keys are lower-cased on merge: HTTP headers are case-insensitive,
@@ -489,7 +491,7 @@ class OpenAIChatProvider:
                     label="OpenAI Chat",
                     is_context_overflow=_is_context_overflow,
                     window_from_body=window_from_error,
-                    trust_env=self._proxy_setting(),
+                    route=self._route,
                 )
                 async for event in iter_sse_json(response, on_done=_mark_done):
                     if "usage" in event and event["usage"]:
@@ -549,7 +551,7 @@ class OpenAIChatProvider:
                 model=self.model,
                 label="OpenAI Chat",
                 url=self.base_url,
-                trust_env=self._proxy_setting(),
+                route=self._route,
             )
 
         # A stream that ends with neither a finish_reason nor the ``[DONE]``

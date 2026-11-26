@@ -453,6 +453,8 @@ def test_a_connection_lends_its_endpoint_and_key(
         "api_key": "sk-chat-1234567890",
         "model": "gpt-transcribe",
         "language": "zh",
+        # The borrowed model's route: it sets none, so the global default.
+        "trust_env": None,
     }
 
     # A reference, not a copy: the profile's new key is the next take's.

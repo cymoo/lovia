@@ -112,6 +112,8 @@ class ModelProfile(BaseModel):
     # ``extra_body`` (reasoning knobs, vLLM's ``chat_template_kwargs``, ...).
     # Stored as written: the endpoint's own dialect, no translation.
     extra_body: dict[str, Any] = Field(default_factory=dict)
+    # Through the system proxy or not; None: as ``--trust-env`` says.
+    trust_env: bool | None = None
 
     @model_validator(mode="after")
     def _normalise(self) -> "ModelProfile":
@@ -495,6 +497,7 @@ class Connection:
     # Runtime probe data, never persisted: the model ids a successful
     # ``/models`` probe listed (None until then, or when the shape is foreign).
     available_models: list[str] | None = None
+    trust_env: bool | None = None
 
     @property
     def flavor(self) -> ProviderFlavor | None:
@@ -510,6 +513,7 @@ class Connection:
             base_url=base_url.rstrip("/"),
             api_key=profile.api_key,
             context_window=profile.context_window,
+            trust_env=profile.trust_env,
         )
 
     def needs_api_key(self) -> bool:

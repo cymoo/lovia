@@ -129,6 +129,16 @@ def test_registered_factory_without_kwargs_still_works_without_overrides() -> No
         _REGISTRY.pop("plainco", None)
 
 
+def test_trust_env_reaches_the_builtin_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "1")
+    assert provider_from_string("bare-model", api_key="k")._trust_env is True  # type: ignore[attr-defined]
+    for spec in ("bare-model", "openai:m", "anthropic:m"):
+        p = provider_from_string(spec, api_key="k", trust_env=False)
+        assert p._trust_env is False  # type: ignore[attr-defined]
+
+
 def test_registered_factory_without_kwargs_rejects_overrides() -> None:
     from lovia.providers import _REGISTRY
 

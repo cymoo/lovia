@@ -806,6 +806,11 @@ const MESSAGES = {
     'cfg.visionOn': '支持',
     'cfg.visionOff': '不支持',
     'cfg.visionHint': '自动 = 按已知模型能力表判断；网关改名时可手动指定',
+    'cfg.proxy': '系统代理',
+    'cfg.proxyDefault': '跟随全局',
+    'cfg.proxyOff': '直连',
+    'cfg.proxyOn': '经代理',
+    'cfg.proxyHint': '只能经公司代理访问的模型选“经代理”（仍遵循 NO_PROXY）；“跟随全局”默认直连，启动时加 --trust-env 则经代理',
     'cfg.extraBody': '额外请求参数',
     'cfg.extraBodyHint':
       '原样合并进发给该端点的每个请求（如 reasoning_effort、thinking、vLLM 的 chat_template_kwargs）；null 表示删除该字段。按端点自己的写法填，不做转换',
@@ -1756,6 +1761,12 @@ const EN = {
   'cfg.visionOff': 'Not supported',
   'cfg.visionHint':
     'Auto follows the known-model table; set it for renamed gateway models',
+  'cfg.proxy': 'System proxy',
+  'cfg.proxyDefault': 'Default',
+  'cfg.proxyOff': 'Direct',
+  'cfg.proxyOn': 'Use proxy',
+  'cfg.proxyHint':
+    'Use proxy for a model reachable only through the office proxy (NO_PROXY still applies). Default is direct, or the proxy when lovia web runs with --trust-env',
   'cfg.extraBody': 'Extra request fields',
   'cfg.extraBodyHint':
     "Merged verbatim into every request to this endpoint (reasoning_effort, thinking, vLLM's chat_template_kwargs…); null removes a field. Written in the endpoint's own dialect — nothing is translated",

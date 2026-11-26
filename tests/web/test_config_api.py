@@ -577,6 +577,49 @@ def test_probe_endpoint_free_form(served, monkeypatch: pytest.MonkeyPatch) -> No
     }
 
 
+def test_a_model_keeps_its_proxy_setting_and_tests_with_the_form_s(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, runtime, _app = served
+    monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
+    _add_model(client, id="out", trust_env=True)
+    _add_model(client, id="in")
+    listed = {m["id"]: m for m in client.get("/api/config").json()["models"]}
+    assert (listed["out"]["trust_env"], listed["in"]["trust_env"]) == (True, None)
+    # A chat on it gets a provider that goes through the proxy, as it says.
+    lovia = client.app.state.deps.agents["lovia"]
+    assert runtime.on_model(lovia, "in").model._trust_env is False
+    assert runtime.on_model(lovia, "out").model._trust_env is True
+
+    seen: list[object] = []
+
+    def fake_validate(conn, **kwargs):
+        seen.append(conn.trust_env)
+        return ValidationOutcome.UNREACHABLE, "ConnectError"
+
+    monkeypatch.setattr("lovia.web.api.config.validate_connection", fake_validate)
+    # The form's choice, its "Default" (null) included; left out, the stored one.
+    for sent in ({"trust_env": False}, {"trust_env": None}, {}):
+        client.post("/api/config/test", json={"profile_id": "out", **sent})
+    assert seen == [False, None, True]
+
+
+def test_voice_on_a_borrowed_model_takes_its_proxy_route(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, runtime, _app = served
+    _add_model(client, id="out", trust_env=True)
+    res = client.put("/api/config/voice", json={"connection": "out", "model": "asr"})
+    assert res.status_code == 200, res.text
+    built: dict[str, object] = {}
+    monkeypatch.setattr(
+        "lovia.web.config.runtime.openai_transcriber",
+        lambda **kwargs: built.update(kwargs) or (lambda *a: None),
+    )
+    assert runtime.transcriber() is not None
+    assert built["trust_env"] is True
+
+
 def test_probe_endpoint_reuses_the_stored_key(
     served, monkeypatch: pytest.MonkeyPatch
 ) -> None:

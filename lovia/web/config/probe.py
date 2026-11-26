@@ -18,6 +18,10 @@ from ...providers.base import context_window as provider_context_window
 from .schema import Connection
 
 
+# A profile's own proxy choice, by the name Settings → Models gives it.
+MODEL_PROXY_SWITCH = "this model's System proxy setting"
+
+
 class ValidationOutcome(enum.Enum):
     OK = "ok"
     AUTH_FAILED = "auth_failed"
@@ -39,12 +43,14 @@ def validate_connection(
     there, so setup need not ask for a number the endpoint knows.
     """
     assert conn.base_url is not None and conn.flavor is not None
-    options = client_options()
+    options = client_options(conn.trust_env)
     url = f"{conn.base_url}/models"
+    # A failure's hint names the setting that decided the route.
+    named = {} if conn.trust_env is None else {"switch": MODEL_PROXY_SWITCH}
 
     def noted(detail: str, failed: str) -> str:
         # ``failed``: where the request ended up, redirects followed.
-        note = proxy_note(failed, options["trust_env"])
+        note = proxy_note(failed, options["trust_env"], **named)
         return f"{detail.rstrip('.')}. {note}" if note else detail
 
     try:
@@ -135,7 +141,10 @@ def build_provider(conn: Connection) -> Provider | None:
         return None
     try:
         return provider_from_string(
-            conn.model, api_key=conn.api_key, base_url=conn.base_url
+            conn.model,
+            api_key=conn.api_key,
+            base_url=conn.base_url,
+            trust_env=conn.trust_env,
         )
     except ValueError:
         return None

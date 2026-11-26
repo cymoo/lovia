@@ -178,6 +178,7 @@ class ConfigRuntime:
             base_url=conn.base_url,
             supports_vision=profile.vision_override(),
             extra_body=profile.extra_body,
+            trust_env=profile.trust_env,
         )
         memory = None
         if config.assistant.memory:
@@ -260,6 +261,7 @@ class ConfigRuntime:
                     base_url=conn.base_url,
                     supports_vision=profile.vision_override(),
                     extra_body=profile.extra_body,
+                    trust_env=profile.trust_env,
                 )
             except ValueError as exc:
                 raise UserError(str(exc)) from exc
@@ -288,12 +290,20 @@ class ConfigRuntime:
             return None
         url, api_key, _ = endpoint
         voice = self.config.voice
+        trust_env = None
         if voice.connection is not None:
             # A borrowed connection brings the key its chats run on: one left
             # out of the file is the provider's own environment lookup.
             api_key = api_key or os.environ.get("OPENAI_API_KEY")
+            # And their route: the same gateway, through the proxy or not.
+            profile = self.config.profile(voice.connection)
+            trust_env = profile.trust_env if profile is not None else None
         return openai_transcriber(
-            base_url=url, api_key=api_key, model=voice.model, language=voice.language
+            base_url=url,
+            api_key=api_key,
+            model=voice.model,
+            language=voice.language,
+            trust_env=trust_env,
         )
 
     def take_seconds(self) -> int | None:

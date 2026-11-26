@@ -86,6 +86,7 @@ class ProfileIn(BaseModel):
     max_tokens: int | None = Field(default=None, ge=1)
     vision: VisionMode = "auto"
     extra_body: dict[str, Any] = Field(default_factory=dict)
+    trust_env: bool | None = None
 
     def to_profile(self, *, profile_id: str, stored_key: str | None) -> ModelProfile:
         if self.api_key is None:
@@ -103,6 +104,7 @@ class ProfileIn(BaseModel):
             max_tokens=self.max_tokens,
             vision=self.vision,
             extra_body=self.extra_body,
+            trust_env=self.trust_env,
         )
 
 
@@ -214,6 +216,9 @@ class TestIn(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     context_window: int | None = None
+    # As the form has it — the setting about to be saved, ``null`` its
+    # "Default". Left out, a stored profile's own.
+    trust_env: bool | None = None
 
 
 class TestOut(BaseModel):
@@ -379,6 +384,7 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                     # (``auto`` asks the provider) — the composer's attach.
                     "sees_images": _sees_images(p),
                     "extra_body": p.extra_body,
+                    "trust_env": p.trust_env,
                 }
                 for p in cfg.models
             ],
@@ -883,6 +889,12 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             probe_key = body.api_key or None
         else:
             probe_key = stored.api_key if stored else None
+        # Left out: the stored profile's route (a caller with only its id);
+        # an explicit null is the form's "Default" being tested.
+        if "trust_env" in body.model_fields_set or stored is None:
+            trust_env = body.trust_env
+        else:
+            trust_env = stored.trust_env
         try:
             probe_profile = ModelProfile(
                 id="probe",
@@ -893,6 +905,7 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                 base_url=body.base_url or (stored.base_url if stored else None),
                 api_key=probe_key,
                 context_window=body.context_window,
+                trust_env=trust_env,
             )
         except ValidationError as exc:
             raise WebError.from_exc(400, "invalid_request", exc) from exc

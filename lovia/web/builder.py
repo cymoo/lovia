@@ -259,6 +259,7 @@ def resolve_vision_tool(
             base_url=profile.base_url,
             supports_vision=profile.vision_override(),
             extra_body=profile.extra_body,
+            trust_env=profile.trust_env,
         )
     except (UserError, ValueError) as exc:
         log.warning(
@@ -285,6 +286,7 @@ def resolve_aux_model(profile: ModelProfile | None) -> Provider | None:
             api_key=profile.api_key,
             base_url=profile.base_url,
             extra_body=profile.extra_body,
+            trust_env=profile.trust_env,
         )
     except (UserError, ValueError) as exc:
         log.warning(

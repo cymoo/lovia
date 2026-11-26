@@ -927,7 +927,7 @@ serve(create_app(agent, token="s3cret"), host="0.0.0.0")   # 固定 token
 serve(agent, host="0.0.0.0")                                # 自动生成并打印
 ```
 
-token 会保护 `build_api_router` 注册的业务路由。`/healthz`、`/api/docs`、
+token 会保护 `build_api_router` 注册的业务路由。`/healthz` 和 `/health`、`/api/docs`、
 `/api/openapi.json`、UI 页面和静态资源默认不要求认证。客户端可以通过以下方式提交 token：
 
 - **普通 API 请求和聊天 SSE**：发送 `Authorization: Bearer <token>`。聊天流由

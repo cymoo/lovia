@@ -1081,7 +1081,7 @@ serve(agent, host="0.0.0.0")                                # generated + printe
 ```
 
 The token guards the business routes registered by `build_api_router`.
-`/healthz`, `/api/docs`, `/api/openapi.json`, the UI shell, and static assets
+`/healthz` and `/health`, `/api/docs`, `/api/openapi.json`, the UI shell, and static assets
 remain public. Clients can supply the token in two ways:
 
 - **Plain API requests and chat SSE** send

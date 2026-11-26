@@ -88,7 +88,7 @@ host generates one when none was supplied.
 Plain requests, `POST /api/chat/stream`, and `POST /api/chat/reconnect` send
 `Authorization: Bearer <token>`. `GET /api/events` uses `EventSource`, which
 cannot set custom headers, so the bundled UI authenticates it with the
-`lovia_token` cookie. `GET /healthz` is served by `create_app` outside the
+`lovia_token` cookie. `GET /healthz` (also at `/health`) is served by `create_app` outside the
 guard, so it stays open under `token` and `auth` alike. Missing or invalid credentials
 return `401` with code `server_token` — distinct from a model provider
 rejecting its API key, which arrives as a run error (`provider_auth`).
@@ -165,7 +165,7 @@ normalizes all three.
 
 | Method & path | Purpose |
 | --- | --- |
-| `GET /healthz` | liveness (served by `create_app`, not `build_api_router`) |
+| `GET /healthz` · `GET /health` | liveness (served by `create_app`, not `build_api_router`) |
 | `GET /api/info` | title, agents, default agent, version, feature flags, `workspace_modes: {modes, default}` when chats can pick a permission mode (`create_app(workspaces=)`; else `null`), and `desktop: {reveal, edit}` when the server can show files on its own desktop (`reveal`: `finder`, `explorer` or `folder`; else `null`). `take_seconds` is the longest voice-input take the transcription service accepts, where the server knows it (else `null`) |
 | `GET /api/agents` · `GET /api/agents/{name}` | agent introspection (instructions, tools, capabilities — `workspace`, `vision`: whether its model sees images) |
 | `POST /api/chat` | one **blocking** turn → `{output, session_id, usage}`: a supervised Run, waited for ([details](#blocking-turns)) |

@@ -108,6 +108,7 @@ def test_healthz_and_ui_shell_stay_open(guard: dict) -> None:
     assert c.get("/api/agents").status_code == 401
     # Probes must not need credentials, whatever the guard is.
     assert c.get("/healthz").status_code == 200
+    assert c.get("/health").json() == {"status": "ok"}
     # The UI shell is public — it carries no data and must be able to load so
     # it can collect the token client-side.
     assert c.get("/").status_code == 200

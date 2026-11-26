@@ -1662,11 +1662,12 @@ async def test_inject_then_cancel_does_not_chain() -> None:
 
     import httpx
 
-    release = asyncio.Event()
+    release, entered = asyncio.Event(), asyncio.Event()
 
     @tool
     async def block() -> str:
         """Block until released."""
+        entered.set()
         await release.wait()
         return "ok"
 
@@ -1685,6 +1686,8 @@ async def test_inject_then_cancel_does_not_chain() -> None:
                     collected.append(line)
 
         consumer = asyncio.create_task(consume())
+        # Inside the tool, so the first turn has run and the message queues.
+        await asyncio.wait_for(entered.wait(), timeout=5)
         for _ in range(100):
             r = await ac.post(
                 "/api/chat/inject", json={"session_id": "s1", "message": "queued"}
@@ -1712,11 +1715,12 @@ async def test_uninject_withdraws_a_queued_message() -> None:
 
     import httpx
 
-    release = asyncio.Event()
+    release, entered = asyncio.Event(), asyncio.Event()
 
     @tool
     async def block() -> str:
         """Block until released."""
+        entered.set()
         await release.wait()
         return "ok"
 
@@ -1735,6 +1739,8 @@ async def test_uninject_withdraws_a_queued_message() -> None:
                     collected.append(line)
 
         consumer = asyncio.create_task(consume())
+        # Inside the tool, so the first turn has drained the empty mailbox.
+        await asyncio.wait_for(entered.wait(), timeout=5)
         inj_id = None
         for _ in range(100):
             d = (

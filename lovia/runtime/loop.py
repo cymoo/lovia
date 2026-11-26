@@ -450,6 +450,7 @@ class RunLoop:
                         time.perf_counter() - model_started,
                     )
                     state.transcript.extend(turn.turn_entries)
+                    state.tool_calls += len(assistant.tool_calls)
                     # The turn has contributed entries to the transcript: from
                     # here on an abort must not roll back the turn counter —
                     # ``save_terminal`` persists these entries under this turn
@@ -687,12 +688,12 @@ class RunLoop:
             run_ctx.entries.extend(normalize_replayed_entries(snapshot.entries))
             run_ctx.usage.add(snapshot.usage)
             if self.budget is not None:
-                # Every call the run requested went through preflight once,
+                # Every call the model requested went through preflight once,
                 # except those still pending: the resume drain preflights
                 # (and counts) them now.
-                requested = sum(isinstance(e, ToolCallEntry) for e in snapshot.entries)
+                pending = len(pending_tool_calls(snapshot.entries))
                 self.budget.resume(
-                    tool_calls=requested - len(pending_tool_calls(snapshot.entries)),
+                    tool_calls=max(0, snapshot.tool_calls - pending),
                     elapsed=snapshot.elapsed,
                 )
             # These entries are already in the checkpoint; only persist new ones.
@@ -744,7 +745,7 @@ class RunLoop:
             started_at=(
                 snapshot.started_at if snapshot is not None else self._invoked_at
             ),
-            elapsed_before=snapshot.elapsed if snapshot is not None else 0.0,
+            tool_calls=snapshot.tool_calls if snapshot is not None else 0,
             pending_handoff=(
                 resolve_pending_handoff(agent, snapshot)
                 if snapshot is not None

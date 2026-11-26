@@ -46,9 +46,9 @@ finish and persist their results.
     instance carries spent time and calls into the next run.
 
 A run [resumed from its checkpoint](sessions-and-checkpoints.md) keeps counting where it
-stopped, even with a fresh budget: tokens through its saved usage, tool calls
-from its transcript, and `max_seconds` from the time it has spent running —
-time spent suspended between the legs does not count.
+stopped, even with a fresh budget: tokens through its saved usage, the tool
+calls it has made, and `max_seconds` from the time it has spent running — time
+spent suspended between the legs does not count.
 
 An [Agent-as-tool](multi-agent.md#agent-as-tool) sub-run uses its own copied
 budget. If that sub-run exceeds the limit, the parent sees a tool error and can

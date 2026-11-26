@@ -1,12 +1,15 @@
 """Environment-driven configuration for lovia's outbound ``httpx`` clients.
 
-The model providers and the fetching tools (``web_fetch``, ``web_search``)
-all make HTTPS requests through ``httpx``. This module centralizes how their
-outbound behavior is resolved from the environment (handy behind an intranet CA
-or proxy). TLS trust (:func:`resolve_verify`) is shared by the providers and the
-tools; the request-timeout (:func:`resolve_timeout`) and proxy/``trust_env``
-(:func:`resolve_trust_env`) knobs are provider-scoped — the tools keep their own
-timeouts and httpx's default proxy handling.
+Every HTTP client lovia builds — the model providers, MCP over HTTP, the
+fetching tools, embeddings — takes its proxy and TLS options from
+:func:`client_options`, so one setting covers every outbound request (handy
+behind an intranet CA or proxy). The request timeout
+(:func:`resolve_timeout`) is provider-scoped: the tools keep their own.
+
+Proxies are off unless asked for (:func:`resolve_trust_env`). httpx reads the
+OS proxy (the Windows registry, macOS system settings) but not its bypass
+list or PAC file, so honoring it by default would send intranet hosts to a
+proxy that cannot reach them.
 """
 
 from __future__ import annotations
@@ -14,15 +17,25 @@ from __future__ import annotations
 import logging
 import os
 import ssl
+import urllib.request
+from typing import Any
+from urllib.parse import urlsplit
 
-__all__ = ["DEFAULT_TIMEOUT", "resolve_timeout", "resolve_trust_env", "resolve_verify"]
+__all__ = [
+    "DEFAULT_TIMEOUT",
+    "client_options",
+    "proxy_note",
+    "resolve_timeout",
+    "resolve_trust_env",
+    "resolve_verify",
+]
 
 logger = logging.getLogger(__name__)
 
 _INSECURE_ENV = "LOVIA_HTTP_INSECURE"
 _CA_BUNDLE_ENV = "LOVIA_HTTP_CA_BUNDLE"
 _PROVIDER_TIMEOUT_ENV = "LOVIA_PROVIDER_TIMEOUT"
-_TRUST_ENV_ENV = "LOVIA_PROVIDER_TRUST_ENV"
+_TRUST_ENV_ENV = "LOVIA_HTTP_TRUST_ENV"
 DEFAULT_TIMEOUT = 300.0
 """Default provider request timeout in seconds (see :func:`resolve_timeout`)."""
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -96,12 +109,69 @@ def resolve_timeout(timeout: float | None) -> float:
 
 
 def resolve_trust_env(trust_env: bool | None) -> bool:
-    """Whether the provider HTTP client honors proxy / netrc env settings.
+    """Whether an outbound HTTP client honors proxy / netrc settings.
 
-    Explicit argument wins, then ``LOVIA_PROVIDER_TRUST_ENV`` (truthy:
+    Explicit argument wins, then ``LOVIA_HTTP_TRUST_ENV`` (truthy:
     ``1``/``true``/``yes``/``on``), else ``False``. Enabling it lets httpx pick
-    up ``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``NO_PROXY`` for provider calls.
+    up ``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``NO_PROXY`` — and, when none is set,
+    the OS proxy, without its bypass list.
     """
     if trust_env is not None:
         return trust_env
     return _env_truthy(_TRUST_ENV_ENV)
+
+
+def client_options(trust_env: bool | None = None) -> dict[str, Any]:
+    """The proxy and TLS options of every httpx client lovia builds.
+
+    Splat into the constructor —
+    ``httpx.AsyncClient(timeout=..., **client_options())`` — so no client can
+    take one setting and miss the other. ``trust_env`` as in
+    :func:`resolve_trust_env`.
+    """
+    return {"trust_env": resolve_trust_env(trust_env), "verify": resolve_verify()}
+
+
+def proxy_note(
+    url: str,
+    trust_env: bool,
+    *,
+    switch: str = "trust_env (LOVIA_HTTP_TRUST_ENV)",
+) -> str | None:
+    """How the proxy settings bore on a failed request to ``url``, in a sentence.
+
+    A failure is where a proxy surprise shows — an endpoint reachable only
+    through the proxy lovia skipped, or an intranet host sent to one — and
+    nothing else in the error says which. ``None`` when no proxy applies to
+    ``url``. ``switch`` names the setting to flip, as the reader knows it.
+    """
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        proxies = urllib.request.getproxies()
+        proxy = proxies.get(parts.scheme) or proxies.get("all")
+        if not host or not proxy or _bypassed(host, proxies):
+            return None
+        where = _proxy_address(proxy)
+    except Exception:  # noqa: BLE001 — a hint must never mask the failure it explains
+        return None
+    if trust_env:
+        return (
+            f"It went through the proxy {where}; if {host} is on your own "
+            f"network, turn {switch} off or add the host to NO_PROXY."
+        )
+    return (
+        f"It skipped the proxy {where} set on this machine, since {switch} is "
+        f"off; if {host} is reachable only through that proxy, turn it on."
+    )
+
+
+# NO_PROXY matching as urllib does it: in every CPython 3, not in typeshed.
+_bypassed = urllib.request.proxy_bypass_environment  # type: ignore[attr-defined]
+
+
+def _proxy_address(proxy: str) -> str:
+    """``host:port`` of a proxy URL — never its credentials."""
+    parts = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+    host = parts.hostname or "?"
+    return f"{host}:{parts.port}" if parts.port else host

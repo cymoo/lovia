@@ -28,7 +28,7 @@ from lovia.web.config import (
 from lovia.web.config import runtime as runtime_module  # noqa: E402
 from lovia.web.config.mcp import mask, parse_servers, restore_secrets, spec_of  # noqa: E402
 from lovia.web.config.schema import MCPServerConfig  # noqa: E402
-from lovia.web.mcp import SettingsMCP  # noqa: E402
+from lovia.web.mcp import SettingsMCP, describe, server_for  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 STUB = str(Path(__file__).parents[1] / "plugins" / "mcp_stub_server.py")
@@ -91,6 +91,8 @@ def test_takes_the_document_or_its_inside_in_the_shapes_clients_write() -> None:
         ({"x": {"url": "https://a", "env": {"K": "v"}}}, "go with a command"),
         ({"x y": {"command": "a"}}, "letters, digits"),
         ({"x": {"command": "a", "args": "-y"}}, "list of strings"),
+        ({"x": {"command": "a", "trustEnv": True}}, "trustEnv goes with a url"),
+        ({"x": {"url": "https://a", "trustEnv": "yes"}}, "true or false"),
         ({}, "no servers"),
         ([], "expected an object"),
     ],
@@ -98,6 +100,33 @@ def test_takes_the_document_or_its_inside_in_the_shapes_clients_write() -> None:
 def test_says_what_is_wrong_with_a_document(doc: Any, says: str) -> None:
     with pytest.raises(ValueError, match=says.replace("(", r"\(").replace(")", r"\)")):
         parse_servers(doc)
+
+
+def test_trust_env_is_kept_per_server_and_reaches_the_connection() -> None:
+    doc = {
+        "out": {"url": "https://mcp.public.example/mcp", "trustEnv": True},
+        "in": {"url": "https://mcp.corp.example/mcp"},
+    }
+    servers = {s.name: s for s in parse_servers(doc)}
+    assert servers["out"].trust_env is True and servers["in"].trust_env is None
+    # Written back only where it was said, so the default stays the default.
+    assert spec_of(servers["out"])["trustEnv"] is True
+    assert "trustEnv" not in spec_of(servers["in"])
+    assert server_for(servers["out"]).trust_env is True
+
+
+def test_a_failed_connection_says_whether_a_proxy_was_in_the_way(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
+    off = MCPServerConfig(name="gw", url="https://mcp.corp.example/mcp")
+    on = off.model_copy(update={"trust_env": True})
+    assert "skipped the proxy proxy.corp:8080" in describe(TimeoutError(), 5, off)
+    said = describe(RuntimeError("Server returned an error response"), 5, on)
+    assert said.startswith("RuntimeError: Server returned an error response.")
+    assert 'turn "trustEnv" off' in said
 
 
 def test_secrets_go_out_masked_and_come_back_as_they_were() -> None:

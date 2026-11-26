@@ -11,7 +11,7 @@ import enum
 
 import httpx
 
-from ...http_config import resolve_trust_env, resolve_verify
+from ...http_config import client_options, proxy_note
 from ...providers import Provider, provider_from_string
 from ...providers._windows import window_from_models_payload
 from ...providers.base import context_window as provider_context_window
@@ -39,27 +39,31 @@ def validate_connection(
     there, so setup need not ask for a number the endpoint knows.
     """
     assert conn.base_url is not None and conn.flavor is not None
+    options = client_options()
+    url = f"{conn.base_url}/models"
+
+    def noted(detail: str) -> str:
+        note = proxy_note(url, options["trust_env"])
+        return f"{detail.rstrip('.')}. {note}" if note else detail
+
     try:
         with httpx.Client(
-            timeout=timeout,
-            transport=transport,
-            follow_redirects=True,
-            trust_env=resolve_trust_env(None),
-            verify=resolve_verify(),
+            timeout=timeout, transport=transport, follow_redirects=True, **options
         ) as client:
-            response = client.get(
-                f"{conn.base_url}/models",
-                headers=conn.flavor.auth_headers(conn.api_key),
-            )
+            response = client.get(url, headers=conn.flavor.auth_headers(conn.api_key))
     except httpx.TransportError as exc:
-        return ValidationOutcome.UNREACHABLE, str(exc) or type(exc).__name__
+        return ValidationOutcome.UNREACHABLE, noted(str(exc) or type(exc).__name__)
     if response.status_code in (401, 403):
         return ValidationOutcome.AUTH_FAILED, f"HTTP {response.status_code}"
     if response.is_success:
         _adopt_reported_window(conn, response)
         conn.available_models = _listed_model_ids(response)
         return ValidationOutcome.OK, f"HTTP {response.status_code}"
-    return ValidationOutcome.UNVERIFIABLE, f"HTTP {response.status_code}"
+    detail = f"HTTP {response.status_code}"
+    # A gateway status through a proxy may be the proxy's own answer.
+    if options["trust_env"] and response.status_code in (407, 502, 504):
+        detail = noted(detail)
+    return ValidationOutcome.UNVERIFIABLE, detail
 
 
 def _listed_model_ids(response: httpx.Response) -> list[str] | None:

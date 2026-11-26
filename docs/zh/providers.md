@@ -298,15 +298,25 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
 | 环境变量 | 作用 | 默认 |
 | --- | --- | --- |
 | `LOVIA_PROVIDER_TIMEOUT` | 请求超时，秒 | `300` |
-| `LOVIA_PROVIDER_TRUST_ENV` | 是否遵守 `HTTP(S)_PROXY` / `NO_PROXY` | 关闭 |
+| `LOVIA_HTTP_TRUST_ENV` | 是否遵守 `HTTP(S)_PROXY` / `NO_PROXY` | 关闭 |
 | `LOVIA_HTTP_CA_BUNDLE` | 出站 TLS 自定义 PEM bundle | — |
 | `LOVIA_HTTP_INSECURE` | 关闭证书校验 | 关闭 |
 
 构造器参数（`timeout=`、`trust_env=`）优先于环境变量。TLS 校验按顺序解析：
 `LOVIA_HTTP_INSECURE` → CA bundle → 安装了可选 `truststore` 包时使用 OS trust store
-（`lovia[web]` 会带上）→ `certifi`。URL 读取和网页搜索工具也使用同一套配置，因此
-一处内网 CA 设置即可覆盖 lovia 的内置出站请求。详见
-[内置工具](built-in-tools.md#读取-url)。
+（`lovia[web]` 会带上）→ `certifi`。
+
+`LOVIA_HTTP_*` 覆盖 lovia 建的所有 HTTP 客户端：provider、[HTTP 方式的 MCP](mcp.md)、
+[URL 读取等工具](built-in-tools.md#读取-url)和 embedding。所以一处内网 CA 或代理设置就能
+覆盖所有出站请求。自己的代码可以从 `lovia.http_config.client_options()` 拿到同一套选项：
+
+```python
+httpx.AsyncClient(timeout=30, **client_options())
+```
+
+请求失败、而本机又配置了代理时，报错的 hint 会说明 lovia 有没有用它：要么是
+"skipped the proxy … since trust_env is off"（没走代理），要么是
+"went through the proxy …"（走了代理，常见于代理访问不到的内网地址）。
 
 **错误分类**会进入[重试机制](retries.md)：HTTP 408/429/5xx 以及传输层超时/断连是
 可重试的 `ProviderError`；上下文长度错误会按供应商识别（状态 + 消息关键词），并抛
@@ -323,7 +333,10 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
   如果不开，每轮都会重新支付完整 prompt，包括全部历史。这个开关的名字早于历史断点，
   现在它同时覆盖工具、system 和对话历史。
 - **`trust_env` 默认关闭**。这是有意为之，避免环境里的代理设置在无提示时改变路由。在需要代理的
-  环境里设置 `LOVIA_PROVIDER_TRUST_ENV=1`，否则不会使用代理。
+  环境里设置 `LOVIA_HTTP_TRUST_ENV=1`，否则不会使用代理。没设 `HTTP(S)_PROXY` 时，httpx 会退回
+  读系统代理（Windows 注册表、macOS 设置），但不读它的例外列表和 PAC 文件，所以打开后内网地址
+  也会走代理。这时请把代理和例外都写明（`HTTPS_PROXY=http://proxy:8080 NO_PROXY=.corp.example`）。
+  注意：只设 `NO_PROXY` 会让系统代理整个失效，因为 Python 这时只读环境变量。
 - **由字符串构造的 provider 归运行管理；你传入的实例归你管理。** 你手动构造并传入的
   `Provider` 不会被 runner 关闭；可以跨运行复用，也请自己关闭。
 - **`supports_json_schema` 推断跟着端点走。** 兼容端点如果确实支持原生 JSON schema，

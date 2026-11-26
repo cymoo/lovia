@@ -33,7 +33,8 @@ from urllib.parse import urlparse
 import httpx
 
 from ...exceptions import ProviderError, UserError
-from ...http_config import resolve_timeout, resolve_trust_env, resolve_verify
+from ...http_config import client_options, resolve_timeout, resolve_trust_env
+from ...providers._http import proxy_hint
 from ...providers._http import is_retryable_status
 from ...stores._sqlite import SQLiteStore
 from .index import Doc, Fusable, Hit, _dump_meta, _hit_from_row
@@ -92,8 +93,9 @@ class OpenAIEmbedder:
             ``LOVIA_PROVIDER_TIMEOUT`` environment variable, else 60.
         default_headers: Extra headers merged into every request.
         trust_env: Whether the embedder-created HTTP client should honor proxy
-            and certificate environment variables. Defaults to ``False`` (same
-            rationale as the chat providers).
+            and certificate environment variables. Defaults to
+            ``LOVIA_HTTP_TRUST_ENV``, else ``False`` (same rationale as the
+            chat providers).
         batch_size: Max texts per request. Kept conservative because
             compatible endpoints commonly cap batches far below OpenAI's.
     """
@@ -151,9 +153,7 @@ class OpenAIEmbedder:
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                timeout=self._timeout,
-                trust_env=self._trust_env,
-                verify=resolve_verify(),
+                timeout=self._timeout, **client_options(self._trust_env)
             )
         return self._client
 
@@ -190,7 +190,11 @@ class OpenAIEmbedder:
                 vendor="openai",
                 model=self.model,
                 retryable=isinstance(exc, httpx.TimeoutException | httpx.NetworkError),
-                hint="Check network connectivity, proxy settings, and base_url.",
+                hint=proxy_hint(
+                    "Check network connectivity, proxy settings, and base_url.",
+                    self.base_url,
+                    self._trust_env if self._owns_client else None,
+                ),
             ) from exc
         if resp.status_code >= 400:
             text = resp.text

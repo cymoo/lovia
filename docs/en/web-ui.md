@@ -268,7 +268,10 @@ A server is a `command` run on the lovia web host (stdio) — for a remote
 chat too — or a `url` (streamable HTTP; SSE is not supported). Its name
 prefixes its tools (`docs__search`), so it is letters, digits, `-` and `_`.
 A command may name the directory it starts in (`cwd`). `"disabled": true`
-saves it switched off; other keys are ignored.
+saves it switched off; a url's `"trustEnv": true` (or `false`) sends it
+through the system proxy (or not), whatever `--trust-env` says for the rest
+— a failed connection says when a proxy was skipped or in the way. Other
+keys are ignored.
 
 - **Connected per message.** Each run connects to the servers as it starts,
   one after another, and closes them when it ends — an `npx` server makes
@@ -821,7 +824,7 @@ Each resolves as flag, environment variable, then default.
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent (or: an Agent, mapping, or app of your own) |
 | `--title` | `LOVIA_TITLE` | `lovia` |
 | `--provider-timeout SECS` | `LOVIA_PROVIDER_TIMEOUT` | `300`; how long one model request may take |
-| `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | Off. On, model requests honor `HTTP(S)_PROXY` / `NO_PROXY` ([details](providers.md#networking-timeouts-proxies-tls)) |
+| `--trust-env` | `LOVIA_HTTP_TRUST_ENV` | Off. On, outbound requests — models, MCP, web fetch — honor `HTTP(S)_PROXY` / `NO_PROXY` ([details](providers.md#networking-timeouts-proxies-tls)) |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--check` | — | Check model configuration and exit |
 

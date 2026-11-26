@@ -29,7 +29,7 @@ from typing import Annotated, Any, Literal, Protocol
 import httpx
 
 from ..exceptions import ToolError, UserError
-from ..http_config import resolve_verify
+from ..http_config import client_options
 from .base import Tool, result_to_text, tool
 from .fence import FENCE_NOTE, fence
 
@@ -144,7 +144,7 @@ class TavilySearch:
             payload["time_range"] = time_range
         try:
             async with httpx.AsyncClient(
-                timeout=self._timeout, verify=resolve_verify()
+                timeout=self._timeout, **client_options()
             ) as client:
                 resp = await client.post(
                     _TAVILY_ENDPOINT,

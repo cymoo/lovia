@@ -355,16 +355,29 @@ Both adapters share one HTTP configuration layer:
 | Env var | Effect | Default |
 | --- | --- | --- |
 | `LOVIA_PROVIDER_TIMEOUT` | request timeout, seconds | `300` |
-| `LOVIA_PROVIDER_TRUST_ENV` | honor `HTTP(S)_PROXY` / `NO_PROXY` | off |
+| `LOVIA_HTTP_TRUST_ENV` | honor `HTTP(S)_PROXY` / `NO_PROXY` | off |
 | `LOVIA_HTTP_CA_BUNDLE` | custom PEM bundle for outbound TLS | — |
 | `LOVIA_HTTP_INSECURE` | disable certificate verification | off |
 
 Constructor arguments (`timeout=`, `trust_env=`) win over the environment.
 TLS verification resolves in order: `LOVIA_HTTP_INSECURE` → the CA bundle →
 the OS trust store when the optional `truststore` package is installed
-(bundled with `lovia[web]`) → `certifi`. The same resolution covers the
-[fetching tools](built-in-tools.md#fetching-urls), so one intranet-CA
-setting fixes every outbound request.
+(bundled with `lovia[web]`) → `certifi`.
+
+The `LOVIA_HTTP_*` settings cover every HTTP client lovia builds — the
+providers, [MCP over HTTP](mcp.md), the [fetching tools](built-in-tools.md#fetching-urls)
+and embeddings — so one intranet-CA or proxy setting fixes every outbound
+request. Your own code gets the same options from
+`lovia.http_config.client_options()`:
+
+```python
+httpx.AsyncClient(timeout=30, **client_options())
+```
+
+When a request fails and a proxy is configured on the machine, the error's
+hint says whether lovia used it — "skipped the proxy … since trust_env is
+off", or "went through the proxy …" for an intranet host the proxy cannot
+reach.
 
 **Error classification** feeds the [retry machinery](retries.md):
 HTTP 408/429/5xx and transport-level timeouts/disconnects are retryable
@@ -387,7 +400,13 @@ triggers reactive compaction instead of retries. That error also carries
   breakpoint; it now covers tools, system, and conversation alike.
 - **`trust_env` defaults to off** — deliberate, so ambient proxy settings
   can't silently reroute provider traffic. In proxied environments set
-  `LOVIA_PROVIDER_TRUST_ENV=1` or nothing connects.
+  `LOVIA_HTTP_TRUST_ENV=1` or nothing connects. With no `HTTP(S)_PROXY` set,
+  httpx falls back to the OS proxy (Windows registry, macOS settings) but
+  not its bypass list or PAC file, so turning it on sends intranet hosts
+  through the proxy too: name the proxy and the exceptions explicitly
+  (`HTTPS_PROXY=http://proxy:8080 NO_PROXY=.corp.example`). Setting
+  `NO_PROXY` alone turns the OS proxy off entirely — Python then reads only
+  the environment.
 - **Providers built from strings are run-owned; instances are yours.**
   A `Provider` you construct and pass in is never closed by the runner —
   reuse it across runs, close it yourself.

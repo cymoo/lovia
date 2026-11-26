@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from ..http_config import resolve_verify
+from ..http_config import client_options
 from ..exceptions import ToolError
 
 __all__ = [
@@ -109,7 +109,7 @@ async def fetch_raw(
         request_headers["User-Agent"] = user_agent
 
     async with httpx.AsyncClient(
-        timeout=timeout, follow_redirects=True, verify=resolve_verify()
+        timeout=timeout, follow_redirects=True, **client_options()
     ) as client:
         async with client.stream("GET", url, headers=request_headers) as resp:
             chunks: list[bytes] = []

@@ -192,7 +192,7 @@ Windows 下还会保留宿主环境中已有的以下变量：系统路径（`SY
 其中 Winsock 需要 `SYSTEMROOT` 才能加载 provider DLL；缺少它时，
 仅创建 socket 就可能报 `WinError 10106`。前台和后台命令遵循相同的环境规则。
 API key、代理配置和自定义 CA 变量仍需通过 `env=` 显式传入；
-`lovia web --trust-env` 只控制模型 provider 的 HTTP 请求。
+`lovia web --trust-env` 只控制 lovia 自己发出的 HTTP 请求，不影响 shell。
 
 ## 后台进程
 

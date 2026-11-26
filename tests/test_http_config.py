@@ -7,7 +7,13 @@ import types
 import certifi
 import pytest
 
-from lovia.http_config import resolve_timeout, resolve_trust_env, resolve_verify
+from lovia.http_config import (
+    client_options,
+    proxy_note,
+    resolve_timeout,
+    resolve_trust_env,
+    resolve_verify,
+)
 
 # --------------------------------------------------------------- verify -
 
@@ -106,22 +112,65 @@ def test_resolve_timeout_ignores_non_positive_env(
 
 
 def test_resolve_trust_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LOVIA_PROVIDER_TRUST_ENV", raising=False)
+    monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
     assert resolve_trust_env(None) is False
 
 
 def test_resolve_trust_env_explicit_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LOVIA_PROVIDER_TRUST_ENV", "1")
+    monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "1")
     assert resolve_trust_env(False) is False
 
 
 def test_resolve_trust_env_truthy_values(monkeypatch: pytest.MonkeyPatch) -> None:
     for val in ("1", "true", "yes", "on", "ON", "True"):
-        monkeypatch.setenv("LOVIA_PROVIDER_TRUST_ENV", val)
+        monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", val)
         assert resolve_trust_env(None) is True
 
 
 def test_resolve_trust_env_falsey_values(monkeypatch: pytest.MonkeyPatch) -> None:
     for val in ("0", "false", "no", ""):
-        monkeypatch.setenv("LOVIA_PROVIDER_TRUST_ENV", val)
+        monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", val)
         assert resolve_trust_env(None) is False
+
+
+def test_client_options_carry_both_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "1")
+    monkeypatch.setenv("LOVIA_HTTP_INSECURE", "1")
+    assert client_options() == {"trust_env": True, "verify": False}
+    assert client_options(False)["trust_env"] is False
+
+
+# ----------------------------------------------------------- proxy_note -
+
+
+@pytest.fixture
+def proxied(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:secret@proxy.corp:8080")
+    monkeypatch.setenv("NO_PROXY", ".corp.example")
+
+
+def test_proxy_note_says_the_proxy_was_skipped(proxied: None) -> None:
+    note = proxy_note("https://api.openai.com/v1", False)
+    assert note is not None
+    assert "skipped the proxy proxy.corp:8080" in note
+    assert "api.openai.com" in note
+    assert "secret" not in note  # never the proxy's credentials
+
+
+def test_proxy_note_says_the_proxy_was_used(proxied: None) -> None:
+    note = proxy_note("https://api.openai.com/v1", True, switch='"trustEnv"')
+    assert note is not None
+    assert "went through the proxy proxy.corp:8080" in note
+    assert '"trustEnv" off' in note
+
+
+def test_proxy_note_is_quiet_when_no_proxy_applies(
+    proxied: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Exempt by NO_PROXY, or a scheme with no proxy of its own.
+    assert proxy_note("https://mcp.corp.example/mcp", True) is None
+    assert proxy_note("http://plain.example/", True) is None
+    monkeypatch.setattr("urllib.request.getproxies", lambda: {})
+    assert proxy_note("https://api.openai.com/v1", False) is None

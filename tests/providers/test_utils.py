@@ -120,6 +120,57 @@ def test_transport_error_retry_classification(
     assert exc_info.value.retryable is retryable
 
 
+@pytest.fixture
+def proxied(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
+    monkeypatch.setenv("NO_PROXY", "")
+
+
+def test_transport_error_hint_names_a_skipped_proxy(proxied: None) -> None:
+    with pytest.raises(ProviderError) as exc_info:
+        raise_for_transport_error(
+            httpx.ConnectError("boom"),
+            vendor="fake",
+            model="m1",
+            label="Fake",
+            url="https://api.provider.test/v1",
+            trust_env=False,
+        )
+    assert "skipped the proxy proxy.corp:8080" in (exc_info.value.hint or "")
+    # A client the caller built: its proxy settings are not ours to describe.
+    with pytest.raises(ProviderError) as exc_info:
+        raise_for_transport_error(
+            httpx.ConnectError("boom"),
+            vendor="fake",
+            model="m1",
+            label="Fake",
+            url="https://api.provider.test/v1",
+        )
+    assert "proxy.corp" not in (exc_info.value.hint or "")
+
+
+@pytest.mark.parametrize(("status", "noted"), [(504, True), (500, False)])
+async def test_gateway_status_through_a_proxy_says_so(
+    proxied: None, status: int, noted: bool
+) -> None:
+    response = httpx.Response(
+        status,
+        content=b"<html>Gateway Timeout</html>",
+        request=httpx.Request("POST", "https://llm.corp.test/v1/chat/completions"),
+    )
+    with pytest.raises(ProviderError) as exc_info:
+        await raise_for_provider_status(
+            response,
+            vendor="fake",
+            model="m1",
+            label="Fake",
+            is_context_overflow=lambda status, body: False,
+            trust_env=True,
+        )
+    hint = exc_info.value.hint or ""
+    assert ("went through the proxy proxy.corp:8080" in hint) is noted
+
+
 @pytest.mark.parametrize(
     ("host", "expected"),
     [

@@ -274,7 +274,8 @@ In particular, Winsock needs `SYSTEMROOT` to load its provider DLLs; removing
 it can cause `WinError 10106` even when creating a socket. Foreground and
 background commands use the same environment rules. API keys, proxy settings,
 and custom CA variables still require explicit `env=` configuration;
-`lovia web --trust-env` only controls model-provider HTTP requests.
+`lovia web --trust-env` only controls lovia's own HTTP requests, not the
+shell's.
 
 ## Background processes
 

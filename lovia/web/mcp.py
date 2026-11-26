@@ -34,6 +34,7 @@ from typing import Any
 
 from ..approvals import Verdict
 from ..exceptions import UserError
+from ..http_config import proxy_note, resolve_trust_env
 from ..plugins.base import PluginInstance
 from ..plugins.mcp import (
     MCPConnection,
@@ -115,6 +116,7 @@ def server_for(cfg: MCPServerConfig) -> MCPServer:
         name=cfg.name,
         url=cfg.url,
         headers=dict(cfg.headers) or None,
+        trust_env=cfg.trust_env,
         auto_reconnect=False,
         retries=0,
         permission="ask",
@@ -167,6 +169,21 @@ def describe(
     # The SDK's transports fail inside task groups: the first real cause.
     while (inner := getattr(exc, "exceptions", None)) and isinstance(inner, tuple):
         exc = inner[0]
+    if isinstance(exc, UserError):
+        return str(exc)
+    line = _cause(exc, timeout, cfg)
+    # A proxy in the way, or one skipped, shows only as a timeout or an HTTP
+    # error the SDK words its own way: say which, when one applies.
+    if cfg is not None and cfg.url:
+        note = proxy_note(
+            cfg.url, resolve_trust_env(cfg.trust_env), switch='"trustEnv"'
+        )
+        if note:
+            line = f"{line.rstrip('.')}. {note}"
+    return line
+
+
+def _cause(exc: BaseException, timeout: float, cfg: MCPServerConfig | None) -> str:
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return f"no answer within {timeout:g} s"
     if isinstance(exc, FileNotFoundError):
@@ -176,8 +193,6 @@ def describe(
         # started, not which file was missing.
         if cfg is not None and cfg.command:
             return f"could not start {cfg.command}: {exc.strerror or exc}"
-    if isinstance(exc, UserError):
-        return str(exc)
     text = str(exc).strip()
     line = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
     return line if len(line) <= 300 else line[:299] + "…"

@@ -70,6 +70,7 @@ from pydantic import Field
 from ..approvals import Verdict
 from ..types import JsonObject
 from ..exceptions import MCPError, ToolError, UserError
+from ..http_config import client_options
 from ..parts import (
     IMAGE_MIME_BY_SUFFIX,
     ContentPart,
@@ -639,40 +640,60 @@ class MCPServerStreamableHTTP(MCPServer):
 
     url: str
     headers: dict[str, str] | None = None
+    # Honor proxy settings; None: LOVIA_HTTP_TRUST_ENV, else off (see
+    # lovia.http_config.resolve_trust_env).
+    trust_env: bool | None = None
 
     def _make_transport(self) -> Callable[[], Any]:
         try:
             from importlib import import_module
 
             module = import_module("mcp.client.streamable_http")
+            from mcp.shared._httpx_utils import create_mcp_http_client
         except ImportError as exc:  # pragma: no cover - import guard
             raise UserError(
                 "MCP HTTP support requires the optional 'mcp' package.",
                 hint=_MCP_INSTALL_HINT,
             ) from exc
         url, headers = self.url, self.headers
+        options = client_options(self.trust_env)
+
+        def http_client(
+            headers: dict[str, str] | None = None,
+            timeout: Any = None,
+            auth: Any = None,
+        ) -> Any:
+            # The SDK's own factory picks the HTTP library — httpx on 1.x,
+            # httpx2 on 2.x — and its timeout/redirect defaults, but takes no
+            # proxy or TLS options: rebuild its client with lovia's.
+            sdk = create_mcp_http_client(headers=headers, timeout=timeout, auth=auth)
+            return type(sdk)(
+                headers=sdk.headers,
+                timeout=sdk.timeout,
+                auth=sdk.auth,
+                follow_redirects=sdk.follow_redirects,
+                **options,
+            )
+
         modern_client = getattr(module, "streamable_http_client", None)
         if modern_client is not None:
-            # The newer API takes a configured HTTP client, not headers. Build
-            # it with the SDK's own factory (what the SDK uses when given no
-            # client) so the HTTP library — httpx on 1.x, httpx2 on 2.x — and
-            # its timeout/redirect defaults always match the installed SDK.
-            from mcp.shared._httpx_utils import create_mcp_http_client
-
+            # The newer API takes a configured HTTP client, not headers.
             @asynccontextmanager
             async def transport() -> AsyncIterator[Any]:
-                async with create_mcp_http_client(headers=headers) as http_client:
-                    async with modern_client(url, http_client=http_client) as streams:
+                async with http_client(headers=headers) as client:
+                    async with modern_client(url, http_client=client) as streams:
                         yield streams
 
             return transport
-        client = getattr(module, "streamablehttp_client", None)
-        if client is None:  # pragma: no cover - very old mcp
+        legacy_client = getattr(module, "streamablehttp_client", None)
+        if legacy_client is None:  # pragma: no cover - very old mcp
             raise UserError(
                 "Installed 'mcp' has no streamable-HTTP client.",
                 hint="Upgrade with: pip install -U mcp",
             )
-        return lambda: client(url, headers=headers)
+        return lambda: legacy_client(
+            url, headers=headers, httpx_client_factory=http_client
+        )
 
 
 # --------------------------------------------------------------------------- #

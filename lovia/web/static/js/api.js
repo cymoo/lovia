@@ -501,7 +501,7 @@ export const api = {
   // Only served when /api/info reports features.settings. API keys never
   // round-trip: reads carry { set, hint }; writes use null=keep, ''=clear.
   getConfig: () => request('/api/config').then(_json),
-  /** @param {object} body Profile fields: { id?, name?, model, flavor?, base_url?, api_key?, context_window?, max_tokens?, vision?, extra_body? }. */
+  /** @param {object} body Profile fields: { id?, name?, model, flavor?, base_url?, api_key?, context_window?, max_tokens?, vision?, extra_body?, trust_env? }. */
   createModel: (body) =>
     request('/api/config/models', {
       method: 'POST',

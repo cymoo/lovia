@@ -620,13 +620,40 @@ export function buildModelsPane() {
         t('cfg.visionHint'),
       ),
     );
+    // Through the system proxy or not; null follows --trust-env.
+    /** @type {boolean | null} */
+    let trustEnv = stored?.trust_env ?? null;
+    const proxyKey = () => (trustEnv === null ? 'default' : trustEnv ? 'on' : 'off');
+    adv.appendChild(
+      field(
+        t('cfg.proxy'),
+        segmented(
+          [
+            ['default', t('cfg.proxyDefault')],
+            ['off', t('cfg.proxyOff')],
+            ['on', t('cfg.proxyOn')],
+          ],
+          proxyKey(),
+          (val) => {
+            trustEnv = val === 'default' ? null : val === 'on';
+          },
+        ),
+        t('cfg.proxyHint'),
+      ),
+    );
     // Extra request fields: raw JSON merged into every request to this
     // endpoint, in the endpoint's own dialect. The textarea is the truth;
     // the chips just write common shapes into it.
     const extras = extraBodyEditor(stored?.extra_body, () => flavor);
     adv.appendChild(field(t('cfg.extraBody'), extras.node, t('cfg.extraBodyHint')));
     const hasExtras = stored && Object.keys(stored.extra_body || {}).length > 0;
-    if (stored?.context_window || stored?.max_tokens || (stored && stored.vision !== 'auto') || hasExtras) {
+    if (
+      stored?.context_window ||
+      stored?.max_tokens ||
+      (stored && stored.vision !== 'auto') ||
+      trustEnv !== null ||
+      hasExtras
+    ) {
       adv.open = true;
     }
     form.appendChild(adv);
@@ -680,6 +707,7 @@ export function buildModelsPane() {
         flavor,
         base_url: urlIn.value.trim() || null,
         context_window: parseWindow() ?? null,
+        trust_env: trustEnv,
       };
       if (keyMode === 'edit' && keyIn.value) {
         body.api_key = keyIn.value;
@@ -725,6 +753,7 @@ export function buildModelsPane() {
         max_tokens: positiveInt(maxTokensIn.value) ?? null,
         vision,
         extra_body: extraBody,
+        trust_env: trustEnv,
       };
       if (keyMode === 'clear') body.api_key = '';
       else if (keyMode === 'edit' && keyIn.value) body.api_key = keyIn.value;

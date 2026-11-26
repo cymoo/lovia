@@ -30,21 +30,24 @@ def validate_connection(
     *,
     timeout: float = 10.0,
     transport: httpx.BaseTransport | None = None,
+    switch: str | None = None,
 ) -> tuple[ValidationOutcome, str]:
     """Probe ``GET {base_url}/models`` and classify the response.
 
     Only called for freshly entered values — configured launches never pay
     for this request. A successful body doubles as a context-window source:
     vLLM, SGLang, OpenRouter, Groq and Together publish the model's window
-    there, so setup need not ask for a number the endpoint knows.
+    there, so setup need not ask for a number the endpoint knows. ``switch``
+    names the proxy setting a failure's hint tells the reader to flip.
     """
     assert conn.base_url is not None and conn.flavor is not None
-    options = client_options()
+    options = client_options(conn.trust_env)
     url = f"{conn.base_url}/models"
 
     def noted(detail: str, failed: str) -> str:
         # ``failed``: where the request ended up, redirects followed.
-        note = proxy_note(failed, options["trust_env"])
+        named = {"switch": switch} if switch else {}
+        note = proxy_note(failed, options["trust_env"], **named)
         return f"{detail.rstrip('.')}. {note}" if note else detail
 
     try:
@@ -135,7 +138,10 @@ def build_provider(conn: Connection) -> Provider | None:
         return None
     try:
         return provider_from_string(
-            conn.model, api_key=conn.api_key, base_url=conn.base_url
+            conn.model,
+            api_key=conn.api_key,
+            base_url=conn.base_url,
+            trust_env=conn.trust_env,
         )
     except ValueError:
         return None

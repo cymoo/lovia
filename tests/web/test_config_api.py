@@ -577,6 +577,32 @@ def test_probe_endpoint_free_form(served, monkeypatch: pytest.MonkeyPatch) -> No
     }
 
 
+def test_a_model_keeps_its_proxy_setting_and_tests_with_the_form_s(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, runtime, _app = served
+    _add_model(client, id="out", trust_env=True)
+    _add_model(client, id="in")
+    listed = {m["id"]: m for m in client.get("/api/config").json()["models"]}
+    assert (listed["out"]["trust_env"], listed["in"]["trust_env"]) == (True, None)
+    # A chat on it gets a provider that goes through the proxy, as it says.
+    lovia = client.app.state.deps.agents["lovia"]
+    assert runtime.on_model(lovia, "in").model._trust_env is False
+    assert runtime.on_model(lovia, "out").model._trust_env is True
+
+    seen: dict[str, object] = {}
+
+    def fake_validate(conn, **kwargs):
+        seen.update(trust_env=conn.trust_env, switch=kwargs.get("switch"))
+        return ValidationOutcome.UNREACHABLE, "ConnectError"
+
+    monkeypatch.setattr("lovia.web.api.config.validate_connection", fake_validate)
+    # The test is of the form about to be saved, not of what is stored.
+    client.post("/api/config/test", json={"profile_id": "out", "trust_env": False})
+    assert seen["trust_env"] is False
+    assert "System proxy" in str(seen["switch"])
+
+
 def test_probe_endpoint_reuses_the_stored_key(
     served, monkeypatch: pytest.MonkeyPatch
 ) -> None:

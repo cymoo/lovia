@@ -178,6 +178,7 @@ class ConfigRuntime:
             base_url=conn.base_url,
             supports_vision=profile.vision_override(),
             extra_body=profile.extra_body,
+            trust_env=profile.trust_env,
         )
         memory = None
         if config.assistant.memory:
@@ -260,6 +261,7 @@ class ConfigRuntime:
                     base_url=conn.base_url,
                     supports_vision=profile.vision_override(),
                     extra_body=profile.extra_body,
+                    trust_env=profile.trust_env,
                 )
             except ValueError as exc:
                 raise UserError(str(exc)) from exc

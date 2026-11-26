@@ -49,7 +49,7 @@ from ..transcript import (
 )
 from ..messages import Usage
 from ..parts import ContentPart, FilePart, TextPart, project_parts
-from ..http_config import resolve_timeout, resolve_trust_env, resolve_verify
+from ..http_config import client_options, resolve_timeout, resolve_trust_env
 from ._content import (
     content_to_anthropic_blocks as _content_to_anthropic_blocks,
     merge_anthropic_blocks as _merge_anthropic_blocks,
@@ -148,10 +148,13 @@ class AnthropicProvider:
         if self._client is None:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self._timeout, connect=10),
-                trust_env=self._trust_env,
-                verify=resolve_verify(),
+                **client_options(self._trust_env),
             )
         return self._client
+
+    def _proxy_setting(self) -> bool | None:
+        """The client's ``trust_env``; ``None`` for one the caller passed in."""
+        return self._trust_env if self._owns_client else None
 
     def context_window(self) -> int | None:
         return self._windows.window()
@@ -372,6 +375,7 @@ class AnthropicProvider:
                     label="Anthropic",
                     is_context_overflow=_is_context_overflow,
                     window_from_body=window_from_error,
+                    trust_env=self._proxy_setting(),
                 )
                 async for event in iter_sse_json(response):
                     etype = event.get("type")
@@ -521,6 +525,8 @@ class AnthropicProvider:
                 vendor="anthropic",
                 model=self.model,
                 label="Anthropic",
+                url=self.base_url,
+                trust_env=self._proxy_setting(),
             )
 
         # A stream that ends with neither a stop_reason nor a ``message_stop``

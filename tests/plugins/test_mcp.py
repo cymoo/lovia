@@ -15,6 +15,8 @@ import pytest
 # need the optional extra (`pip install -e '.[mcp]'`); CI always installs it.
 pytest.importorskip("mcp")
 
+from mcp.shared._httpx_utils import create_mcp_http_client
+
 from lovia.exceptions import MCPError, ToolError, UserError
 from lovia.plugins.mcp import (
     MCP,
@@ -52,6 +54,11 @@ async def test_streamable_http_modern_client(
         if headers:
             assert request.headers["User-Agent"] == headers["User-Agent"]
         assert not http_client.is_closed
+        # Proxy settings are lovia's (off by default), the rest the SDK's.
+        assert http_client.trust_env is False
+        sdk = create_mcp_http_client()
+        assert http_client.timeout == sdk.timeout
+        assert http_client.follow_redirects == sdk.follow_redirects
         yield streams
 
     def legacy(*args: Any, **kwargs: Any) -> None:
@@ -92,12 +99,19 @@ async def test_streamable_http_modern_client(
 
 async def test_streamable_http_legacy_client(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, dict[str, str] | None]] = []
+    clients: list[Any] = []
     headers = {"Authorization": "Bearer example", "User-Agent": "lovia-example"}
     streams = object()
 
     @asynccontextmanager
-    async def legacy(url: str, headers: dict[str, str] | None = None):
+    async def legacy(
+        url: str,
+        headers: dict[str, str] | None = None,
+        httpx_client_factory: Any = None,
+    ):
         calls.append((url, headers))
+        # The SDK calls the factory with the headers it was given.
+        clients.append(httpx_client_factory(headers=headers))
         yield streams
 
     with monkeypatch.context() as patch:
@@ -107,11 +121,67 @@ async def test_streamable_http_legacy_client(monkeypatch: pytest.MonkeyPatch) ->
             lambda _: SimpleNamespace(streamablehttp_client=legacy),
         )
         factory = MCPServerStreamableHTTP(
-            url="https://mcp.example.com/mcp", headers=headers
+            url="https://mcp.example.com/mcp", headers=headers, trust_env=True
         )._make_transport()
     async with factory() as result:
         assert result is streams
     assert calls == [("https://mcp.example.com/mcp", headers)]
+    assert clients[0].trust_env is True
+    assert clients[0].headers["Authorization"] == "Bearer example"
+    await clients[0].aclose()
+
+
+def test_streamable_http_never_builds_a_client_on_ambient_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The SDK's factory reads the ambient proxy as it builds a client, which
+    # fails outright for a SOCKS proxy without socksio: it must not be called.
+    from mcp.shared import _httpx_utils
+
+    def ambient(*args: Any, **kwargs: Any) -> None:
+        raise ImportError(
+            "Using SOCKS proxy, but the 'socksio' package is not installed"
+        )
+
+    monkeypatch.setattr(_httpx_utils, "create_mcp_http_client", ambient)
+    built: list[Any] = []
+
+    def legacy(url: str, **kwargs: Any) -> None:
+        built.append(kwargs["httpx_client_factory"](headers={"A": "b"}))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            importlib,
+            "import_module",
+            lambda _: SimpleNamespace(streamablehttp_client=legacy),
+        )
+        factory = MCPServerStreamableHTTP(url="https://x.example/mcp")._make_transport()
+    factory()
+    assert built[0].trust_env is False and built[0].headers["A"] == "b"
+
+
+def test_streamable_http_trust_env_follows_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "1")
+    built: list[Any] = []
+
+    def legacy(url: str, **kwargs: Any) -> None:
+        built.append(kwargs["httpx_client_factory"]())
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            importlib,
+            "import_module",
+            lambda _: SimpleNamespace(streamablehttp_client=legacy),
+        )
+        on = MCPServerStreamableHTTP(url="https://x.example/mcp")._make_transport()
+        off = MCPServerStreamableHTTP(
+            url="https://x.example/mcp", trust_env=False
+        )._make_transport()
+    on()
+    off()
+    assert [c.trust_env for c in built] == [True, False]
 
 
 # --------------------------------------------------------------------------- #

@@ -1505,12 +1505,12 @@ def test_main_provider_timeout_and_trust_env_set_env(
     # setenv (not delenv) so monkeypatch restores/removes them on teardown even
     # though main() mutates os.environ directly.
     monkeypatch.setenv("LOVIA_PROVIDER_TIMEOUT", "60")
-    monkeypatch.setenv("LOVIA_PROVIDER_TRUST_ENV", "")
+    monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "")
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     rc = cli.main(["--provider-timeout", "150", "--trust-env"])
     assert rc == 0
     assert os.environ["LOVIA_PROVIDER_TIMEOUT"] == "150.0"
-    assert os.environ["LOVIA_PROVIDER_TRUST_ENV"] == "1"
+    assert os.environ["LOVIA_HTTP_TRUST_ENV"] == "1"
 
 
 def test_main_rejects_bad_provider_timeout(

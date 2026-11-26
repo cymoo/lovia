@@ -244,6 +244,9 @@ class MCPServerConfig(BaseModel):
     cwd: str | None = None
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
+    # Honor proxy settings (``trustEnv``); None: lovia's default, off unless
+    # ``--trust-env``.
+    trust_env: bool | None = None
 
     @model_validator(mode="after")
     def _one_transport(self) -> "MCPServerConfig":
@@ -255,6 +258,8 @@ class MCPServerConfig(BaseModel):
             )
         if command is not None and self.headers:
             raise ValueError(f"MCP server {self.name!r}: headers go with a url")
+        if command is not None and self.trust_env is not None:
+            raise ValueError(f"MCP server {self.name!r}: trustEnv goes with a url")
         if url is not None:
             if self.args or self.env or self.cwd:
                 raise ValueError(

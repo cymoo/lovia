@@ -38,8 +38,10 @@ available. Endpoint dialect rules are in [Providers & models](providers.md).
 
 ## Proxies and TLS
 
-Provider clients ignore ambient `HTTP_PROXY` / `HTTPS_PROXY` by default. Set
-`LOVIA_PROVIDER_TRUST_ENV=1` when those variables are intentional.
+lovia's HTTP clients — providers, MCP over HTTP, `web_fetch` — ignore ambient
+`HTTP_PROXY` / `HTTPS_PROXY` and the OS proxy by default. Set
+`LOVIA_HTTP_TRUST_ENV=1` when those settings are intentional; a failed model
+request or MCP connection says whether a proxy was skipped or used.
 
 For a private CA, use `LOVIA_HTTP_CA_BUNDLE=/path/to/ca.pem`. The Web extra
 also enables the operating-system trust store. `LOVIA_HTTP_INSECURE=1`

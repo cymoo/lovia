@@ -195,7 +195,7 @@ API Key 只写不读：服务端只返回是否已设置及脱敏提示，不会
 ```
 
 服务器要么是在 lovia web 所在机器上运行的 `command`（stdio，远程对话也一样），要么是一个 `url`（streamable HTTP，不支持 SSE）。
-服务器名会作为它的工具名前缀（`docs__search`），只能用字母、数字、`-` 和 `_`。命令可以用 `cwd` 指定启动目录。`"disabled": true` 表示保存为停用；其他字段会被忽略。
+服务器名会作为它的工具名前缀（`docs__search`），只能用字母、数字、`-` 和 `_`。命令可以用 `cwd` 指定启动目录。`"disabled": true` 表示保存为停用；url 写 `"trustEnv": true`（或 `false`）表示经系统代理连接（或不经），不受 `--trust-env` 影响。连接失败时会说明是跳过了代理还是被代理挡住了。其他字段会被忽略。
 
 - **每条消息连接一次。** 每个 run 开始时依次连接这些服务器，结束时关闭，run 之间不保持连接。`npx` 类服务器会让每条消息的启动慢一些。
 - **每次调用工具都会先问你**，“完全权限”除外：“仅可查看”和“工作区内修改”只管文件和 shell，管不到 MCP 工具对外部系统的操作；
@@ -571,7 +571,7 @@ Agent 会按同样的规则读取主机上这个目录的 [`AGENTS.md`](#项目�
 | `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent（或使用自己的 Agent、映射或应用） |
 | `--title` | `LOVIA_TITLE` | `lovia` |
 | `--provider-timeout SECS` | `LOVIA_PROVIDER_TIMEOUT` | `300`；一次模型请求最长可用的时间 |
-| `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | 关闭。开启后，模型请求遵循 `HTTP(S)_PROXY` / `NO_PROXY`（[详情](providers.md#网络超时代理tls)） |
+| `--trust-env` | `LOVIA_HTTP_TRUST_ENV` | 关闭。开启后，出站请求（模型、MCP、网页读取）遵循 `HTTP(S)_PROXY` / `NO_PROXY`（[详情](providers.md#网络超时代理tls)） |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--check` | — | 检查模型配置并退出 |
 

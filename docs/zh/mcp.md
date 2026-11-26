@@ -32,8 +32,12 @@ agent = Agent(
 
 ```python
 MCPServerStdio(command="uvx", args=["mcp-server-fetch"], env=None, cwd=None, name="web")
-MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="api")
+MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, trust_env=None, name="api")
 ```
+
+HTTP 服务器的客户端使用 lovia 的[代理和 TLS 设置](providers.md#网络超时代理tls)：默认不走代理，
+除非设了 `LOVIA_HTTP_TRUST_ENV=1`；`trust_env=True` / `False` 可以单独决定某一个服务器。比如
+一个只能经公司代理访问的公网服务器，和几个绝不能走代理的内网服务器放在一起时。
 
 两种配置共享的选项：
 

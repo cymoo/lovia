@@ -31,7 +31,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from ..exceptions import LoviaError
-from ..http_config import resolve_trust_env, resolve_verify
+from ..http_config import client_options
 
 __all__ = [
     "TranscribeFn",
@@ -127,7 +127,7 @@ def openai_transcriber(
     :func:`transcription_endpoint`. ``model`` may be left out for a service
     that has only one. ``language`` is an ISO 639-1 code, or ``None`` to
     let the model detect it. TLS and proxy settings follow
-    the providers' (``LOVIA_HTTP_*``, ``LOVIA_PROVIDER_TRUST_ENV``). One
+    every outbound client's (``LOVIA_HTTP_*``). One
     attempt, no retry: the person is waiting, and can press retry.
     """
     url, _ = transcription_endpoint(base_url)
@@ -148,10 +148,7 @@ def openai_transcriber(
 
     def client() -> httpx.AsyncClient:
         return httpx.AsyncClient(
-            timeout=timeout,
-            transport=transport,
-            trust_env=resolve_trust_env(None),
-            verify=resolve_verify(),
+            timeout=timeout, transport=transport, **client_options()
         )
 
     async def key_refused() -> str | None:

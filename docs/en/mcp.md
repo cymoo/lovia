@@ -34,8 +34,13 @@ Two transports, both frozen keyword-only configs:
 
 ```python
 MCPServerStdio(command="uvx", args=["mcp-server-fetch"], env=None, cwd=None, name="web")
-MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="api")
+MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, trust_env=None, name="api")
 ```
+
+An HTTP server's client takes lovia's [proxy and TLS settings](providers.md#networking-timeouts-proxies-tls):
+proxies off unless `LOVIA_HTTP_TRUST_ENV=1`, and `trust_env=True` / `False`
+decides for one server — say, a public server reachable only through the
+office proxy, beside intranet ones that must not use it.
 
 Shared options (on either config):
 

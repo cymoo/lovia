@@ -3,7 +3,9 @@
 Most MCP clients write servers as ``{"mcpServers": {name: {...}}}``: a
 ``command`` with ``args`` and ``env``, or a ``url`` with ``headers``. That is
 what the editor takes — the whole document, or just the object inside it —
-and what it shows when a server is edited.
+and what it shows when a server is edited. One key is lovia's own: a url's
+``trustEnv`` (true / false) sends it through the system proxy or not,
+whatever ``--trust-env`` says for the rest.
 
 ``env`` and ``headers`` values are secrets as often as not (API tokens), so
 they leave the server masked (``ghp…a1b2``) and come back the way API keys
@@ -74,6 +76,7 @@ def parse_server(name: str, spec: Any) -> MCPServerConfig:
             cwd=_text(name, "cwd", spec.get("cwd")),
             url=_text(name, "url", url),
             headers=_mapping(name, "headers", spec.get("headers")),
+            trust_env=_flag(name, "trustEnv", spec.get("trustEnv")),
         )
     except ValidationError as exc:
         first = exc.errors()[0]
@@ -91,6 +94,12 @@ def _text(name: str, key: str, value: Any) -> str | None:
     if value is None or isinstance(value, str):
         return value
     raise ValueError(f"{name}: {key} must be a string")
+
+
+def _flag(name: str, key: str, value: Any) -> bool | None:
+    if value is None or isinstance(value, bool):
+        return value
+    raise ValueError(f"{name}: {key} must be true or false")
 
 
 def _texts(name: str, key: str, value: Any) -> list[str]:
@@ -135,6 +144,8 @@ def spec_of(server: MCPServerConfig, *, masked: bool = True) -> dict[str, Any]:
         spec["url"] = server.url
         if server.headers:
             spec["headers"] = {k: hide(v) for k, v in server.headers.items()}
+        if server.trust_env is not None:
+            spec["trustEnv"] = server.trust_env
     if not server.enabled:
         spec["disabled"] = True
     return spec

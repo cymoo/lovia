@@ -18,7 +18,6 @@ from __future__ import annotations
 from dotenv import load_dotenv
 
 from lovia import Agent, Compaction, Todo, tool, enable_logging, model_from_env
-from lovia.plugins.mcp import MCP, MCPServerStreamableHTTP
 from lovia.workspace import Workspace
 from lovia.web import serve
 
@@ -44,15 +43,7 @@ def main() -> None:
         ),
         model=MODEL,
         tools=[send_email],
-        # Web search: Parallel's keyless search MCP server.
-        plugins=[
-            Todo(),
-            MCP(
-                MCPServerStreamableHTTP(
-                    url="https://mcp.parallel.ai/mcp", include_tools=["web_search"]
-                )
-            ),
-        ],
+        plugins=[Todo()],
         workspace=Workspace.local(".", mode="trusted"),
         # Compaction posture rides on the agent; the server inherits it.
         # Cheap moves first (archive/clear old tool results), an incremental

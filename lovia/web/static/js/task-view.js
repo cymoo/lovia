@@ -118,13 +118,11 @@ export function taskGuest(first, { stop, open }) {
   prompt.append(promptHead, promptBody);
   const step = document.createElement('div');
   step.className = 'lv-task-step';
-  const stats = document.createElement('div');
-  stats.className = 'lv-proc-note';
   const answer = document.createElement('div');
   const note = document.createElement('div');
   note.className = 'lv-proc-note';
   note.hidden = true;
-  content.append(note, prompt, step, stats, answer);
+  content.append(note, prompt, step, answer);
 
   function renderBody() {
     if (!summary) return;
@@ -133,10 +131,6 @@ export function taskGuest(first, { stop, open }) {
     promptBody.textContent = summary.prompt || item.title;
     step.hidden = item.state !== 'running';
     step.textContent = stepLine(summary.step);
-    const counts = [t('bg.toolCalls', { n: summary.tool_calls })];
-    if (summary.failed_calls) counts.push(t('bg.toolCallsFailed', { n: summary.failed_calls }));
-    stats.textContent = counts.join(' · ');
-    stats.hidden = !summary.tool_calls;
     renderAnswer();
   }
 
@@ -218,7 +212,7 @@ export function taskGuest(first, { stop, open }) {
 
   return {
     key: item.key,
-    name: item.tag ? `${item.tag} ${item.title}` : item.title,
+    name: item.title,
     title: item.title,
     get copy() {
       return { label: t('bg.copyPrompt'), text: summary?.prompt ?? item.title };

@@ -13,7 +13,6 @@ import {
   loadConfig,
   notice,
   readOnlyNotice,
-  scopeFootnote,
 } from './model-config.js';
 import { toast } from './toast.js';
 import { SILENCE_DB, captureBlocked, startCapture, toWav } from './voice-recorder.js';
@@ -225,7 +224,6 @@ export function buildVoicePane() {
     actions.appendChild(save);
     pane.append(form, errBox, actions);
     if (voice.enabled) pane.appendChild(trial());
-    pane.appendChild(scopeFootnote());
   }
 
   void render();

@@ -65,6 +65,9 @@ class _Watch:
     # Commands that have their record, or never will.
     settled: set[str] = field(default_factory=set)
     user_stops: set[str] = field(default_factory=set)
+    # What each command does, as the model said starting it (shell's
+    # `description`): the engine keeps no such thing.
+    titles: dict[str, str] = field(default_factory=dict)
     # Added to the session's times to make them this machine's.
     skew: float | None = None
     # Whether to keep looking, and whether a mark came while a look was under
@@ -133,10 +136,15 @@ class ProcessWatcher:
     def _looked(self, session_id: str, _task: "asyncio.Task[None]") -> None:
         self._looks.pop(session_id, None)
 
-    def mark(self, session_id: str) -> None:
-        """Something in the chat's workspace session may have changed."""
+    def mark(self, session_id: str, *, started: str = "", title: str = "") -> None:
+        """Something in the chat's workspace session may have changed:
+        perhaps command ``started`` started, to do ``title``."""
         watch = self._watch(session_id)
         if watch is not None:
+            if started and title:
+                watch.titles[started] = title
+                if started in watch.known:  # seen, and listed, before its title
+                    self._announce(session_id, watch)
             watch.active = watch.marked = True
             self._wake.set()
 
@@ -270,6 +278,7 @@ class ProcessWatcher:
             ended_by=ended_by or _ended_by(watch, status),
             base=output.base,
             chars=len(text),
+            title=watch.titles.get(status.process_id, ""),
         )
         try:
             await asyncio.to_thread(save_record, folder, record, text)
@@ -368,6 +377,7 @@ class ProcessWatcher:
                 out[s.process_id] = ProcessInfo(
                     process_id=s.process_id,
                     command=s.command,
+                    title=watch.titles.get(s.process_id, ""),
                     status=s.status,
                     exit_code=s.exit_code,
                     cwd=s.cwd,
@@ -383,6 +393,9 @@ class ProcessWatcher:
                 out[r.id] = ProcessInfo(
                     process_id=r.id,
                     command=r.command,
+                    # A command that ended before its title came keeps it
+                    # until a restart.
+                    title=r.title or (watch.titles.get(r.id, "") if watch else ""),
                     status=r.status,
                     exit_code=r.exit_code,
                     cwd=r.cwd,

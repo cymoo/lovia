@@ -9,7 +9,7 @@ import {
   buildItems,
   buttonState,
   createFailureWatch,
-  taskLabel,
+  taskName,
   taskState,
 } from '../../../lovia/web/static/js/background-items.js';
 
@@ -56,10 +56,12 @@ test('a running task is in a step, an ended one took a time', () => {
 });
 
 test('a task is named by its title', () => {
-  assert.deepEqual(taskLabel(task('dig in')), { tag: 't1', title: 'dig in' });
-  assert.deepEqual(taskLabel({ id: 'x', title: 'plain' }), { tag: '', title: 'plain' });
-  assert.deepEqual(taskLabel({ id: 'x', title: null }), { tag: '', title: 'x' });
-  assert.deepEqual(taskLabel({ id: 'x', title: '[t2] ' }), { tag: 't2', title: 'x' });
+  assert.equal(taskName(task('dig in')), 'dig in'); // as titles were before 0.9.286
+  assert.equal(taskName({ id: 'x', title: 'plain [a] title' }), 'plain [a] title');
+  // A prompt that starts with brackets of its own keeps them.
+  assert.equal(taskName({ id: 'x', title: '[API] check retries' }), '[API] check retries');
+  assert.equal(taskName({ id: 'x', title: null }), 'x');
+  assert.equal(taskName({ id: 'x', title: '[t2] ' }), 'x');
 });
 
 test('how a command ended', () => {
@@ -79,6 +81,10 @@ test('how a command ended', () => {
   // One line, whatever the command; its last line only while it runs.
   const item = state(cmd('a', { command: 'a \\\n  b\n', last_line: 'x' }));
   assert.deepEqual([item.title, item.line], ['a \\ b', 'x']);
+  assert.equal(item.oneLine, item.title);
+  // What the model said it does, when it said so; the command stays as it was.
+  const said = state(cmd('a', { command: 'npm run dev', title: 'Dev server' }));
+  assert.deepEqual([said.title, said.command, said.oneLine], ['Dev server', 'npm run dev', 'npm run dev']);
   assert.equal(state(done('a', 0, { last_line: 'x' })).line, '');
 });
 

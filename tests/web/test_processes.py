@@ -197,6 +197,17 @@ async def test_a_record_keeps_the_whole_buffer_and_its_offsets(
         assert rest.text == body[100:] and rest.eof
 
 
+async def test_a_title_that_comes_after_the_end_is_still_shown(tmp_path) -> None:
+    async with _world(tmp_path) as w:
+        pid = await w.spawn("true")
+        await _until(lambda: load_records(w.folder))
+        assert w.record(pid)[0].title == ""
+        seen = len(w.events)
+        w.deps.processes.mark(CHAT, started=pid, title="Check")
+        assert len(w.events) == seen + 1  # the list is told to look again
+        assert (await w.info(pid)).title == "Check"
+
+
 async def test_who_stopped_a_command(tmp_path) -> None:
     async with _world(tmp_path) as w:
         by_user = await w.spawn("sleep 30")
@@ -443,6 +454,17 @@ def test_a_record_is_one_line_whatever_the_command(tmp_path) -> None:
     assert body == "out\n"
 
 
+def test_a_record_from_before_titles_still_loads(tmp_path) -> None:
+    save_record(tmp_path, _record("bg-1", title="Build"), "x")
+    path = tmp_path / "bg-1.log"
+    head, _, body = path.read_text().partition("\n")
+    data = json.loads(head)
+    assert data.pop("title") == "Build"
+    path.write_text(json.dumps(data) + "\n" + body)
+    (record,) = load_records(tmp_path)
+    assert (record.id, record.title) == ("bg-1", "")
+
+
 def test_strangers_files_and_names_are_not_records(tmp_path) -> None:
     (tmp_path / "notes.log").write_text("just text\n")
     (tmp_path / "half.log").write_text('{"id": "half"}\n')
@@ -510,7 +532,8 @@ def _served(tmp_path: Path, script: list) -> TestClient:
 
 def test_the_routes_before_and_after_a_restart(tmp_path) -> None:
     command = "echo serving; touch up; sleep 30"
-    script = [call("shell", {"command": command, "background": True}), text("ok")]
+    args = {"command": command, "background": True, "description": " Serve\n it "}
+    script = [call("shell", args), text("ok")]
     with _served(tmp_path, script) as c:
         sid = c.post("/api/chat", json={"message": "go"}).json()["session_id"]
         deadline = time.time() + 5
@@ -527,6 +550,8 @@ def test_the_routes_before_and_after_a_restart(tmp_path) -> None:
         pid = live["process_id"]
         assert (live["status"], live["ended_by"]) == ("running", None)
         assert live["last_line"] == "serving"
+        # What the model said it does, on one line.
+        assert live["title"] == "Serve it"
         url = f"/api/sessions/{sid}/processes/{pid}"
         page = c.get(f"{url}/output", params={"after": 3, "limit": 4}).json()
         assert page == {"text": "ving", "base": 0, "next": 7, "eof": False}
@@ -540,7 +565,7 @@ def test_the_routes_before_and_after_a_restart(tmp_path) -> None:
         (past,) = c.get(f"/api/sessions/{sid}/processes").json()
         assert past["process_id"] == pid
         assert (past["status"], past["ended_by"]) == ("killed", "shutdown")
-        assert past["command"] == command
+        assert (past["command"], past["title"]) == (command, "Serve it")
         page = c.get(f"{url}/output").json()
         assert page == {"text": "serving\n", "base": 0, "next": 8, "eof": True}
         assert c.get(f"{url}/log").text == "serving\n"

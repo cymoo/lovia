@@ -625,15 +625,6 @@ body.lv-sidebar-resizing {
   -webkit-backdrop-filter: blur(20px) saturate(1.5);
   backdrop-filter: blur(20px) saturate(1.5);
 }
-.lv-task-tag {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-  padding: 0 5px;
-  margin-right: 6px;
-  border-radius: 4px;
-  background: var(--lv-surface-2);
-  color: var(--lv-muted);
-}
 /* The row that widens the list's window: "Load more" under a flat list,
    "Show more" / "Show less" under a workspace group's chats. */
 .lv-sessions-more {
@@ -3183,6 +3174,33 @@ button.lv-question-option:hover {
 .lv-report-card {
   margin: 0;
 }
+.lv-report-card > summary {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  list-style: none;
+  cursor: pointer;
+}
+.lv-report-card > summary::-webkit-details-marker {
+  display: none;
+}
+.lv-report-card.lv-report-empty > summary {
+  cursor: default;
+}
+.lv-report-chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--lv-muted-2);
+  transition:
+    transform var(--lv-t-fast) var(--lv-ease),
+    color var(--lv-t-fast);
+}
+.lv-report-card > summary:hover .lv-report-chevron {
+  color: var(--lv-ink-2);
+}
+.lv-report-card[open] .lv-report-chevron {
+  transform: rotate(180deg);
+}
 .lv-report-meta {
   min-width: 0;
   overflow: hidden;
@@ -3197,8 +3215,8 @@ button.lv-question-option:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.lv-report-card:has(> details[open]) > .lv-report-preview {
-  display: none; /* the full report says it */
+.lv-report-card[open] .lv-report-preview {
+  display: none; /* the full report says it, right below */
 }
 .lv-turn.lv-user .lv-report-body {
   margin-top: 6px;
@@ -5284,11 +5302,46 @@ body.lv-files-resizing {
   min-width: 0;
 }
 .lv-files-head .lv-files-tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
   min-width: 0;
   padding: 4px 10px;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.lv-files-head .lv-files-tab > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* What changed in this chat, what runs: quiet beside the name. */
+.lv-files-tab-stat,
+.lv-files-tab-count {
+  display: inline-flex;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.lv-files-tab-stat:empty,
+.lv-files-tab-count:empty {
+  display: none;
+}
+.lv-files-tab-stat .lv-add {
+  color: var(--lv-ok);
+}
+.lv-files-tab-stat .lv-del {
+  color: var(--lv-danger);
+}
+.lv-files-tab-count {
+  color: var(--lv-muted);
+}
+/* Short of room, the names come first. */
+.lv-files-snug .lv-files-tab-stat {
+  display: none;
+}
+.lv-files-snug .lv-files-head .lv-files-tab {
+  padding: 4px 8px;
 }
 .lv-files-head-actions {
   display: inline-flex;
@@ -5377,7 +5430,7 @@ body.lv-files-resizing {
   line-height: 18px;
   color: var(--lv-ink);
 }
-.lv-bg-title.lv-cmd {
+.lv-bg-title.lv-code {
   font-family: var(--lv-mono);
   font-size: 12px;
 }
@@ -5387,9 +5440,6 @@ body.lv-files-resizing {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.lv-bg-title .lv-task-tag {
-  flex-shrink: 0;
-}
 .lv-bg-line {
   display: block;
   font-size: 11.5px;
@@ -5397,7 +5447,8 @@ body.lv-files-resizing {
   color: var(--lv-muted-2);
   font-variant-numeric: tabular-nums;
 }
-.lv-bg-row.lv-running .lv-cmd + .lv-bg-line {
+/* A running command's last line of output. */
+.lv-bg-row.lv-running[data-key^="cmd:"] .lv-bg-line {
   font-family: var(--lv-mono);
   font-size: 11px;
 }
@@ -5528,7 +5579,7 @@ body.lv-files-resizing {
   color: var(--lv-ink-2);
   overflow-wrap: anywhere;
 }
-.lv-task-answer-head {
+.lv-task-detail .lv-task-answer-head {
   padding-left: 0;
 }
 .lv-task-detail [hidden] {
@@ -5824,7 +5875,7 @@ body.lv-files-resizing {
 }
 .lv-files-wide .lv-files-viewer-back,
 .lv-files-panel:not(.lv-files-wide) #files-viewer-close,
-.lv-files-panel:not(.lv-files-roomy) #files-list-toggle {
+.lv-files-panel:not(.lv-files-roomy.lv-viewing) #files-list-toggle {
   display: none;
 }
 .lv-files-panel:not(.lv-files-wide) .lv-files-viewer-head {
@@ -7246,10 +7297,14 @@ body.lv-files-resizing {
 
 /* ---- Files panel: filter + wrap toggle -------------------------------------------------------------- */
 .lv-files-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 0 10px 8px;
 }
 .lv-files-search .lv-search-input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
 }
 #files-wrap-toggle.lv-active {
   color: var(--lv-accent);

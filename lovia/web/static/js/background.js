@@ -19,7 +19,7 @@ import { loadCurrentTasks, refreshRuns, switchSession } from './sessions.js';
 import { buildItems, buttonState, createFailureWatch } from './background-items.js';
 import { outcomeText, processGuest } from './process-view.js';
 import { CONFIRM_MS, stepLine, taskGuest, taskStatusText } from './task-view.js';
-import { openGuest, panelState, setPanel, viewedGuest } from './files.js';
+import { fitTabs, openGuest, panelState, setPanel, viewedGuest } from './files.js';
 
 const els = {};
 let _procs = [];
@@ -105,7 +105,7 @@ async function openProcess(id) {
     toast(t('bg.gone'));
     return;
   }
-  setPanel('background');
+  setPanel('background', { restore: false });
   openGuest(processGuest(sid, row, { stop: stopCommand }));
 }
 
@@ -113,7 +113,7 @@ async function openProcess(id) {
 
 /** Open a task's detail in the panel. */
 function openTask(item) {
-  setPanel('background');
+  setPanel('background', { restore: false });
   openGuest(taskGuest(item, { stop: stopTask, open: openTaskChat }));
 }
 
@@ -209,6 +209,12 @@ function render() {
     _failures.seen();
   }
   renderButton();
+  // The tab's own count: what runs.
+  const count = list.live.length ? String(list.live.length) : '';
+  if (els.tabCount && els.tabCount.textContent !== count) {
+    els.tabCount.textContent = count;
+    fitTabs();
+  }
   renderList();
   updateGuest();
   pollSteps(list);
@@ -315,20 +321,17 @@ function row(item, active) {
   main.type = 'button';
   main.className = 'lv-bg-main';
   main.dataset.part = 'open';
-  main.title = item.title;
+  // A command's full text on hover, when its title says what it does.
+  main.title = item.command || item.title;
   const glyph = document.createElement('span');
   glyph.className = 'lv-bg-icon';
   glyph.innerHTML = icon(item.kind === 'task' ? 'bot' : 'terminal', { size: 14 });
   const body = document.createElement('span');
   body.className = 'lv-bg-body';
   const head = document.createElement('span');
-  head.className = `lv-bg-title lv-${item.kind}`;
-  if (item.tag) {
-    const tag = document.createElement('span');
-    tag.className = 'lv-task-tag';
-    tag.textContent = item.tag;
-    head.append(tag);
-  }
+  head.className = 'lv-bg-title';
+  // A command with no title of its own shows as code.
+  head.classList.toggle('lv-code', item.kind === 'cmd' && item.title === item.oneLine);
   const name = document.createElement('span');
   name.className = 'lv-bg-name';
   name.textContent = item.title;
@@ -384,6 +387,7 @@ export function initBackground() {
   els.wrap = document.getElementById('tasks-wrap');
   els.btn = document.getElementById('tasks-btn');
   els.list = document.getElementById('background-list');
+  els.tabCount = document.getElementById('files-bg-count');
   if (!els.btn || !els.list) return;
 
   els.btn.addEventListener('click', () => {

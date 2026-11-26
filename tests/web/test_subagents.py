@@ -222,11 +222,11 @@ async def test_wired_plugin_delivers_end_to_end(caplog) -> None:
     )
     await _poll(lambda: _none(deps.supervisor.get("s3")))  # parent run over
 
-    # The spawn became a task session: parent_id set, [t1]-prefixed title,
+    # The spawn became a task session: parent_id set, titled by its prompt,
     # its own supervised run record.
     task = await _task_of(deps, "s3")
     assert not [r for r in await deps.store.list() if r.parent_id]  # chats only
-    assert task.title is not None and task.title.startswith("[t1]")
+    assert task.title == "dig"  # never its run-scoped id
     assert task.agent == "bot"  # follow-ups in the task chat use a served key
 
     async def _child_recorded() -> bool:
@@ -753,9 +753,9 @@ async def test_each_spawns_card_leads_to_its_own_task() -> None:
     tasks = await deps.store.list_children("s7")
     titles = {m.origin_ref: m.title for m in tasks}
     assert [titles[spawn_id] for spawn_id in await cards()] == [
-        "[t1] one",
-        "[t2] two",
-        "[t1] three",
+        "one",
+        "two",
+        "three",
     ]
     for m in tasks:
         deps.supervisor.cancel(m.id)
@@ -818,7 +818,6 @@ async def test_a_tasks_step_and_summary() -> None:
         live = (await c.get(f"/api/sessions/{task}/summary")).json()
         assert live["prompt"] == "dig in"
         assert live["step"] == step
-        assert (live["tool_calls"], live["failed_calls"]) == (2, 1)
         assert live["report"] is None
 
         gate.set()
@@ -833,8 +832,6 @@ async def test_a_tasks_step_and_summary() -> None:
         assert done == {
             "prompt": "dig in",
             "step": None,
-            "tool_calls": 2,
-            "failed_calls": 1,
             "report": "**found** it",
             "error": None,
         }
@@ -895,7 +892,7 @@ async def test_a_failed_tasks_summary_says_why() -> None:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
         summary = (await c.get(f"/api/sessions/{task.id}/summary")).json()
-    assert summary["error"] and summary["failed_calls"] == 1
+    assert summary["error"] and summary["report"] is None
 
 
 async def test_failed_child_delivers_failure_report() -> None:

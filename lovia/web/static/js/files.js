@@ -61,8 +61,9 @@ const els = {};
 const state = {
   available: false, // current agent has a workspace
   open: false,
-  mode: 'changes', // 'changes' | 'browse' | 'background'
-  fileMode: 'changes', // the tab of the two file ones that was last on
+  // The tab on: 'browse' is the one named Files.
+  mode: /** @type {'changes' | 'browse' | 'background'} */ ('changes'),
+  fileMode: /** @type {'changes' | 'browse'} */ ('changes'), // of the two file tabs, the one last on
   entries: [], // the change list (Browse keeps its listings in `tree`)
   // The last change list, by path — what the viewer asks whether a file has
   // a diff to show (also while browsing). `git` says whether there is one at all.
@@ -194,8 +195,19 @@ const isWide = () => els.panel.classList.contains('lv-files-wide');
 
 function syncLayout() {
   const roomy = els.panel.clientWidth >= WIDE_W;
+  fitTabs();
   els.panel.classList.toggle('lv-files-roomy', roomy);
   els.panel.classList.toggle('lv-files-wide', roomy && state.listBeside);
+}
+
+/** The Changes count shows while the tabs have room for it: names first. */
+export function fitTabs() {
+  if (!els.panel) return;
+  els.panel.classList.remove('lv-files-snug');
+  // A name gives way inside its tab: the name is what is measured.
+  const names = els.panel.querySelectorAll('.lv-files-head .lv-files-tab > span:first-child');
+  const cut = [...names].some((name) => name.scrollWidth > name.clientWidth + 1);
+  els.panel.classList.toggle('lv-files-snug', cut);
 }
 
 function initLayout() {
@@ -236,10 +248,8 @@ function setOpen(open, { persist = true } = {}) {
     localStorage.setItem('lovia-files-open', state.open ? '1' : '0');
   }
   claimSpace();
-  if (filesShown()) {
-    clearUnseen(); // the badge's job is done — the user is looking
-    refresh();
-  }
+  if (filesShown()) clearUnseen(); // the badge's job is done — the user is looking
+  if (state.open) refresh();
   store.emit('panel-changed');
 }
 
@@ -251,10 +261,12 @@ export function panelState() {
 /**
  * Show the panel at a tab, or close it (null).
  * @param {'background' | null} mode
+ * @param {{ restore?: boolean }} [opts] `restore: false` for a caller about
+ *   to open something there itself: what was open there stays closed.
  */
-export function setPanel(mode) {
+export function setPanel(mode, { restore = true } = {}) {
   if (mode === null) return setOpen(false);
-  if (state.mode !== mode) setMode(mode);
+  if (state.mode !== mode) void setMode(mode, { restore });
   if (!state.open) setOpen(true);
 }
 
@@ -348,7 +360,7 @@ let _refreshTimer = null;
 let _slowTimer = null;
 
 function queueRefresh() {
-  if (!filesShown() || _refreshTimer) return;
+  if (!state.open || !state.available || _refreshTimer) return;
   if (_refreshing) {
     _refreshAgain = true;
     return;
@@ -372,6 +384,10 @@ async function refresh() {
   clearTimeout(_refreshTimer);
   _refreshTimer = null;
   _refreshAgain = false;
+  if (!state.open || !state.available) return;
+  // Off the Changes tab its count still shows: the change list is asked for
+  // beside the tab's own listing (Files), or alone (Background).
+  if (state.mode !== 'changes') void refreshChangeMap();
   if (!filesShown()) return;
   const seq = ++_refreshSeq;
   _refreshing = true;
@@ -435,25 +451,64 @@ function applyChangeMap(changes) {
   state.git = changes.git;
   state.changes = new Map(changes.files.map((f) => [f.path, f]));
   syncViewerViews(); // a file on screen may just have gained (or lost) a diff
+  renderChangeStat();
 }
 
-// The other tabs don't ask for the change list, so the change map would stay
-// as the Changes tab last left it — or empty, for a panel that opened on
-// another — and a changed file would open with no Diff tab. Opening (or
-// reloading) a file there asks for the map meanwhile; the file shows at once.
-let _mapSeq = 0;
-async function refreshChangeMap() {
-  const seq = ++_mapSeq;
-  const scope = viewingScope();
-  let changes;
-  try {
-    changes = await fetchChanges();
-  } catch {
-    return; // the map stays as it was: at worst a tab missing, as before
+/** The Changes tab's "+12 −3": the lines this chat's own files changed. */
+function renderChangeStat() {
+  let added = 0;
+  let removed = 0;
+  for (const f of state.changes.values()) {
+    // Asked for by the chat on screen: a list asked for by the last one is not.
+    if (!f.touched || !state.touched.has(touchKey(f.path))) continue;
+    added += f.added || 0;
+    removed += f.removed || 0;
   }
-  // A newer ask, another agent or folder, or the Changes tab took over.
-  if (seq !== _mapSeq || scope !== viewingScope() || state.mode === 'changes') return;
-  applyChangeMap(changes);
+  const stat = els.changesStat;
+  if (!stat) return;
+  stat.replaceChildren();
+  if (!added && !removed) return;
+  const part = (/** @type {string} */ cls, /** @type {string} */ text) => {
+    const span = document.createElement('span');
+    span.className = cls;
+    span.textContent = text;
+    stat.append(span);
+  };
+  if (added) part('lv-add', `+${added}`);
+  if (removed) part('lv-del', `\u2212${removed}`);
+  fitTabs();
+}
+
+// Off the Changes tab the change map is asked for on its own: for the tab's
+// count, and so a changed file opens with its Diff tab. Opening (or reloading)
+// a file asks for it too; the file shows at once.
+let _mapSeq = 0;
+let _mapBusy = false; // an ask is out: what wants another waits for it
+let _mapAgain = false;
+async function refreshChangeMap() {
+  if (_mapBusy) {
+    _mapAgain = true;
+    return;
+  }
+  _mapBusy = true;
+  try {
+    do {
+      _mapAgain = false;
+      const seq = ++_mapSeq;
+      const scope = viewingScope();
+      let changes;
+      try {
+        changes = await fetchChanges();
+      } catch {
+        continue; // the map stays as it was: at worst a tab missing, as before
+      }
+      // A newer ask, another agent or folder, or the Changes tab took over.
+      if (seq !== _mapSeq || scope !== viewingScope() || state.mode === 'changes') continue;
+      applyChangeMap(changes);
+    } while (_mapAgain);
+  } finally {
+    _mapBusy = false;
+  }
 }
 
 /** The list has nothing of the place just left to show while the new one loads. */
@@ -463,6 +518,7 @@ function clearList() {
   state.git = false;
   state.failed = false;
   els.list.replaceChildren();
+  renderChangeStat();
 }
 
 function emptyNode(text) {
@@ -477,13 +533,13 @@ function selectTab(mode) {
   state.mode = mode;
   if (mode !== 'background') state.fileMode = mode;
   _mapSeq++; // a Browse map ask still out predates whatever this tab loads
-  for (const [tab, name] of [
-    [els.tabChanges, 'changes'],
-    [els.tabBrowse, 'browse'],
-    [els.tabBackground, 'background'],
+  for (const [tab, on] of [
+    [els.tabChanges, mode === 'changes'],
+    [els.tabBrowse, mode === 'browse'],
+    [els.tabBackground, mode === 'background'],
   ]) {
-    tab.classList.toggle('lv-active', mode === name);
-    tab.setAttribute('aria-selected', String(mode === name));
+    tab.classList.toggle('lv-active', on);
+    tab.setAttribute('aria-selected', String(on));
   }
   els.panel.classList.toggle('lv-background', mode === 'background');
   els.btn?.setAttribute('aria-expanded', String(filesShown()));
@@ -500,13 +556,61 @@ function selectTab(mode) {
   }
 }
 
-async function setMode(mode) {
-  // A tab is also the way back to its list from a file covering the panel.
-  if (state.viewing && !isWide()) closeViewer();
-  selectTab(mode);
+/**
+ * @param {'changes' | 'browse' | 'background'} mode
+ * @param {{ restore?: boolean, carry?: boolean }} [opts] `restore: false` for
+ *   a caller about to open something there itself; `carry` takes the open
+ *   file along instead.
+ */
+async function setMode(mode, { restore = true, carry = false } = {}) {
+  if (mode !== state.mode) {
+    // Each tab keeps what it had open — a diff, a file, a log or a task — and
+    // gets it back on its return.
+    if (state.viewing && !carry) parkViewer(state.mode);
+    selectTab(mode);
+    // Taken now, whatever happens next: a caller opening something of its
+    // own there means the last one is not coming back.
+    const slot = parked[mode];
+    parked[mode] = null;
+    if (restore && !carry) void unpark(slot);
+  } else {
+    // A tab is also the way back to its list from a file covering the panel.
+    if (state.viewing && !isWide()) closeViewer();
+    selectTab(mode);
+  }
   if (filesShown()) clearUnseen();
   store.emit('panel-changed');
   await refresh();
+}
+
+/** @typedef {{ path: string, view?: string, raw: boolean }} ParkedFile */
+/** What each tab had open while another one was on. */
+const parked = {
+  changes: /** @type {ParkedFile | null} */ (null),
+  browse: /** @type {ParkedFile | null} */ (null),
+  background: /** @type {ViewerGuest | null} */ (null),
+};
+
+function parkViewer(mode) {
+  const v = state.viewing;
+  if (mode === 'background') parked.background = v?.guest ?? null;
+  else parked[mode] = v?.path ? { path: v.path, view: v.view, raw: v.raw } : null;
+  closeViewer({ forget: false });
+}
+
+/** @param {ParkedFile | ViewerGuest | null} slot */
+async function unpark(slot) {
+  if (!slot) return;
+  if (!('path' in slot)) return openGuest(slot);
+  await openFile(slot.path, { silent: true, view: slot.view });
+  const v = state.viewing;
+  if (v?.path !== slot.path) return;
+  // As it was shown: its diff or its source, not just the file. Whether the
+  // diff came or went meanwhile, the tab's own refresh asks.
+  if (slot.raw && !v.raw && typeof v.content === 'string') {
+    v.raw = true;
+    renderViewerContent();
+  }
 }
 
 // ---- Browse: the folder tree -------------------------------------------------
@@ -781,7 +885,10 @@ async function revealInTree(path, { open = false } = {}) {
   syncTreeScope();
   for (const d of ancestorsOf(path)) tree.open.add(d);
   saveTree();
-  await (state.mode === 'browse' ? refresh() : setMode('browse'));
+  // The open file goes along only when it is what is shown: a folder of the
+  // change list leaves each tab what it has.
+  const carry = state.viewing?.path === path;
+  await (state.mode === 'browse' ? refresh() : setMode('browse', { carry }));
   if (open) await openDir(path); // and the lone folders inside, as a click would
   // A row past its folder's first pages isn't rendered: each folder on the
   // way down shows enough pages to include the next step.
@@ -1168,7 +1275,8 @@ let _restoredScope = /** @type {string | null} */ (null);
 /** @param {string | null} path */
 function rememberViewing(path) {
   try {
-    if (path) sessionStorage.setItem(VIEWING_KEY, JSON.stringify({ scope: viewingScope(), path }));
+    const saved = { scope: viewingScope(), path, tab: state.mode };
+    if (path) sessionStorage.setItem(VIEWING_KEY, JSON.stringify(saved));
     else sessionStorage.removeItem(VIEWING_KEY);
   } catch {
     /* storage off: this tab just won't remember */
@@ -1177,7 +1285,11 @@ function rememberViewing(path) {
 
 async function restoreViewing() {
   const scope = viewingScope();
-  if (state.viewing || _restoredScope === scope) return;
+  // Once per scope, whatever it finds: a later refresh (another tab's)
+  // mustn't open what was saved since.
+  if (_restoredScope === scope) return;
+  _restoredScope = scope;
+  if (state.viewing) return;
   let saved = null;
   try {
     saved = JSON.parse(sessionStorage.getItem(VIEWING_KEY) || 'null');
@@ -1185,14 +1297,17 @@ async function restoreViewing() {
     /* unreadable: nothing to restore */
   }
   if (saved?.scope !== scope || typeof saved.path !== 'string') return;
-  _restoredScope = scope; // once per scope: a later refresh mustn't reopen it
+  // Back on the tab it was open on: another one is waiting for it there.
+  const tab = saved.tab === 'browse' || saved.tab === 'changes' ? saved.tab : state.mode;
   try {
     await api.workspaceFile({ agent: store.agent, path: saved.path }); // still there?
   } catch {
     rememberViewing(null);
     return;
   }
-  if (!state.viewing && viewingScope() === scope) openFile(saved.path);
+  if (viewingScope() !== scope) return;
+  if (tab !== state.mode) parked[tab] ??= { path: saved.path, raw: false };
+  else if (!state.viewing) openFile(saved.path);
 }
 
 /** @param {{ forget?: boolean }} [opts] `forget: false` for a close the user didn't ask for. */
@@ -1836,6 +1951,12 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
 // file's directory first, then (authors often mean root-relative) the root.
 async function followViewerLink(href) {
   const base = dirname(state.viewing?.path || '');
+  // A link in a task's report: the file opens on a file tab, and the task
+  // waits on Background.
+  if (state.mode === 'background') {
+    if (!state.available) return; // no files to open
+    void setMode(state.fileMode, { restore: false });
+  }
   const joined = href.startsWith('/')
     ? href.slice(1)
     : (base ? `${base}/` : '') + href;
@@ -2013,6 +2134,7 @@ export function initFiles() {
   els.viewFile = document.getElementById('files-view-file');
   els.tabBrowse = document.getElementById('files-tab-browse');
   els.tabBackground = document.getElementById('files-tab-background');
+  els.changesStat = document.getElementById('files-changes-stat');
   els.refresh = document.getElementById('files-refresh');
   els.close = document.getElementById('files-close');
   els.collapse = document.getElementById('files-collapse');
@@ -2155,7 +2277,7 @@ export function initFiles() {
   els.close.addEventListener('click', () => setOpen(false));
   els.refresh.addEventListener('click', () => {
     if (state.mode === 'background') store.emit('panel-changed'); // lists anew
-    else refresh();
+    refresh(); // the file tab's list, or (off it) the Changes count
   });
   els.tabChanges.addEventListener('click', () => setMode('changes'));
   els.tabBrowse.addEventListener('click', () => setMode('browse'));
@@ -2289,6 +2411,7 @@ export function initFiles() {
 
   store.on('agents-loaded', updateVisibility);
   store.on('agent-changed', () => {
+    parked.changes = parked.browse = null;
     state.touched.clear();
     state.revs.clear();
     state.filter = '';
@@ -2303,6 +2426,7 @@ export function initFiles() {
   // for a new chat): a different one is a different tree — start over.
   // (The tree follows the scope on its own: see syncTreeScope.)
   store.on('workspace-scope-changed', () => {
+    parked.changes = parked.browse = null;
     state.filter = '';
     if (els.filter) els.filter.value = '';
     closeViewer({ forget: false });
@@ -2314,10 +2438,12 @@ export function initFiles() {
   // left wrote; the replay of the new one's history asks for its own.
   const chatChanged = () => {
     if (viewedGuest()) closeViewer();
+    parked.background = null; // the last chat's log or task
     state.touched.clear();
     state.revs.clear();
     clearUnseen();
     state.entries = state.entries.filter((e) => !e.touched);
+    renderChangeStat();
     queueRender();
     queueRefresh();
   };
@@ -2354,6 +2480,8 @@ export function initFiles() {
       toast(t('files.noWorkspace'));
       return;
     }
+    // A file opens on a file tab, never beside the Background list.
+    if (state.mode === 'background') void setMode(state.fileMode, { restore: false });
     if (!state.open) setOpen(true);
     if (!(await openFile(path))) {
       toast(t('files.openFailed'), { type: 'error' });

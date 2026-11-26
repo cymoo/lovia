@@ -495,8 +495,15 @@ Uploads default to 25 MiB per file (`LOVIA_MAX_UPLOAD_MB`). Named extensions
 must match the built-in allowlist; override it with
 `LOVIA_UPLOAD_ALLOWED_EXT`, separated by commas or spaces, or use `*` for any.
 
-The Files panel opens on **Changes**: the files this chat wrote, plus the
-Workspace files attached to its messages, newest first. In a
+The right panel has three tabs: **Changes**, **Files** and **Background**. The
+topbar's folder button opens whichever of the first two was last on (Changes at
+first), its run button opens Background. Each tab keeps what it has open — a
+diff, a file, a log — for when you come back to it. The Changes tab carries the
+lines this chat's files gained and lost (`+12 −3`, left out on a panel too
+narrow for it), the Background tab how many things run.
+
+**Changes** lists the files this chat wrote, plus the Workspace files attached
+to its messages, newest first. In a
 git work tree a folded second group lists the other uncommitted changes
 `git status` sees under the folder, and each row carries its line counts
 (`+12 −3`) or a *new* mark. A changed tracked file opens on its diff against
@@ -505,7 +512,7 @@ Outside git there is only the chat's own group, and no diff. Git runs on the
 host that holds the files, limited to `git rev-parse`, `git status` and
 `git diff`, and a path the agent could not read unasked never shows.
 
-**Browse** is the folder tree: a folder opens in place, a folder holding
+**Files** is the folder tree: a folder opens in place, a folder holding
 nothing but another folder shows the chain as one row (`src/app/core`), and an
 open folder's row stays at the top while its contents scroll. The arrow keys
 move through it. An open file's "⋯" menu shows it in the tree. A folder too
@@ -535,7 +542,8 @@ deletes that directory.
 
 The panel's **Background** tab lists what runs behind the chat, and what ran:
 its [subagent tasks](#background-subagents) and the commands the Agent started
-with `shell(background=true)` — a dev server, a test run. What waits on you
+with `shell(background=true)` — a dev server, a test run — each named by what
+the Agent said it does, or by the command when it said nothing. What waits on you
 comes first; what is over is folded below. The topbar button shows how many
 run (a red dot: something failed since you last looked) and opens the tab; a
 chat with commands running has a hollow dot in the sidebar. An agent without a
@@ -547,8 +555,8 @@ shows the newest 5,000 lines; the download has everything kept. Reading it
 takes nothing from the Agent, which still reads the output itself, and after
 you stop a command it is told so and reads the rest. Stopping a task asks once
 more: it ends where it is, and no report comes. Click a task, or *View task* on
-its `spawn_subagent` card, for what it was asked, its current step, how many
-tool calls it made and its report; *Open full chat* shows the rest.
+its `spawn_subagent` card, for what it was asked, its current step and its
+report; *Open full chat* shows the rest.
 
 Background processes belong to the chat rather than one Run. Finishing a Run
 does not stop them; deleting the chat or stopping the Web server reaps them,

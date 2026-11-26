@@ -445,7 +445,7 @@ export const api = {
       `/api/sessions/${encodeURIComponent(sessionId)}/tool-images/${encodeURIComponent(callId)}/${index}`,
     ),
   // A chat's run in short (a subagent task's detail) → { prompt, step,
-  // tool_calls, failed_calls, report, error }.
+  // report, error }.
   /** @param {string} sessionId */
   sessionSummary: (sessionId) =>
     request(`/api/sessions/${encodeURIComponent(sessionId)}/summary`).then(_json),

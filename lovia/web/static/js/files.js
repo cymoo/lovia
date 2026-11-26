@@ -201,10 +201,12 @@ function syncLayout() {
 }
 
 /** The Changes count shows while the tabs have room for it: names first. */
-function fitTabs() {
+export function fitTabs() {
+  if (!els.panel) return;
   els.panel.classList.remove('lv-files-snug');
-  const tabs = els.panel.querySelectorAll('.lv-files-head .lv-files-tab');
-  const cut = [...tabs].some((tab) => tab.scrollWidth > tab.clientWidth + 1);
+  // A name gives way inside its tab: the name is what is measured.
+  const names = els.panel.querySelectorAll('.lv-files-head .lv-files-tab > span:first-child');
+  const cut = [...names].some((name) => name.scrollWidth > name.clientWidth + 1);
   els.panel.classList.toggle('lv-files-snug', cut);
 }
 
@@ -457,7 +459,8 @@ function renderChangeStat() {
   let added = 0;
   let removed = 0;
   for (const f of state.changes.values()) {
-    if (!f.touched) continue;
+    // Asked for by the chat on screen: a list asked for by the last one is not.
+    if (!f.touched || !state.touched.has(touchKey(f.path))) continue;
     added += f.added || 0;
     removed += f.removed || 0;
   }
@@ -480,18 +483,32 @@ function renderChangeStat() {
 // count, and so a changed file opens with its Diff tab. Opening (or reloading)
 // a file asks for it too; the file shows at once.
 let _mapSeq = 0;
+let _mapBusy = false; // an ask is out: what wants another waits for it
+let _mapAgain = false;
 async function refreshChangeMap() {
-  const seq = ++_mapSeq;
-  const scope = viewingScope();
-  let changes;
-  try {
-    changes = await fetchChanges();
-  } catch {
-    return; // the map stays as it was: at worst a tab missing, as before
+  if (_mapBusy) {
+    _mapAgain = true;
+    return;
   }
-  // A newer ask, another agent or folder, or the Changes tab took over.
-  if (seq !== _mapSeq || scope !== viewingScope() || state.mode === 'changes') return;
-  applyChangeMap(changes);
+  _mapBusy = true;
+  try {
+    do {
+      _mapAgain = false;
+      const seq = ++_mapSeq;
+      const scope = viewingScope();
+      let changes;
+      try {
+        changes = await fetchChanges();
+      } catch {
+        continue; // the map stays as it was: at worst a tab missing, as before
+      }
+      // A newer ask, another agent or folder, or the Changes tab took over.
+      if (seq !== _mapSeq || scope !== viewingScope() || state.mode === 'changes') continue;
+      applyChangeMap(changes);
+    } while (_mapAgain);
+  } finally {
+    _mapBusy = false;
+  }
 }
 
 /** The list has nothing of the place just left to show while the new one loads. */
@@ -566,7 +583,7 @@ async function setMode(mode, { restore = true, carry = false } = {}) {
   await refresh();
 }
 
-/** @typedef {{ path: string, view: string, raw: boolean }} ParkedFile */
+/** @typedef {{ path: string, view?: string, raw: boolean }} ParkedFile */
 /** What each tab had open while another one was on. */
 const parked = {
   changes: /** @type {ParkedFile | null} */ (null),
@@ -869,7 +886,10 @@ async function revealInTree(path, { open = false } = {}) {
   syncTreeScope();
   for (const d of ancestorsOf(path)) tree.open.add(d);
   saveTree();
-  await (state.mode === 'browse' ? refresh() : setMode('browse', { carry: true }));
+  // The open file goes along only when it is what is shown: a folder of the
+  // change list leaves each tab what it has.
+  const carry = state.viewing?.path === path;
+  await (state.mode === 'browse' ? refresh() : setMode('browse', { carry }));
   if (open) await openDir(path); // and the lone folders inside, as a click would
   // A row past its folder's first pages isn't rendered: each folder on the
   // way down shows enough pages to include the next step.
@@ -1256,7 +1276,8 @@ let _restoredScope = /** @type {string | null} */ (null);
 /** @param {string | null} path */
 function rememberViewing(path) {
   try {
-    if (path) sessionStorage.setItem(VIEWING_KEY, JSON.stringify({ scope: viewingScope(), path }));
+    const saved = { scope: viewingScope(), path, tab: state.mode };
+    if (path) sessionStorage.setItem(VIEWING_KEY, JSON.stringify(saved));
     else sessionStorage.removeItem(VIEWING_KEY);
   } catch {
     /* storage off: this tab just won't remember */
@@ -1277,13 +1298,17 @@ async function restoreViewing() {
     /* unreadable: nothing to restore */
   }
   if (saved?.scope !== scope || typeof saved.path !== 'string') return;
+  // Back on the tab it was open on: another one is waiting for it there.
+  const tab = saved.tab === 'browse' || saved.tab === 'changes' ? saved.tab : state.mode;
   try {
     await api.workspaceFile({ agent: store.agent, path: saved.path }); // still there?
   } catch {
     rememberViewing(null);
     return;
   }
-  if (!state.viewing && viewingScope() === scope) openFile(saved.path);
+  if (viewingScope() !== scope) return;
+  if (tab !== state.mode) parked[tab] ??= { path: saved.path, raw: false };
+  else if (!state.viewing) openFile(saved.path);
 }
 
 /** @param {{ forget?: boolean }} [opts] `forget: false` for a close the user didn't ask for. */
@@ -2419,6 +2444,7 @@ export function initFiles() {
     state.revs.clear();
     clearUnseen();
     state.entries = state.entries.filter((e) => !e.touched);
+    renderChangeStat();
     queueRender();
     queueRefresh();
   };

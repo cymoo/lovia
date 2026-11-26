@@ -19,7 +19,7 @@ import { loadCurrentTasks, refreshRuns, switchSession } from './sessions.js';
 import { buildItems, buttonState, createFailureWatch } from './background-items.js';
 import { outcomeText, processGuest } from './process-view.js';
 import { CONFIRM_MS, stepLine, taskGuest, taskStatusText } from './task-view.js';
-import { openGuest, panelState, setPanel, viewedGuest } from './files.js';
+import { fitTabs, openGuest, panelState, setPanel, viewedGuest } from './files.js';
 
 const els = {};
 let _procs = [];
@@ -210,7 +210,11 @@ function render() {
   }
   renderButton();
   // The tab's own count: what runs.
-  if (els.tabCount) els.tabCount.textContent = list.live.length ? String(list.live.length) : '';
+  const count = list.live.length ? String(list.live.length) : '';
+  if (els.tabCount && els.tabCount.textContent !== count) {
+    els.tabCount.textContent = count;
+    fitTabs();
+  }
   renderList();
   updateGuest();
   pollSteps(list);

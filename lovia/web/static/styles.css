@@ -5340,6 +5340,9 @@ body.lv-files-resizing {
 .lv-files-snug .lv-files-tab-stat {
   display: none;
 }
+.lv-files-snug .lv-files-head .lv-files-tab {
+  padding: 4px 8px;
+}
 .lv-files-head-actions {
   display: inline-flex;
   flex-shrink: 0;

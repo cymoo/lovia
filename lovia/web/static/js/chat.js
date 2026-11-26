@@ -16,6 +16,7 @@ import {
   updateSessionTitle,
 } from './sessions.js';
 import { parseReport } from './subagent-report.js';
+import { taskName } from './background-items.js';
 import { splitAttachmentNote } from './attachment-note.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
@@ -1227,11 +1228,6 @@ function renderTaskApprovals() {
   taskTray.hidden = _trayItems.size === 0;
 }
 
-/** A task's name as its chat title gives it ("[t1] dig into …" before 0.9.286). */
-function taskName(task) {
-  const m = /^\[([^\]]{1,8})\]\s*(.*)$/.exec(task.title || '');
-  return (m ? m[2] : task.title) || task.id;
-}
 
 /** "dig into … · Open task" over a task's card. */
 function taskApprovalHead(task) {

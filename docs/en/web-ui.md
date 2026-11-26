@@ -548,8 +548,8 @@ shows the newest 5,000 lines; the download has everything kept. Reading it
 takes nothing from the Agent, which still reads the output itself, and after
 you stop a command it is told so and reads the rest. Stopping a task asks once
 more: it ends where it is, and no report comes. Click a task, or *View task* on
-its `spawn_subagent` card, for what it was asked, its current step, how many
-tool calls it made and its report; *Open full chat* shows the rest.
+its `spawn_subagent` card, for what it was asked, its current step and its
+report; *Open full chat* shows the rest.
 
 Background processes belong to the chat rather than one Run. Finishing a Run
 does not stop them; deleting the chat or stopping the Web server reaps them,

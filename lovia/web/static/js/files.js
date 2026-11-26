@@ -257,7 +257,6 @@ export function panelState() {
 export function setPanel(mode, { restore = true } = {}) {
   if (mode === null) return setOpen(false);
   if (state.mode !== mode) void setMode(mode, { restore });
-  else if (!restore) parked.background = null;
   if (!state.open) setOpen(true);
 }
 
@@ -515,7 +514,11 @@ async function setMode(mode, { restore = true } = {}) {
     // open waits for its own tab to come back, the one coming back returns.
     if (state.viewing) parkViewer(side(state.mode));
     selectTab(mode);
-    if (restore) void unpark(side(mode));
+    // Taken now, whatever happens next: a caller opening something of its
+    // own there means the last one is not coming back.
+    const slot = side(mode) === 'files' ? parked.files : parked.background;
+    parked[side(mode)] = null;
+    if (restore) void unpark(slot);
   } else {
     // A tab is also the way back to its list from a file covering the panel.
     if (state.viewing && !isWide()) closeViewer();
@@ -528,21 +531,27 @@ async function setMode(mode, { restore = true } = {}) {
 
 /** What each side of the panel had open while the other one was shown. */
 const parked = {
-  files: /** @type {string | null} */ (null),
+  files: /** @type {{ path: string, view: string, raw: boolean } | null} */ (null),
   background: /** @type {ViewerGuest | null} */ (null),
 };
 
 function parkViewer(side) {
   const v = state.viewing;
-  if (side === 'files') parked.files = v?.path ?? null;
+  if (side === 'files') parked.files = v?.path ? { path: v.path, view: v.view, raw: v.raw } : null;
   else parked.background = v?.guest ?? null;
   closeViewer({ forget: false });
 }
 
-async function unpark(side) {
-  if (side === 'files' && parked.files) await openFile(parked.files, { silent: true });
-  else if (side === 'background' && parked.background) openGuest(parked.background);
-  parked[side] = null;
+/** @param {{ path: string, view: string, raw: boolean } | ViewerGuest | null} slot */
+async function unpark(slot) {
+  if (!slot) return;
+  if (!('path' in slot)) return openGuest(slot);
+  await openFile(slot.path, { silent: true, view: slot.view });
+  // As it was shown: its diff or its source, not just the file.
+  if (state.viewing?.path === slot.path && slot.raw && !state.viewing.raw) {
+    state.viewing.raw = true;
+    renderViewerContent();
+  }
 }
 
 // ---- Browse: the folder tree -------------------------------------------------
@@ -1872,6 +1881,9 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
 // file's directory first, then (authors often mean root-relative) the root.
 async function followViewerLink(href) {
   const base = dirname(state.viewing?.path || '');
+  // A link in a task's report: the file opens on the Files tab, and the task
+  // waits on Background.
+  if (state.mode === 'background') void setMode(state.fileMode, { restore: false });
   const joined = href.startsWith('/')
     ? href.slice(1)
     : (base ? `${base}/` : '') + href;

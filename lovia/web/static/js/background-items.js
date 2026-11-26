@@ -41,7 +41,7 @@ export function taskState(task, run) {
 
 /** A task's name: its chat's title, without the "[t1] " a title had before 0.9.286. */
 export function taskName(task) {
-  return (task.title || '').replace(/^\[[^\]]{1,8}\]\s*/, '') || task.id;
+  return (task.title || '').replace(/^\[t\d+\] /, '') || task.id;
 }
 
 /** @returns {BackgroundItem} */

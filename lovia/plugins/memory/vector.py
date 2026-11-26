@@ -34,8 +34,7 @@ import httpx
 
 from ...exceptions import ProviderError, UserError
 from ...http_config import client_options, resolve_timeout, resolve_trust_env
-from ...providers._http import proxy_hint
-from ...providers._http import is_retryable_status
+from ...providers._http import is_retryable_status, proxy_hint, proxy_route
 from ...stores._sqlite import SQLiteStore
 from .index import Doc, Fusable, Hit, _dump_meta, _hit_from_row
 
@@ -132,6 +131,7 @@ class OpenAIEmbedder:
         self._timeout = resolve_timeout(timeout)
         self._extra_headers = dict(default_headers or {})
         self._trust_env = resolve_trust_env(trust_env)
+        self._route = proxy_route(trust_env, owns_client=client is None)
         self._batch_size = max(1, batch_size)
 
     def _check_ready(self) -> None:
@@ -193,7 +193,7 @@ class OpenAIEmbedder:
                 hint=proxy_hint(
                     "Check network connectivity, proxy settings, and base_url.",
                     self.base_url,
-                    self._trust_env if self._owns_client else None,
+                    self._route,
                 ),
             ) from exc
         if resp.status_code >= 400:

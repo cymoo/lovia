@@ -7,12 +7,13 @@ the other way round, so what an error body *means* stays in one place.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import NoReturn
 
 import httpx
 
 from ..exceptions import ContextOverflowError, ProviderError
-from ..http_config import proxy_note
+from ..http_config import proxy_note, resolve_trust_env
 
 # What a proxy answers when it cannot reach (or will not relay to) the host.
 _PROXY_STATUSES = frozenset({407, 502, 504})
@@ -43,15 +44,15 @@ async def raise_for_provider_status(
     label: str,
     is_context_overflow: Callable[[int, str], bool],
     window_from_body: Callable[[str], int | None] | None = None,
-    trust_env: bool | None = None,
+    route: ProxyRoute | None = None,
 ) -> None:
     """Raise a structured lovia exception for failed provider responses.
 
     ``window_from_body`` reads the context window an overflow names, when it
     names one; the adapters pass
-    :func:`~lovia.providers._windows.window_from_error`. ``trust_env`` is
-    the client's, ``None`` when unknown: with it on, a gateway status may be
-    the proxy's own answer, and the error says so.
+    :func:`~lovia.providers._windows.window_from_error`. ``route`` is the
+    client's, ``None`` when unknown: through a proxy, a gateway status may
+    be the proxy's own answer, and the error says so.
     """
     if response.status_code < 400:
         return
@@ -64,8 +65,8 @@ async def raise_for_provider_status(
             reported_window=window_from_body(text) if window_from_body else None,
         )
     note = None
-    if trust_env and response.status_code in _PROXY_STATUSES:
-        note = proxy_note(str(response.request.url), trust_env)
+    if route and route.trust_env and response.status_code in _PROXY_STATUSES:
+        note = proxy_note(str(response.request.url), True, switch=route.switch)
     raise ProviderError(
         f"{label} stream returned HTTP {response.status_code}: {text}",
         vendor=vendor,
@@ -77,11 +78,29 @@ async def raise_for_provider_status(
     )
 
 
-def proxy_hint(base: str, url: str, trust_env: bool | None) -> str:
-    """``base``, plus how the proxy settings bore on the request to ``url``.
-    ``trust_env`` is ``None`` for a client the caller built: its settings
-    are not ours to describe."""
-    note = proxy_note(url, trust_env) if trust_env is not None else None
+@dataclass(frozen=True)
+class ProxyRoute:
+    """How a provider's own client treats proxies, for its errors to tell."""
+
+    trust_env: bool
+    switch: str
+    """The setting that decided it, as a hint names it."""
+
+
+def proxy_route(trust_env: bool | None, *, owns_client: bool) -> ProxyRoute | None:
+    """The route of a provider-built client; ``None`` for one the caller
+    passed in, whose settings are not ours to describe."""
+    if not owns_client:
+        return None
+    if trust_env is None:
+        return ProxyRoute(resolve_trust_env(None), "trust_env (LOVIA_HTTP_TRUST_ENV)")
+    # Set for this model: the environment variable would change nothing.
+    return ProxyRoute(trust_env, "the model's proxy setting (trust_env)")
+
+
+def proxy_hint(base: str, url: str, route: ProxyRoute | None) -> str:
+    """``base``, plus how the proxy settings bore on the request to ``url``."""
+    note = proxy_note(url, route.trust_env, switch=route.switch) if route else None
     return f"{base} {note}" if note else base
 
 
@@ -92,7 +111,7 @@ def raise_for_transport_error(
     model: str | None,
     label: str,
     url: str = "",
-    trust_env: bool | None = None,
+    route: ProxyRoute | None = None,
 ) -> NoReturn:
     """Translate network-layer failures into structured provider errors."""
     # RemoteProtocolError is how a mid-stream disconnect surfaces (gateway or
@@ -110,6 +129,6 @@ def raise_for_transport_error(
         hint=proxy_hint(
             "Check network connectivity, proxy settings, provider base_url, and retry policy.",
             url,
-            trust_env,
+            route,
         ),
     ) from exc

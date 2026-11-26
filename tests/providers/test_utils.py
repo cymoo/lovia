@@ -5,8 +5,10 @@ import pytest
 
 from lovia.exceptions import ContextOverflowError, ProviderError
 from lovia.providers._http import (
+    ProxyRoute,
     host_matches,
     is_retryable_status,
+    proxy_route,
     raise_for_provider_status,
     raise_for_transport_error,
 )
@@ -126,7 +128,7 @@ def proxied(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NO_PROXY", "")
 
 
-def test_transport_error_hint_names_a_skipped_proxy(proxied: None) -> None:
+def _transport_hint(route: ProxyRoute | None) -> str:
     with pytest.raises(ProviderError) as exc_info:
         raise_for_transport_error(
             httpx.ConnectError("boom"),
@@ -134,19 +136,24 @@ def test_transport_error_hint_names_a_skipped_proxy(proxied: None) -> None:
             model="m1",
             label="Fake",
             url="https://api.provider.test/v1",
-            trust_env=False,
+            route=route,
         )
-    assert "skipped the proxy proxy.corp:8080" in (exc_info.value.hint or "")
+    return exc_info.value.hint or ""
+
+
+def test_transport_error_hint_names_the_setting_that_decided(
+    proxied: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
+    inherited = _transport_hint(proxy_route(None, owns_client=True))
+    assert "skipped the proxy proxy.corp:8080" in inherited
+    assert "LOVIA_HTTP_TRUST_ENV" in inherited
+    # Set for the model, the environment variable would change nothing.
+    explicit = _transport_hint(proxy_route(False, owns_client=True))
+    assert "the model's proxy setting" in explicit
+    assert "LOVIA_HTTP_TRUST_ENV" not in explicit
     # A client the caller built: its proxy settings are not ours to describe.
-    with pytest.raises(ProviderError) as exc_info:
-        raise_for_transport_error(
-            httpx.ConnectError("boom"),
-            vendor="fake",
-            model="m1",
-            label="Fake",
-            url="https://api.provider.test/v1",
-        )
-    assert "proxy.corp" not in (exc_info.value.hint or "")
+    assert "proxy.corp" not in _transport_hint(proxy_route(False, owns_client=False))
 
 
 @pytest.mark.parametrize(("status", "noted"), [(504, True), (500, False)])
@@ -165,7 +172,7 @@ async def test_gateway_status_through_a_proxy_says_so(
             model="m1",
             label="Fake",
             is_context_overflow=lambda status, body: False,
-            trust_env=True,
+            route=proxy_route(True, owns_client=True),
         )
     hint = exc_info.value.hint or ""
     assert ("went through the proxy proxy.corp:8080" in hint) is noted

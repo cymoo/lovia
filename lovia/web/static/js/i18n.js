@@ -810,7 +810,7 @@ const MESSAGES = {
     'cfg.proxyDefault': '跟随全局',
     'cfg.proxyOff': '直连',
     'cfg.proxyOn': '经代理',
-    'cfg.proxyHint': '只能经公司代理访问的模型选“经代理”；全局默认直连，启动时加 --trust-env 则默认经代理',
+    'cfg.proxyHint': '只能经公司代理访问的模型选“经代理”（仍遵循 NO_PROXY）；“跟随全局”默认直连，启动时加 --trust-env 则经代理',
     'cfg.extraBody': '额外请求参数',
     'cfg.extraBodyHint':
       '原样合并进发给该端点的每个请求（如 reasoning_effort、thinking、vLLM 的 chat_template_kwargs）；null 表示删除该字段。按端点自己的写法填，不做转换',
@@ -1766,7 +1766,7 @@ const EN = {
   'cfg.proxyOff': 'Direct',
   'cfg.proxyOn': 'Use proxy',
   'cfg.proxyHint':
-    'Use proxy for a model reachable only through the office proxy. The default is direct, or the proxy when lovia web runs with --trust-env',
+    'Use proxy for a model reachable only through the office proxy (NO_PROXY still applies). Default is direct, or the proxy when lovia web runs with --trust-env',
   'cfg.extraBody': 'Extra request fields',
   'cfg.extraBodyHint':
     "Merged verbatim into every request to this endpoint (reasoning_effort, thinking, vLLM's chat_template_kwargs…); null removes a field. Written in the endpoint's own dialect — nothing is translated",

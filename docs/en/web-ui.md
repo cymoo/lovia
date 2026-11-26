@@ -110,12 +110,13 @@ schedule opens run on the default. Vision and auxiliary
 work such as titles and follow-up suggestions can be assigned to separate
 profiles.
 
-**System proxy** (Advanced) decides whether requests to that model go through
-the proxy configured on the machine: **Default** follows `--trust-env` (off
-unless given), **Direct** never, **Use proxy** always — for a model reachable
-only through the office proxy while intranet ones stay direct. **Test** uses
-the setting as the form has it, and a failed test says when a proxy was
-skipped or in the way.
+**System proxy** (Advanced) decides whether requests to that model honor the
+proxy configured on the machine: **Default** follows `--trust-env` /
+`LOVIA_HTTP_TRUST_ENV` (off unless set), **Direct** ignores it, **Use proxy**
+honors it — `HTTP(S)_PROXY` and `NO_PROXY`, else the OS proxy — for a model
+reachable only through the office proxy while intranet ones stay direct.
+**Test** uses the setting as the form has it, and a failed test or chat says
+when a proxy was skipped or in the way.
 
 **Extra request fields** (Advanced) is a JSON object merged verbatim into every
 request to that endpoint — the provider's

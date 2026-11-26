@@ -125,6 +125,12 @@ class RunState:
     # resumed run keeps it — for the finished segment's ``timing`` meta. ``None``
     # when resumed from a snapshot that predates it: the segment goes untimed.
     started_at: float | None = None
+    # Tool calls the model requested in this run (not ones in a supplied
+    # input history), persisted so a resumed budget keeps counting.
+    tool_calls: int = 0
+    # The budget seconds earlier legs ran (the snapshot's ``elapsed``): saved
+    # again as is by a leg that runs without a budget of its own.
+    elapsed_before: float = 0.0
     # The run's most recent compaction, as a typed
     # :class:`~lovia.events.CompactionNotice`. Stowed (as a dict) under
     # ``context_notice`` in the finished segment's ``meta`` by ``_persist_session``

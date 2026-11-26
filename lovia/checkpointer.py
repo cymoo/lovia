@@ -81,6 +81,11 @@ class RunHead:
     # original start — the session segment's ``timing`` records it. ``None``
     # in snapshots from before it was recorded.
     started_at: float | None = None
+    # What a resumed RunBudget continues from: the tool calls the model
+    # requested in this run, and the seconds its budget clock ran across the
+    # legs (time suspended between them left out; 0 for a run without one).
+    tool_calls: int = 0
+    elapsed: float = 0.0
 
     def to_dict(self) -> JsonObject:
         return {
@@ -95,6 +100,8 @@ class RunHead:
             "pending_handoff": self.pending_handoff,
             "updated_at": self.updated_at,
             "started_at": self.started_at,
+            "tool_calls": self.tool_calls,
+            "elapsed": self.elapsed,
         }
 
     @classmethod
@@ -111,6 +118,8 @@ class RunHead:
             pending_handoff=data.get("pending_handoff"),
             updated_at=data.get("updated_at", time.time()),
             started_at=data.get("started_at"),
+            tool_calls=data.get("tool_calls", 0),
+            elapsed=data.get("elapsed", 0.0),
         )
 
     def to_json(self) -> str:
@@ -144,6 +153,8 @@ class RunSnapshot:
     updated_at: float = field(default_factory=time.time)
     pending_handoff: str | None = None
     started_at: float | None = None
+    tool_calls: int = 0
+    elapsed: float = 0.0
 
     # ----- head <-> snapshot, used by store implementations -----
 
@@ -162,6 +173,8 @@ class RunSnapshot:
             pending_handoff=self.pending_handoff,
             updated_at=self.updated_at,
             started_at=self.started_at,
+            tool_calls=self.tool_calls,
+            elapsed=self.elapsed,
         )
 
     @classmethod
@@ -183,6 +196,8 @@ class RunSnapshot:
             pending_handoff=head.pending_handoff,
             updated_at=head.updated_at,
             started_at=head.started_at,
+            tool_calls=head.tool_calls,
+            elapsed=head.elapsed,
         )
 
     # ----- whole-snapshot (de)serialization (tests / direct callers) -----

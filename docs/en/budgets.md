@@ -45,6 +45,11 @@ finish and persist their results.
     A `RunBudget` stores its start time and tool-call count. Reusing the same
     instance carries spent time and calls into the next run.
 
+A run [resumed from its checkpoint](sessions-and-checkpoints.md) keeps counting where it
+stopped, even with a fresh budget: tokens through its saved usage, the tool
+calls it has made, and `max_seconds` from the time it has spent running — time
+spent suspended between the legs does not count.
+
 An [Agent-as-tool](multi-agent.md#agent-as-tool) sub-run uses its own copied
 budget. If that sub-run exceeds the limit, the parent sees a tool error and can
 adapt instead of failing automatically.

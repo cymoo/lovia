@@ -10,11 +10,14 @@ from pydantic import BaseModel, ValidationError
 
 from lovia import (
     Agent,
+    BudgetExceeded,
     CheckpointOptions,
     ImagePart,
     InMemoryCheckpointer,
+    MaxTurnsExceeded,
     ProviderError,
     RetryPolicy,
+    RunBudget,
     RunContext,
     Runner,
     TextPart,
@@ -33,7 +36,7 @@ from lovia.transcript import (
     TextDelta,
     UsageDelta,
 )
-from lovia.messages import Usage
+from lovia.messages import Message, ToolCall, Usage
 from lovia.stores.checkpointer import SQLiteCheckpointer
 
 from .scripted_provider import ScriptedProvider, call, text
@@ -1036,3 +1039,186 @@ def test_snapshot_round_trips_pending_handoff() -> None:
     )
     assert RunSnapshot.from_dict(snap.to_dict()).pending_handoff == "b"
     assert RunHead.from_json(snap.head.to_json()).pending_handoff == "b"
+
+
+# ----- a resumed run's budget keeps counting (#550) -----
+
+
+@tool
+async def ping() -> str:
+    """Ping."""
+    return "pong"
+
+
+async def test_a_resumed_run_keeps_its_tool_call_count() -> None:
+    """One call, cut off by max_turns; the resumed leg's second call is the
+    run's second, over a budget of one — as it would be without the cut."""
+    cp = InMemoryCheckpointer()
+    provider = ScriptedProvider(
+        [call("ping", {}, call_id="c1"), call("ping", {}, call_id="c2"), text("done")]
+    )
+    agent = Agent(name="a", model=provider, tools=[ping])
+    with pytest.raises(MaxTurnsExceeded):
+        await Runner.run(
+            agent,
+            "go",
+            max_turns=1,
+            budget=RunBudget(max_tool_calls=1),
+            checkpoint=ckpt(cp, "r1"),
+        )
+    with pytest.raises(BudgetExceeded, match="tool call count 2"):
+        await Runner.run(
+            agent,
+            [],
+            max_turns=10,
+            budget=RunBudget(max_tool_calls=1),
+            checkpoint=ckpt(cp, "r1"),
+        )
+
+
+async def test_a_pending_call_counts_once_across_a_resume() -> None:
+    """The call the resume drains was requested before the cut, and is
+    counted when its preflight runs again, not twice."""
+    snap = RunSnapshot(
+        run_id="p",
+        agent_name="a",
+        entries=[
+            InputEntry(role="user", content="go"),
+            ToolCallEntry(call_id="c1", name="ping", arguments="{}"),
+        ],
+        usage=Usage(),
+        turns=1,
+        tool_calls=1,
+    )
+    agent = Agent(name="a", model=ScriptedProvider([text("done")]), tools=[ping])
+    result = await Runner.run(
+        agent,
+        [],
+        budget=RunBudget(max_tool_calls=1),
+        checkpoint=CheckpointOptions(resume_from=snap),
+    )
+    assert result.output == "done"
+
+
+async def test_supplied_history_calls_are_not_the_runs() -> None:
+    """Tool calls in a message history handed in as input never passed this
+    run's preflight: a resume does not charge them."""
+    cp = InMemoryCheckpointer()
+    provider = ScriptedProvider(
+        [call("ping", {}, call_id="c1"), call("ping", {}, call_id="c2"), text("done")]
+    )
+    agent = Agent(name="a", model=provider, tools=[ping])
+    history = [
+        Message(role="user", content="earlier"),
+        Message(
+            role="assistant",
+            tool_calls=[ToolCall(id="h1", name="ping", arguments="{}")],
+        ),
+        Message(role="tool", content="pong", tool_call_id="h1"),
+        Message(role="user", content="go"),
+    ]
+    with pytest.raises(MaxTurnsExceeded):
+        await Runner.run(
+            agent,
+            history,
+            max_turns=1,
+            budget=RunBudget(max_tool_calls=2),
+            checkpoint=ckpt(cp, "h"),
+        )
+    result = await Runner.run(
+        agent,
+        [],
+        max_turns=10,
+        budget=RunBudget(max_tool_calls=2),
+        checkpoint=ckpt(cp, "h"),
+    )
+    assert result.output == "done"  # c1 + c2: two calls, within the budget
+
+
+async def test_a_resumed_run_keeps_its_running_time() -> None:
+    """``elapsed`` is the budget clock, saved with each checkpoint and charged
+    on resume; the wall clock between the legs is not."""
+    cp = InMemoryCheckpointer()
+    agent = Agent(name="a", model=ScriptedProvider([text("done")]))
+    await Runner.run(
+        agent, "go", budget=RunBudget(max_seconds=60), checkpoint=ckpt(cp, "t")
+    )
+    saved = await cp.load("t")
+    assert saved is not None and 0 < saved.elapsed < 5
+
+    snap = RunSnapshot(
+        run_id="late",
+        agent_name="a",
+        entries=[InputEntry(role="user", content="go")],
+        usage=Usage(),
+        turns=0,
+        started_at=0.0,  # long ago: time suspended doesn't count
+        elapsed=30.0,
+    )
+    fresh = Agent(name="a", model=ScriptedProvider([text("done")]))
+    result = await Runner.run(
+        fresh,
+        [],
+        budget=RunBudget(max_seconds=60),
+        checkpoint=CheckpointOptions(resume_from=snap),
+    )
+    assert result.output == "done"
+    with pytest.raises(BudgetExceeded, match="elapsed"):
+        await Runner.run(
+            Agent(name="a", model=ScriptedProvider([text("done")])),
+            [],
+            budget=RunBudget(max_seconds=20),
+            checkpoint=CheckpointOptions(resume_from=snap),
+        )
+
+
+def test_budget_counters_round_trip_and_default_for_old_heads() -> None:
+    snap = RunSnapshot(
+        run_id="r",
+        agent_name="a",
+        entries=[],
+        usage=Usage(),
+        turns=1,
+        tool_calls=3,
+        elapsed=4.5,
+    )
+    back = RunSnapshot.from_dict(snap.to_dict())
+    assert (back.tool_calls, back.elapsed) == (3, 4.5)
+    old = {
+        k: v
+        for k, v in snap.head.to_dict().items()
+        if k not in ("tool_calls", "elapsed")
+    }
+    assert (RunHead.from_dict(old).tool_calls, RunHead.from_dict(old).elapsed) == (
+        0,
+        0.0,
+    )
+
+
+async def test_a_leg_without_a_budget_keeps_the_saved_time() -> None:
+    cp = InMemoryCheckpointer()
+    await _seed(
+        cp,
+        RunSnapshot(
+            run_id="nb",
+            agent_name="a",
+            entries=[InputEntry(role="user", content="go")],
+            usage=Usage(),
+            turns=0,
+            status="interrupted",
+            elapsed=30.0,
+        ),
+    )
+    agent = Agent(name="a", model=ScriptedProvider([text("done")]))
+    await Runner.run(agent, [], checkpoint=ckpt(cp, "nb"))
+    saved = await cp.load("nb")
+    assert saved is not None and saved.elapsed == 30.0
+
+
+def test_a_resumed_budget_clock_starts_at_its_first_check() -> None:
+    """Startup before the first check is not charged, on any leg."""
+    budget = RunBudget(max_seconds=10)
+    budget.resume(tool_calls=0, elapsed=9.5)
+    assert budget.elapsed == 9.5  # nothing more until the clock starts
+    budget.check(Usage())
+    assert 9.5 <= budget.elapsed < 10

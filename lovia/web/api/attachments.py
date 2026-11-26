@@ -153,7 +153,9 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
                 raise WebError(422, "invalid_request", "empty file")
         finally:
             await file.close()
+
         try:
+            await deps.store.make_folder(folder)
             name = await asyncio.to_thread(save_attachment, folder, name, bytes(data))
         except OSError as exc:  # a full disk, a folder we can't write
             raise WebError.from_exc(500, "attachment_io_error", exc) from exc

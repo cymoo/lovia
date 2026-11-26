@@ -14,6 +14,8 @@ metadata table is owned by this module.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import json
 import re
 import secrets
@@ -379,11 +381,37 @@ ATTACHMENTS_ID = re.compile(r"[0-9a-f]{32}")
 _UNCLAIMED_AGE = 24 * 3600
 
 
-def _remove_folders(root: Path, names: Sequence[str]) -> None:
+# A folder a store made says whose it is: one file inside, holding a digest of
+# the store's database path. Databases side by side (``.lovia/<agent>.db``)
+# share the roots, and each removes only folders its chats claim or it made —
+# one from before 0.9.287 says nothing, and is left where no chat claims it.
+OWNER_FILE = ".lovia-owner"
+
+
+def _owner_tag(meta_path: str | Path) -> str:
+    if str(meta_path) == ":memory:":
+        return uuid.uuid4().hex
+    path = str(Path(meta_path).resolve())
+    return hashlib.sha256(path.encode("utf-8")).hexdigest()[:32]
+
+
+def _marked(folder: Path, owner: str) -> bool:
+    try:
+        return (folder / OWNER_FILE).read_text(encoding="utf-8") == owner
+    except (OSError, ValueError):  # none, unreadable, not text
+        return False
+
+
+def _remove_folders(root: Path, names: Sequence[str], owner: str) -> None:
     """Best-effort: a file held open (Windows) leaves its folder for the
-    next sweep, never fails the delete that freed it."""
+    next sweep, never fails the delete that freed it — marked again as
+    ``owner``'s, for the mark may have gone first."""
     for name in names:
-        shutil.rmtree(root / name, ignore_errors=True)
+        folder = root / name
+        shutil.rmtree(folder, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            if folder.is_dir() and not folder.is_symlink():
+                (folder / OWNER_FILE).write_text(owner, encoding="utf-8")
 
 
 def _folder_names(root: Path) -> list[str]:
@@ -393,10 +421,6 @@ def _folder_names(root: Path) -> list[str]:
         return [p.name for p in root.iterdir() if ATTACHMENTS_ID.fullmatch(p.name)]
     except OSError:  # nothing there yet, or a root we can't read
         return []
-
-
-def _remove_all_folders(root: Path) -> None:
-    _remove_folders(root, _folder_names(root))
 
 
 class LatestRun(NamedTuple):
@@ -723,7 +747,9 @@ class ChatStore:
     store deletes the folder with the last chat that uses it. The records of
     finished background commands sit there the same way, in
     ``process-logs/`` (``process_logs_dir``): one folder per chat, gone with
-    it. They are a cache: that directory may be deleted at any time.
+    it. They are a cache: that directory may be deleted at any time. Stores
+    may share both roots: each removes only the folders its chats claim or
+    it made (:data:`OWNER_FILE`).
     """
 
     def __init__(
@@ -747,6 +773,7 @@ class ChatStore:
 
         self._attachments = _beside(attachments_dir, "attachments")
         self._process_logs = _beside(process_logs_dir, "process-logs")
+        self._owner = _owner_tag(meta_path)
         # ``wal`` covers only the metadata store owned here; a caller-supplied
         # Session/Checkpointer configures its own (see ChatStore.sqlite, which
         # sets all three consistently).
@@ -775,6 +802,32 @@ class ChatStore:
         weakref.finalize(self, shutil.rmtree, path, True)
         return path
 
+    async def make_folder(self, folder: Path) -> None:
+        """Create ``folder``, one of this store's attachment or record
+        folders, as this store's; one already there stays as it is."""
+
+        def _make() -> None:
+            try:
+                folder.mkdir(mode=0o700, parents=True)
+            except FileExistsError:
+                return
+            try:
+                (folder / OWNER_FILE).write_text(self._owner, encoding="utf-8")
+            except OSError:
+                folder.rmdir()  # unmarked, no sweep would take it: try again
+                raise
+
+        await asyncio.to_thread(_make)
+
+    def _own_folders(self, root: Path, claimed: set[str]) -> list[str]:
+        """The folders under ``root`` that are this store's: claimed by its
+        chats, or made by it. Blocking."""
+        return [
+            name
+            for name in _folder_names(root)
+            if name in claimed or _marked(root / name, self._owner)
+        ]
+
     async def attachment_folder(self, session_id: str) -> Path | None:
         """Where ``session_id``'s attachments live: its ``attachments_id``'s
         folder — a fork's and a task's are their source's — or, for a chat
@@ -791,9 +844,9 @@ class ChatStore:
         return self.attachments_dir / owner
 
     async def sweep_attachments(self, *, max_age: float = _UNCLAIMED_AGE) -> None:
-        """Remove the attachment folders no chat claims, once older than
-        ``max_age`` seconds: drafts never sent, and folders a delete could
-        not remove (a file held open on Windows).
+        """Remove the attachment folders this store made that no chat claims,
+        once older than ``max_age`` seconds: drafts never sent, and folders a
+        delete could not remove (a file held open on Windows).
 
         The claims are read once to pick candidates, so each candidate is
         asked again right before it goes: a draft sent meanwhile has a chat
@@ -823,14 +876,14 @@ class ChatStore:
     async def sweep_process_logs(
         self, *, max_age: float = _UNCLAIMED_AGE, max_bytes: int | None = None
     ) -> None:
-        """Remove the record folders of chats that are gone, once older than
-        ``max_age`` seconds, then the oldest records of all chats until the
-        rest fit in ``max_bytes`` (default
+        """Remove the record folders of this store's chats that are gone, once
+        older than ``max_age`` seconds, then the oldest records of its chats
+        until the rest fit in ``max_bytes`` (default
         :func:`~lovia.web.process_logs.max_total_bytes`)."""
         root = self._process_logs
         if root is None:
             return
-        await self._sweep_unclaimed(
+        claimed = await self._sweep_unclaimed(
             root,
             max_age,
             claims="SELECT id FROM chat_sessions",
@@ -839,7 +892,7 @@ class ChatStore:
 
         def _trim() -> None:
             trim_total(
-                [root / name for name in _folder_names(root)],
+                [root / name for name in self._own_folders(root, claimed)],
                 max_total_bytes() if max_bytes is None else max_bytes,
             )
 
@@ -847,10 +900,10 @@ class ChatStore:
 
     async def _sweep_unclaimed(
         self, root: Path, max_age: float, *, claims: str, claim: str
-    ) -> None:
-        """Remove the folders under ``root`` that no chat claims, once older
-        than ``max_age`` seconds. ``claims`` selects every name a chat claims,
-        ``claim`` asks for one."""
+    ) -> set[str]:
+        """Remove the folders under ``root`` this store made that no chat
+        claims, once older than ``max_age`` seconds; return the claimed names.
+        ``claims`` selects every name a chat claims, ``claim`` asks for one."""
         claimed = set(await self._read_all(claims, (), lambda row: cast(str, row[0])))
         cutoff = time.time() - max_age
 
@@ -868,13 +921,16 @@ class ChatStore:
             return [
                 name
                 for name in _folder_names(root)
-                if name not in claimed and _stale(root / name)
+                if name not in claimed
+                and _stale(root / name)
+                and _marked(root / name, self._owner)
             ]
 
         for name in await asyncio.to_thread(_candidates):
             still = await self._read_one(claim, (name,), lambda row: True)
             if still is None and await asyncio.to_thread(_stale, root / name):
-                await asyncio.to_thread(_remove_folders, root, [name])
+                await asyncio.to_thread(_remove_folders, root, [name], self._owner)
+        return claimed
 
     # ---- low-level helpers ----------------------------------------------
     # One transaction/read dance, shared by every metadata method.
@@ -1332,8 +1388,16 @@ class ChatStore:
             await self._drop_checkpoint(sid)
             await self.session.clear(sid)
 
-        def _impl() -> list[str]:
+        def _impl() -> tuple[list[str], list[str]]:
             with self._meta._tx() as conn:
+                # A chat that is not this store's has no records here to drop.
+                existed = [
+                    sid
+                    for sid in ids
+                    if conn.execute(
+                        "SELECT 1 FROM chat_sessions WHERE id = ?", (sid,)
+                    ).fetchone()
+                ]
                 owners = {
                     row[0]
                     for sid in ids
@@ -1365,7 +1429,7 @@ class ChatStore:
                         [(sid,) for sid in ids],
                     )
                 # ``id = ?`` too: a chat from before the column owns its own.
-                return [
+                return existed, [
                     owner
                     for owner in owners
                     if ATTACHMENTS_ID.fullmatch(owner)
@@ -1377,21 +1441,32 @@ class ChatStore:
                     is None
                 ]
 
-        freed = await self._meta._run(_impl)
+        existed, freed = await self._meta._run(_impl)
         if freed and self._attachments is not None:
-            await asyncio.to_thread(_remove_folders, self._attachments, freed)
-        logs = [sid for sid in ids if ATTACHMENTS_ID.fullmatch(sid)]
+            await asyncio.to_thread(
+                _remove_folders, self._attachments, freed, self._owner
+            )
+        logs = [sid for sid in existed if ATTACHMENTS_ID.fullmatch(sid)]
         if logs and self._process_logs is not None:
-            await asyncio.to_thread(_remove_folders, self._process_logs, logs)
+            await asyncio.to_thread(
+                _remove_folders, self._process_logs, logs, self._owner
+            )
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, metadata and attachments —
-        and the schedules bound to a chat (as ``delete``)."""
+        and the schedules bound to a chat (as ``delete``). Folders another
+        store shares the roots with stay."""
         # Read every id directly — ``list`` caps at its limit, which would
         # leave the transcripts/checkpoints of sessions beyond one page orphaned
         # while the unconditional row delete below wiped their metadata.
         ids = await self._read_all(
             "SELECT id FROM chat_sessions", (), lambda row: row[0]
+        )
+        # Read before the rows go: what is this store's is what they claim.
+        owners = await self._read_all(
+            "SELECT DISTINCT COALESCE(attachments_id, id) FROM chat_sessions",
+            (),
+            lambda row: cast(str, row[0]),
         )
         for session_id in ids:
             await self._drop_checkpoint(session_id)
@@ -1401,9 +1476,13 @@ class ChatStore:
         await self._write("DELETE FROM chat_runs")
         await self._write("DELETE FROM chat_ui_data")
         await self._write("DELETE FROM chat_grants")
-        for root in (self._attachments, self._process_logs):
+        for root, claimed in (
+            (self._attachments, set(owners)),
+            (self._process_logs, set(ids)),
+        ):
             if root is not None:
-                await asyncio.to_thread(_remove_all_folders, root)
+                names = await asyncio.to_thread(self._own_folders, root, claimed)
+                await asyncio.to_thread(_remove_folders, root, names, self._owner)
 
     # ---- remembered approvals ("always allow" grants) -------------------
 

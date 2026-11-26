@@ -142,14 +142,78 @@ async def test_the_sweep_takes_only_old_unclaimed_folders(tmp_path: Path) -> Non
     claimed = _sid()
     await _chat(store, claimed)
     root = store.attachments_dir
-    old, fresh = _sid(), _sid()
-    for name in (claimed, old, fresh, "notes"):
+    old, fresh, legacy = _sid(), _sid(), _sid()
+    for name in (old, fresh):
+        await store.make_folder(root / name)
+    for name in (claimed, old, fresh, legacy, "notes"):
         _put(root / name)
     an_hour_ago = time.time() - 3600
-    for name in (claimed, old, "notes"):
+    for name in (claimed, old, legacy, "notes"):
         os.utime(root / name, (an_hour_ago, an_hour_ago))
     await store.sweep_attachments(max_age=60)
-    assert sorted(p.name for p in root.iterdir()) == sorted([claimed, fresh, "notes"])
+    # A folder from before the owner mark (``legacy``) may be another store's.
+    kept = sorted(p.name for p in root.iterdir())
+    assert kept == sorted([claimed, fresh, legacy, "notes"])
+
+
+async def test_stores_side_by_side_leave_each_other_be(tmp_path: Path) -> None:
+    # ``create_app``'s default: ``.lovia/<agent>.db``, one root for both.
+    a = ChatStore.sqlite(tmp_path / "a.db")
+    b = ChatStore.sqlite(tmp_path / "b.db")
+    assert a.attachments_dir == b.attachments_dir
+    root = a.attachments_dir
+    chat, draft, mine = _sid(), _sid(), _sid()
+    await _chat(b, chat)
+    for store, name in ((b, chat), (b, draft), (a, mine)):
+        await store.make_folder(root / name)
+        _put(root / name)
+        an_hour_ago = time.time() - 3600
+        os.utime(root / name, (an_hour_ago, an_hour_ago))
+    await a.sweep_attachments(max_age=60)
+    assert sorted(p.name for p in root.iterdir()) == sorted([chat, draft])
+    await a.delete_all()
+    assert sorted(p.name for p in root.iterdir()) == sorted([chat, draft])
+    await b.sweep_attachments(max_age=60)  # its own draft goes
+    assert [p.name for p in root.iterdir()] == [chat]
+    await b.delete_all()
+    assert list(root.iterdir()) == []
+
+
+async def test_a_folder_a_delete_left_is_still_the_stores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Windows: a file held open survives the delete, its owner mark may not.
+    import lovia.web.store as store_module
+
+    store = ChatStore.sqlite(tmp_path / "chat.db")
+    sid = _sid()
+    await _chat(store, sid)
+    folder = await store.attachment_folder(sid)
+    assert folder is not None
+    await store.make_folder(folder)
+    _put(folder)
+
+    def held_open(path, ignore_errors=False):
+        (Path(path) / ".lovia-owner").unlink(missing_ok=True)
+
+    monkeypatch.setattr(store_module.shutil, "rmtree", held_open)
+    await store.delete(sid)
+    monkeypatch.undo()
+    assert (folder / ".lovia-owner").is_file()
+    an_hour_ago = time.time() - 3600
+    os.utime(folder, (an_hour_ago, an_hour_ago))
+    await store.sweep_attachments(max_age=60)  # closed by now
+    assert not folder.exists()
+
+
+async def test_the_owner_mark_is_not_an_attachment(tmp_path: Path) -> None:
+    from lovia.web.attachments import _stats
+
+    store = ChatStore.sqlite(tmp_path / "chat.db")
+    folder = store.attachments_dir / _sid()
+    await store.make_folder(folder)
+    _put(folder, "a.txt")
+    assert list(_stats(folder)) == ["a.txt"]  # what a remote host is sent
 
 
 async def test_the_sweep_spares_a_folder_claimed_after_its_snapshot(
@@ -160,6 +224,7 @@ async def test_the_sweep_spares_a_folder_claimed_after_its_snapshot(
     store = ChatStore.sqlite(tmp_path / "chat.db")
     draft = _sid()
     folder = store.attachments_dir / draft
+    await store.make_folder(folder)
     _put(folder)
     an_hour_ago = time.time() - 3600
     os.utime(folder, (an_hour_ago, an_hour_ago))
@@ -181,6 +246,7 @@ async def test_a_send_freshens_its_folder_for_the_sweep(tmp_path: Path) -> None:
 
     store = ChatStore.sqlite(tmp_path / "chat.db")
     folder = store.attachments_dir / _sid()
+    await store.make_folder(folder)
     _put(folder, "a.txt")
     an_hour_ago = time.time() - 3600
     os.utime(folder, (an_hour_ago, an_hour_ago))
@@ -326,7 +392,9 @@ def test_an_id_that_cannot_name_a_folder_is_refused(tmp_path: Path, sid: str) ->
 
 
 # (A bare ``..`` segment never arrives: the client normalizes it away.)
-@pytest.mark.parametrize("name", ["..%2Fchat.db", "%2E%2E", ".hidden", "a%5Cb.txt"])
+@pytest.mark.parametrize(
+    "name", ["..%2Fchat.db", "%2E%2E", ".hidden", ".lovia-owner", "a%5Cb.txt"]
+)
 def test_only_a_plain_name_is_served(tmp_path: Path, name: str) -> None:
     sid = _sid()
     with _client(tmp_path) as c:
@@ -341,7 +409,8 @@ def test_upload_sanitizes_and_dedupes_names(tmp_path: Path) -> None:
         assert _upload(c, sid, "../../evil.txt").json()["name"] == "evil.txt"
         assert _upload(c, sid, "evil.txt").json()["name"] == "evil-1.txt"
     folder = tmp_path / "data" / "attachments" / sid
-    assert sorted(p.name for p in folder.iterdir()) == ["evil-1.txt", "evil.txt"]
+    names = sorted(p.name for p in folder.iterdir())
+    assert names == [".lovia-owner", "evil-1.txt", "evil.txt"]
 
 
 @pytest.mark.parametrize(

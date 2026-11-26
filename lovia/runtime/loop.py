@@ -746,6 +746,7 @@ class RunLoop:
                 snapshot.started_at if snapshot is not None else self._invoked_at
             ),
             tool_calls=snapshot.tool_calls if snapshot is not None else 0,
+            elapsed_before=snapshot.elapsed if snapshot is not None else 0.0,
             pending_handoff=(
                 resolve_pending_handoff(agent, snapshot)
                 if snapshot is not None

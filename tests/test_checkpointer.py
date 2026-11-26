@@ -1195,6 +1195,26 @@ def test_budget_counters_round_trip_and_default_for_old_heads() -> None:
     )
 
 
+async def test_a_leg_without_a_budget_keeps_the_saved_time() -> None:
+    cp = InMemoryCheckpointer()
+    await _seed(
+        cp,
+        RunSnapshot(
+            run_id="nb",
+            agent_name="a",
+            entries=[InputEntry(role="user", content="go")],
+            usage=Usage(),
+            turns=0,
+            status="interrupted",
+            elapsed=30.0,
+        ),
+    )
+    agent = Agent(name="a", model=ScriptedProvider([text("done")]))
+    await Runner.run(agent, [], checkpoint=ckpt(cp, "nb"))
+    saved = await cp.load("nb")
+    assert saved is not None and saved.elapsed == 30.0
+
+
 def test_a_resumed_budget_clock_starts_at_its_first_check() -> None:
     """Startup before the first check is not charged, on any leg."""
     budget = RunBudget(max_seconds=10)

@@ -9,7 +9,7 @@ import {
   buildItems,
   buttonState,
   createFailureWatch,
-  taskLabel,
+  taskName,
   taskState,
 } from '../../../lovia/web/static/js/background-items.js';
 
@@ -56,10 +56,10 @@ test('a running task is in a step, an ended one took a time', () => {
 });
 
 test('a task is named by its title', () => {
-  assert.deepEqual(taskLabel(task('dig in')), { tag: 't1', title: 'dig in' });
-  assert.deepEqual(taskLabel({ id: 'x', title: 'plain' }), { tag: '', title: 'plain' });
-  assert.deepEqual(taskLabel({ id: 'x', title: null }), { tag: '', title: 'x' });
-  assert.deepEqual(taskLabel({ id: 'x', title: '[t2] ' }), { tag: 't2', title: 'x' });
+  assert.equal(taskName(task('dig in')), 'dig in'); // as titles were before 0.9.286
+  assert.equal(taskName({ id: 'x', title: 'plain [a] title' }), 'plain [a] title');
+  assert.equal(taskName({ id: 'x', title: null }), 'x');
+  assert.equal(taskName({ id: 'x', title: '[t2] ' }), 'x');
 });
 
 test('how a command ended', () => {

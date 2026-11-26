@@ -7,7 +7,6 @@
  * @property {string} key `task:<session>` or `cmd:<process>`.
  * @property {'task' | 'cmd'} kind
  * @property {string} id
- * @property {string} tag A task's `t1`; '' for a command.
  * @property {string} title
  * @property {string | null} agent The agent a task's chat runs.
  * @property {'approval' | 'running' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'interrupted' | 'lost'} state
@@ -40,10 +39,9 @@ export function taskState(task, run) {
   }
 }
 
-/** "[t1] dig into …" → its tag and its name. */
-export function taskLabel(task) {
-  const m = /^\[([^\]]{1,8})\]\s*(.*)$/s.exec(task.title || '');
-  return { tag: m ? m[1] : '', title: (m ? m[2] : task.title) || task.id };
+/** A task's name: its chat's title, without the "[t1] " a title had before 0.9.286. */
+export function taskName(task) {
+  return (task.title || '').replace(/^\[[^\]]{1,8}\]\s*/, '') || task.id;
 }
 
 /** @returns {BackgroundItem} */
@@ -53,7 +51,7 @@ function taskItem(task, run) {
     key: `task:${task.id}`,
     kind: 'task',
     id: task.id,
-    ...taskLabel(task),
+    title: taskName(task),
     agent: task.agent ?? null,
     state,
     waitsFor: state === 'approval' ? (run.waits_on?.kind ?? 'approval') : null,
@@ -86,7 +84,6 @@ function commandItem(p) {
     key: `cmd:${p.process_id}`,
     kind: 'cmd',
     id: p.process_id,
-    tag: '',
     agent: null,
     title: p.command.split(/\s+/).join(' ').trim(),
     state,

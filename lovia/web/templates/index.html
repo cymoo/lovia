@@ -233,18 +233,25 @@
 <aside id="files-panel" class="lv-files-panel" aria-label="Files and background work" data-part="files-panel" data-i18n-aria="files.panel">
   <div id="files-resizer" class="lv-files-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel (arrow keys; double-click resets)" aria-controls="files-panel" tabindex="0"></div>
   <div class="lv-files-head">
-    <div class="lv-files-tabs" role="tablist" aria-label="File view">
-      <button id="files-tab-changes" class="lv-files-tab lv-active" type="button" role="tab" aria-selected="true" data-i18n="files.changes">Changes</button>
-      <button id="files-tab-browse" class="lv-files-tab" type="button" role="tab" aria-selected="false" data-i18n="files.browse">Browse</button>
+    <!-- Files and Background, as the topbar's two buttons open them; the
+         files' own two views sit in the row below (files.js). -->
+    <div class="lv-files-tabs" role="tablist" aria-label="Panel">
+      <button id="files-tab-files" class="lv-files-tab lv-active" type="button" role="tab" aria-selected="true" data-i18n="files.tab">Files</button>
       <button id="files-tab-background" class="lv-files-tab" type="button" role="tab" aria-selected="false" data-i18n="bg.tab">Background</button>
     </div>
     <div class="lv-files-head-actions">
+      <!-- Only beside an open file, given room (styles.css) -->
+      <button id="files-list-toggle" class="lv-btn-icon" type="button" title="Hide file list" aria-label="Hide file list" aria-controls="files-list"></button>
       <button id="files-collapse" class="lv-btn-icon lv-hidden" type="button" title="Collapse all" aria-label="Collapse all folders" data-i18n-title="files.collapseAll" data-i18n-aria="files.collapseAll"></button>
       <button id="files-refresh" class="lv-btn-icon" type="button" title="Refresh" aria-label="Refresh files" data-i18n-title="files.refresh" data-i18n-aria="files.refresh"></button>
       <button id="files-close" class="lv-btn-icon" type="button" title="Close" aria-label="Close files panel" data-i18n-title="files.close" data-i18n-aria="files.close"></button>
     </div>
   </div>
   <div class="lv-files-search">
+    <div class="lv-files-tabs lv-files-views" role="tablist" aria-label="File view">
+      <button id="files-tab-changes" class="lv-files-tab lv-active" type="button" role="tab" aria-selected="true" data-i18n="files.changes">Changes</button>
+      <button id="files-tab-browse" class="lv-files-tab" type="button" role="tab" aria-selected="false" data-i18n="files.browse">Browse</button>
+    </div>
     <input type="search" id="files-filter" class="lv-search-input" placeholder="Filter files…" aria-label="Filter files" autocomplete="off" data-i18n-placeholder="files.filter" data-i18n-aria="files.filter" />
   </div>
   <div id="files-list" class="lv-files-list"></div>
@@ -265,8 +272,6 @@
         <button id="files-fullscreen" class="lv-btn-icon" type="button" title="Expand view" aria-haspopup="dialog" aria-label="Open file in the reader" data-i18n-title="files.fullscreen" data-i18n-aria="files.fullscreen"></button>
         <a id="files-download" class="lv-btn-icon lv-files-overflow" title="Download" aria-label="Download file" download data-i18n-title="files.download" data-i18n-aria="files.download"></a>
         <button id="files-more" class="lv-btn-icon" type="button" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" data-i18n-title="files.more" data-i18n-aria="files.more"></button>
-        <!-- Only where there is room for the list beside the file (styles.css) -->
-        <button id="files-list-toggle" class="lv-btn-icon" type="button" title="Hide file list" aria-label="Hide file list" aria-controls="files-list"></button>
         <button id="files-viewer-close" class="lv-btn-icon" type="button" title="Close file" aria-label="Close file preview"></button>
       </div>
     </div>

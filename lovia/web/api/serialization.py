@@ -104,8 +104,6 @@ def session_summary(
     return SessionSummary(
         prompt=next(iter(texts["user"]), ""),
         step=step if live else None,
-        tool_calls=sum(len(m.tool_calls) for m in view),
-        failed_calls=sum(m.is_error for m in view if m.role == "tool"),
         # A stopped run's last words are no report.
         report=next((t for t in reversed(texts["assistant"]) if t.strip()), None)
         if over == "completed"

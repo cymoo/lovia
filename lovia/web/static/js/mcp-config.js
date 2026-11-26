@@ -18,7 +18,7 @@ import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { confirmDialog, segmented } from './ui.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
-import { backButton, cfg, el, field, ghostBtn, loadConfig, readOnlyNotice, scopeFootnote } from './model-config.js';
+import { backButton, cfg, el, field, ghostBtn, loadConfig, readOnlyNotice } from './model-config.js';
 import { switchControl } from './assistant-config.js';
 import { scopeRoot, workspaceChoices, workspaceName, workspacesOn } from './workspaces.js';
 
@@ -303,13 +303,13 @@ function buildPane(pick, projects) {
     if (!servers.length) {
       const empty = el('div', 'lv-mcp-empty');
       empty.append(el('div', 'lv-cfg-hint', t('mcp.empty')), addButton('lv-btn lv-btn-primary lv-btn-sm'));
-      box.append(empty, scopeFootnote());
+      box.append(empty);
       return box;
     }
 
     const list = el('div', 'lv-model-list');
     for (const s of servers) list.appendChild(row(s, c.writable));
-    box.append(list, scopeFootnote());
+    box.append(list);
     return box;
   }
 

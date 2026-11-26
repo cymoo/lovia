@@ -251,10 +251,13 @@ export function panelState() {
 /**
  * Show the panel at a tab, or close it (null).
  * @param {'background' | null} mode
+ * @param {{ restore?: boolean }} [opts] `restore: false` for a caller about
+ *   to open something there itself: what was open there stays closed.
  */
-export function setPanel(mode) {
+export function setPanel(mode, { restore = true } = {}) {
   if (mode === null) return setOpen(false);
-  if (state.mode !== mode) setMode(mode);
+  if (state.mode !== mode) void setMode(mode, { restore });
+  else if (!restore) parked.background = null;
   if (!state.open) setOpen(true);
 }
 
@@ -316,8 +319,7 @@ function updateVisibility() {
   const agent = store.agents.find((a) => a.name === store.agent);
   state.available = !!agent?.workspace;
   els.btn?.classList.toggle('lv-hidden', !state.available);
-  els.tabChanges.classList.toggle('lv-hidden', !state.available);
-  els.tabBrowse.classList.toggle('lv-hidden', !state.available);
+  els.tabFiles.classList.toggle('lv-hidden', !state.available);
   if (state.available) scratchDirFor(store.agent); // warm it for the first write
   const phone = window.matchMedia('(max-width: 720px)').matches;
   if (!state.available) {
@@ -477,13 +479,14 @@ function selectTab(mode) {
   state.mode = mode;
   if (mode !== 'background') state.fileMode = mode;
   _mapSeq++; // a Browse map ask still out predates whatever this tab loads
-  for (const [tab, name] of [
-    [els.tabChanges, 'changes'],
-    [els.tabBrowse, 'browse'],
-    [els.tabBackground, 'background'],
+  for (const [tab, on] of [
+    [els.tabFiles, mode !== 'background'],
+    [els.tabBackground, mode === 'background'],
+    [els.tabChanges, mode === 'changes'],
+    [els.tabBrowse, mode === 'browse'],
   ]) {
-    tab.classList.toggle('lv-active', mode === name);
-    tab.setAttribute('aria-selected', String(mode === name));
+    tab.classList.toggle('lv-active', on);
+    tab.setAttribute('aria-selected', String(on));
   }
   els.panel.classList.toggle('lv-background', mode === 'background');
   els.btn?.setAttribute('aria-expanded', String(filesShown()));
@@ -500,13 +503,46 @@ function selectTab(mode) {
   }
 }
 
-async function setMode(mode) {
-  // A tab is also the way back to its list from a file covering the panel.
-  if (state.viewing && !isWide()) closeViewer();
-  selectTab(mode);
+/**
+ * @param {string} mode
+ * @param {{ restore?: boolean }} [opts] `restore: false` for a caller about
+ *   to open something there itself.
+ */
+async function setMode(mode, { restore = true } = {}) {
+  const side = (/** @type {string} */ m) => (m === 'background' ? 'background' : 'files');
+  if (side(mode) !== side(state.mode)) {
+    // A file belongs to the Files tab, a log or a task to Background: what is
+    // open waits for its own tab to come back, the one coming back returns.
+    if (state.viewing) parkViewer(side(state.mode));
+    selectTab(mode);
+    if (restore) void unpark(side(mode));
+  } else {
+    // A tab is also the way back to its list from a file covering the panel.
+    if (state.viewing && !isWide()) closeViewer();
+    selectTab(mode);
+  }
   if (filesShown()) clearUnseen();
   store.emit('panel-changed');
   await refresh();
+}
+
+/** What each side of the panel had open while the other one was shown. */
+const parked = {
+  files: /** @type {string | null} */ (null),
+  background: /** @type {ViewerGuest | null} */ (null),
+};
+
+function parkViewer(side) {
+  const v = state.viewing;
+  if (side === 'files') parked.files = v?.path ?? null;
+  else parked.background = v?.guest ?? null;
+  closeViewer({ forget: false });
+}
+
+async function unpark(side) {
+  if (side === 'files' && parked.files) await openFile(parked.files, { silent: true });
+  else if (side === 'background' && parked.background) openGuest(parked.background);
+  parked[side] = null;
 }
 
 // ---- Browse: the folder tree -------------------------------------------------
@@ -2008,6 +2044,7 @@ export function initFiles() {
   els.btn = document.getElementById('files-btn');
   if (!els.panel || !els.btn) return;
   els.tabChanges = document.getElementById('files-tab-changes');
+  els.tabFiles = document.getElementById('files-tab-files');
   els.viewerViews = document.getElementById('files-viewer-views');
   els.viewDiff = document.getElementById('files-view-diff');
   els.viewFile = document.getElementById('files-view-file');
@@ -2157,6 +2194,9 @@ export function initFiles() {
     if (state.mode === 'background') store.emit('panel-changed'); // lists anew
     else refresh();
   });
+  els.tabFiles.addEventListener('click', () => {
+    if (state.mode === 'background') void setMode(state.fileMode);
+  });
   els.tabChanges.addEventListener('click', () => setMode('changes'));
   els.tabBrowse.addEventListener('click', () => setMode('browse'));
   els.tabBackground.addEventListener('click', () => setMode('background'));
@@ -2289,6 +2329,7 @@ export function initFiles() {
 
   store.on('agents-loaded', updateVisibility);
   store.on('agent-changed', () => {
+    parked.files = null;
     state.touched.clear();
     state.revs.clear();
     state.filter = '';
@@ -2303,6 +2344,7 @@ export function initFiles() {
   // for a new chat): a different one is a different tree — start over.
   // (The tree follows the scope on its own: see syncTreeScope.)
   store.on('workspace-scope-changed', () => {
+    parked.files = null;
     state.filter = '';
     if (els.filter) els.filter.value = '';
     closeViewer({ forget: false });
@@ -2314,6 +2356,7 @@ export function initFiles() {
   // left wrote; the replay of the new one's history asks for its own.
   const chatChanged = () => {
     if (viewedGuest()) closeViewer();
+    parked.background = null; // the last chat's log or task
     state.touched.clear();
     state.revs.clear();
     clearUnseen();
@@ -2354,6 +2397,8 @@ export function initFiles() {
       toast(t('files.noWorkspace'));
       return;
     }
+    // A file opens on the Files tab, never beside the Background list.
+    if (state.mode === 'background') void setMode(state.fileMode, { restore: false });
     if (!state.open) setOpen(true);
     if (!(await openFile(path))) {
       toast(t('files.openFailed'), { type: 'error' });

@@ -575,42 +575,51 @@ function appendUserText(turn, bubble, text) {
  * @returns {HTMLElement}
  */
 function makeReportCard(r) {
-  const card = document.createElement('div');
+  // The head is the toggle: what it shows stays put when the report opens
+  // under it. The task's run-scoped id (t1) and agent are the model's words,
+  // not the user's: left out.
+  const card = document.createElement('details');
   card.className = 'lv-context-notice lv-report-card';
+  const head = document.createElement('summary');
   const row = document.createElement('div');
   row.className = 'lv-context-row';
   row.innerHTML = icon('bot', { size: 13, cls: 'lv-context-icon' });
   const title = document.createElement('span');
   title.className = 'lv-context-title';
-  title.textContent = t('report.title', { id: r.id });
+  title.textContent = t('report.title');
   const meta = document.createElement('span');
   meta.className = 'lv-report-meta';
-  meta.textContent = `${r.agent} · ${fmtElapsed(r.elapsed)}`;
+  meta.textContent = fmtElapsed(r.elapsed);
   const status = document.createElement('span');
   status.className = `lv-context-trigger lv-context-trigger--${r.ok ? 'proactive' : 'reactive'}`;
   status.textContent = t(r.ok ? 'task.completed' : 'task.failed');
   row.append(title, meta, status);
-  card.appendChild(row);
+  head.append(row);
+  card.append(head);
   const first = r.body.split('\n').find((line) => line.trim());
-  if (!first) return card;
+  if (!first) {
+    card.classList.add('lv-report-empty');
+    head.addEventListener('click', (e) => e.preventDefault()); // nothing to open
+    return card;
+  }
+  const chevron = document.createElement('span');
+  chevron.className = 'lv-report-chevron';
+  chevron.innerHTML = icon('chevron-down', { size: 14 });
+  row.append(chevron);
   const preview = document.createElement('div');
   preview.className = 'lv-context-detail lv-report-preview';
   // Its first line as words: no heading, list or emphasis marks.
   preview.textContent = first.replace(/^[\s#>*+-]+/, '').replace(/[*_`]/g, '');
-  const details = document.createElement('details');
-  details.className = 'lv-context-summary';
-  const label = document.createElement('summary');
-  label.textContent = t('report.full');
+  head.append(preview);
   const body = document.createElement('div');
   body.className = 'lv-report-body lv-body';
-  details.append(label, body);
+  card.append(body);
   // Rendered on first open: a report runs to thousands of characters.
-  details.addEventListener('toggle', () => {
-    if (!details.open || body.childNodes.length) return;
+  card.addEventListener('toggle', () => {
+    if (!card.open || body.childNodes.length) return;
     renderMarkdownInto(body, r.body, { agent: store.agent });
     highlightCode(body);
   });
-  card.append(preview, details);
   return card;
 }
 
@@ -1218,23 +1227,16 @@ function renderTaskApprovals() {
   taskTray.hidden = _trayItems.size === 0;
 }
 
-/** A task's name as its chat title gives it: "[t1] dig into …" → "dig into …". */
+/** A task's name as its chat title gives it ("[t1] dig into …" before 0.9.286). */
 function taskName(task) {
   const m = /^\[([^\]]{1,8})\]\s*(.*)$/.exec(task.title || '');
   return (m ? m[2] : task.title) || task.id;
 }
 
-/** "t1 · dig into … · Open task" over a task's card. */
+/** "dig into … · Open task" over a task's card. */
 function taskApprovalHead(task) {
   const head = document.createElement('div');
   head.className = 'lv-task-approval-head';
-  const tag = /^\[([^\]]{1,8})\]/.exec(task.title || '')?.[1];
-  if (tag) {
-    const chip = document.createElement('span');
-    chip.className = 'lv-task-tag';
-    chip.textContent = tag;
-    head.append(chip);
-  }
   const title = document.createElement('span');
   title.className = 'lv-task-approval-title';
   title.textContent = taskName(task);

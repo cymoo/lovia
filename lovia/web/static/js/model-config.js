@@ -160,13 +160,6 @@ export function readOnlyNotice() {
   return c && c.writable === false ? notice(t('cfg.readOnly', { file: c.scope.label })) : null;
 }
 
-/** A settings page's last line: the file its changes are saved in. */
-export function scopeFootnote() {
-  const { scope } = cfg();
-  const text = t('cfg.scopeNote', { label: scope.label });
-  return el('div', 'lv-cfg-footnote', scope.exists ? text : `${text} ${t('cfg.scopeUnsaved')}`);
-}
-
 let _fieldIds = 0;
 
 export function field(labelText, control, hintText) {
@@ -447,7 +440,6 @@ export function buildModelsPane() {
     box.appendChild(list);
 
     if (c.models.length) box.appendChild(renderRoles());
-    box.appendChild(scopeFootnote());
     return box;
   }
 
@@ -881,7 +873,7 @@ export function buildSearchPane() {
       }
     });
     actions.appendChild(save);
-    pane.append(form, errBox, actions, scopeFootnote());
+    pane.append(form, errBox, actions);
   })();
 
   return pane;
@@ -1049,7 +1041,6 @@ export function buildSkillsPane() {
         ),
       );
     }
-    pane.appendChild(scopeFootnote());
   }
 
   render();

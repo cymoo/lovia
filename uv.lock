@@ -960,7 +960,7 @@ wheels = [
 
 [[package]]
 name = "lovia"
-version = "0.9.285"
+version = "0.9.286"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

@@ -105,7 +105,7 @@ async function openProcess(id) {
     toast(t('bg.gone'));
     return;
   }
-  setPanel('background');
+  setPanel('background', { restore: false });
   openGuest(processGuest(sid, row, { stop: stopCommand }));
 }
 
@@ -113,7 +113,7 @@ async function openProcess(id) {
 
 /** Open a task's detail in the panel. */
 function openTask(item) {
-  setPanel('background');
+  setPanel('background', { restore: false });
   openGuest(taskGuest(item, { stop: stopTask, open: openTaskChat }));
 }
 
@@ -323,12 +323,6 @@ function row(item, active) {
   body.className = 'lv-bg-body';
   const head = document.createElement('span');
   head.className = `lv-bg-title lv-${item.kind}`;
-  if (item.tag) {
-    const tag = document.createElement('span');
-    tag.className = 'lv-task-tag';
-    tag.textContent = item.tag;
-    head.append(tag);
-  }
   const name = document.createElement('span');
   name.className = 'lv-bg-name';
   name.textContent = item.title;

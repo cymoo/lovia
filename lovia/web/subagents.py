@@ -330,7 +330,8 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             await deps.store.upsert(
                 child_sid,
                 agent=agent_key,
-                title=f"[{spec.id}] {provisional_title(spec.prompt)}",
+                # Not its run-scoped id (t1): the user never names a task so.
+                title=provisional_title(spec.prompt),
                 parent_id=parent,
                 spawn_id=spec.spawn_id,
                 workspace_root=binding.root,
@@ -390,7 +391,7 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             SessionCreatedData(
                 session_id=child_sid,
                 agent=agent_key,
-                title=f"[{spec.id}] {provisional_title(spec.prompt)}",
+                title=provisional_title(spec.prompt),
             ),
         )
 

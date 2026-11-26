@@ -495,7 +495,8 @@ Uploads default to 25 MiB per file (`LOVIA_MAX_UPLOAD_MB`). Named extensions
 must match the built-in allowlist; override it with
 `LOVIA_UPLOAD_ALLOWED_EXT`, separated by commas or spaces, or use `*` for any.
 
-The Files panel opens on **Changes**: the files this chat wrote, plus the
+The right panel has two tabs, **Files** and **Background**, as the topbar's
+two buttons open them. Files opens on **Changes**: the files this chat wrote, plus the
 Workspace files attached to its messages, newest first. In a
 git work tree a folded second group lists the other uncommitted changes
 `git status` sees under the folder, and each row carries its line counts

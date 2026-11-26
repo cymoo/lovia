@@ -627,8 +627,6 @@ class SessionSummary(BaseModel):
     prompt: str
     # The tool call under way; None between calls and once over.
     step: StepInfo | None = None
-    tool_calls: int = 0
-    failed_calls: int = 0
     # The last answer, once no run is live or waiting.
     report: str | None = None
     # Why the latest run failed.

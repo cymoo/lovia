@@ -281,12 +281,9 @@ class ProcessWatcher:
             title=watch.titles.get(status.process_id, ""),
         )
 
-        def _save() -> None:
-            self._deps.store.make_folder(folder)
-            save_record(folder, record, text)
-
         try:
-            await asyncio.to_thread(_save)
+            await self._deps.store.make_folder(folder)
+            await asyncio.to_thread(save_record, folder, record, text)
         except OSError as exc:
             log.warning("recording process %s failed: %s", record.id, exc)
 

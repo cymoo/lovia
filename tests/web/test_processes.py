@@ -487,7 +487,7 @@ async def test_the_sweep_trims_the_oldest_and_drops_orphans(tmp_path) -> None:
         save_record(folder, _record(f"bg-{i}"), "x" * 1000)
         os.utime(folder / f"bg-{i}.log", (i + 1, i + 1))
     root = store.process_log_folder(chat).parent
-    store.make_folder(root / orphan)
+    await store.make_folder(root / orphan)
     for name in (orphan, "notes"):
         save_record(root / name, _record("bg-9"), "x")
         os.utime(root / name, (1, 1))
@@ -507,7 +507,7 @@ async def test_another_stores_records_are_neither_trimmed_nor_dropped(
     await b.upsert(chat, title="t")
     for sid in (chat, gone):
         folder = b.process_log_folder(sid)
-        b.make_folder(folder)
+        await b.make_folder(folder)
         save_record(folder, _record("bg-1"), "x" * 1000)
         os.utime(folder, (1, 1))
     root = b.process_log_folder(chat).parent

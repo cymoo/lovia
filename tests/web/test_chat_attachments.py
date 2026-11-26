@@ -144,7 +144,7 @@ async def test_the_sweep_takes_only_old_unclaimed_folders(tmp_path: Path) -> Non
     root = store.attachments_dir
     old, fresh, legacy = _sid(), _sid(), _sid()
     for name in (old, fresh):
-        store.make_folder(root / name)
+        await store.make_folder(root / name)
     for name in (claimed, old, fresh, legacy, "notes"):
         _put(root / name)
     an_hour_ago = time.time() - 3600
@@ -165,7 +165,7 @@ async def test_stores_side_by_side_leave_each_other_be(tmp_path: Path) -> None:
     chat, draft, mine = _sid(), _sid(), _sid()
     await _chat(b, chat)
     for store, name in ((b, chat), (b, draft), (a, mine)):
-        store.make_folder(root / name)
+        await store.make_folder(root / name)
         _put(root / name)
         an_hour_ago = time.time() - 3600
         os.utime(root / name, (an_hour_ago, an_hour_ago))
@@ -179,12 +179,39 @@ async def test_stores_side_by_side_leave_each_other_be(tmp_path: Path) -> None:
     assert list(root.iterdir()) == []
 
 
-def test_the_owner_mark_is_not_an_attachment(tmp_path: Path) -> None:
+async def test_a_folder_a_delete_left_is_still_the_stores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Windows: a file held open survives the delete, its owner mark may not.
+    import lovia.web.store as store_module
+
+    store = ChatStore.sqlite(tmp_path / "chat.db")
+    sid = _sid()
+    await _chat(store, sid)
+    folder = await store.attachment_folder(sid)
+    assert folder is not None
+    await store.make_folder(folder)
+    _put(folder)
+
+    def held_open(path, ignore_errors=False):
+        (Path(path) / ".lovia-owner").unlink(missing_ok=True)
+
+    monkeypatch.setattr(store_module.shutil, "rmtree", held_open)
+    await store.delete(sid)
+    monkeypatch.undo()
+    assert (folder / ".lovia-owner").is_file()
+    an_hour_ago = time.time() - 3600
+    os.utime(folder, (an_hour_ago, an_hour_ago))
+    await store.sweep_attachments(max_age=60)  # closed by now
+    assert not folder.exists()
+
+
+async def test_the_owner_mark_is_not_an_attachment(tmp_path: Path) -> None:
     from lovia.web.attachments import _stats
 
     store = ChatStore.sqlite(tmp_path / "chat.db")
     folder = store.attachments_dir / _sid()
-    store.make_folder(folder)
+    await store.make_folder(folder)
     _put(folder, "a.txt")
     assert list(_stats(folder)) == ["a.txt"]  # what a remote host is sent
 
@@ -197,7 +224,7 @@ async def test_the_sweep_spares_a_folder_claimed_after_its_snapshot(
     store = ChatStore.sqlite(tmp_path / "chat.db")
     draft = _sid()
     folder = store.attachments_dir / draft
-    store.make_folder(folder)
+    await store.make_folder(folder)
     _put(folder)
     an_hour_ago = time.time() - 3600
     os.utime(folder, (an_hour_ago, an_hour_ago))
@@ -219,7 +246,7 @@ async def test_a_send_freshens_its_folder_for_the_sweep(tmp_path: Path) -> None:
 
     store = ChatStore.sqlite(tmp_path / "chat.db")
     folder = store.attachments_dir / _sid()
-    store.make_folder(folder)
+    await store.make_folder(folder)
     _put(folder, "a.txt")
     an_hour_ago = time.time() - 3600
     os.utime(folder, (an_hour_ago, an_hour_ago))

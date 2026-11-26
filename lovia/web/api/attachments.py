@@ -154,12 +154,9 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
         finally:
             await file.close()
 
-        def _save() -> str:
-            deps.store.make_folder(folder)
-            return save_attachment(folder, name, bytes(data))
-
         try:
-            name = await asyncio.to_thread(_save)
+            await deps.store.make_folder(folder)
+            name = await asyncio.to_thread(save_attachment, folder, name, bytes(data))
         except OSError as exc:  # a full disk, a folder we can't write
             raise WebError.from_exc(500, "attachment_io_error", exc) from exc
         # Type comes from the SAVED extension, never the client's Content-Type;

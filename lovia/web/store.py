@@ -14,6 +14,7 @@ metadata table is owned by this module.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import re
@@ -401,11 +402,16 @@ def _marked(folder: Path, owner: str) -> bool:
         return False
 
 
-def _remove_folders(root: Path, names: Sequence[str]) -> None:
+def _remove_folders(root: Path, names: Sequence[str], owner: str) -> None:
     """Best-effort: a file held open (Windows) leaves its folder for the
-    next sweep, never fails the delete that freed it."""
+    next sweep, never fails the delete that freed it — marked again as
+    ``owner``'s, for the mark may have gone first."""
     for name in names:
-        shutil.rmtree(root / name, ignore_errors=True)
+        folder = root / name
+        shutil.rmtree(folder, ignore_errors=True)
+        if folder.is_dir():
+            with contextlib.suppress(OSError):
+                (folder / OWNER_FILE).write_text(owner, encoding="utf-8")
 
 
 def _folder_names(root: Path) -> list[str]:
@@ -796,14 +802,22 @@ class ChatStore:
         weakref.finalize(self, shutil.rmtree, path, True)
         return path
 
-    def make_folder(self, folder: Path) -> None:
+    async def make_folder(self, folder: Path) -> None:
         """Create ``folder``, one of this store's attachment or record
-        folders, as this store's; one already there stays as it is. Blocking."""
-        try:
-            folder.mkdir(mode=0o700, parents=True)
-        except FileExistsError:
-            return
-        (folder / OWNER_FILE).write_text(self._owner, encoding="utf-8")
+        folders, as this store's; one already there stays as it is."""
+
+        def _make() -> None:
+            try:
+                folder.mkdir(mode=0o700, parents=True)
+            except FileExistsError:
+                return
+            try:
+                (folder / OWNER_FILE).write_text(self._owner, encoding="utf-8")
+            except OSError:
+                folder.rmdir()  # unmarked, no sweep would take it: try again
+                raise
+
+        await asyncio.to_thread(_make)
 
     def _own_folders(self, root: Path, claimed: set[str]) -> list[str]:
         """The folders under ``root`` that are this store's: claimed by its
@@ -915,7 +929,7 @@ class ChatStore:
         for name in await asyncio.to_thread(_candidates):
             still = await self._read_one(claim, (name,), lambda row: True)
             if still is None and await asyncio.to_thread(_stale, root / name):
-                await asyncio.to_thread(_remove_folders, root, [name])
+                await asyncio.to_thread(_remove_folders, root, [name], self._owner)
         return claimed
 
     # ---- low-level helpers ----------------------------------------------
@@ -1429,10 +1443,14 @@ class ChatStore:
 
         existed, freed = await self._meta._run(_impl)
         if freed and self._attachments is not None:
-            await asyncio.to_thread(_remove_folders, self._attachments, freed)
+            await asyncio.to_thread(
+                _remove_folders, self._attachments, freed, self._owner
+            )
         logs = [sid for sid in existed if ATTACHMENTS_ID.fullmatch(sid)]
         if logs and self._process_logs is not None:
-            await asyncio.to_thread(_remove_folders, self._process_logs, logs)
+            await asyncio.to_thread(
+                _remove_folders, self._process_logs, logs, self._owner
+            )
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, metadata and attachments —
@@ -1464,7 +1482,7 @@ class ChatStore:
         ):
             if root is not None:
                 names = await asyncio.to_thread(self._own_folders, root, claimed)
-                await asyncio.to_thread(_remove_folders, root, names)
+                await asyncio.to_thread(_remove_folders, root, names, self._owner)
 
     # ---- remembered approvals ("always allow" grants) -------------------
 

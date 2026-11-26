@@ -22,13 +22,17 @@ from dotenv import load_dotenv
 
 from lovia import Agent, Runner, events, model_from_env
 from lovia.plugins.mcp import MCP, MCPServerStreamableHTTP
+from lovia.tools import fence
 
 load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
-# Only its search: lovia's own web_fetch reads pages.
+# Only its search (lovia's own web_fetch reads pages), with its results fenced:
+# they are the open web's words, material and never instructions.
 SEARCH = MCPServerStreamableHTTP(
-    url="https://mcp.parallel.ai/mcp", include_tools=["web_search"]
+    url="https://mcp.parallel.ai/mcp",
+    include_tools=["web_search"],
+    result_renderer=lambda result, ctx: fence(str(result)),
 )
 
 

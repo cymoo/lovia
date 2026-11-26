@@ -5,12 +5,12 @@ construction site therefore shows every external capability it can use.
 
 ```python
 from lovia import Agent
-from lovia.tools import now, web_fetch, web_search
+from lovia.tools import now, web_fetch
 
 agent = Agent(
     name="researcher",
     model="<model>",
-    tools=[web_fetch(), web_search(MySearch()), now],  # MySearch: see Web search
+    tools=[web_fetch(), now],
 )
 ```
 
@@ -217,7 +217,7 @@ Two small utilities:
   the system prompt:
 
   ```python
-  agent = Agent(name="researcher", model="<model>", tools=[web_search(MySearch())])
+  agent = Agent(name="researcher", model="<model>", tools=[web_fetch()])
   agent.instruction(current_date())
   ```
 

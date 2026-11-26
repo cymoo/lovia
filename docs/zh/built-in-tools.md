@@ -4,12 +4,12 @@
 
 ```python
 from lovia import Agent
-from lovia.tools import now, web_fetch, web_search
+from lovia.tools import now, web_fetch
 
 agent = Agent(
     name="researcher",
     model="<model>",
-    tools=[web_fetch(), web_search(MySearch()), now],  # MySearch：见 Web 搜索
+    tools=[web_fetch(), now],
 )
 ```
 
@@ -196,7 +196,7 @@ tools = [web_search(TavilySearch())]
   [指令片段](agents.md#编写指令)的工厂，将当天日期写入系统提示词：
 
   ```python
-  agent = Agent(name="researcher", model="<model>", tools=[web_search(MySearch())])
+  agent = Agent(name="researcher", model="<model>", tools=[web_fetch()])
   agent.instruction(current_date())
   ```
 

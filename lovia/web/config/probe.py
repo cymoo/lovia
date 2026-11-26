@@ -18,6 +18,10 @@ from ...providers.base import context_window as provider_context_window
 from .schema import Connection
 
 
+# A profile's own proxy choice, by the name Settings → Models gives it.
+MODEL_PROXY_SWITCH = "this model's System proxy setting"
+
+
 class ValidationOutcome(enum.Enum):
     OK = "ok"
     AUTH_FAILED = "auth_failed"
@@ -30,23 +34,22 @@ def validate_connection(
     *,
     timeout: float = 10.0,
     transport: httpx.BaseTransport | None = None,
-    switch: str | None = None,
 ) -> tuple[ValidationOutcome, str]:
     """Probe ``GET {base_url}/models`` and classify the response.
 
     Only called for freshly entered values — configured launches never pay
     for this request. A successful body doubles as a context-window source:
     vLLM, SGLang, OpenRouter, Groq and Together publish the model's window
-    there, so setup need not ask for a number the endpoint knows. ``switch``
-    names the proxy setting a failure's hint tells the reader to flip.
+    there, so setup need not ask for a number the endpoint knows.
     """
     assert conn.base_url is not None and conn.flavor is not None
     options = client_options(conn.trust_env)
     url = f"{conn.base_url}/models"
+    # A failure's hint names the setting that decided the route.
+    named = {} if conn.trust_env is None else {"switch": MODEL_PROXY_SWITCH}
 
     def noted(detail: str, failed: str) -> str:
         # ``failed``: where the request ended up, redirects followed.
-        named = {"switch": switch} if switch else {}
         note = proxy_note(failed, options["trust_env"], **named)
         return f"{detail.rstrip('.')}. {note}" if note else detail
 

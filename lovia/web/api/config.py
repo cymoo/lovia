@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
-from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 
@@ -56,10 +55,6 @@ from ..project_mcp import ProjectServer, read_project_servers
 from ..workspaces import WorkspaceRef
 from .deps import RouterDeps
 from .routing import GuardedRoute
-
-# The proxy setting a failed model test tells the reader to flip, by the
-# name Settings → Models gives it.
-MODEL_PROXY_SWITCH = "this model's System proxy setting"
 
 
 def _mask(secret: str | None) -> dict[str, object]:
@@ -221,8 +216,8 @@ class TestIn(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     context_window: int | None = None
-    # As the form has it — not the stored profile's: the test is of the
-    # setting about to be saved.
+    # As the form has it — the setting about to be saved, ``null`` its
+    # "Default". Left out, a stored profile's own.
     trust_env: bool | None = None
 
 
@@ -894,6 +889,12 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             probe_key = body.api_key or None
         else:
             probe_key = stored.api_key if stored else None
+        # Left out: the stored profile's route (a caller with only its id);
+        # an explicit null is the form's "Default" being tested.
+        if "trust_env" in body.model_fields_set or stored is None:
+            trust_env = body.trust_env
+        else:
+            trust_env = stored.trust_env
         try:
             probe_profile = ModelProfile(
                 id="probe",
@@ -904,16 +905,14 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                 base_url=body.base_url or (stored.base_url if stored else None),
                 api_key=probe_key,
                 context_window=body.context_window,
-                trust_env=body.trust_env,
+                trust_env=trust_env,
             )
         except ValidationError as exc:
             raise WebError.from_exc(400, "invalid_request", exc) from exc
         conn = Connection.from_profile(probe_profile)
         # The probe is synchronous httpx (shared with the terminal wizard);
         # keep the event loop free while it waits on the network.
-        outcome, detail = await asyncio.to_thread(
-            partial(validate_connection, conn, switch=MODEL_PROXY_SWITCH)
-        )
+        outcome, detail = await asyncio.to_thread(validate_connection, conn)
         return TestOut(
             outcome=outcome.value,
             detail=detail,

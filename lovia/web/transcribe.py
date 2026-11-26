@@ -118,6 +118,7 @@ def openai_transcriber(
     language: str | None = None,
     timeout: float = 60.0,
     transport: httpx.AsyncBaseTransport | None = None,
+    trust_env: bool | None = None,
 ) -> TranscribeFn:
     """A :data:`TranscribeFn` for an OpenAI-compatible endpoint.
 
@@ -127,8 +128,9 @@ def openai_transcriber(
     :func:`transcription_endpoint`. ``model`` may be left out for a service
     that has only one. ``language`` is an ISO 639-1 code, or ``None`` to
     let the model detect it. TLS and proxy settings follow
-    every outbound client's (``LOVIA_HTTP_*``). One
-    attempt, no retry: the person is waiting, and can press retry.
+    every outbound client's (``LOVIA_HTTP_*``), ``trust_env`` deciding the
+    proxy when given. One attempt, no retry: the person is waiting, and can
+    press retry.
     """
     url, _ = transcription_endpoint(base_url)
     # Neither route is one lovia chose: the address was used as typed.
@@ -148,7 +150,7 @@ def openai_transcriber(
 
     def client() -> httpx.AsyncClient:
         return httpx.AsyncClient(
-            timeout=timeout, transport=transport, **client_options()
+            timeout=timeout, transport=transport, **client_options(trust_env)
         )
 
     async def key_refused() -> str | None:

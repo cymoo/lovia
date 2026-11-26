@@ -1220,7 +1220,8 @@ function closeViewer({ forget = true } = {}) {
  * @property {string} key
  * @property {string} name
  * @property {string} title The full name, as the header's tooltip.
- * @property {string} download
+ * @property {string | null} download
+ * @property {boolean} [wrap] Whether its lines can be wrapped or not (they can).
  * @property {{ label: string, text: string }} copy A "⋯" entry that copies `text`.
  * @property {HTMLElement} info A block between the header and the body.
  * @property {HTMLElement} content What the body holds, and the reader while it is open.
@@ -1247,7 +1248,8 @@ export function openGuest(guest) {
   name.textContent = guest.name;
   els.viewerName.replaceChildren(name);
   els.viewerName.title = guest.title;
-  els.download.href = guest.download;
+  els.download.href = guest.download ?? '';
+  els.download.classList.toggle('lv-hidden', !guest.download);
   syncViewerViews();
   els.viewerInfo.replaceChildren(guest.info);
   renderViewerContent();
@@ -1718,6 +1720,7 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
   }
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
+  els.download.classList.remove('lv-hidden');
   // Off until renderViewerContent re-shows them for text: an image, PDF or
   // binary returns before it, and must not keep the last file's buttons.
   els.mdToggle.classList.add('lv-hidden');
@@ -1884,7 +1887,7 @@ function renderViewerContent() {
   els.viewerBody.classList.toggle('lv-nowrap', !state.wrap);
   if (v.guest) {
     els.mdToggle.classList.add('lv-hidden');
-    els.wrapToggle.classList.remove('lv-hidden');
+    els.wrapToggle.classList.toggle('lv-hidden', v.guest.wrap === false);
     els.copyContent.classList.remove('lv-hidden');
     return;
   }

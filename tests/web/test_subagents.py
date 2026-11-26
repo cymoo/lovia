@@ -673,6 +673,7 @@ def test_the_chat_recognises_what_the_core_renders() -> None:
     def record(**kw: Any) -> _Record:
         return _Record(
             id="t1",
+            spawn_id="s1",
             agent_name="lovia.sub",
             prompt="p",
             token=CancelToken(),
@@ -688,6 +689,190 @@ def test_the_chat_recognises_what_the_core_renders() -> None:
     failed = pattern.match(_render(record(error=RuntimeError("boom")), max_chars=None))
     assert failed is not None and failed.group(2) == "failed"
     assert failed.group(5) == "RuntimeError: boom"
+
+
+async def test_each_spawns_card_leads_to_its_own_task() -> None:
+    """Two turns of one run spawn under the same provider call id, both as
+    ``t1``/``t2`` of that run — and a later run starts at ``t1`` again: the
+    text a card holds (as static/js/tools.js reads it) still names one task."""
+    import re
+    from pathlib import Path
+
+    from lovia.transcript import ToolResultEntry
+
+    never = asyncio.Event()  # no report comes to start runs of its own
+    child = Agent(
+        name="re (search)er", model=GatedProvider(ScriptedProvider([]), never)
+    )
+    provider = ScriptedProvider(
+        [
+            call("spawn_subagent", {"prompt": "one"}, call_id="same"),
+            call("spawn_subagent", {"prompt": "two"}, call_id="same"),
+            text("bye"),
+            call("spawn_subagent", {"prompt": "three"}, call_id="same"),
+            text("bye"),
+        ]
+    )
+    agent = Agent(name="bot", model=provider, plugins=[Subagents(child)])
+    app = _app(agent)
+    deps = app.state.deps
+    await deps.store.upsert("s7", agent="bot", title="chat")
+
+    async def go() -> None:
+        await deps.supervisor.start(
+            session_id="s7",
+            agent=agent,
+            input="go",
+            is_new=False,
+            title_message=None,
+            autostart=True,
+            source="user",
+        )
+        await _poll(lambda: _none(deps.supervisor.get("s7")))
+
+    js = (Path(__file__).parents[2] / "lovia/web/static/js/tools.js").read_text()
+    literal = re.search(r"const STARTED_TASK = /(.+)/;", js).group(1)  # type: ignore[union-attr]
+
+    async def cards() -> list[str]:
+        return [
+            m.group(1)
+            for e in await deps.session.load("s7")
+            if isinstance(e, ToolResultEntry) and (m := re.match(literal, e.output))
+        ]
+
+    async def spawned(n: int) -> bool:
+        return len(await cards()) == n and (
+            len(await deps.store.list_children("s7")) == n
+        )
+
+    await go()
+    await _poll(lambda: spawned(2))
+    await go()
+    await _poll(lambda: spawned(3))
+
+    tasks = await deps.store.list_children("s7")
+    titles = {m.origin_ref: m.title for m in tasks}
+    assert [titles[spawn_id] for spawn_id in await cards()] == [
+        "[t1] one",
+        "[t2] two",
+        "[t1] three",
+    ]
+    for m in tasks:
+        deps.supervisor.cancel(m.id)
+    await deps.supervisor.shutdown()
+
+
+async def test_a_tasks_step_and_summary() -> None:
+    import httpx
+
+    from lovia import tool
+
+    gate = asyncio.Event()
+    entered = asyncio.Event()
+
+    @tool
+    async def dig(where: str, notes: list[str], depth: int = 1) -> str:
+        """Dig."""
+        entered.set()
+        await gate.wait()
+        return "dug"
+
+    child = Agent(
+        name="digger",
+        tools=[dig],
+        model=ScriptedProvider(
+            [
+                call("missing_tool", {}),
+                call("dig", {"where": "x" * 1000, "notes": ["n"], "depth": 2}),
+                text("**found** it"),
+            ]
+        ),
+    )
+    provider = ScriptedProvider(
+        [call("spawn_subagent", {"prompt": "dig in"}), text("bye"), text("noted")]
+    )
+    agent = Agent(name="bot", model=provider, plugins=[Subagents(child)])
+    app = _app(agent)
+    deps = app.state.deps
+    await deps.store.upsert("s8", agent="bot", title="chat")
+    await deps.supervisor.start(
+        session_id="s8",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="user",
+    )
+    await asyncio.wait_for(entered.wait(), 5)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        (row,) = (await c.get("/api/sessions", params={"parent": "s8"})).json()
+        task = row["id"]
+        assert row["spawn_id"] and row["last_run_seconds"] is None
+        runs = {r["session_id"]: r for r in (await c.get("/api/runs")).json()}
+        step = runs[task]["step"]
+        # What a line needs of the call: short and plain.
+        assert step == {"name": "dig", "args": {"where": "x" * 300, "depth": 2}}
+
+        live = (await c.get(f"/api/sessions/{task}/summary")).json()
+        assert live["prompt"] == "dig in"
+        assert live["step"] == step
+        assert (live["tool_calls"], live["failed_calls"]) == (2, 1)
+        assert live["report"] is None
+
+        gate.set()
+        await _poll(lambda: _none(deps.supervisor.get(task)))
+
+        async def over() -> bool:
+            rows = (await c.get("/api/sessions", params={"parent": "s8"})).json()
+            return rows[0]["last_run_seconds"] is not None
+
+        await _poll(over)
+        done = (await c.get(f"/api/sessions/{task}/summary")).json()
+        assert done == {
+            "prompt": "dig in",
+            "step": None,
+            "tool_calls": 2,
+            "failed_calls": 1,
+            "report": "**found** it",
+            "error": None,
+        }
+        missing = await c.get("/api/sessions/nope/summary")
+        assert missing.status_code == 404
+
+
+async def test_a_failed_tasks_summary_says_why() -> None:
+    import httpx
+
+    child = Agent(name="doomed", model=ScriptedProvider([call("missing_tool", {})]))
+    provider = ScriptedProvider(
+        [call("spawn_subagent", {"prompt": "fail"}), text("bye"), text("noted")]
+    )
+    agent = Agent(name="bot", model=provider, plugins=[Subagents(child, max_turns=1)])
+    app = _app(agent)
+    deps = app.state.deps
+    await deps.store.upsert("s9", agent="bot", title="chat")
+    await deps.supervisor.start(
+        session_id="s9",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="user",
+    )
+    task = await _task_of(deps, "s9")
+
+    async def failed() -> bool:
+        last = (await deps.store.latest_runs([task.id])).get(task.id)
+        return last is not None and last.status == "failed"
+
+    await _poll(failed)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        summary = (await c.get(f"/api/sessions/{task.id}/summary")).json()
+    assert summary["error"] and summary["failed_calls"] == 1
 
 
 async def test_failed_child_delivers_failure_report() -> None:

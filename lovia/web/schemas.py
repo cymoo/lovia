@@ -586,9 +586,12 @@ class ChatSessionInfo(BaseModel):
     # Set on a subagent task session: the chat that spawned it. The UI groups
     # such sessions under a Tasks section instead of the chat list.
     parent_id: str | None = None
-    # Task sessions only: the latest run's terminal status ("completed",
-    # "failed", "cancelled", …) — the sidebar's badge for finished tasks.
+    # Task sessions only: the spawn the ``spawn_subagent`` result names (None
+    # for one from before 0.9.285), and how the latest run stands — its status
+    # ("completed", "failed", "cancelled", …) and, once over, how long it took.
+    spawn_id: str | None = None
     last_run_status: str | None = None
+    last_run_seconds: float | None = None
     # Where the chat came from (see SessionDetail.origin). The sidebar marks
     # a "fork", since a branch starts with its source's title, and a
     # "schedule"'s chat.
@@ -608,6 +611,28 @@ class WaitsOn(BaseModel):
 
     kind: Literal["approval", "question", "call"]
     id: str
+
+
+class StepInfo(BaseModel):
+    """A tool call as one line needs it: its short, plain arguments only."""
+
+    name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionSummary(BaseModel):
+    """A chat's run in short (``GET /api/sessions/{id}/summary``): what a
+    subagent task was asked, what it is doing, and what it answered."""
+
+    prompt: str
+    # The tool call under way; None between calls and once over.
+    step: StepInfo | None = None
+    tool_calls: int = 0
+    failed_calls: int = 0
+    # The last answer, once no run is live or waiting.
+    report: str | None = None
+    # Why the latest run failed.
+    error: str | None = None
 
 
 class RunInfo(BaseModel):
@@ -633,6 +658,8 @@ class RunInfo(BaseModel):
     # the run's own approval_required frame carries it — so a page can offer the card
     # outside that run's chat (a task's, in the chat that spawned it).
     pending_approval: dict[str, Any] | None = None
+    # The tool call under way, None between calls.
+    step: StepInfo | None = None
     # What the run waits on from a person, if anything: an approval card
     # ("blocked_on_approval", or "waiting" on one), an ask_human question or
     # another tool's wait ("waiting"), with the call's id — what a page tells

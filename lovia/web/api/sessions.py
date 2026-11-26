@@ -45,6 +45,7 @@ from ..schemas import (
     SessionDetail,
     SessionOrigin,
     SessionPatch,
+    SessionSummary,
     TodoItemOut,
     TodosResponse,
 )
@@ -66,6 +67,8 @@ from .serialization import (
     segments_runs,
     segments_to_out,
     session_info,
+    session_summary,
+    step_info,
     user_turn_refs,
     view_messages,
 )
@@ -176,7 +179,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         archived: bool = Query(False),
     ) -> list[ChatSessionInfo]:
         if parent:
-            # A chat's own subagent tasks — the topbar tasks popover.
+            # A chat's own subagent tasks — the Background tab.
             metas = await store.list_children(parent)
         elif q:
             metas = await store.search(q, limit=limit, offset=offset)
@@ -190,15 +193,14 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 per_workspace=per_workspace,
                 archived=archived,
             )
-        # Task sessions carry their latest run outcome so the topbar Tasks
-        # popover can
-        # badge finished tasks without per-task follow-up requests.
+        # Task sessions carry their latest run's outcome, so the Background
+        # tab lists finished tasks without per-task follow-up requests.
         task_ids = [m.id for m in metas if m.parent_id]
-        statuses = await store.latest_run_statuses(task_ids)
+        last_runs = await store.latest_runs(task_ids)
         return [
             session_info(
                 m,
-                last_run_status=statuses.get(m.id),
+                last_run=last_runs.get(m.id),
                 processes_running=deps.processes.running(m.id),
             )
             for m in metas
@@ -221,6 +223,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 if c.pending_approval is not None
                 else None,
                 waits_on=_live_waits_on(sid, c),
+                step=step_info(call.name, call.arguments)
+                if (call := c.open_call()) is not None
+                else None,
             )
             for sid, c in deps.supervisor
         ]
@@ -358,6 +363,25 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             workspace_root=meta.workspace_root if meta else None,
             model=meta.model if meta else None,
             exists=meta is not None,
+        )
+
+    @router.get("/api/sessions/{session_id}/summary", response_model=SessionSummary)
+    async def get_summary(session_id: str) -> SessionSummary:
+        """The chat in short: what it was asked, what it is doing, what it
+        answered — a subagent task's detail, without its transcript."""
+        meta = await store.get(session_id)
+        if meta is None:
+            raise WebError(404, "session_not_found", "session not found")
+        view, active, waiting = await _session_view(
+            deps,
+            session_id,
+            created_at=meta.created_at,
+            updated_at=meta.updated_at,
+        )
+        return session_summary(
+            view,
+            live=active is not None or waiting is not None,
+            last_run=(await store.latest_runs([session_id])).get(session_id),
         )
 
     @router.get("/api/sessions/{session_id}/ui-data/{ref}")

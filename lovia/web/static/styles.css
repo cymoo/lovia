@@ -5390,12 +5390,6 @@ body.lv-files-resizing {
 .lv-bg-title .lv-task-tag {
   flex-shrink: 0;
 }
-.lv-bg-out {
-  display: inline-flex;
-  flex-shrink: 0;
-  margin-left: 5px;
-  color: var(--lv-muted-2);
-}
 .lv-bg-line {
   display: block;
   font-size: 11.5px;
@@ -5501,8 +5495,44 @@ body.lv-files-resizing {
 .lv-proc-info-meta .lv-danger {
   color: var(--lv-danger);
 }
-.lv-proc-info-meta .lv-btn {
+.lv-proc-info-meta > .lv-btn,
+.lv-proc-info-actions {
   margin-left: auto;
+}
+.lv-proc-info-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+/* A task in the viewer (task-view.js). */
+.lv-task-prompt {
+  margin-bottom: 10px;
+  font-size: 12.5px;
+}
+.lv-task-prompt summary {
+  color: var(--lv-muted);
+  cursor: pointer;
+}
+.lv-task-prompt-body {
+  margin-top: 6px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--lv-radius-sm);
+  background: var(--lv-surface-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lv-task-step {
+  margin-bottom: 4px;
+  color: var(--lv-ink-2);
+  overflow-wrap: anywhere;
+}
+.lv-task-answer-head {
+  padding-left: 0;
+}
+.lv-task-detail [hidden] {
+  display: none;
 }
 .lv-proc-note {
   margin-bottom: 8px;

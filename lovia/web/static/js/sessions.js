@@ -318,7 +318,7 @@ let _runsShown = 0;
  * Re-fetch just the live runs (a status flip changes nothing else) and redraw
  * what reads them: the sidebar's dots, the tasks button, the task tray.
  */
-async function refreshRuns() {
+export async function refreshRuns() {
   const stamp = ++_runsSent;
   let runs;
   try {

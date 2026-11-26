@@ -27,7 +27,7 @@ import zlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, NamedTuple, TypeVar, cast
 
 from ..checkpointer import Checkpointer
 from ..types import JsonObject
@@ -399,6 +399,19 @@ def _remove_all_folders(root: Path) -> None:
     _remove_folders(root, _folder_names(root))
 
 
+class LatestRun(NamedTuple):
+    """How a chat's most recent run stands (see :class:`RunRow`)."""
+
+    status: str
+    started_at: float
+    finished_at: float | None
+    error: str | None
+
+    @property
+    def seconds(self) -> float | None:
+        return None if self.finished_at is None else self.finished_at - self.started_at
+
+
 @dataclass(frozen=True)
 class ChatMeta:
     """One row of the chat metadata table."""
@@ -420,7 +433,8 @@ class ChatMeta:
     origin_session_id: str | None = None
     origin_ref: str | None = None
     """For a fork: the source's user message the fork was cut before (None
-    for a whole-chat copy). For a schedule's chat: the schedule's id."""
+    for a whole-chat copy). For a schedule's chat: the schedule's id. For a
+    task: its ``spawn_id``, which the ``spawn_subagent`` result names."""
     workspace_root: str | None = None
     """The resolved workspace root the chat was created in; None for a chat
     from before 0.9.147 (not associated yet) or an agent without one."""
@@ -941,6 +955,7 @@ class ChatStore:
         parent_id: str | None = None,
         spawned_from: str | None = None,
         scheduled_by: str | None = None,
+        spawn_id: str | None = None,
         workspace_root: str | None = None,
         workspace_mode: str | None = None,
         model: str | None = None,
@@ -957,7 +972,8 @@ class ChatStore:
         sticks from the insert — a session's task-ness never changes later —
         and so does ``spawned_from``, the chat whose agent started this one
         (``origin_kind = "spawn"``), and ``scheduled_by``, the schedule whose
-        fire created it (``origin_kind = "schedule"``). The workspace binding
+        fire created it (``origin_kind = "schedule"``), and a task's
+        ``spawn_id`` (:class:`~lovia.plugins.ChildSpec`). The workspace binding
         too is set on insert only — :meth:`set_workspace_mode` is the one way
         to change it — and so is ``model`` (:meth:`set_model`), and the
         attachment folder: the chat's own, a task's parent's.
@@ -987,7 +1003,7 @@ class ChatStore:
                 parent_id,
                 kind,
                 spawned_from,
-                scheduled_by,
+                scheduled_by or spawn_id,
                 workspace_root,
                 workspace_mode,
                 model,
@@ -1951,13 +1967,13 @@ class ChatStore:
             lambda row: row[0],
         )
 
-    async def latest_run_statuses(self, session_ids: Sequence[str]) -> dict[str, str]:
-        """Each session's most recent run status, in one query.
+    async def latest_runs(self, session_ids: Sequence[str]) -> dict[str, LatestRun]:
+        """How each session's most recent run stands, in one query.
 
-        Backs the sidebar's task badges: the sessions list joins this in for
+        Backs the Background tab's tasks: the sessions list joins this in for
         task sessions so the client needs no per-task follow-up requests.
         """
-        out: dict[str, str] = {}
+        out: dict[str, LatestRun] = {}
         ids = list(session_ids)
         # Chunk under SQLite's default 999-bind limit; pick each session's
         # newest row in SQL rather than scanning every run.
@@ -1965,12 +1981,13 @@ class ChatStore:
             chunk = ids[i : i + 900]
             marks = ",".join("?" for _ in chunk)
             rows = await self._read_all(
-                "SELECT r.session_id, r.status FROM chat_runs r JOIN ("
+                "SELECT r.session_id, r.status, r.started_at, r.finished_at, "
+                "r.error FROM chat_runs r JOIN ("
                 "SELECT session_id, MAX(started_at) AS ts FROM chat_runs "
                 f"WHERE session_id IN ({marks}) GROUP BY session_id"
                 ") m ON r.session_id = m.session_id AND r.started_at = m.ts",
                 tuple(chunk),
-                lambda r: (r[0], r[1]),
+                lambda r: (r[0], LatestRun(*r[1:])),
             )
             out.update(rows)
         return out

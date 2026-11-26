@@ -37,10 +37,22 @@ test('a task waits on the user only when its run says so', () => {
   assert.equal(taskState(t, { status: 'cancelling' }), 'running');
   assert.equal(taskState(t, { status: 'blocked_on_approval', pending_approval: {} }), 'approval');
   assert.equal(taskState(t, { status: 'waiting', waits_on: { kind: 'question' } }), 'approval');
+  // Stopped while a tool of its still runs: not over yet, whatever lists it.
+  const stopping = task('a', { last_run_status: 'running' });
+  assert.equal(taskState(stopping), 'stopping');
+  assert.equal(buildItems([], [stopping], undefined).live.length, 1);
   assert.equal(taskState(task('a', { last_run_status: 'failed' })), 'failed');
   assert.equal(taskState(task('a', { last_run_status: 'cancelled' })), 'stopped');
   assert.equal(taskState(task('a', { last_run_status: 'interrupted' })), 'interrupted');
   assert.equal(taskState(task('a')), 'completed');
+});
+
+test('a running task is in a step, an ended one took a time', () => {
+  const step = { name: 'read_file', args: { path: 'a.md' } };
+  const [live] = buildItems([], [task('a')], runs({ session_id: 'a', started_at: 150, step })).live;
+  assert.deepEqual([live.step, live.startedAt, live.endedAt], [step, 150, null]);
+  const [ended] = buildItems([], [task('a', { last_run_seconds: 90 })], undefined).ended;
+  assert.deepEqual([ended.step, ended.endedAt - ended.startedAt], [null, 90]);
 });
 
 test('a task is named by its title', () => {

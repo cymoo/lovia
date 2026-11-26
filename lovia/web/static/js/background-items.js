@@ -9,7 +9,7 @@
  * @property {string} id
  * @property {string} tag A task's `t1`; '' for a command.
  * @property {string} title
- * @property {'approval' | 'running' | 'completed' | 'failed' | 'stopped' | 'interrupted' | 'lost'} state
+ * @property {'approval' | 'running' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'interrupted' | 'lost'} state
  * @property {string | null} waitsFor What a task in `approval` waits on: `approval`, `question`, `call`.
  * @property {boolean} live
  * @property {boolean} failed
@@ -18,12 +18,16 @@
  * @property {number | null} exitCode
  * @property {string | null} endedBy
  * @property {string} line A running command's last line of output.
+ * @property {{ name: string, args: any } | null} step The tool call a running task is in.
  */
 
 /** A task's lifecycle: its live run wins, else how its last one ended. */
 export function taskState(task, run) {
   if (run) return run.pending_approval || run.waits_on ? 'approval' : 'running';
   switch (task.last_run_status) {
+    case 'running':
+      // Stopped, and no longer listed as live, but a tool of its may go on.
+      return 'stopping';
     case 'failed':
       return 'failed';
     case 'cancelled':
@@ -51,13 +55,14 @@ function taskItem(task, run) {
     ...taskLabel(task),
     state,
     waitsFor: state === 'approval' ? (run.waits_on?.kind ?? 'approval') : null,
-    live: !!run,
+    live: !!run || state === 'stopping',
     failed: state === 'failed',
     startedAt: run?.started_at || task.created_at || 0,
-    endedAt: null,
+    endedAt: run || task.last_run_seconds == null ? null : task.created_at + task.last_run_seconds,
     exitCode: null,
     endedBy: null,
     line: '',
+    step: run?.step ?? null,
   };
 }
 
@@ -90,6 +95,7 @@ function commandItem(p) {
     exitCode: p.exit_code ?? null,
     endedBy: p.ended_by ?? null,
     line: live ? p.last_line || '' : '',
+    step: null,
   };
 }
 

@@ -12,6 +12,8 @@ change the wire format.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any, Literal, NamedTuple, cast
 
@@ -24,13 +26,20 @@ from ...transcript import (
     TranscriptEntry,
     entries_to_messages,
 )
-from ..schemas import ChatSessionInfo, MessageOut, RunRecordInfo, ToolImageOut
+from ..schemas import (
+    ChatSessionInfo,
+    MessageOut,
+    RunRecordInfo,
+    SessionSummary,
+    StepInfo,
+    ToolImageOut,
+)
 from ..stop_check import without_stop_check
-from ..store import ChatMeta, RunRow
+from ..store import ChatMeta, LatestRun, RunRow
 
 
 def session_info(
-    meta: ChatMeta, *, last_run_status: str | None = None, processes_running: int = 0
+    meta: ChatMeta, *, last_run: LatestRun | None = None, processes_running: int = 0
 ) -> ChatSessionInfo:
     """Project a metadata row onto the public session-list shape."""
     return ChatSessionInfo(
@@ -42,13 +51,75 @@ def session_info(
         pinned=meta.pinned,
         archived=meta.archived,
         parent_id=meta.parent_id,
-        last_run_status=last_run_status,
+        spawn_id=meta.origin_ref if meta.parent_id else None,
+        last_run_status=last_run.status if last_run else None,
+        last_run_seconds=last_run.seconds if last_run else None,
         origin_kind=origin_kind(meta.origin_kind),
         workspace_mode=meta.workspace_mode,
         workspace_mode_rev=meta.workspace_mode_rev,
         workspace_root=meta.workspace_root,
         model=meta.model,
         processes_running=processes_running,
+    )
+
+
+# A step's line shows this much of one argument at most.
+_STEP_ARG_CHARS = 300
+
+
+def step_info(name: str, arguments: str) -> StepInfo:
+    """A tool call as one line needs it: a file's content stays behind."""
+    try:
+        args = json.loads(arguments or "{}")
+    except ValueError:
+        args = None
+    return StepInfo(
+        name=name,
+        args={
+            key: value[:_STEP_ARG_CHARS] if isinstance(value, str) else value
+            for key, value in (args.items() if isinstance(args, dict) else ())
+            if isinstance(value, (str, int, float, bool))
+        },
+    )
+
+
+def session_summary(
+    view: Sequence[MessageOut], *, live: bool, last_run: LatestRun | None
+) -> SessionSummary:
+    """``view`` (:func:`segments_to_out`) in short; ``live``: a run is under
+    way or waiting."""
+    open_calls: list[dict[str, Any]] = []
+    for m in view:
+        if m.tool_calls:
+            open_calls = list(m.tool_calls)
+        elif m.role == "tool":
+            # Of the newest calls only: a provider may reuse an id across turns.
+            open_calls = [tc for tc in open_calls if tc["id"] != m.tool_call_id]
+    texts = {
+        role: [_text_of(m.content) for m in view if m.role == role]
+        for role in ("user", "assistant")
+    }
+    failed = last_run is not None and last_run.status == "failed"
+    return SessionSummary(
+        prompt=next(iter(texts["user"]), ""),
+        step=step_info(open_calls[-1]["name"], open_calls[-1]["arguments"])
+        if open_calls and live
+        else None,
+        tool_calls=sum(len(m.tool_calls) for m in view),
+        failed_calls=sum(m.is_error for m in view if m.role == "tool"),
+        report=next((t for t in reversed(texts["assistant"]) if t.strip()), None)
+        if not live
+        else None,
+        error=last_run.error if failed and not live and last_run else None,
+    )
+
+
+def _text_of(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    parts = content if isinstance(content, list) else []
+    return "\n".join(
+        p["text"] for p in parts if isinstance(p, dict) and p.get("type") == "text"
     )
 
 

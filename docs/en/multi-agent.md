@@ -201,7 +201,9 @@ budget=None, max_result_chars=16_000, instructions=None)`:
   `ChildSpec` and returns the child's `RunResult` — this is the seam the web
   layer uses to route children through its run supervisor. Pair it with
   `deliver`; on its own, bounded-mode teardown would orphan the children it
-  cannot cancel. `ChildSpec` carries no deps on purpose: a child that may
+  cannot cancel. `ChildSpec.spawn_id` is unique across runs (`id`, `t1`, is
+  not) and stands in the `spawn_subagent` result, so a UI can lead from that
+  call to the child it keeps. `ChildSpec` carries no deps on purpose: a child that may
   outlive its parent, or run in another process, needs its own. The override
   builds them, as the web layer does through
   [`create_app(run_deps=...)`](web-server.md#run-deps), whose trigger then

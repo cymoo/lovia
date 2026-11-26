@@ -9,6 +9,7 @@
  * @property {string} id
  * @property {string} tag A task's `t1`; '' for a command.
  * @property {string} title
+ * @property {string | null} agent The agent a task's chat runs.
  * @property {'approval' | 'running' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'interrupted' | 'lost'} state
  * @property {string | null} waitsFor What a task in `approval` waits on: `approval`, `question`, `call`.
  * @property {boolean} live
@@ -53,6 +54,7 @@ function taskItem(task, run) {
     kind: 'task',
     id: task.id,
     ...taskLabel(task),
+    agent: task.agent ?? null,
     state,
     waitsFor: state === 'approval' ? (run.waits_on?.kind ?? 'approval') : null,
     live: !!run || state === 'stopping',
@@ -85,6 +87,7 @@ function commandItem(p) {
     kind: 'cmd',
     id: p.process_id,
     tag: '',
+    agent: null,
     title: p.command.split(/\s+/).join(' ').trim(),
     state,
     waitsFor: null,

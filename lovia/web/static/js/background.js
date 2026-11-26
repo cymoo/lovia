@@ -224,7 +224,8 @@ function pollSteps({ live }) {
   }
   _stepsTimer = setTimeout(() => {
     _stepsTimer = null;
-    if (onScreen()) void refreshRuns(); // its answer renders, and polls again
+    // Its answer renders; a failed one doesn't, so look again either way.
+    if (onScreen()) void refreshRuns().finally(() => pollSteps(items()));
   }, STEPS_MS);
 }
 

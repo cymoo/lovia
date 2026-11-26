@@ -61,7 +61,8 @@ function chartTitle(option) {
  */
 export function builtinSummary(name, args) {
   if (name === 'shell') return shellSummary(args);
-  const spec = TOOLS[name];
+  // Own keys only: a tool may be named `constructor`.
+  const spec = Object.hasOwn(TOOLS, name) ? TOOLS[name] : null;
   if (!spec) return null;
   const [key, subject] = spec;
   if (!subject) return t(key);

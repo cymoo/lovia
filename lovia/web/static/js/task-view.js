@@ -51,6 +51,9 @@ export function taskStatusText(item) {
 export function taskGuest(first, { stop, open }) {
   let item = first;
   let summary = /** @type {any} */ (null);
+  // Whether the last summary that came was of the task at work: an ended
+  // task is asked until one of it as ended has come.
+  let fetchedLive = /** @type {boolean | null} */ (null);
 
   // ---- the header block
   const info = document.createElement('div');
@@ -155,7 +158,8 @@ export function taskGuest(first, { stop, open }) {
     turn.append(body);
     if (summary.error) body.textContent = summary.error;
     else {
-      renderMarkdownInto(body, text);
+      // A relative image or link is a file of the task's agent's workspace.
+      renderMarkdownInto(body, text, { agent: item.agent || undefined });
       highlightIn(body);
       addCodeBlockControls(body);
     }
@@ -180,7 +184,9 @@ export function taskGuest(first, { stop, open }) {
     busy = true;
     let gone = false;
     try {
+      const asked = item.live;
       summary = await api.sessionSummary(item.id);
+      fetchedLive = asked;
       note.hidden = true;
       if (mounted) renderBody();
     } catch (err) {
@@ -200,7 +206,7 @@ export function taskGuest(first, { stop, open }) {
   function poll() {
     clearTimeout(timer);
     // An ended task is polled only until its summary has come.
-    if (!mounted || (!item.live && summary)) return;
+    if (!mounted || (!item.live && fetchedLive === false)) return;
     timer = setTimeout(() => {
       if (document.hidden || !shown()) poll();
       else void load();

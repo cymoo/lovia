@@ -632,7 +632,9 @@ def test_main_serves_a_built_app_as_is(
     assert served["app"] is sys.modules["appmod_b"].app
     assert served["port"] == 9124
     # Served as built: no /health of ours over one the app may define.
-    assert "/health" not in {r.path for r in served["app"].routes}  # type: ignore[attr-defined]
+    from fastapi.testclient import TestClient
+
+    assert TestClient(served["app"]).get("/health").status_code == 404  # type: ignore[arg-type]
     err = capsys.readouterr().err
     assert "ignoring options it was built without: --title" in err
 

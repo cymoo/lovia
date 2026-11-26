@@ -61,8 +61,9 @@ const els = {};
 const state = {
   available: false, // current agent has a workspace
   open: false,
-  mode: 'changes', // 'changes' | 'browse' | 'background'
-  fileMode: 'changes', // the tab of the two file ones that was last on
+  // The tab on: 'browse' is the one named Files.
+  mode: /** @type {'changes' | 'browse' | 'background'} */ ('changes'),
+  fileMode: /** @type {'changes' | 'browse'} */ ('changes'), // of the two file tabs, the one last on
   entries: [], // the change list (Browse keeps its listings in `tree`)
   // The last change list, by path — what the viewer asks whether a file has
   // a diff to show (also while browsing). `git` says whether there is one at all.
@@ -194,8 +195,17 @@ const isWide = () => els.panel.classList.contains('lv-files-wide');
 
 function syncLayout() {
   const roomy = els.panel.clientWidth >= WIDE_W;
+  fitTabs();
   els.panel.classList.toggle('lv-files-roomy', roomy);
   els.panel.classList.toggle('lv-files-wide', roomy && state.listBeside);
+}
+
+/** The Changes count shows while the tabs have room for it: names first. */
+function fitTabs() {
+  els.panel.classList.remove('lv-files-snug');
+  const tabs = els.panel.querySelectorAll('.lv-files-head .lv-files-tab');
+  const cut = [...tabs].some((tab) => tab.scrollWidth > tab.clientWidth + 1);
+  els.panel.classList.toggle('lv-files-snug', cut);
 }
 
 function initLayout() {
@@ -236,10 +246,8 @@ function setOpen(open, { persist = true } = {}) {
     localStorage.setItem('lovia-files-open', state.open ? '1' : '0');
   }
   claimSpace();
-  if (filesShown()) {
-    clearUnseen(); // the badge's job is done — the user is looking
-    refresh();
-  }
+  if (filesShown()) clearUnseen(); // the badge's job is done — the user is looking
+  if (state.open) refresh();
   store.emit('panel-changed');
 }
 
@@ -318,7 +326,8 @@ function updateVisibility() {
   const agent = store.agents.find((a) => a.name === store.agent);
   state.available = !!agent?.workspace;
   els.btn?.classList.toggle('lv-hidden', !state.available);
-  els.tabFiles.classList.toggle('lv-hidden', !state.available);
+  els.tabChanges.classList.toggle('lv-hidden', !state.available);
+  els.tabBrowse.classList.toggle('lv-hidden', !state.available);
   if (state.available) scratchDirFor(store.agent); // warm it for the first write
   const phone = window.matchMedia('(max-width: 720px)').matches;
   if (!state.available) {
@@ -349,7 +358,7 @@ let _refreshTimer = null;
 let _slowTimer = null;
 
 function queueRefresh() {
-  if (!filesShown() || _refreshTimer) return;
+  if (!state.open || !state.available || _refreshTimer) return;
   if (_refreshing) {
     _refreshAgain = true;
     return;
@@ -373,6 +382,10 @@ async function refresh() {
   clearTimeout(_refreshTimer);
   _refreshTimer = null;
   _refreshAgain = false;
+  if (!state.open || !state.available) return;
+  // Off the Changes tab its count still shows: the change list is asked for
+  // beside the tab's own listing (Files), or alone (Background).
+  if (state.mode !== 'changes') void refreshChangeMap();
   if (!filesShown()) return;
   const seq = ++_refreshSeq;
   _refreshing = true;
@@ -436,12 +449,36 @@ function applyChangeMap(changes) {
   state.git = changes.git;
   state.changes = new Map(changes.files.map((f) => [f.path, f]));
   syncViewerViews(); // a file on screen may just have gained (or lost) a diff
+  renderChangeStat();
 }
 
-// The other tabs don't ask for the change list, so the change map would stay
-// as the Changes tab last left it — or empty, for a panel that opened on
-// another — and a changed file would open with no Diff tab. Opening (or
-// reloading) a file there asks for the map meanwhile; the file shows at once.
+/** The Changes tab's "+12 −3": the lines this chat's own files changed. */
+function renderChangeStat() {
+  let added = 0;
+  let removed = 0;
+  for (const f of state.changes.values()) {
+    if (!f.touched) continue;
+    added += f.added || 0;
+    removed += f.removed || 0;
+  }
+  const stat = els.changesStat;
+  if (!stat) return;
+  stat.replaceChildren();
+  if (!added && !removed) return;
+  const part = (/** @type {string} */ cls, /** @type {string} */ text) => {
+    const span = document.createElement('span');
+    span.className = cls;
+    span.textContent = text;
+    stat.append(span);
+  };
+  if (added) part('lv-add', `+${added}`);
+  if (removed) part('lv-del', `\u2212${removed}`);
+  fitTabs();
+}
+
+// Off the Changes tab the change map is asked for on its own: for the tab's
+// count, and so a changed file opens with its Diff tab. Opening (or reloading)
+// a file asks for it too; the file shows at once.
 let _mapSeq = 0;
 async function refreshChangeMap() {
   const seq = ++_mapSeq;
@@ -464,6 +501,7 @@ function clearList() {
   state.git = false;
   state.failed = false;
   els.list.replaceChildren();
+  renderChangeStat();
 }
 
 function emptyNode(text) {
@@ -479,10 +517,9 @@ function selectTab(mode) {
   if (mode !== 'background') state.fileMode = mode;
   _mapSeq++; // a Browse map ask still out predates whatever this tab loads
   for (const [tab, on] of [
-    [els.tabFiles, mode !== 'background'],
-    [els.tabBackground, mode === 'background'],
     [els.tabChanges, mode === 'changes'],
     [els.tabBrowse, mode === 'browse'],
+    [els.tabBackground, mode === 'background'],
   ]) {
     tab.classList.toggle('lv-active', on);
     tab.setAttribute('aria-selected', String(on));
@@ -503,22 +540,22 @@ function selectTab(mode) {
 }
 
 /**
- * @param {string} mode
- * @param {{ restore?: boolean }} [opts] `restore: false` for a caller about
- *   to open something there itself.
+ * @param {'changes' | 'browse' | 'background'} mode
+ * @param {{ restore?: boolean, carry?: boolean }} [opts] `restore: false` for
+ *   a caller about to open something there itself; `carry` takes the open
+ *   file along instead.
  */
-async function setMode(mode, { restore = true } = {}) {
-  const side = (/** @type {string} */ m) => (m === 'background' ? 'background' : 'files');
-  if (side(mode) !== side(state.mode)) {
-    // A file belongs to the Files tab, a log or a task to Background: what is
-    // open waits for its own tab to come back, the one coming back returns.
-    if (state.viewing) parkViewer(side(state.mode));
+async function setMode(mode, { restore = true, carry = false } = {}) {
+  if (mode !== state.mode) {
+    // Each tab keeps what it had open — a diff, a file, a log or a task — and
+    // gets it back on its return.
+    if (state.viewing && !carry) parkViewer(state.mode);
     selectTab(mode);
     // Taken now, whatever happens next: a caller opening something of its
     // own there means the last one is not coming back.
-    const slot = side(mode) === 'files' ? parked.files : parked.background;
-    parked[side(mode)] = null;
-    if (restore) void unpark(slot);
+    const slot = parked[mode];
+    parked[mode] = null;
+    if (restore && !carry) void unpark(slot);
   } else {
     // A tab is also the way back to its list from a file covering the panel.
     if (state.viewing && !isWide()) closeViewer();
@@ -529,20 +566,22 @@ async function setMode(mode, { restore = true } = {}) {
   await refresh();
 }
 
-/** What each side of the panel had open while the other one was shown. */
+/** @typedef {{ path: string, view: string, raw: boolean }} ParkedFile */
+/** What each tab had open while another one was on. */
 const parked = {
-  files: /** @type {{ path: string, view: string, raw: boolean } | null} */ (null),
+  changes: /** @type {ParkedFile | null} */ (null),
+  browse: /** @type {ParkedFile | null} */ (null),
   background: /** @type {ViewerGuest | null} */ (null),
 };
 
-function parkViewer(side) {
+function parkViewer(mode) {
   const v = state.viewing;
-  if (side === 'files') parked.files = v?.path ? { path: v.path, view: v.view, raw: v.raw } : null;
-  else parked.background = v?.guest ?? null;
+  if (mode === 'background') parked.background = v?.guest ?? null;
+  else parked[mode] = v?.path ? { path: v.path, view: v.view, raw: v.raw } : null;
   closeViewer({ forget: false });
 }
 
-/** @param {{ path: string, view: string, raw: boolean } | ViewerGuest | null} slot */
+/** @param {ParkedFile | ViewerGuest | null} slot */
 async function unpark(slot) {
   if (!slot) return;
   if (!('path' in slot)) return openGuest(slot);
@@ -830,7 +869,7 @@ async function revealInTree(path, { open = false } = {}) {
   syncTreeScope();
   for (const d of ancestorsOf(path)) tree.open.add(d);
   saveTree();
-  await (state.mode === 'browse' ? refresh() : setMode('browse'));
+  await (state.mode === 'browse' ? refresh() : setMode('browse', { carry: true }));
   if (open) await openDir(path); // and the lone folders inside, as a click would
   // A row past its folder's first pages isn't rendered: each folder on the
   // way down shows enough pages to include the next step.
@@ -1226,7 +1265,11 @@ function rememberViewing(path) {
 
 async function restoreViewing() {
   const scope = viewingScope();
-  if (state.viewing || _restoredScope === scope) return;
+  // Once per scope, whatever it finds: a later refresh (another tab's)
+  // mustn't open what was saved since.
+  if (_restoredScope === scope) return;
+  _restoredScope = scope;
+  if (state.viewing) return;
   let saved = null;
   try {
     saved = JSON.parse(sessionStorage.getItem(VIEWING_KEY) || 'null');
@@ -1234,7 +1277,6 @@ async function restoreViewing() {
     /* unreadable: nothing to restore */
   }
   if (saved?.scope !== scope || typeof saved.path !== 'string') return;
-  _restoredScope = scope; // once per scope: a later refresh mustn't reopen it
   try {
     await api.workspaceFile({ agent: store.agent, path: saved.path }); // still there?
   } catch {
@@ -1885,7 +1927,7 @@ async function openFile(path, { silent = false, view = undefined } = {}) {
 // file's directory first, then (authors often mean root-relative) the root.
 async function followViewerLink(href) {
   const base = dirname(state.viewing?.path || '');
-  // A link in a task's report: the file opens on the Files tab, and the task
+  // A link in a task's report: the file opens on a file tab, and the task
   // waits on Background.
   if (state.mode === 'background') {
     if (!state.available) return; // no files to open
@@ -2063,12 +2105,12 @@ export function initFiles() {
   els.btn = document.getElementById('files-btn');
   if (!els.panel || !els.btn) return;
   els.tabChanges = document.getElementById('files-tab-changes');
-  els.tabFiles = document.getElementById('files-tab-files');
   els.viewerViews = document.getElementById('files-viewer-views');
   els.viewDiff = document.getElementById('files-view-diff');
   els.viewFile = document.getElementById('files-view-file');
   els.tabBrowse = document.getElementById('files-tab-browse');
   els.tabBackground = document.getElementById('files-tab-background');
+  els.changesStat = document.getElementById('files-changes-stat');
   els.refresh = document.getElementById('files-refresh');
   els.close = document.getElementById('files-close');
   els.collapse = document.getElementById('files-collapse');
@@ -2213,10 +2255,6 @@ export function initFiles() {
     if (state.mode === 'background') store.emit('panel-changed'); // lists anew
     else refresh();
   });
-  els.tabFiles.addEventListener('click', () => {
-    // Like any tab, also the way back to its list from a file covering it.
-    if (state.mode === 'background' || (state.viewing && !isWide())) void setMode(state.fileMode);
-  });
   els.tabChanges.addEventListener('click', () => setMode('changes'));
   els.tabBrowse.addEventListener('click', () => setMode('browse'));
   els.tabBackground.addEventListener('click', () => setMode('background'));
@@ -2349,7 +2387,7 @@ export function initFiles() {
 
   store.on('agents-loaded', updateVisibility);
   store.on('agent-changed', () => {
-    parked.files = null;
+    parked.changes = parked.browse = null;
     state.touched.clear();
     state.revs.clear();
     state.filter = '';
@@ -2364,7 +2402,7 @@ export function initFiles() {
   // for a new chat): a different one is a different tree — start over.
   // (The tree follows the scope on its own: see syncTreeScope.)
   store.on('workspace-scope-changed', () => {
-    parked.files = null;
+    parked.changes = parked.browse = null;
     state.filter = '';
     if (els.filter) els.filter.value = '';
     closeViewer({ forget: false });
@@ -2417,7 +2455,7 @@ export function initFiles() {
       toast(t('files.noWorkspace'));
       return;
     }
-    // A file opens on the Files tab, never beside the Background list.
+    // A file opens on a file tab, never beside the Background list.
     if (state.mode === 'background') void setMode(state.fileMode, { restore: false });
     if (!state.open) setOpen(true);
     if (!(await openFile(path))) {

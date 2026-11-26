@@ -5302,11 +5302,43 @@ body.lv-files-resizing {
   min-width: 0;
 }
 .lv-files-head .lv-files-tab {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
   min-width: 0;
   padding: 4px 10px;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.lv-files-head .lv-files-tab > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* What changed in this chat, what runs: quiet beside the name. */
+.lv-files-tab-stat,
+.lv-files-tab-count {
+  display: inline-flex;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.lv-files-tab-stat:empty,
+.lv-files-tab-count:empty {
+  display: none;
+}
+.lv-files-tab-stat .lv-add {
+  color: var(--lv-ok);
+}
+.lv-files-tab-stat .lv-del {
+  color: var(--lv-danger);
+}
+.lv-files-tab-count {
+  color: var(--lv-muted);
+}
+/* Short of room, the names come first. */
+.lv-files-snug .lv-files-tab-stat {
+  display: none;
 }
 .lv-files-head-actions {
   display: inline-flex;
@@ -7270,16 +7302,6 @@ body.lv-files-resizing {
 .lv-files-search .lv-search-input {
   flex: 1;
   min-width: 0;
-}
-/* The files' two views, smaller than the panel's own tabs above them. */
-.lv-files-views {
-  flex-shrink: 0;
-  padding: 2px;
-  background: var(--lv-sidebar-hover);
-}
-.lv-files-views .lv-files-tab {
-  padding: 3px 9px;
-  font-size: 11.5px;
 }
 #files-wrap-toggle.lv-active {
   color: var(--lv-accent);

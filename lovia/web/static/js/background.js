@@ -209,6 +209,8 @@ function render() {
     _failures.seen();
   }
   renderButton();
+  // The tab's own count: what runs.
+  if (els.tabCount) els.tabCount.textContent = list.live.length ? String(list.live.length) : '';
   renderList();
   updateGuest();
   pollSteps(list);
@@ -381,6 +383,7 @@ export function initBackground() {
   els.wrap = document.getElementById('tasks-wrap');
   els.btn = document.getElementById('tasks-btn');
   els.list = document.getElementById('background-list');
+  els.tabCount = document.getElementById('files-bg-count');
   if (!els.btn || !els.list) return;
 
   els.btn.addEventListener('click', () => {

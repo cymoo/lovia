@@ -330,7 +330,6 @@ const MESSAGES = {
     'tool.linesAll': '共 {total} 行',
     // ---- files panel
     'files.changes': '变更',
-    'files.browse': '浏览',
     'files.refresh': '刷新',
     'files.close': '关闭',
     'files.closeFile': '关闭文件',
@@ -1279,7 +1278,6 @@ const EN = {
   'tool.lines': 'Lines {start}–{end} of {total}',
   'tool.linesAll': '{total} lines',
   'files.changes': 'Changes',
-  'files.browse': 'Browse',
   'files.refresh': 'Refresh',
   'files.close': 'Close',
   'files.closeFile': 'Close file',

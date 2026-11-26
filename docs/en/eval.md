@@ -48,7 +48,7 @@ eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
 | `samples` | `1` | run the case N times; non-determinism becomes a number |
 | `pass_threshold` | `1.0` | fraction of samples that must pass for the case to pass |
 | `deps` | `None` | forwarded as the run's deps |
-| `output_type` / `max_turns` | agent's / `50` | per-case run settings |
+| `output_type` / `max_turns` | agent's / `200` | per-case run settings |
 | `model` | agent's | clone the agent onto another model for this case |
 | `timeout` | `None` | wall-clock cap per sample — a timeout is a failed sample, not a crashed suite |
 | `metadata` | `{}` | carried untouched into the result |

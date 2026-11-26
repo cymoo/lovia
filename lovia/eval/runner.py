@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterable, Sequence, Union
 from ..agent import Agent
 from ..messages import Message, Usage
 from ..parts import text_of
+from ..reliability import DEFAULT_MAX_TURNS
 from ..runner import Runner
 from .checks import Check, run_check
 from .report import CaseResult, Report, SampleResult
@@ -59,7 +60,7 @@ class Case:
     script while sharing one agent definition, and how a live suite pins one
     case to a different model. ``None`` = the agent's own model."""
 
-    max_turns: int = 50
+    max_turns: int = DEFAULT_MAX_TURNS
     """Turn cap forwarded to :meth:`~lovia.Runner.run` per sample."""
 
     timeout: float | None = None

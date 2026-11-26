@@ -48,7 +48,7 @@ serve(default_app(workspace=".", customize=customize))
 | 设置页（模型、助手、技能、MCP、联网搜索）、模型按钮、首次配置引导 | 有 | 没有，在代码里配置 |
 | 项目的 `AGENTS.md` 和 `.agents/skills`，按对话加载 | 有 | 用 `WorkspaceSwitch(agent_for=)` |
 | 权限模式按钮 | 启动参数允许的每一种 | 传 `workspaces=WorkspaceSwitch()` |
-| 最大轮数 / 追问建议 / 审批超时 | `150` / 开 / 600 秒 | `50` / 关 / 不超时 |
+| 最大轮数 / 追问建议 / 审批超时 | `200` / 开 / 600 秒 | `200` / 关 / 不超时 |
 | 聊天记录 | `<home>/lovia.db` | `./.lovia/<agent>.db` |
 
 `default_app(*, home="~/.lovia", workspace=".", readonly=False, lock_workspace=False, db_path=None,
@@ -77,7 +77,7 @@ customize=None, ...)`：前五个就是命令行的开关（`--home`、`DIR`（`
 | --- | --- | --- |
 | `agent_or_agents` | 必填 | 一个 Agent 或 `{name: agent}` 映射；第一个是默认 Agent，请求没指明时用它 |
 | `db_path` / `store` / `session` | `./.lovia/<agent>.db` | Transcript 和聊天元数据存储 |
-| `max_turns` / `budget` / `retry` / `context_policy` | — | 应用于每个托管 Run 的设置；`max_turns` 也可以是 `{name: n}` 映射，每个 Agent 一个（没列出的用 `50`） |
+| `max_turns` / `budget` / `retry` / `context_policy` | `200` / `None` / `None` / `None` | 应用于每个托管 Run 的设置；`max_turns` 也可以是 `{name: n}` 映射，每个 Agent 一个（没列出的用 `200`）。后台子 Agent 任务的 `Subagents` 插件设了自己的 `max_turns` / `budget` 就用插件的，没设就用这里的 |
 | `tracer` | `None` | 托管 Run 的 Span 记录器 |
 | `titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
 | `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后生成追问建议（见下文） |

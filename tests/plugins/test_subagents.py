@@ -10,6 +10,7 @@ import pytest
 from lovia import Agent, InMemorySession, RunContext, Runner, Subagents
 from lovia.exceptions import UserError
 from lovia.plugins.subagents import SubagentReport
+from lovia.reliability import DEFAULT_MAX_TURNS
 from lovia.tools import tool
 from lovia.transcript import ModelDelta, ToolResultEntry, TranscriptEntry
 
@@ -119,6 +120,33 @@ async def test_spawn_then_wait_collects_report_once() -> None:
     )
     # Child usage (2 tokens) folded into the parent's total (2 turns x 2 + 2).
     assert result.usage.total_tokens == 6
+
+
+@pytest.mark.parametrize("explicit", [None, 1])
+async def test_a_child_without_a_limit_runs_on_the_runners_default(
+    monkeypatch: pytest.MonkeyPatch, explicit: int | None
+) -> None:
+    import lovia.plugins.subagents as module
+
+    # A default of 1 (or a limit of 1) stops the two-turn child either way.
+    monkeypatch.setattr(module, "DEFAULT_MAX_TURNS", 1 if explicit is None else 9)
+    parent = Agent(
+        name="parent",
+        model=ScriptedProvider(
+            [
+                batch(
+                    ("spawn_subagent", {"prompt": "go"}, "c_spawn"),
+                    ("wait_subagents", {}, "c_wait"),
+                ),
+                text("final"),
+            ]
+        ),
+        plugins=[
+            Subagents(_child([call("missing", {}), text("done")]), max_turns=explicit)
+        ],
+    )
+    result = await Runner.run(parent, "go")
+    assert "max_turns=1" in _tool_result(result.entries, "c_wait")
 
 
 async def test_mailbox_delivery_arrives_next_turn() -> None:
@@ -634,7 +662,9 @@ async def test_childspec_carries_the_spawn_mailbox() -> None:
         specs.append(spec)
         # Deliberately does NOT hand spec.mailbox to Runner.run: the pushed
         # steer must stay queued in exactly this channel, proving targeting.
-        return await Runner.run(spec.agent, spec.prompt, max_turns=spec.max_turns)
+        # None: the plugin sets no limit, so the override picks its own.
+        limit = spec.max_turns or DEFAULT_MAX_TURNS
+        return await Runner.run(spec.agent, spec.prompt, max_turns=limit)
 
     async def deliver(report) -> None:  # detached mode: reports via callback
         return None

@@ -28,7 +28,7 @@ from .context.compaction import Compaction
 from .exceptions import UserError
 from .handoff import Handoff, agent_as_tool
 from .providers import ModelSettings, Provider, provider_from_string
-from .reliability import RetryPolicy
+from .reliability import DEFAULT_MAX_TURNS, RetryPolicy
 from .run_context import RunContext
 from .tools import Tool
 
@@ -311,7 +311,7 @@ class Agent(Generic[TDeps]):
         *,
         name: str | None = None,
         description: str | None = None,
-        max_turns: int = 50,
+        max_turns: int = DEFAULT_MAX_TURNS,
         budget: "RunBudget | None" = None,
         retry: "RetryPolicy | None" = None,
         context_policy: "ContextPolicy | None" = None,

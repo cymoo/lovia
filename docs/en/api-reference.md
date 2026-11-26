@@ -19,7 +19,7 @@ All three Runner forms accept the same public options:
 | `deps` | `None` | Application dependencies exposed as `ctx.deps` |
 | `output_type` | Agent setting | Override structured output for this Run |
 | `extra_instructions` | `None` | Append Run-specific system instructions |
-| `max_turns` | `50` | Limit logical model Turns |
+| `max_turns` | `200` | Limit logical model Turns |
 | `budget` | `None` | Apply a `RunBudget` |
 | `cancel_token` | auto-created | Supply a cooperative `CancelToken` |
 | `mailbox` | auto-created | Supply a `Mailbox` for mid-Run steering |

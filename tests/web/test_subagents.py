@@ -869,7 +869,7 @@ async def test_a_failed_tasks_summary_says_why() -> None:
     provider = ScriptedProvider(
         [call("spawn_subagent", {"prompt": "fail"}), text("bye"), text("noted")]
     )
-    agent = Agent(name="bot", model=provider, plugins=[Subagents(child, max_turns=1)])
+    agent = Agent(name="bot", model=provider, plugins=[Subagents(child)])
     app = _app(agent)
     deps = app.state.deps
     await deps.store.upsert("s9", agent="bot", title="chat")
@@ -893,6 +893,53 @@ async def test_a_failed_tasks_summary_says_why() -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
         summary = (await c.get(f"/api/sessions/{task.id}/summary")).json()
     assert summary["error"] and summary["report"] is None
+
+
+async def test_a_childs_own_limits_win_over_the_servers() -> None:
+    from lovia import RunBudget, tool
+
+    @tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    def child() -> Agent[Any]:
+        pings = [call("ping", {}, call_id=f"p{i}") for i in range(4)]
+        return Agent(
+            name="kid", model=ScriptedProvider([*pings, text("done")]), tools=[ping]
+        )
+
+    cases = [
+        (Subagents(child(), max_turns=2), "max_turns=2"),
+        (Subagents(child(), budget=RunBudget(max_tool_calls=1)), "tool"),
+    ]
+    for plugin, why in cases:
+        provider = ScriptedProvider(
+            [call("spawn_subagent", {"prompt": "go"}), text("bye"), text("noted")]
+        )
+        agent = Agent(name="bot", model=provider, plugins=[plugin])
+        app = create_app(agent, store=ChatStore.in_memory(), titles=False)
+        deps = app.state.deps
+        await deps.store.upsert("s1", agent="bot", title="chat")
+        await deps.supervisor.start(
+            session_id="s1",
+            agent=agent,
+            input="go",
+            is_new=False,
+            title_message=None,
+            autostart=True,
+            source="user",
+        )
+        task = await _task_of(deps, "s1")
+
+        async def ended() -> bool:
+            last = (await deps.store.latest_runs([task.id])).get(task.id)
+            return last is not None and last.status not in ("running", "waiting")
+
+        await _poll(ended)
+        last = (await deps.store.latest_runs([task.id]))[task.id]
+        # The server's own limits (200 turns, no budget) would let it finish.
+        assert last.status != "completed" and why in (last.error or ""), last
 
 
 async def test_failed_child_delivers_failure_report() -> None:

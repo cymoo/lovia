@@ -53,7 +53,7 @@ All three entry points accept the same keywords:
 | `deps` | `None` | your dependency object, surfaced as `ctx.deps` ([Agents](agents.md#inject-application-dependencies)) |
 | `output_type` | `None` | run-wide override of the agent's [output type](structured-output.md) |
 | `extra_instructions` | `None` | per-run system-prompt addendum, rendered after the agent's own instructions (and re-applied to every agent a handoff reaches) |
-| `max_turns` | `50` | hard cap on model turns; exceeding it raises `MaxTurnsExceeded` |
+| `max_turns` | `200` | hard cap on model turns; exceeding it raises `MaxTurnsExceeded` |
 | `budget` | `None` | a `RunBudget` limiting what the run may spend ([Budgets](budgets.md)) |
 | `cancel_token` | `None` | pre-wired cooperative cancellation ([Cancellation](cancellation.md#cancellation)) |
 | `mailbox` | `None` | inbound steering channel ([Steering](cancellation.md#steering-a-live-run)) |

@@ -24,7 +24,7 @@ from ..agent import Agent
 from ..exceptions import UserError
 from ..context import ContextPolicy
 from ..providers import Provider
-from ..reliability import RetryPolicy, RunBudget
+from ..reliability import DEFAULT_MAX_TURNS, RetryPolicy, RunBudget
 from ..session import Session
 from ..tracing import Tracer
 from .api import RouterDeps, build_api_router
@@ -194,7 +194,7 @@ def create_app(
     followup_model: str | Provider | None = None,
     transcribe: TranscribeFn | None = None,
     title: str = "lovia",
-    max_turns: int | Mapping[str, int] = 50,
+    max_turns: int | Mapping[str, int] = DEFAULT_MAX_TURNS,
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
@@ -245,10 +245,12 @@ def create_app(
 
     Run limits apply to every chat turn the server drives: ``max_turns`` caps
     the agent loop per request — one number for every agent, or one per
-    agent by registry key (an agent left out gets 50) — and ``budget`` (a
-    :class:`RunBudget`) caps token
+    agent by registry key (an agent left out gets core's default, 200) — and
+    ``budget`` (a :class:`RunBudget`) caps token
     spend, wall-clock, and tool calls. ``budget`` is a template — copied per run
-    — so its clock and counters never carry across runs. ``retry`` (a
+    — so its clock and counters never carry across runs. A background
+    subagent task runs on its ``Subagents`` plugin's own ``max_turns`` and
+    ``budget`` where it sets them, on these where it doesn't. ``retry`` (a
     :class:`RetryPolicy`) overrides the agent's own provider-retry posture for
     server-driven turns; ``None`` inherits it.
 
@@ -305,7 +307,10 @@ def create_app(
     ``/api/config`` routes and allows an *empty* agents mapping — the
     not-yet-configured state whose first ``/api/config`` write brings the
     default agent up. Leave it ``None``: for the app Settings configures,
-    call ``default_app``.
+    call ``default_app``. A save in Settings replaces the served agents,
+    and only what it changed besides: the title and follow-up model when
+    it changes the aux role, ``max_turns`` when the file's limit changed.
+    Voice input is Settings' too, so ``transcribe`` can't go with it.
 
     ``workspaces`` (a :class:`~lovia.web.WorkspaceSwitch`) lets each chat
     pick its own permission mode — the composer offers the switch's modes,
@@ -324,6 +329,9 @@ def create_app(
     token = _clean_token(token)
     if token is not None and auth is not None:
         raise ValueError("pass either token= or auth=, not both")
+    if transcribe is not None and config_runtime is not None:
+        # The runtime's Settings → Voice decides; this one would never run.
+        raise ValueError("pass either transcribe= or config_runtime=, not both")
 
     if store is not None:
         chat_store = store

@@ -16,6 +16,10 @@ from typing import Awaitable, Callable
 from .exceptions import BudgetExceeded, ProviderError, RunCancelled
 from .messages import Usage
 
+# Every run's turn cap unless its caller sets one: Runner, as_tool, Subagents,
+# eval cases and the web server all default to this one number.
+DEFAULT_MAX_TURNS = 200
+
 
 @dataclass
 class RunBudget:

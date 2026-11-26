@@ -223,10 +223,13 @@ def test_skills_relative_entry_in_a_file_says_why(tmp_path: Path) -> None:
         storage.load_config(path)
 
 
-def test_web_runs_have_their_own_turn_and_retry_defaults() -> None:
-    # The web's own defaults; core's Runner and RetryPolicy keep theirs.
+def test_web_runs_have_cores_turn_limit_and_their_own_retries() -> None:
+    from lovia.reliability import DEFAULT_MAX_TURNS
+
+    # The turn limit is core's one default; the retry count is the web's own.
     assistant = WebConfig().assistant
-    assert (assistant.max_turns, assistant.max_retries) == (150, 5)
+    assert (assistant.max_turns, assistant.max_retries) == (DEFAULT_MAX_TURNS, 5)
+    assert DEFAULT_MAX_TURNS == 200
 
 
 def test_skills_explicit_empty_list_stays_empty() -> None:
@@ -430,7 +433,7 @@ def test_earlier_versions_settings_are_ignored_not_converted() -> None:
     assistant = cfg.assistant
     assert (assistant.instructions, assistant.max_turns, assistant.mode) == (
         "",
-        150,
+        200,
         "coding",
     )
     assert "agents" not in cfg.model_dump()

@@ -45,7 +45,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Annotated, Any, Awaitable, Callable, Sequence
 
 from ..exceptions import RunCancelled, UserError
-from ..reliability import CancelToken, RunBudget
+from ..reliability import DEFAULT_MAX_TURNS, CancelToken, RunBudget
 from ..run_context import RunContext
 from ..steering import Mailbox
 from ..tools import Tool, tool
@@ -126,11 +126,13 @@ class ChildSpec:
     parent_session_id: str | None
     """The spawning run's session, when it has one."""
 
-    max_turns: int
-    """Turn bound for the child run (the plugin's ``max_turns``)."""
+    max_turns: int | None
+    """The plugin's ``max_turns``: the child run's turn bound, or ``None``
+    for the override's own default (``lovia.web``: the server's limit)."""
 
     budget: RunBudget | None
-    """A fresh per-spawn budget copy, when the plugin carries one."""
+    """A fresh per-spawn copy of the plugin's budget, or ``None`` for the
+    override's own default (``lovia.web``: the server's budget)."""
 
     mailbox: Mailbox
     """The child's inbound steering channel — ``send_to_subagent`` pushes
@@ -300,11 +302,13 @@ class Subagents:
     max_concurrent: int = 4
     """Spawn cap; at capacity ``spawn_subagent`` declines (no queueing)."""
 
-    max_turns: int = 50
-    """Turn bound forwarded to every child run (as in ``agent_as_tool``)."""
+    max_turns: int | None = None
+    """Turn bound for every child run. ``None`` inherits: the runner's
+    default in-process, the server's limit under ``lovia.web``."""
 
     budget: RunBudget | None = None
-    """Per-child budget; copied per spawn so counters never accumulate."""
+    """Per-child budget; copied per spawn so counters never accumulate.
+    ``None``: none in-process, the server's budget under ``lovia.web``."""
 
     max_result_chars: int | None = 16_000
     """Report-body cap (head + tail kept). A child's final answer is injected
@@ -438,7 +442,7 @@ class Subagents:
             child,
             rec.prompt,
             deps=ctx.deps,
-            max_turns=self.max_turns,
+            max_turns=DEFAULT_MAX_TURNS if self.max_turns is None else self.max_turns,
             budget=replace(self.budget) if self.budget is not None else None,
             cancel_token=rec.token,
             mailbox=rec.mailbox,

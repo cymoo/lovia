@@ -23,7 +23,7 @@ from ...agent import Agent
 from ...handoff import Handoff
 from ...context import ContextPolicy
 from ...providers import Provider
-from ...reliability import RetryPolicy, RunBudget
+from ...reliability import DEFAULT_MAX_TURNS, RetryPolicy, RunBudget
 from ...session import Session
 from ...tracing import Tracer
 from ...exceptions import UserError
@@ -100,7 +100,7 @@ class RouterDeps:
     # ``default_app`` leaves it unset — see :meth:`transcriber`.
     transcribe: TranscribeFn | None = None
     # One limit for every agent, or one per registry key (see max_turns_for).
-    max_turns: int | Mapping[str, int] = 50
+    max_turns: int | Mapping[str, int] = DEFAULT_MAX_TURNS
     # Per-run limits. Used as a template: ``fresh_budget`` copies it per run so a
     # ``RunBudget``'s wall-clock/tool-call state never bleeds across runs.
     # ``None`` (default) leaves runs unbounded, like the core ``Runner``.
@@ -803,7 +803,7 @@ class RouterDeps:
     def max_turns_for(self, agent: str) -> int:
         """The turn limit for a run of the agent served as ``agent``."""
         limit = self.max_turns
-        return limit if isinstance(limit, int) else limit.get(agent, 50)
+        return limit if isinstance(limit, int) else limit.get(agent, DEFAULT_MAX_TURNS)
 
     def name_of(self, agent: Agent[Any]) -> str:
         """The registry key an agent is served under — the API-facing identity.

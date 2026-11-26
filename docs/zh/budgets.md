@@ -47,7 +47,7 @@ Runner 会在 Turn 之间、每次模型回复后，以及每个 Tool 调用的�
 
 ## Turn 限制
 
-`max_turns` 默认为 `50`，耗尽后抛出 `MaxTurnsExceeded`。它是防止 Agent 反复调用工具、
+`max_turns` 默认为 `200`，耗尽后抛出 `MaxTurnsExceeded`。它是防止 Agent 反复调用工具、
 始终无法产生最终答案的最直接保护。
 
 ## 时间限制是协作式的

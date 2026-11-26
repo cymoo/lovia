@@ -106,7 +106,7 @@ manager = Agent(
 )
 ```
 
-`agent.as_tool(*, name=None, description=None, max_turns=50, budget=None,
+`agent.as_tool(*, name=None, description=None, max_turns=200, budget=None,
 retry=None, context_policy=None)`：
 
 - 工具默认名为 `ask_<slug>`，只接受一个由模型填写的参数 `input`，也就是交给子 Agent
@@ -155,12 +155,17 @@ result = await Runner.run(agent, "调研 X 和 Y，然后对比总结。")
   并必须把它接入实际运行子 Agent 的方式。
 - `cancel_subagent(id)`：请求子 Agent 停止；被取消的任务不会产生报告。
 
-`Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,
+`Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=None,
 budget=None, max_result_chars=16_000, instructions=None)`：
 
 - 使用内置 runner 时，子运行继承父运行的 `deps` 和 Tracer，Token 用量也计入父运行的
   `usage`，这一点与 `as_tool` 相同。每个子 Agent 使用独立的取消令牌；
   `budget` 则在每次启动任务时复制一份。替换了 `run_child` 时，子运行的 deps 由替换实现自己决定（见下文）。
+- `max_turns` 和 `budget` 是子运行的限制。保持 `None` 表示继承：在进程内是 runner
+  的默认轮数上限（`200`），没有预算；在 Web 服务里是服务的 `max_turns` 和 `budget`。
+  显式设置的值在两处都优先，对 Web 任务的每一段运行都生效（审批后的恢复、在任务对话里发的消息）。
+  `run_child` 替换实现从 `ChildSpec.max_turns` / `ChildSpec.budget` 拿到它们，`None`
+  表示用它自己的默认值。
 - **`deliver` 决定任务是否能脱离当前 Run。** 默认不传 `deliver`：报告进入
   当前 Run 的消息队列；Run 结束时，尚未完成的任务会被取消。内置提示会要求模型
   在结束前等待这些任务，或明确取消它们。传入 `deliver` 回调后，报告全部交给

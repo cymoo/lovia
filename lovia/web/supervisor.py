@@ -24,7 +24,7 @@ import time
 import uuid
 import weakref
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .. import events
@@ -965,6 +965,9 @@ class RunController:
             ),
         )
         try:
+            # A task's own limits (its Subagents plugin's), on every leg it
+            # runs; any other chat runs on the server's.
+            own = await store.run_limits(sid)
             while True:
                 self.run_id = ckpt.resolved_run_id if ckpt is not None else None
                 # Bail before starting a leg that was cancelled mid-setup. On an
@@ -984,7 +987,11 @@ class RunController:
                 self._mirror_run_id = self.run_id
                 self.current_turn_entries = []
                 self.in_flight_buffer = []
-                budget = deps.fresh_budget()
+                budget = (
+                    replace(own.budget)
+                    if own.budget is not None
+                    else deps.fresh_budget()
+                )
                 handle = Runner.stream(
                     self.agent,
                     next_input,
@@ -994,7 +1001,7 @@ class RunController:
                     context_policy=deps.context_policy,
                     cancel_token=self.cancel,
                     mailbox=self.mailbox,
-                    max_turns=deps.max_turns_for(self.agent_name),
+                    max_turns=own.max_turns or deps.max_turns_for(self.agent_name),
                     budget=budget,
                     retry=deps.retry,
                     tracer=deps.tracer,

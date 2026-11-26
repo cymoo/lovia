@@ -115,7 +115,7 @@ manager = Agent(
 )
 ```
 
-`agent.as_tool(*, name=None, description=None, max_turns=50, budget=None,
+`agent.as_tool(*, name=None, description=None, max_turns=200, budget=None,
 retry=None, context_policy=None)`:
 
 - The tool is named `ask_<slug>` by default and takes one model-controlled
@@ -172,7 +172,7 @@ The model gets four tools and a per-turn status reminder:
   `ChildSpec.mailbox` and must hand it to however it runs the child.
 - `cancel_subagent(id)` — cooperative stop, no report.
 
-`Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,
+`Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=None,
 budget=None, max_result_chars=16_000, instructions=None)`:
 
 - With the built-in runner, children inherit the parent's `deps` and tracer,
@@ -180,6 +180,12 @@ budget=None, max_result_chars=16_000, instructions=None)`:
   sub-runs. Each child gets its **own** cancel token (that is what
   `cancel_subagent` trips) and a fresh copy of `budget` per spawn. A
   `run_child` override decides the child's deps itself (below).
+- `max_turns` and `budget` set the child's limits. Left `None`, they inherit:
+  in-process that is the runner's default turn limit (`200`) and no budget;
+  under the web server it is the server's `max_turns` and `budget`. A value
+  you set wins in both, on every leg of a web task (a resume after an
+  approval, a message in its chat). A `run_child` override gets them as
+  `ChildSpec.max_turns` / `ChildSpec.budget`, `None` meaning its own default.
 - **Lifecycle is keyed on `deliver`.** With the default (`deliver=None`,
   *bounded*), reports push into the run's mailbox and anything still running
   when the run ends is cancelled — children never outlive the run, and the

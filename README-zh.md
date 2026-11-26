@@ -170,7 +170,7 @@ serve(app)
 
 - **简洁。** 不可变的 `Agent`、无状态的 `Runner`、`@tool`，以及作为唯一扩展轴的插件。
   每个部件的心智模型都不超过一屏。
-- **轻量。** 只有三个硬依赖。MCP、Web 应用和搜索后端都是 extra，用到时才导入。
+- **轻量。** 只有三个硬依赖。MCP 和 Web 应用都是 extra，用到时才导入。
 - **读得懂。** 模型调用、工具执行、重试和持久化都在一个显式的循环里。遇到意外行为，
   顺着一条链查下去就行。
 - **可扩展，但克制。** 扩展点都是 dataclass、Protocol 和装饰器，从不靠继承。能在应用层
@@ -185,7 +185,6 @@ lovia 需要 Python 3.10 或更新版本。
 | 核心库 | `pip install lovia` |
 | MCP | `pip install "lovia[mcp]"` |
 | Web 应用（含 MCP） | `pip install "lovia[web]"` |
-| DuckDuckGo 搜索 | `pip install "lovia[ddg]"`（Tavily 无需额外依赖，设置 `TAVILY_API_KEY` 即可） |
 | 可运行示例 | `pip install "lovia[examples,web]"` |
 
 ## 项目状态

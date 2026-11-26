@@ -46,7 +46,7 @@ environment variables the docs name: the CLI's in
 [CLI options](web-ui.md#cli-options), the providers' in
 [Model strings](providers.md#model-strings) and
 [Networking](providers.md#networking-timeouts-proxies-tls), plus
-`TAVILY_API_KEY`, `LOVIA_EMBEDDING_BASE_URL` / `LOVIA_EMBEDDING_API_KEY` and
+`LOVIA_EMBEDDING_BASE_URL` / `LOVIA_EMBEDDING_API_KEY` and
 `LOVIA_EVAL_JUDGE_MODEL`.
 
 ## Not covered

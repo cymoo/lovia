@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --extra dev --extra mcp --extra web --extra ddg
+        run: uv sync --extra dev --extra mcp --extra web
       - name: Ruff
         run: uv run ruff check lovia tests
       # Formatting is checked, never applied: `uv run ruff format lovia tests`
@@ -38,7 +38,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: uv sync --extra dev --extra mcp --extra web --extra ddg
+        run: uv sync --extra dev --extra mcp --extra web
       - name: Pytest
         run: uv run pytest
 
@@ -108,9 +108,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install docs dependencies
-        # Extras back the modules that doc snippets import (lovia.web, .plugins.mcp,
-        # .tools.search); the snippet checker imports them for real to verify symbols.
-        run: uv sync --extra docs --extra mcp --extra web --extra ddg
+        # Extras back the modules that doc snippets import (lovia.web,
+        # .plugins.mcp); the snippet checker imports them for real to verify symbols.
+        run: uv sync --extra docs --extra mcp --extra web
       - name: Build site (strict)
         run: uv run mkdocs build --strict
       - name: Check links, anchors, and snippets
@@ -136,9 +136,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install docs dependencies
-        # Extras back the modules that doc snippets import (lovia.web, .plugins.mcp,
-        # .tools.search); the snippet checker imports them for real to verify symbols.
-        run: uv sync --extra docs --extra mcp --extra web --extra ddg
+        # Extras back the modules that doc snippets import (lovia.web,
+        # .plugins.mcp); the snippet checker imports them for real to verify symbols.
+        run: uv sync --extra docs --extra mcp --extra web
       - name: Build site (strict)
         run: uv run mkdocs build --strict
       - name: Check links, anchors, and snippets

@@ -96,11 +96,8 @@ lovia 的 HTTP 客户端（provider、HTTP 方式的 MCP、`web_fetch`）默认�
 
 ```bash
 pip install "lovia[mcp]"   # MCP
-pip install "lovia[ddg]"   # DuckDuckGo 搜索
 pip install "lovia[web]"   # FastAPI 服务端和 UI
 ```
-
-Tavily 搜索后端无需安装额外依赖，只需设置 `TAVILY_API_KEY`。
 
 ## 提交有效的问题报告
 

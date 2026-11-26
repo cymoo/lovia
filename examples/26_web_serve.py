@@ -18,7 +18,6 @@ from __future__ import annotations
 from dotenv import load_dotenv
 
 from lovia import Agent, Compaction, Todo, tool, enable_logging, model_from_env
-from lovia.tools import duckduckgo_search
 from lovia.workspace import Workspace
 from lovia.web import serve
 
@@ -43,7 +42,7 @@ def main() -> None:
             "Keep replies short and conversational. Ask for clarification if the question is ambiguous."
         ),
         model=MODEL,
-        tools=[send_email, duckduckgo_search()],
+        tools=[send_email],
         plugins=[Todo()],
         workspace=Workspace.local(".", mode="trusted"),
         # Compaction posture rides on the agent; the server inherits it.

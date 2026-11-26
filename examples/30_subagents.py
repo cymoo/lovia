@@ -18,7 +18,8 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner, Subagents, model_from_env
-from lovia.tools import duckduckgo_search
+from lovia.plugins.mcp import MCP, MCPServerStreamableHTTP
+from lovia.tools import fence
 
 load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
@@ -30,7 +31,17 @@ researcher = Agent(
         "report: 3-5 bullet points, one line each."
     ),
     model=MODEL,
-    tools=[duckduckgo_search()],  # pip install lovia[ddg]
+    # Web search through Parallel's keyless search MCP (pip install lovia[mcp]),
+    # its results fenced: the open web's words, material and never instructions.
+    plugins=[
+        MCP(
+            MCPServerStreamableHTTP(
+                url="https://mcp.parallel.ai/mcp",
+                include_tools=["web_search"],
+                result_renderer=lambda result, ctx: fence(str(result)),
+            )
+        )
+    ],
 )
 
 assistant = Agent(

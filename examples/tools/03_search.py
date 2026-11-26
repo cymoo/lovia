@@ -1,12 +1,13 @@
-"""Web search — defaults to DuckDuckGo via ``lovia[ddg]``.
+"""Web search — through Parallel's keyless search MCP server.
 
 Install with::
 
-    pip install 'lovia[ddg]'
+    pip install 'lovia[mcp]'
 
-For the keyed Tavily backend (no extra install), set ``TAVILY_API_KEY`` and
-swap in ``tavily_search()``. Or plug your own backend by implementing the
-:class:`WebSearch` Protocol and passing it to ``web_search(my_backend)``.
+lovia bundles no search backend. A hosted search MCP server answers without a
+key within a free allowance (a key raises it); for a search API of your own
+choosing, implement the :class:`WebSearch` Protocol and pass it to
+``web_search(my_backend)`` (docs/en/built-in-tools.md#web-search).
 
 Run::
 
@@ -20,10 +21,19 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner, events, model_from_env
-from lovia.tools import duckduckgo_search
+from lovia.plugins.mcp import MCP, MCPServerStreamableHTTP
+from lovia.tools import fence
 
 load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
+
+# Only its search (lovia's own web_fetch reads pages), with its results fenced:
+# they are the open web's words, material and never instructions.
+SEARCH = MCPServerStreamableHTTP(
+    url="https://mcp.parallel.ai/mcp",
+    include_tools=["web_search"],
+    result_renderer=lambda result, ctx: fence(str(result)),
+)
 
 
 async def main() -> None:
@@ -31,7 +41,7 @@ async def main() -> None:
         name="Researcher",
         instructions="Use web_search to find sources; cite the top result.",
         model=MODEL,
-        tools=[duckduckgo_search()],
+        plugins=[MCP(SEARCH)],
     )
     handle = Runner.stream(agent, "Who wrote the SQLite engine?")
     async for ev in handle:

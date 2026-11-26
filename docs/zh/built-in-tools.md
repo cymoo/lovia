@@ -4,12 +4,12 @@
 
 ```python
 from lovia import Agent
-from lovia.tools import duckduckgo_search, now, web_fetch
+from lovia.tools import now, web_fetch
 
 agent = Agent(
     name="researcher",
     model="<model>",
-    tools=[web_fetch(), duckduckgo_search(), now],
+    tools=[web_fetch(), now],
 )
 ```
 
@@ -19,7 +19,7 @@ agent = Agent(
 | 需求 | 工具 |
 | --- | --- |
 | 读取 URL：网页转成 Markdown，也支持 JSON、文本 | `web_fetch()` |
-| 搜索公开网页 | `duckduckgo_search()` / `tavily_search()` |
+| 搜索公开网页 | `web_search(backend)`，或一个搜索 MCP 服务器 |
 | 获取当前时间 | `now` |
 | 暂停并询问用户 | `ask_human` |
 
@@ -135,27 +135,8 @@ TLS 设置见 [`LOVIA_HTTP_*` 配置](providers.md#网络超时代理tls)。
 
 ## Web 搜索
 
-`web_search` 是可插拔的搜索工具，自带两种后端：DuckDuckGo 无需 API 密钥，
-但要安装 `ddg` extra；Tavily 无需安装额外依赖，但要设置 `TAVILY_API_KEY` 或传入
-`api_key=`。
-
-```bash
-pip install "lovia[ddg]"   # 仅 DuckDuckGo 后端需要
-```
-
-```python
-from lovia.tools import duckduckgo_search, tavily_search, web_search
-
-tools = [duckduckgo_search()]            # 无需 API 密钥，需要 lovia[ddg]
-tools = [tavily_search()]                # Tavily API，读取 TAVILY_API_KEY
-tools = [web_search(MySearchBackend())]  # 或你自己的后端
-```
-
-工具默认名为 `web_search`（可用 `name=` 覆盖），接收 `query`、`max_results`
-（1–20，默认 5）和可选的时间范围过滤 `time_range`（`"d"` / `"w"` / `"m"` /
-`"y"`）。结果会整理为标题、URL 和摘要，而不是直接返回 JSON。
-
-自定义后端只需实现 `WebSearch` 协议中的 `search()` 方法：
+`web_search(backend)` 是基于你所选后端的搜索工具。lovia 不内置任何后端：搜索服务都是
+商业 API，来来去去，接一个只要十几行代码。后端只需实现 `WebSearch` 协议中的 `search()` 方法：
 
 ```python
 class WebSearch(Protocol):
@@ -164,8 +145,45 @@ class WebSearch(Protocol):
     ) -> list[SearchResult]: ...
 ```
 
-后端必须能安全处理并发调用。显式传入后端（`web_search(impl)`）意味着缺失的
-可选依赖会在构造时失败，而不是运行到一半才失败。
+以 Tavily 的 REST API 为例：
+
+```python
+import os
+
+import httpx
+
+from lovia.http_config import client_options
+from lovia.tools import SearchResult, web_search
+
+
+class TavilySearch:
+    async def search(self, query, *, max_results=5, time_range=None):
+        body = {"query": query, "max_results": max_results}
+        if time_range:
+            body["time_range"] = time_range  # Tavily 直接接受 d/w/m/y
+        async with httpx.AsyncClient(timeout=30, **client_options()) as client:
+            resp = await client.post(
+                "https://api.tavily.com/search",
+                json=body,
+                headers={"Authorization": f"Bearer {os.environ['TAVILY_API_KEY']}"},
+            )
+        resp.raise_for_status()
+        return [
+            SearchResult(title=r["title"], url=r["url"], snippet=r.get("content", ""))
+            for r in resp.json()["results"]
+        ]
+
+
+tools = [web_search(TavilySearch())]
+```
+
+工具默认名为 `web_search`（可用 `name=` 覆盖），接收 `query`、`max_results`
+（1–20，默认 5）和可选的时间范围过滤 `time_range`（`"d"` / `"w"` / `"m"` /
+`"y"`）。结果会整理为标题、URL 和摘要，而不是直接返回 JSON。后端必须能安全处理并发调用；
+`client_options()` 让你的后端使用 lovia 的[代理和 TLS 设置](providers.md#网络超时代理tls)。
+
+另一种方式是托管的搜索 MCP 服务器：好几家都能在免费额度内免 key 使用，见
+[使用 Parallel 进行网页研究](mcp.md#使用-parallel-进行网页研究)。lovia web 用的就是这些（设置 → 联网搜索）。
 
 ## 时间
 
@@ -178,7 +196,7 @@ class WebSearch(Protocol):
   [指令片段](agents.md#编写指令)的工厂，将当天日期写入系统提示词：
 
   ```python
-  agent = Agent(name="researcher", model="<model>", tools=[duckduckgo_search()])
+  agent = Agent(name="researcher", model="<model>", tools=[web_fetch()])
   agent.instruction(current_date())
   ```
 
@@ -264,11 +282,7 @@ async def latest_reply(ticket_id: str) -> str:
   公众的场景中使用前，请启用审批或隔离网络。
 - **`web_fetch` 默认缓存响应 5 分钟。** 变化比这更快的页面需要
   `web_fetch(HttpReader(cache_ttl=0))`。
-- **`duckduckgo_search()` / `tavily_search()` 会立即创建后端。** 缺少 `ddgs` 包或
-  `TAVILY_API_KEY` 时，构建工具便会抛出 `UserError`，让配置问题在启动阶段暴露，
-  而不是拖到运行中途。
-- **搜索结果质量取决于后端。** DDG 后端不需要 API 密钥，但实际使用中可能遇到频率限制；
-  生产环境通常使用 Tavily 等需要密钥的后端，或自行实现 `WebSearch`。
+- **搜索结果质量取决于后端。** 免 key 额度都有频率限制；生产环境通常给后端配上 key。
 
 ## 延伸阅读
 

@@ -8,7 +8,7 @@ style lovia uses everywhere.
 | --- | --- | --- |
 | `01_fetch.py` | `lovia.tools.web_fetch` | Read a page as Markdown (with its images); read a JSON API |
 | `02_time.py` | `lovia.tools.now` | Give the model the current time |
-| `03_search.py` | `lovia.tools.duckduckgo_search` | Requires `pip install "lovia[ddg]"`; swap in `tavily_search()` (`TAVILY_API_KEY`) for the keyed backend |
+| `03_search.py` | `MCP` + Parallel's search server | Keyless; requires `pip install "lovia[mcp]"`. Or `web_search(backend)` over a search API of your own |
 | `04_human.py` | `HumanChannel` + `ask_human` | Let the model ask an operator for missing information |
 
 For filesystem and shell tools (`read_file`, `write_file`, `edit_file`,

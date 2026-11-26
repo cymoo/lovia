@@ -201,14 +201,7 @@ export function buildAssistantPane() {
     });
     actions.appendChild(save);
     if (c.writable) actions.appendChild(el('div', 'lv-cfg-footnote', t('cfg.appliesNextRun')));
-    // The two limits Settings doesn't edit: say what they are (About names
-    // the file they are set in).
-    const limits = el(
-      'div',
-      'lv-cfg-footnote',
-      t('assistant.limits', { turns: a.max_turns, retries: a.max_retries }),
-    );
-    box.append(form, errBox, actions, limits);
+    box.append(form, errBox, actions);
     return box;
   }
 

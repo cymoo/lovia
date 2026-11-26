@@ -273,7 +273,7 @@ function renderList() {
     toggle.className = 'lv-files-group-label lv-files-group-toggle';
     toggle.dataset.part = 'ended';
     toggle.setAttribute('aria-expanded', String(_endedOpen));
-    toggle.innerHTML = icon('chevron-right', { size: 12 });
+    toggle.innerHTML = icon('chevron-right', { size: 14 });
     toggle.append(`${t('bg.groupEnded')} ${list.ended.length}`);
     toggle.addEventListener('click', () => {
       _endedOpen = !_endedOpen;
@@ -294,20 +294,19 @@ function renderList() {
   }
 }
 
-/** The second line: what it is doing, or how it ended and how long it took. */
+/** The second line: what it is doing, or how it ended — none for an ended
+ * one that just finished: its group says it ended, its right edge how long it took. */
 function detailText(item) {
+  if (!item.live && item.state === 'completed') return '';
   if (item.kind === 'task') {
-    return item.state === 'running' ? stepLine(item.step) : taskStatusText(item);
+    return item.state === 'running' ? stepLine(item.step) : taskStatusText(item, { took: false });
   }
   if (item.live) return plainText(item.line);
-  const how = outcomeText({
+  return outcomeText({
     status: item.endedBy === 'exit' ? 'exited' : 'killed',
     exit_code: item.exitCode,
     ended_by: item.endedBy,
   });
-  const took =
-    item.endedAt && item.startedAt ? ` · ${fmtElapsed(item.endedAt - item.startedAt)}` : '';
-  return how + took;
 }
 
 /** @param {import('./background-items.js').BackgroundItem} item */
@@ -351,6 +350,12 @@ function row(item, active) {
   });
   el.append(main);
 
+  if (!item.live && item.endedAt && item.startedAt) {
+    const took = document.createElement('span');
+    took.className = 'lv-bg-clock';
+    took.textContent = fmtElapsed(item.endedAt - item.startedAt);
+    el.append(took);
+  }
   if (item.live && item.state !== 'stopping') {
     if (item.startedAt && item.state !== 'approval') {
       const clock = elapsedNode(item.startedAt);

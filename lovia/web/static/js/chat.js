@@ -435,8 +435,19 @@ function startEditUserTurn(node) {
   wrap.className = 'lv-edit-area';
   const ta = document.createElement('textarea');
   ta.value = body.textContent;
+  ta.rows = 1;
+  ta.setAttribute('aria-label', t('chat.edit'));
+  // As tall as its text (the CSS caps it), so nothing scrolls out of sight.
+  const fit = () => {
+    ta.style.height = 'auto';
+    ta.style.height = `${ta.scrollHeight}px`;
+  };
+  ta.addEventListener('input', fit);
   const actions = document.createElement('div');
   actions.className = 'lv-edit-actions';
+  const hint = document.createElement('span');
+  hint.className = 'lv-edit-hint';
+  hint.textContent = t('chat.editHint');
   const cancelBtn = document.createElement('button');
   cancelBtn.type = 'button';
   cancelBtn.className = 'lv-btn lv-btn-ghost lv-btn-sm';
@@ -445,7 +456,7 @@ function startEditUserTurn(node) {
   sendBtn.type = 'button';
   sendBtn.className = 'lv-btn lv-btn-primary lv-btn-sm';
   sendBtn.textContent = t('chat.send');
-  actions.append(cancelBtn, sendBtn);
+  actions.append(hint, cancelBtn, sendBtn);
   wrap.append(ta, actions);
 
   const restore = () => {
@@ -478,6 +489,7 @@ function startEditUserTurn(node) {
 
   body.style.display = 'none';
   bubble.insertBefore(wrap, body);
+  fit();
   ta.focus();
   ta.setSelectionRange(ta.value.length, ta.value.length);
 }

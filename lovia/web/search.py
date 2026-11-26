@@ -82,7 +82,8 @@ def server_config(search: SearchConfig) -> MCPServerConfig | None:
     preset = PRESETS.get(search.provider)
     if preset is None:
         return None
-    key = search.keys.get(search.provider)
+    # Stripped here too: a hand-edited config.json skips the API's check.
+    key = (search.keys.get(search.provider) or "").strip()
     headers = preset.key_headers(key) if key else dict(preset.keyless_headers)
     return MCPServerConfig(
         name="search", url=preset.url, headers=headers, trust_env=search.trust_env

@@ -981,6 +981,8 @@ export function buildSearchPane() {
     save.addEventListener('click', async () => {
       const body = formBody();
       save.disabled = true;
+      // Held still while it saves: the pane is redrawn from what was saved.
+      form.inert = true;
       errBox.hidden = true;
       try {
         await api.setSearch(body);
@@ -991,6 +993,7 @@ export function buildSearchPane() {
         errBox.textContent = String(err.message || err);
         errBox.hidden = false;
         save.disabled = false;
+        form.inert = false;
       }
     });
     actions.appendChild(save);

@@ -50,7 +50,8 @@ So a chat in another project follows that project's `AGENTS.md` and skills.
 
 Web search asks a hosted search service over MCP, picked in **Settings → Web
 search**: Parallel (the default), Tavily or Exa — each answers without an API
-key within a free allowance, and a key (under Advanced) raises it — or Off.
+key within a free allowance; with a key (under Advanced), searches run on your
+account with that service and may be billed by it — or Off.
 The page says where your searches go and tests the pick as soon as it is made,
 spending no search. The tool keeps one shape whichever service answers, and
 connects only when the model searches, so a message that doesn't search pays

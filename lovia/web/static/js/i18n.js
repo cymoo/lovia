@@ -948,7 +948,7 @@ const MESSAGES = {
     'search.fail': '连不上',
     'search.key': 'API key',
     'search.keyNone': '未设置',
-    'search.keyHint': '可选，额度更高；只保存在服务器上',
+    'search.keyHint': '可选。填了之后搜索算在你在该服务的账户上，可能按量计费；只保存在服务器上',
     'search.proxyHint': '只能经公司代理访问时选“经代理”；“跟随全局”默认直连',
     'cfg.skillsTitle': '技能目录',
     'cfg.skillsIntro':
@@ -1915,7 +1915,8 @@ const EN = {
   'search.fail': 'Can’t connect',
   'search.key': 'API key',
   'search.keyNone': 'Not set',
-  'search.keyHint': 'Optional, for a larger allowance; kept on the server',
+  'search.keyHint':
+    'Optional. With it, searches run on your account with the service and may be billed; kept on the server',
   'search.proxyHint': 'Use proxy when it is reachable only through the office proxy; Default is direct',
   'cfg.skillsTitle': 'Skill directories',
   'cfg.skillsIntro':

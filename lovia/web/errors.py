@@ -65,6 +65,7 @@ ErrorCode = Literal[
     "run_active",
     "run_stopping",
     "run_waiting",
+    "run_interrupted",
     "run_unfinished",
     "nothing_to_fork",
     "run_cancelled",

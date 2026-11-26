@@ -56,7 +56,6 @@ export const store = {
   reasoningNode: null,
   reasoningStart: 0,
   reasoningEnd: 0,
-  lastMessage: null,
   // Set when the current run created a brand-new session whose title is being
   // generated server-side, so the chat view knows to poll for it.
   titlePending: false,

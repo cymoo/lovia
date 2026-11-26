@@ -33,7 +33,7 @@ from ..checkpointer import CheckpointOptions
 from ..exceptions import RunSuspended
 from ..log_config import CURRENT_AGENT
 from ..messages import Message, ToolCall, Usage
-from ..reliability import CancelToken
+from ..reliability import CancelToken, RunBudget
 from ..parts import coerce_parts
 from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
@@ -352,6 +352,9 @@ class RunController:
         # False for a turn whose caller can't answer an approval (a blocking
         # /api/chat): the run doesn't park, Runner.run's order decides.
         self.await_approvals = await_approvals
+        # Set by a resume a person's message asked for: the resumed leg gets
+        # its turn and budget limits afresh (see _counted_from).
+        self.fresh_allowance = False
         # The page's client context and what run_deps= built from it: the
         # run's RunContext.deps, shared by every auto-chained leg. The client
         # is persisted beside each leg's checkpoint pointer for a resume.
@@ -992,6 +995,16 @@ class RunController:
                     if own.budget is not None
                     else deps.fresh_budget()
                 )
+                max_turns = (
+                    deps.max_turns_for(self.agent_name)
+                    if own.max_turns is None
+                    else own.max_turns
+                )
+                if self.fresh_allowance and ckpt is not None and ckpt.resume_from:
+                    # A person's message continues the run: its limits count
+                    # from where it stopped, not from its first leg.
+                    max_turns += ckpt.resume_from.turns
+                    budget = _counted_from(budget, ckpt.resume_from)
                 handle = Runner.stream(
                     self.agent,
                     next_input,
@@ -1001,9 +1014,7 @@ class RunController:
                     context_policy=deps.context_policy,
                     cancel_token=self.cancel,
                     mailbox=self.mailbox,
-                    max_turns=deps.max_turns_for(self.agent_name)
-                    if own.max_turns is None
-                    else own.max_turns,
+                    max_turns=max_turns,
                     budget=budget,
                     retry=deps.retry,
                     tracer=deps.tracer,
@@ -1341,6 +1352,31 @@ def _spent_before(record: JsonObject | None, leg: Usage) -> Usage:
     )
 
 
+def _counted_from(budget: RunBudget | None, snapshot: RunSnapshot) -> RunBudget | None:
+    """``budget`` with every limit raised by what ``snapshot``'s run already
+    spent: a resumed run carries its spend (tokens, tool calls, seconds), so
+    this leaves the whole allowance for what comes after."""
+    if budget is None:
+        return None
+
+    def more(limit: int | float | None, spent: int | float) -> Any:
+        return None if limit is None else limit + spent
+
+    used = snapshot.usage
+    return replace(
+        budget,
+        max_input_tokens=more(budget.max_input_tokens, used.input_tokens),
+        max_output_tokens=more(budget.max_output_tokens, used.output_tokens),
+        max_total_tokens=more(budget.max_total_tokens, used.total_tokens),
+        # As the loop carries it: pending calls count again when they replay.
+        max_tool_calls=more(
+            budget.max_tool_calls,
+            max(0, snapshot.tool_calls - len(pending_tool_calls(snapshot.entries))),
+        ),
+        max_seconds=more(budget.max_seconds, snapshot.elapsed),
+    )
+
+
 class RunSupervisor:
     def __init__(self, deps: RouterDeps) -> None:
         self.deps = deps
@@ -1616,19 +1652,26 @@ class RunSupervisor:
         mailbox: Mailbox | None = None,
         source: str = "user",
         autostart: bool = False,
+        await_approvals: bool = True,
+        fresh_allowance: bool = False,
     ) -> RunController:
         """Register a resume of ``snapshot``; ``run_deps``, ``mailbox``,
-        ``source`` and ``autostart`` as for :meth:`start`.
+        ``source``, ``autostart`` and ``await_approvals`` as for :meth:`start`.
 
         A run suspended on a card resumes with that card's answer in
         ``answers`` (by call id: the resumed run asks again, see
         ``RunController._answers``) and the messages it had not read yet,
-        plus any new one, in ``inbox`` — read at its next turn."""
+        plus any new one, in ``inbox`` — read at its next turn.
+        ``fresh_allowance``: a person's message asked for the resume, so its
+        turn and budget limits count from here."""
         # One start at a time per chat: binding the workspace may switch
         # the chat session's policy (set_policy), which a start about to
         # lose to a concurrent one must never do under the winner's run.
+        # A resume a person's message asked for is new work, held to the run
+        # cap like a fresh start; a reconnect or an answer picks up old work.
+        cap = fresh_allowance
         async with self._start_lock(session_id):
-            self._check_slot(session_id, cap=False)
+            self._check_slot(session_id, cap=cap)
             meta = await self.deps.store.get(session_id)
             agent_name = self.deps.name_of(agent)  # before binding copies the agent
             grants = await self.deps.grant_owner(session_id)
@@ -1642,7 +1685,7 @@ class RunSupervisor:
             # its shell/file tools must land on the chat's one live session.
             folder = await attachments_for_run(self.deps.store, session_id, agent)
             agent = await self.deps.workspaces.bind(session_id, agent, folder)
-            self._check_slot(session_id, cap=False)  # as in start()
+            self._check_slot(session_id, cap=cap)  # as in start()
             client = dict(client or {})
             ckpt = CheckpointOptions(
                 checkpointer=self.deps.store.checkpointer,
@@ -1664,7 +1707,7 @@ class RunSupervisor:
                 if self.deps.session is not None
                 else []
             )
-            self._check_slot(session_id, cap=False)  # those awaits, as above
+            self._check_slot(session_id, cap=cap)  # those awaits, as above
             ctrl = RunController(
                 deps=self.deps,
                 supervisor=self,
@@ -1682,8 +1725,10 @@ class RunSupervisor:
                 mailbox=mailbox,
                 client=client,
                 run_deps=run_deps,
+                await_approvals=await_approvals,
                 chat_created_at=meta.created_at if meta else None,
             )
+            ctrl.fresh_allowance = fresh_allowance
             ctrl.is_task = bool(meta and meta.parent_id)
             ctrl.binding, ctrl.source_agent = binding, handed
             ctrl.grant_owner = grants

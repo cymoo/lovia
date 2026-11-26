@@ -221,35 +221,33 @@ async def test_blocking_turn_failure_answers_run_failed() -> None:
     assert "scripted non-retryable failure" in detail["message"]
 
 
-async def test_refused_blocking_turn_keeps_the_interrupted_run() -> None:
-    """The chat's interrupted run is deleted only once a new run has taken the
-    chat: a turn refused at the run cap leaves it resumable."""
+async def test_a_blocking_turn_continues_the_interrupted_run() -> None:
+    """A message to a chat whose run was interrupted continues that run (its
+    entries and the message), never a fresh run beside it."""
     store = ChatStore.in_memory()
     await store.upsert("s1", agent="bot")
     await store.checkpointer.append(
         "run-1",
         [InputEntry(role="user", content="q")],
-        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+        RunHead(
+            agent_name="bot",
+            usage=Usage(),
+            turns=1,
+            status="interrupted",
+            error={"type": "MaxTurnsExceeded", "message": "limit"},
+        ),
     )
     await store.set_active_run_id("s1", "run-1")
-    release = asyncio.Event()
-    provider = ScriptedProvider(
-        [call("block", {}, call_id="c1"), text("other done"), text("s1 done")]
-    )
-    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
-    async with _client(_app(agent, store=store, max_background_runs=1)) as ac:
-        other = _post(ac, "go", sid="s2")
-        await _wait_run(ac, "s2")  # the one slot is taken
-        refused = await ac.post("/api/chat", json={"message": "hi", "session_id": "s1"})
-        assert refused.status_code == 429
-        assert await store.checkpointer.load("run-1") is not None
-        assert await store.get_active_run_id("s1") == "run-1"
-
-        release.set()
-        await asyncio.wait_for(other, timeout=5)
-        res = await ac.post("/api/chat", json={"message": "hi", "session_id": "s1"})
+    provider = ScriptedProvider([text("s1 done")])
+    agent = Agent(name="bot", model=provider)
+    async with _client(_app(agent, store=store, max_turns=1)) as ac:
+        res = await ac.post("/api/chat", json={"message": "go on", "session_id": "s1"})
     assert res.status_code == 200, res.text
-    assert await store.checkpointer.load("run-1") is None  # superseded: dropped
+    assert res.json()["output"] == "s1 done"
+    seen = [m.content for m in provider.calls[-1] if m.role == "user"]
+    assert seen == ["q", "go on"]  # one run: its input, then the message
+    # Under max_turns=1 after a first turn: the limit counted afresh.
+    assert await store.checkpointer.load("run-1") is None  # completed
 
 
 async def test_failed_auto_chain_hop_is_not_a_success(monkeypatch) -> None:

@@ -128,6 +128,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `run_active` | 409 | 该聊天已有 Run 在执行 |
 | `run_stopping` | 409 | 已停止的 Run 仍在收尾，请稍后重试 |
 | `run_waiting` | 409 | 对话的 Run 因审批而暂停：回答审批卡片即可续跑，也可以停止它 |
+| `run_interrupted` | 409 | 对话的 Run 因达到上限或出错而停下：向对话发一条消息即可接着运行（reconnect 和带 `busy="reject"` 的流式请求会被拒绝） |
 | `run_unfinished` | 409 | 该聊天的上一个 Run 被中断且仍可恢复；复制整个聊天要等它结束 |
 | `nothing_to_fork` | 409 | fork 结果会是空的：该位置之前没有已完成的历史 |
 | `run_cancelled` | 409 | 阻塞式 Turn 的 Run 被停止（取消、删除聊天或服务端关闭） |
@@ -161,7 +162,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/info` | 标题、Agent 列表、默认 Agent、版本和功能开关；对话可以选择权限模式时（`create_app(workspaces=)`）还有 `workspace_modes: {modes, default}`，否则为 `null`；服务能在自己的桌面上显示文件时还有 `desktop: {reveal, edit}`（`reveal` 取 `finder`、`explorer` 或 `folder`），否则为 `null`。`take_seconds` 是转写服务接受的最长语音输入秒数，服务端不知道时为 `null` |
 | `GET /api/agents` · `GET /api/agents/{name}` | 查看 Agent 的 instructions、工具和能力（`workspace`、`vision`：模型能否看图） |
 | `POST /api/chat` | 执行一次**阻塞式** Turn → `{output, session_id, usage}`：托管 Run，请求等待其结束（[详见](#阻塞式-turn)） |
-| `POST /api/chat/stream` | **SSE**：启动 Run，或连接到 Session 中正在执行的 Run（新消息会作为追加指令注入） |
+| `POST /api/chat/stream` | **SSE**：启动 Run，或连接到 Session 中正在执行的 Run（新消息会作为追加指令注入）。对话的上一个 Run 被中断时（达到上限、出错或服务关闭），消息会让那个 Run 接着运行：在下一轮读到这条消息，各项上限从此处重新计算；`POST /api/chat` 也是如此 |
 | `POST /api/chat/reconnect?session_id=` | **SSE**：重新连接，或从 Checkpoint 恢复中断的 Run |
 | `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision, remember?, scopes?, reason?}` → `{ok, remembered, resumed}`。回答一个因这条请求而暂停的运行（`suspended`）时，会带着回答把它续跑起来，此时没有客户端连着（`resumed: true`）：用 `POST /api/chat/reconnect` 接上。`POST /api/chat/answer` 对暂停中的 `ask_human` 问题也是如此（返回 `{ok, resumed}`）。`remember`（仅允许时）同时为这条请求自己的每个 `scopes` 在本对话各记一条“总是允许”——传了 `scopes` 时只记其中列出的，只能缩小、不能扩大（列出请求没有的范围 → `400 invalid_request`，本次不做任何决定）；`reason`（仅拒绝时）会传给模型。授权先落库再唤醒运行，同范围的下一条调用不会在此期间再问；一个都没选、请求没有 scopes 或保存失败时 `remembered` 为 false（本次允许照常生效） |
 | `POST /api/chat/cancel?session_id=` | 取消正在执行的 Run（保留已完成的 Turn） |

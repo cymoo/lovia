@@ -52,7 +52,7 @@ from ..schemas import (
 from ...runtime.loop import pending_tool_calls
 from ..supervisor import RunController, agent_grant_context
 from ..titles import provisional_title
-from ..waiting import RESUMABLE, find_waiting
+from ..waiting import RESUMABLE, find_waiting, interrupted_by
 from ..workspaces import ChatBinding
 from .deps import RouterDeps
 from .routing import GuardedRoute
@@ -116,6 +116,8 @@ async def _session_view(
       pointer: answering it resumes the run, opening the chat must not.
     * No live run but a resumable checkpoint (restart recovery) → the same
       splice, advertising the stored pointer; a stale pointer is cleaned up.
+      One cut off by a limit or a failure gets ``{"kind": "message", ...}``
+      instead of the pointer: the next message continues it.
     * Finished → rebuilt from segments so persisted per-run compaction notices
       replay (a live run surfaces compaction over SSE instead).
     """
@@ -150,6 +152,11 @@ async def _session_view(
             runs = segments_runs(await session.segments(session_id))
             runs.append(_in_flight(snapshot))
             view = view_messages(runs, created_at=created_at, updated_at=updated_at)
+            if (reason := interrupted_by(snapshot)) is not None:
+                # Cut off by a limit or a failure: no reconnect; the person's
+                # next message continues it.
+                error = (snapshot.error or {}).get("message")
+                return view, None, {"kind": "message", "reason": reason, "error": error}
             return view, candidate, None
         # Stale pointer — clean it up so a reload doesn't offer a dead reconnect.
         await store.clear_active_run_id(session_id)

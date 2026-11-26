@@ -1003,6 +1003,12 @@ A graceful server shutdown retains the main Run's Checkpoint so it can resume
 after restart. Process-local approval and SSE subscription state is not
 restored, nor are Shell background processes or background subagents.
 
+A Run stopped by the turn limit, a budget, or a model or network failure stays
+the chat's Run: the chat says why it stopped, and your next message — "go on",
+or anything else — continues it where it stopped, with its plan and its work,
+and with the limits counted afresh. Opening the chat doesn't restart it on its
+own.
+
 A message sent while a Run is active does one of two things, decided per message:
 
 - **Queue** (Enter): the message waits above the composer and is sent as its own

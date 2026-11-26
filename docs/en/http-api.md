@@ -136,6 +136,7 @@ normalizes all three.
 | `run_active` | 409 | a run owns this chat |
 | `run_stopping` | 409 | a stopped run is still winding down; retry shortly |
 | `run_waiting` | 409 | the chat's run is suspended on an approval: answer its card to resume it, or stop it |
+| `run_interrupted` | 409 | the chat's run stopped at a limit or on a failure: a message to the chat continues it (refused by reconnect, and for a stream sent with `busy="reject"`) |
 | `run_unfinished` | 409 | the chat's last run was interrupted and can still resume; a whole-chat fork waits for it |
 | `nothing_to_fork` | 409 | the fork would be empty: no finished history before that point |
 | `run_cancelled` | 409 | a blocking turn's run was stopped (cancel, chat deletion, or shutdown) |
@@ -169,7 +170,7 @@ normalizes all three.
 | `GET /api/info` | title, agents, default agent, version, feature flags, `workspace_modes: {modes, default}` when chats can pick a permission mode (`create_app(workspaces=)`; else `null`), and `desktop: {reveal, edit}` when the server can show files on its own desktop (`reveal`: `finder`, `explorer` or `folder`; else `null`). `take_seconds` is the longest voice-input take the transcription service accepts, where the server knows it (else `null`) |
 | `GET /api/agents` · `GET /api/agents/{name}` | agent introspection (instructions, tools, capabilities — `workspace`, `vision`: whether its model sees images) |
 | `POST /api/chat` | one **blocking** turn → `{output, session_id, usage}`: a supervised Run, waited for ([details](#blocking-turns)) |
-| `POST /api/chat/stream` | **SSE**: start a run, or attach to the session's live run (injecting the new message) |
+| `POST /api/chat/stream` | **SSE**: start a run, or attach to the session's live run (injecting the new message). A chat whose last run was interrupted (a limit, a failure, a shutdown) continues that run instead, the message read at its next turn and its limits counted afresh; `POST /api/chat` does the same |
 | `POST /api/chat/reconnect?session_id=` | **SSE**: re-attach after refresh, or resume an interrupted checkpoint |
 | `POST /api/chat/approve` | resolve a pending approval: `{session_id, call_id, decision, remember?, scopes?, reason?}` → `{ok, remembered, resumed}`. Answering a run suspended on that request (`suspended`) resumes it with the answer, with no client attached (`resumed: true`): attach with `POST /api/chat/reconnect`. `POST /api/chat/answer` does the same for a suspended `ask_human` question (`{ok, resumed}`). `remember` (approve only) also saves an "always allow" grant for each of the request's own `scopes` in this chat — or only for the ones listed in `scopes`, which may narrow but never widen them (one the request does not offer → `400 invalid_request`, and nothing is decided); `reason` (deny only) reaches the model. The grants are written before the run wakes, so a repeat call in those scopes never asks meanwhile; `remembered` is false when nothing was picked, the request had no scopes, or saving failed (the approval still stands) |
 | `POST /api/chat/cancel?session_id=` | stop the live run (completed turns are kept) |

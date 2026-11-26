@@ -437,14 +437,15 @@ async def test_concurrency_cap_rejects_new_runs() -> None:
 
 @pytest.mark.asyncio
 async def test_refused_stream_keeps_the_interrupted_run() -> None:
-    """The chat's interrupted run is deleted only once a new run has taken the
-    chat: a stream refused at the run cap leaves it resumable (#254)."""
+    """A run left behind that a message can't continue (its agent no longer
+    served) is deleted only once a new run has taken the chat: a stream
+    refused at the run cap leaves it in place (#254)."""
     store = ChatStore.in_memory()
     await store.upsert("s1", agent="bot")
     await store.checkpointer.append(
         "run-1",
         [InputEntry(role="user", content="q")],
-        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+        RunHead(agent_name="gone", usage=Usage(), turns=1, status="interrupted"),
     )
     await store.set_active_run_id("s1", "run-1")
     release = asyncio.Event()

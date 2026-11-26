@@ -1323,7 +1323,6 @@ export async function switchSession(id) {
 export function clearChat() {
   store.sessionId = null;
   store.syncURL(null);
-  store.lastMessage = null;
   renderOrigin(null);
   if (chatTitleEl) chatTitleEl.textContent = t('session.newChat');
   store.emit('reset-chat-view');

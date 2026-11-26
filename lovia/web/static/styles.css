@@ -3253,8 +3253,15 @@ button.lv-question-option:hover {
 .lv-retry-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-top: 12px;
+}
+
+/* Under a run that ended on an error: the next message continues it. */
+.lv-continue-hint {
+  color: var(--lv-muted);
+  font-size: 13px;
 }
 
 /* ---- Errors ----------------------------------------------------------------------- */

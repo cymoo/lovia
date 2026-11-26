@@ -279,18 +279,27 @@ def _refusing(trigger: RunTrigger) -> dict:
 
 
 async def test_a_refused_turn_leaves_the_interrupted_run_resumable() -> None:
+    """A message continues the interrupted run, judged — like any resume —
+    with the run's own client context; a refusal leaves the run in place."""
     store = ChatStore.in_memory()
     await _interrupted(store)
-    app = _app(_agent([text("ok")]), store=store, run_deps=_refusing)
+    await store.set_active_run_id("s1", "run-1", context={"kb": "secret"})
+    provider = ScriptedProvider([text("ok")])
+    app = _app(
+        Agent(name="bot", model=provider, tools=[whoami]),
+        store=store,
+        run_deps=_refusing,
+    )
     async with _client(app) as ac:
-        body = {"message": "hi", "session_id": "s1", "context": {"kb": "secret"}}
+        body = {"message": "hi", "session_id": "s1", "context": {"kb": "docs"}}
         res = await ac.post("/api/chat/stream", json=body)
         assert res.status_code == 403
         assert await store.get_active_run_id("s1") == "run-1"
         assert await store.checkpointer.load("run-1") is not None
-        # A turn that does start supersedes it.
-        body["context"] = {"kb": "docs"}
+        # Under a context the hook allows, the message continues the run.
+        await store.set_active_run_id("s1", "run-1", context={"kb": "docs"})
         await ac.post("/api/chat/stream", json=body)
+    assert [m.content for m in provider.calls[-1] if m.role == "user"] == ["q", "hi"]
     assert await store.checkpointer.load("run-1") is None
 
 

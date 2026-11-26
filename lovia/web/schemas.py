@@ -550,7 +550,9 @@ class SessionDetail(BaseModel):
     # approval_required frame); "question": an ask_human question, as
     # ``{id, name, arguments, question}``, answered with POST /api/chat/answer;
     # "call": another tool that put its answer off, as ``{id, name,
-    # arguments}`` — a message to the chat resumes it.
+    # arguments}`` — a message to the chat resumes it; "message": a run cut
+    # off by a limit or a failure, as ``{reason, error}`` (``reason``
+    # "max_turns", "budget" or "error") — the next message continues it.
     waiting: dict[str, Any] | None = None
     pinned: bool = False
     # Put away by the user: left out of GET /api/sessions unless asked for.

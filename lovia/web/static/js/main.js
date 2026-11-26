@@ -125,18 +125,6 @@ store.on('render-history', (entries) => renderHistory(entries));
 // The card a suspended run waits on, drawn under the history just rendered.
 store.on('waiting-card', (call) => showWaitingCard(call));
 
-store.on('retry', () => {
-  const promptEl = /** @type {HTMLTextAreaElement | null} */ (
-    document.getElementById('prompt')
-  );
-  if (store.lastMessage && promptEl) {
-    promptEl.value = store.lastMessage;
-    /** @type {HTMLFormElement | null} */ (
-      document.getElementById('composer')
-    )?.requestSubmit();
-  }
-});
-
 store.on('reset-chat-view', resetChatForNewSession);
 
 store.on('reconnect', (sessionId) => {

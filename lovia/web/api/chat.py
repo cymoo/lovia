@@ -25,7 +25,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ...agent import Agent
 from ...messages import user
-from ..attachments import build_user_input, user_content
+from ..attachments import user_content
 from ..errors import WebError
 from ..run_deps import RunTrigger, build_run_deps
 from ...approvals import Approval
@@ -45,7 +45,10 @@ from ..titles import provisional_title
 from ..waiting import (
     RESUMABLE,
     Waiting,
+    find_interrupted,
     find_waiting,
+    interrupted_by,
+    resume_interrupted,
     resume_waiting,
     stop_waiting,
 )
@@ -186,45 +189,59 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             )
         scoped = scope(agent, meta, req, binding)
         folder = await store.attachment_folder(sid) if req.attachments else None
-        user_input = await build_user_input(req, scoped, folder)
-        if isinstance(user_input, str) and not user_input.strip():
+        content = await user_content(req.message, req.attachments, scoped, folder)
+        if isinstance(content, str) and not content.strip():
             # Attachments were given but all invalid (missing / outside the
             # workspace) and there's no text — nothing to run.
             raise WebError(422, "invalid_request", "empty message")
         client = req.context or {}
-        # The run_deps hook decides first, before anything is written: a
-        # refused message leaves no trace.
-        trigger = RunTrigger(
-            session_id=sid,
-            agent=scoped,
-            source="user",
-            request=request,
-            client_context=client,
-        )
-        run_deps = await build_run_deps(deps.run_deps, trigger)
-        await upsert_session(sid, agent, req, binding if is_new else None)
-        # The chat's interrupted run, superseded by this one: read before the
-        # start, deleted only after it, so a refused start (409/429) leaves it
-        # resumable.
-        checkpointer = store.checkpointer
-        stranded = (
-            await store.get_active_run_id(sid) if checkpointer is not None else None
-        )
-        ctrl = await deps.supervisor.start(
-            session_id=sid,
-            agent=agent,
-            input=user_input,
-            is_new=is_new,
-            title_message=req.message,
-            autostart=True,
-            client=client,
-            run_deps=run_deps,
-            # No client to ask: Runner.run's approval behaviour.
-            await_approvals=False,
-        )
+        # The chat's interrupted run goes on with this message (as a stream's
+        # does), with no client to ask for approvals.
+        ctrl: RunController | None = None
+        if (interrupted := await find_interrupted(deps, sid)) is not None:
+            await upsert_session(sid, agent, req, None)
+            ctrl = await resume_interrupted(
+                deps,
+                sid,
+                interrupted,
+                message=content,
+                request=request,
+                await_approvals=False,
+            )
+        if ctrl is None:
+            # The run_deps hook decides first, before anything is written: a
+            # refused message leaves no trace.
+            trigger = RunTrigger(
+                session_id=sid,
+                agent=scoped,
+                source="user",
+                request=request,
+                client_context=client,
+            )
+            run_deps = await build_run_deps(deps.run_deps, trigger)
+            await upsert_session(sid, agent, req, binding if is_new else None)
+            # An interrupted run left behind (its agent no longer served) is
+            # superseded: read before the start, deleted only after it, so a
+            # refused start (409/429) leaves it resumable.
+            checkpointer = store.checkpointer
+            stranded = (
+                await store.get_active_run_id(sid) if checkpointer is not None else None
+            )
+            ctrl = await deps.supervisor.start(
+                session_id=sid,
+                agent=agent,
+                input=content if isinstance(content, str) else [user(content)],
+                is_new=is_new,
+                title_message=req.message,
+                autostart=True,
+                client=client,
+                run_deps=run_deps,
+                # No client to ask: Runner.run's approval behaviour.
+                await_approvals=False,
+            )
+            if checkpointer is not None and stranded:
+                await checkpointer.delete(stranded)
         assert ctrl.task is not None  # autostart began it
-        if checkpointer is not None and stranded:
-            await checkpointer.delete(stranded)
         # asyncio.wait never cancels what it waits on: a request cancelled
         # by its client going away leaves the run to finish into the chat.
         await asyncio.wait([ctrl.task])
@@ -293,10 +310,17 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 "this chat's run waits on an approval",
                 hint='sent with busy="reject": send it again once that run has ended',
             )
+        # So is one cut off by a limit, a failure or a shutdown: the message
+        # resumes it and joins it, with its limits counted afresh.
+        interrupted = (
+            await find_interrupted(deps, sid) if waiting is None and not empty else None
+        )
         # A message for a live run joins it, in that run's context. Any other
         # starts one: the run_deps hook decides first, before anything is
         # written, so a refused message leaves no trace.
-        decided = deps.supervisor.get(sid) is None and waiting is None
+        decided = (
+            deps.supervisor.get(sid) is None and waiting is None and interrupted is None
+        )
         run_deps = None
         if decided:
             run_deps = await build_run_deps(deps.run_deps, trigger)
@@ -338,6 +362,26 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                     run_id=resumed.record_id,
                 )
             )
+        if interrupted is not None:
+            try:
+                resumed = await resume_interrupted(
+                    deps, sid, interrupted, message=content, request=request
+                )
+            except WebError as exc:
+                # Another request resumed it first: join that run.
+                live = deps.supervisor.get(sid)
+                if exc.code == "run_active" and live is not None:
+                    return attach(live)
+                raise
+            if resumed is not None:
+                return EventSourceResponse(
+                    forward(
+                        resumed.attach(with_snapshot=True),
+                        sid=sid,
+                        run_id=resumed.record_id,
+                    )
+                )
+            # Gone meanwhile (resumed to its end, or cleared): a fresh run.
         if not decided:  # ... and so did the one this message was to join
             run_deps = await build_run_deps(deps.run_deps, trigger)
             # Another may have started while the hook ran: join that one,
@@ -345,10 +389,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             if (live := deps.supervisor.get(sid)) is not None:
                 return attach(live)
 
-        # No live run → start a fresh supervised run. The chat's interrupted
-        # run, superseded by it, is read before the start and deleted only
-        # after it (as in /chat), so a refused start (409/429) leaves it
-        # resumable.
+        # No live run → start a fresh supervised run. An interrupted run left
+        # behind (its agent no longer served) is superseded by it: read before
+        # the start and deleted only after it (as in /chat), so a refused
+        # start (409/429) leaves it resumable.
         checkpointer = store.checkpointer
         stranded = (
             await store.get_active_run_id(sid) if checkpointer is not None else None
@@ -609,6 +653,15 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         if snapshot is None or snapshot.status not in RESUMABLE:
             await store.clear_active_run_id(session_id)
             raise WebError(404, "run_not_found", "no resumable run")
+        if interrupted_by(snapshot) is not None:
+            # Cut off by a limit or a failure: it goes on when the person
+            # sends a message, not because a page opened the chat.
+            raise WebError(
+                409,
+                "run_interrupted",
+                "this chat's run stopped and waits for a message",
+                hint="send a message to the chat to continue it",
+            )
         if snapshot.agent_name not in deps.agents:
             await store.checkpointer.delete(run_id)
             await store.clear_active_run_id(session_id)

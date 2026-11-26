@@ -989,10 +989,15 @@ function noteToolWaiting(id, name) {
  * Show what the chat's suspended run waits on (the session's `waiting`),
  * under the last reply of the history just rendered: an approval card (drawn
  * here), an ask_human question (drawn by the history from its pending call,
- * only marked paused), or another tool's wait (a note).
- * @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], kind?: string }} call
+ * only marked paused), another tool's wait (a note), or a run cut off by a
+ * limit or a failure (a notice: the next message continues it).
+ * @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], kind?: string, error?: string | null }} call
  */
 export function showWaitingCard(call) {
+  if (call.kind === 'message') {
+    showInterrupted(call);
+    return;
+  }
   if (call.kind === 'question') {
     suspendQuestion(call.id);
     return;
@@ -1999,15 +2004,24 @@ function appendContextCompacted(target, data) {
 
 // The error codes a person fixes in the model settings, not by waiting.
 const SETTINGS_FIXABLE = new Set(['provider_auth', 'network']);
-/** The code of the run's last `error` event, for the retry row's offer. */
+/** The code of the run's last `error` event, for the continue row's offer. */
 let _lastErrorCode = '';
 
-function appendRetry() {
+/**
+ * Under a run that ended on an error: the chat's next message continues it
+ * (the server resumes an interrupted run with it), plus the settings that
+ * may fix the cause. No Retry: re-sending a message would start the work
+ * over, and the page may hold another chat's last message.
+ * @param {{ quiet?: boolean }} [opts] `quiet`: no announcement (history).
+ */
+function appendContinueRow({ quiet = false } = {}) {
   if (!store.bubble) return;
-  const node = cloneTemplate('tmpl-retry');
-  const btn = node.querySelector('.lv-retry-btn');
-  btn.textContent = t('chat.retry');
-  btn.addEventListener('click', () => store.emit('retry'));
+  const node = document.createElement('div');
+  node.className = 'lv-retry-row';
+  const hint = document.createElement('span');
+  hint.className = 'lv-continue-hint';
+  hint.textContent = t('chat.sendToContinue');
+  node.appendChild(hint);
   if (store.canConfigure && SETTINGS_FIXABLE.has(_lastErrorCode)) {
     const settings = document.createElement('button');
     settings.type = 'button';
@@ -2026,7 +2040,43 @@ function appendRetry() {
     node.appendChild(limit);
   }
   appendBubbleContent(store.bubble, node);
-  announce(t('a11y.runFailed'), { assertive: true });
+  if (!quiet) announce(t('a11y.runFailed'), { assertive: true });
+}
+
+/**
+ * A message the server never took (refused, or cut off before its run
+ * began) goes back in the composer to send again — unless something new is
+ * being written there.
+ * @param {string} message
+ */
+function restorePrompt(message) {
+  if (!promptEl || !message || promptEl.value.trim()) return;
+  promptEl.value = message;
+  promptEl.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/**
+ * The chat's run stopped at a limit or on a failure (the session's `waiting`
+ * of kind "message"): say so under the history just rendered, and that the
+ * next message continues it.
+ * @param {{ reason?: string, error?: string | null }} waiting
+ */
+function showInterrupted(waiting) {
+  if (store.streaming) return;
+  const turns = document.querySelectorAll('#transcript .lv-turn');
+  const last = /** @type {HTMLElement | undefined} */ (turns[turns.length - 1]);
+  if (last && !last.classList.contains('lv-user')) {
+    store.turnNode = last;
+    store.bubble = last.querySelector('.lv-bubble');
+  } else {
+    // Cut off before it answered: the notice gets a reply bubble of its own.
+    startAssistantTurn();
+    store.turnNode?.classList.remove('lv-streaming');
+  }
+  const reason = waiting.reason ?? '';
+  _lastErrorCode = reason === 'max_turns' || reason === 'budget' ? reason : '';
+  appendErrorNotice(waiting.error || t('chat.runStopped'), _lastErrorCode);
+  appendContinueRow({ quiet: true });
 }
 
 // ---- Screen-reader announcements ----------------------------------------
@@ -3822,7 +3872,6 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
     outcome.admitted = true;
     onAdmit?.(runId);
   };
-  store.lastMessage = message;
   store.titlePending = false; // set true by the `session` event for new chats
   stopTitlePolling();
   clearFollowups(); // the previous turn's suggestions are answered or abandoned
@@ -3878,7 +3927,8 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
       }
       _lastErrorCode = err.code ?? '';
       appendErrorNotice(err.message, err.code);
-      appendRetry();
+      restorePrompt(message); // never taken: send it again from the composer
+      announce(t('a11y.runFailed'), { assertive: true });
       return;
     }
 
@@ -3913,7 +3963,12 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
       const hint = humanizeError(raw, err.code);
       store.rawText += `\n\n> ⚠️ **${t('chat.error')}:** ${hint ? `${hint} (${raw})` : raw}`;
       flushRender(true);
-      appendRetry();
+      if (outcome.admitted) {
+        appendContinueRow();
+      } else {
+        restorePrompt(message);
+        announce(t('a11y.runFailed'), { assertive: true });
+      }
     }
   } finally {
     cancelRender();
@@ -3928,15 +3983,17 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
         flushRender(true);
       }
       // Stream ended right after an `error` event → the failure was terminal
-      // (a recovered tool error is followed by more events). Offer a Retry.
-      if (_lastEventWasError && store.bubble) appendRetry();
+      // (a recovered tool error is followed by more events): the next
+      // message continues the run.
+      if (_lastEventWasError && store.bubble) appendContinueRow();
       // Clean EOF with no `done` and no surfaced failure: the connection
       // dropped mid-run and the reply on screen may be missing its tail.
       const dropped = !terminal && !_lastEventWasError && !_sawDone && !_sawSuspended;
       if (dropped && !store.sessionId && store.bubble) {
         // Nothing persisted to reconnect to — surface it as a failure.
         appendErrorNotice(t('chat.connectionLost'));
-        appendRetry();
+        restorePrompt(message);
+        announce(t('a11y.runFailed'), { assertive: true });
       }
       finalizeCurrentAssistantTurn();
       // Un-mute any queued bubbles the server dropped (an errored/cancelled run
@@ -4038,9 +4095,8 @@ export async function runReconnect(sessionId) {
         store.body.dataset.raw = store.rawText;
         flushRender(true);
       }
-      // Retry re-sends store.lastMessage — only offer it when there is one
-      // (a reconnect after a page refresh has nothing to re-send).
-      if (_lastEventWasError && store.bubble && store.lastMessage) appendRetry();
+      // A resumed run that failed again: the next message continues it.
+      if (_lastEventWasError && store.bubble) appendContinueRow();
       const dropped = !terminal && !_lastEventWasError && !_sawDone && !_sawSuspended;
       finalizeCurrentAssistantTurn();
       flushQueuedTurns();

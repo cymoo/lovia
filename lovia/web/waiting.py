@@ -10,6 +10,13 @@ Everything that would start a run in such a chat comes through here instead
 (``RunSupervisor.start`` refuses it with ``run_waiting``): answering the card
 resumes the run with that answer, a message resumes it and joins it, a stop
 settles it, and a subagent's report waits in its queue.
+
+A run cut off without a card (a turn or budget limit, a model or network
+failure, a shutdown) keeps a resumable checkpoint too, with no ``waiting``
+record: a person's message to the chat resumes it and joins it
+(:func:`resume_interrupted`), never a fresh run beside it. One cut off by a
+limit or a failure waits for that message (:func:`interrupted_by`); one cut
+off by a shutdown resumes when a page reconnects.
 """
 
 from __future__ import annotations
@@ -184,6 +191,7 @@ async def resume_waiting(
             mailbox=kept.mailbox if kept is not None else None,
             source=kept.source if kept is not None else waiting.record.source,
             autostart=True,
+            fresh_allowance=message is not None,
         )
         if reply is not None and waiting.question is not None and deps.questions:
             # Set before the task first runs (no await since it was begun):
@@ -195,6 +203,95 @@ async def resume_waiting(
         # Nothing resumed: the run waits on, as it was.
         await store.unclaim_waiting(waiting.record.id, claimed)
         raise
+
+
+# Cut off by a stop, a shutdown or a lost process: a reconnect resumes these.
+_RECONNECTABLE = ("RunCancelled", "CancelledError", "RunSuspended")
+
+
+def interrupted_by(snapshot: RunSnapshot) -> str | None:
+    """Why ``snapshot``'s run stopped, when it waits for a person's message to
+    go on: ``max_turns``, ``budget``, or ``error`` (a model or network
+    failure). Opening the chat doesn't resume these — it would hit the limit
+    again at once, or spend without being asked. None for a run a reconnect
+    resumes (a shutdown, a lost process)."""
+    kind = (snapshot.error or {}).get("type")
+    if kind is None or kind in _RECONNECTABLE:
+        return None
+    return {"MaxTurnsExceeded": "max_turns", "BudgetExceeded": "budget"}.get(
+        str(kind), "error"
+    )
+
+
+async def find_interrupted(deps: RouterDeps, session_id: str) -> RunSnapshot | None:
+    """The chat's interrupted run, when a message may resume it: a resumable
+    checkpoint the chat points at, with no live run and no card (see
+    :func:`find_waiting`), whose agent is still served."""
+    store = deps.store
+    if store.checkpointer is None or deps.supervisor.get(session_id) is not None:
+        return None
+    # A run stopped a moment ago retires its pointer once saved.
+    await deps.supervisor.settle(session_id)
+    run_id = await store.get_active_run_id(session_id)
+    if run_id is None:
+        return None
+    snapshot = await store.checkpointer.load(run_id)
+    if snapshot is None or snapshot.status not in RESUMABLE:
+        return None
+    return snapshot if snapshot.agent_name in deps.agents else None
+
+
+async def resume_interrupted(
+    deps: RouterDeps,
+    sid: str,
+    snapshot: RunSnapshot,
+    *,
+    message: InjectedContent,
+    request: Request | None = None,
+    await_approvals: bool = True,
+) -> RunController | None:
+    """Resume chat ``sid``'s interrupted run (``snapshot``, from
+    :func:`find_interrupted`) now, with ``message`` read at its next turn and
+    its limits counted afresh from where it stopped; with no subscriber (the
+    caller attaches). None when it is no longer there to resume (another
+    request resumed or cleared it meanwhile)."""
+    store = deps.store
+    assert store.checkpointer is not None  # find_interrupted found one
+    agent = deps.agents[snapshot.agent_name]
+    # Checked like a fresh turn: a chat whose directory this server no longer
+    # allows is refused, not resumed elsewhere.
+    binding = deps.chat_binding(agent, await store.get(sid))
+    # The run's own client context (a checkpoint keeps none).
+    client = await store.get_active_context(sid) or {}
+    run_deps = await build_run_deps(
+        deps.run_deps,
+        RunTrigger(
+            session_id=sid,
+            agent=deps.at_root(agent, binding),
+            source="user",
+            request=request,
+            client_context=client,
+            resumed=True,
+        ),
+    )
+    # The hook may have let another request resume (or clear) it meanwhile,
+    # even to its end: resume only what the chat still points at, read afresh.
+    if await store.get_active_run_id(sid) != snapshot.run_id:
+        return None
+    current = await store.checkpointer.load(snapshot.run_id)
+    if current is None or current.status not in RESUMABLE:
+        return None
+    return await deps.supervisor.start_resume(
+        session_id=sid,
+        agent=agent,
+        snapshot=current,
+        client=client,
+        run_deps=run_deps,
+        inbox=[message],
+        autostart=True,
+        await_approvals=await_approvals,
+        fresh_allowance=True,
+    )
 
 
 async def stop_waiting(deps: RouterDeps, waiting: Waiting) -> bool:

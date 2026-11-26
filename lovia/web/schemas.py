@@ -204,6 +204,9 @@ class ProcessInfo(BaseModel):
 
     process_id: str
     command: str
+    # What it does, as the model said starting it (shell's `description`);
+    # "" when it said nothing.
+    title: str = ""
     status: Literal["running", "exited", "killed"]
     exit_code: int | None = None
     cwd: str = ""

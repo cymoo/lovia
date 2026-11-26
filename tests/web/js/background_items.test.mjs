@@ -81,6 +81,10 @@ test('how a command ended', () => {
   // One line, whatever the command; its last line only while it runs.
   const item = state(cmd('a', { command: 'a \\\n  b\n', last_line: 'x' }));
   assert.deepEqual([item.title, item.line], ['a \\ b', 'x']);
+  assert.equal(item.oneLine, item.title);
+  // What the model said it does, when it said so; the command stays as it was.
+  const said = state(cmd('a', { command: 'npm run dev', title: 'Dev server' }));
+  assert.deepEqual([said.title, said.command, said.oneLine], ['Dev server', 'npm run dev', 'npm run dev']);
   assert.equal(state(done('a', 0, { last_line: 'x' })).line, '');
 });
 

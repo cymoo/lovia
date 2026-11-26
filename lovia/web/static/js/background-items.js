@@ -7,7 +7,9 @@
  * @property {string} key `task:<session>` or `cmd:<process>`.
  * @property {'task' | 'cmd'} kind
  * @property {string} id
- * @property {string} title
+ * @property {string} title What a command does (its `description`), else the command.
+ * @property {string} command A command's own text; '' for a task.
+ * @property {string} oneLine The command on one line: the title when it has no other.
  * @property {string | null} agent The agent a task's chat runs.
  * @property {'approval' | 'running' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'interrupted' | 'lost'} state
  * @property {string | null} waitsFor What a task in `approval` waits on: `approval`, `question`, `call`.
@@ -52,6 +54,8 @@ function taskItem(task, run) {
     kind: 'task',
     id: task.id,
     title: taskName(task),
+    command: '',
+    oneLine: '',
     agent: task.agent ?? null,
     state,
     waitsFor: state === 'approval' ? (run.waits_on?.kind ?? 'approval') : null,
@@ -65,6 +69,8 @@ function taskItem(task, run) {
     step: run?.step ?? null,
   };
 }
+
+const oneLine = (/** @type {string} */ text) => text.split(/\s+/).join(' ').trim();
 
 /** @returns {BackgroundItem} */
 function commandItem(p) {
@@ -85,7 +91,10 @@ function commandItem(p) {
     kind: 'cmd',
     id: p.process_id,
     agent: null,
-    title: p.command.split(/\s+/).join(' ').trim(),
+    // What it does when the model said so, else the command itself.
+    title: p.title || oneLine(p.command),
+    command: p.command,
+    oneLine: oneLine(p.command),
     state,
     waitsFor: null,
     live,

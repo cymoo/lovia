@@ -170,8 +170,8 @@ export function processGuest(sessionId, proc, { stop }) {
 
   return {
     key: `cmd:${p.process_id}`,
-    name: p.command.split('\n')[0],
-    title: p.command,
+    name: p.title || p.command.split('\n')[0],
+    title: p.title ? `${p.title}\n${p.command}` : p.command,
     copy: { label: t('bg.copyCommand'), text: p.command },
     download: api.processLogUrl(sessionId, p.process_id),
     info,

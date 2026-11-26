@@ -48,6 +48,9 @@ class ProcessRecord:
     ended_by: EndedBy
     base: int
     chars: int
+    title: str = ""
+    """What the command does, as the model said starting it; "" when it did
+    not (or for a record from before 0.9.286)."""
 
 
 def max_total_bytes() -> int:
@@ -116,8 +119,11 @@ def _parse(line: bytes) -> ProcessRecord:
     """Raises ``ValueError`` for a line that is not a record's."""
     data = json.loads(line)
     try:
-        return ProcessRecord(**{f.name: data[f.name] for f in fields(ProcessRecord)})
-    except (KeyError, TypeError) as exc:
+        # A field with a default may be missing: a record from before it.
+        return ProcessRecord(
+            **{f.name: data[f.name] for f in fields(ProcessRecord) if f.name in data}
+        )
+    except TypeError as exc:
         raise ValueError("not a process record") from exc
 
 

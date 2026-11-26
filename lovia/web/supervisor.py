@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import json
 import logging
 import time
 import uuid
@@ -115,6 +116,16 @@ class Kept:
     mailbox: Mailbox
     source: str
     is_task: bool
+
+
+def _described(arguments: str | None) -> str:
+    """The ``description`` a tool call gave (shell's: what the command does)."""
+    try:
+        args = json.loads(arguments or "{}")
+    except ValueError:
+        return ""
+    title = args.get("description") if isinstance(args, dict) else None
+    return " ".join(title.split()) if isinstance(title, str) else ""
 
 
 def _queued_entry(content: InjectedContent) -> JsonObject:
@@ -830,7 +841,12 @@ class RunController:
         if isinstance(ev, events.ToolCallCompleted) and isinstance(
             ev.result, (ProcessStart, ProcessOutput)
         ):
-            self.deps.processes.mark(self.session_id)
+            started = (
+                ev.result.process_id if isinstance(ev.result, ProcessStart) else ""
+            )
+            self.deps.processes.mark(
+                self.session_id, started=started, title=_described(ev.call.arguments)
+            )
         self._ingest(ev)
         self.hub.publish(ev)
 

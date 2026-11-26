@@ -5395,7 +5395,7 @@ body.lv-files-resizing {
   line-height: 18px;
   color: var(--lv-ink);
 }
-.lv-bg-title.lv-cmd {
+.lv-bg-title.lv-code {
   font-family: var(--lv-mono);
   font-size: 12px;
 }
@@ -5412,7 +5412,8 @@ body.lv-files-resizing {
   color: var(--lv-muted-2);
   font-variant-numeric: tabular-nums;
 }
-.lv-bg-row.lv-running .lv-cmd + .lv-bg-line {
+/* A running command's last line of output. */
+.lv-bg-row.lv-running[data-key^="cmd:"] .lv-bg-line {
   font-family: var(--lv-mono);
   font-size: 11px;
 }

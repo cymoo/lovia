@@ -315,14 +315,17 @@ function row(item, active) {
   main.type = 'button';
   main.className = 'lv-bg-main';
   main.dataset.part = 'open';
-  main.title = item.title;
+  // A command's full text on hover, when its title says what it does.
+  main.title = item.command || item.title;
   const glyph = document.createElement('span');
   glyph.className = 'lv-bg-icon';
   glyph.innerHTML = icon(item.kind === 'task' ? 'bot' : 'terminal', { size: 14 });
   const body = document.createElement('span');
   body.className = 'lv-bg-body';
   const head = document.createElement('span');
-  head.className = `lv-bg-title lv-${item.kind}`;
+  head.className = 'lv-bg-title';
+  // A command with no title of its own shows as code.
+  head.classList.toggle('lv-code', item.kind === 'cmd' && item.title === item.oneLine);
   const name = document.createElement('span');
   name.className = 'lv-bg-name';
   name.textContent = item.title;

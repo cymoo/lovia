@@ -809,7 +809,7 @@ wheels = [
 
 [[package]]
 name = "lovia"
-version = "0.9.297"
+version = "0.9.298"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -825,6 +825,7 @@ dev = [
     { name = "jinja2" },
     { name = "markdown-it-py" },
     { name = "mypy" },
+    { name = "pypdf" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "python-dotenv" },
@@ -845,11 +846,15 @@ examples = [
 mcp = [
     { name = "mcp" },
 ]
+pdf = [
+    { name = "pypdf" },
+]
 web = [
     { name = "croniter" },
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "mcp" },
+    { name = "pypdf" },
     { name = "python-multipart" },
     { name = "sse-starlette" },
     { name = "truststore" },
@@ -874,6 +879,9 @@ requires-dist = [
     { name = "mkdocs-static-i18n", marker = "extra == 'docs'", specifier = ">=1.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pydantic", specifier = ">=2.6" },
+    { name = "pypdf", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "pypdf", marker = "extra == 'pdf'", specifier = ">=5.0" },
+    { name = "pypdf", marker = "extra == 'web'", specifier = ">=5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "python-dotenv", marker = "extra == 'dev'", specifier = ">=1.0.0" },
@@ -891,7 +899,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.27" },
 ]
-provides-extras = ["mcp", "web", "examples", "docs", "dev"]
+provides-extras = ["mcp", "pdf", "web", "examples", "docs", "dev"]
 
 [[package]]
 name = "markdown"
@@ -1470,6 +1478,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/21/a9/5f0c535ba3b08fe09270c16808e053a968868242ecbd5676d4e3a488bf28/pymdown_extensions-11.0.1.tar.gz", hash = "sha256:dd2905ae6fc5b75582fafb139a1266ffc754705efa902aa50067fa7ff4f94ec0", size = 857113, upload-time = "2026-07-02T17:59:22.955Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d6/54/da572c98c0b77626a91b5d3b89f0231d8bff5125c225420908632f8b342d/pymdown_extensions-11.0.1-py3-none-any.whl", hash = "sha256:db3943a62bab7e03af1364f0c4083e64b91fb097675a4b6cceccfbe9a77e5eb2", size = 269455, upload-time = "2026-07-02T17:59:21.271Z" },
+]
+
+[[package]]
+name = "pypdf"
+version = "7.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/89/7b/5dff016bef001c3556c5fdd7645ec80251b78bb496b049d2ab9ec497b087/pypdf-7.2.0.tar.gz", hash = "sha256:b2c637b6f0be3def1f762fd8be20118736bafdffc75badab80db003d7a9ed110", size = 7253070, upload-time = "2026-11-26T15:38:53.825Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9d/b5/36b52010264f40f35fcd469f62586c0d88753c16682f2e156c42347f884b/pypdf-7.2.0-py3-none-any.whl", hash = "sha256:5edb9b033dd55cecead9303370e6854c1a3b979669bde1c46024cde0228405b1", size = 428449, upload-time = "2026-11-26T15:38:52.262Z" },
 ]
 
 [[package]]

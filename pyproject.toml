@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lovia"
-version = "0.9.297"
+version = "0.9.298"
 description = "A lightweight and elegant Agent framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -30,11 +30,13 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.18,<3"]
+pdf = ["pypdf>=5.0"]
 web = [
     "croniter>=2.0",
     "fastapi>=0.110",
     "jinja2>=3.1",
     "mcp>=1.18,<3",
+    "pypdf>=5.0",
     "python-multipart>=0.0.9",
     "sse-starlette>=2.1",
     "truststore>=0.9",
@@ -56,6 +58,7 @@ dev = [
     "jinja2>=3.1",
     "markdown-it-py>=3.0",
     "mypy>=1.10",
+    "pypdf>=5.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "python-dotenv>=1.0.0",
@@ -82,5 +85,5 @@ files = ["lovia"]
 # warn_unused_ignores, so prefer module-level suppression here over inline
 # ``# type: ignore`` comments that go stale when the dep is installed.
 [[tool.mypy.overrides]]
-module = ["croniter.*", "truststore.*"]
+module = ["croniter.*", "pypdf.*", "truststore.*"]
 ignore_missing_imports = true

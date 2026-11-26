@@ -218,4 +218,5 @@ example `pip install "lovia[mcp,web]"`.
 | Capability | Install |
 | --- | --- |
 | MCP client support | `pip install "lovia[mcp]"` |
+| `web_fetch` reads PDFs | `pip install "lovia[pdf]"` |
 | FastAPI server, chat UI, and scheduling (includes MCP) | `pip install "lovia[web]"` |

@@ -1,7 +1,9 @@
 """Fetch a URL and return its content in a form the model can act on.
 
 ``web_fetch`` fetches one URL and returns a :class:`Page`: the final URL, the
-title, and the body — HTML as Markdown, JSON compacted, text as-is. Markdown
+title, and the body — HTML as Markdown (only its one ``<main>`` or
+``<article>`` when it has one: navigation can outweigh the page), a PDF as
+text (with the optional ``pypdf``), JSON compacted, text as-is. Markdown
 rather than plain text because headings, lists, links and images are exactly
 the structure a model needs — ``[docs](/guide)`` tells it where to go next,
 where flattened text tells it nothing. Set ``images=True`` and the page's
@@ -27,6 +29,7 @@ no browser, and therefore no client-side rendering::
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import re
 import time
@@ -49,6 +52,7 @@ from ._http import (
     render_payload,
     validate_url,
 )
+from ._pdf import PDF_MAGIC, pdf_text
 from .base import Tool, result_to_text, tool
 from .fence import FENCE_NOTE, fence
 
@@ -90,6 +94,9 @@ class Page:
     so no ``offset`` will ever reach it."""
     next_offset: int | None = None
     """Pass back as ``offset`` to continue reading; ``None`` means the end."""
+    note: str | None = None
+    """A word on the fetch itself — say, that the page seems to need
+    JavaScript — shown outside the page's own words."""
 
 
 class PageReader(Protocol):
@@ -145,6 +152,19 @@ _MAX_ALT_CHARS = 200
 
 # An error page's HTML template is never worth a full character budget.
 _ERROR_PAGE_CHARS = 500
+# Less text than this from a page that runs scripts: an app shell, most likely.
+_SCRIPT_SHELL_CHARS = 200
+# A <script> the browser runs: no type, or a JavaScript one — not the
+# JSON-LD and other data blocks server-rendered pages carry.
+_SCRIPT_TAG_RE = re.compile(r"<script\b([^>]*)>", re.IGNORECASE)
+_SCRIPT_TYPE_RE = re.compile(
+    r"""(?<![\w-])type\s*=\s*["']?([^"'\s>]+)""", re.IGNORECASE
+)
+_RUNNABLE_TYPES = frozenset(
+    {"module", "text/javascript", "application/javascript", "text/ecmascript"}
+)
+# Papers and manuals run to megabytes, and a PDF cut short reads as nothing.
+PDF_MAX_BYTES = 10_000_000
 # When clipping, back up to a line break within this much of the limit so the
 # cut lands between lines instead of mid-word.
 _CLIP_BACKTRACK = 200
@@ -188,10 +208,20 @@ class _MarkdownExtractor(HTMLParser):
     itself — HTML source indentation never reaches the result.
     """
 
-    def __init__(self, base_url: str = "", *, collect_images: bool = False) -> None:
+    def __init__(
+        self,
+        base_url: str = "",
+        *,
+        collect_images: bool = False,
+        scope: str | None = None,
+    ) -> None:
         super().__init__(convert_charrefs=True)
         self._base = base_url
         self._collect_images = collect_images
+        # With ``scope`` (``main`` / ``article``), only that element's content
+        # is converted; <head> is still read for the title, base and og:image.
+        self._scope = scope
+        self._scope_depth = 0
         self._out: list[str] = []
         self._skip_depth = 0
         self._pre_depth = 0
@@ -249,6 +279,17 @@ class _MarkdownExtractor(HTMLParser):
         if tag == "title":
             self._in_title = True
             return
+        if self._scope:
+            if tag == self._scope:
+                self._scope_depth += 1
+            elif not self._scope_depth:
+                # Outside the main content no Markdown is written, but the
+                # images=True list stays page-wide.
+                if tag == "img":
+                    self._record_image(*self._img_source(values))
+                elif tag == "source":
+                    self._record_image(self._pick_srcset(values.get("srcset", "")), "")
+                return
         if tag == "img":
             self._handle_img(values)
             return
@@ -316,6 +357,11 @@ class _MarkdownExtractor(HTMLParser):
         if tag == "title":
             self._in_title = False
             return
+        if self._scope:
+            if not self._scope_depth:
+                return
+            if tag == self._scope:
+                self._scope_depth -= 1
         if tag == "pre":
             if self._pre_depth == 1:
                 self._break()
@@ -350,6 +396,8 @@ class _MarkdownExtractor(HTMLParser):
             return
         if self._in_title:
             self._title.append(data)
+            return
+        if self._scope and not self._scope_depth:
             return
         if self._pre_depth:
             self._emit(data)
@@ -448,9 +496,13 @@ class _MarkdownExtractor(HTMLParser):
         if prop in ("og:image", "og:image:url", "twitter:image"):
             self._record_image(values.get("content", ""), "")
 
-    def _handle_img(self, values: dict[str, str]) -> None:
+    def _img_source(self, values: dict[str, str]) -> tuple[str, str]:
+        """An <img>'s source and alt text."""
         src = values.get("src") or self._pick_srcset(values.get("srcset", ""))
-        alt = " ".join(values.get("alt", "").split())[:_MAX_ALT_CHARS]
+        return src, " ".join(values.get("alt", "").split())[:_MAX_ALT_CHARS]
+
+    def _handle_img(self, values: dict[str, str]) -> None:
+        src, alt = self._img_source(values)
         # The structured PageImage keeps the alt text as written; only the
         # Markdown copy needs escaping.
         url = self._record_image(src, alt)
@@ -537,14 +589,82 @@ def html_to_markdown(html: str, *, base_url: str = "") -> str:
     return _parse(html, base_url=base_url, collect_images=False).text
 
 
-def _parse(html: str, *, base_url: str, collect_images: bool) -> _MarkdownExtractor:
-    parser = _MarkdownExtractor(base_url, collect_images=collect_images)
+def _parse(
+    html: str, *, base_url: str, collect_images: bool, scope: str | None = None
+) -> _MarkdownExtractor:
+    parser = _MarkdownExtractor(base_url, collect_images=collect_images, scope=scope)
     try:
         parser.feed(html)
         parser.close()
     except Exception:  # malformed markup — keep whatever was collected
         pass
     return parser
+
+
+class _Landmarks(HTMLParser):
+    """Counts a document's live <main> and <article> elements — not those
+    inside what extraction skips (a <template>'s, say)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.counts = {"main": 0, "article": 0}
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in _SKIPPED_ELEMENTS:
+            self._skip_depth += 1
+        elif tag in self.counts and not self._skip_depth:
+            self.counts[tag] += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _SKIPPED_ELEMENTS:
+            self._skip_depth = max(0, self._skip_depth - 1)
+
+
+def _main_content(html: str) -> str | None:
+    """The element holding the page's own content — its one <main>, else its
+    one <article> — or None. Navigation, sidebars and footers lie outside it,
+    and on a docs site they can outweigh the page (Kubernetes' run to 100k
+    characters, ahead of the text the reader came for)."""
+    landmarks = _Landmarks()
+    try:
+        landmarks.feed(html)
+        landmarks.close()
+    except Exception:  # malformed markup — no landmark to trust
+        return None
+    for tag in ("main", "article"):
+        if landmarks.counts[tag] == 1:
+            return tag
+    return None
+
+
+def _parse_page(
+    html: str, *, base_url: str, collect_images: bool
+) -> tuple[_MarkdownExtractor, int]:
+    """The page's main content when it marks one, else the whole document —
+    and how much text the page's own content holds, landmark or not, to tell
+    a script's empty shell by."""
+    if scope := _main_content(html):
+        doc = _parse(
+            html, base_url=base_url, collect_images=collect_images, scope=scope
+        )
+        own = len(doc.text.strip())
+        # A landmark a script fills in later holds nothing yet: the rest of
+        # the page is all there is to read.
+        if own:
+            return doc, own
+        return _parse(html, base_url=base_url, collect_images=collect_images), own
+    doc = _parse(html, base_url=base_url, collect_images=collect_images)
+    return doc, len(doc.text.strip())
+
+
+def _runs_scripts(html: str) -> bool:
+    """Whether ``html`` has a script a browser would run."""
+    for attrs in _SCRIPT_TAG_RE.findall(html):
+        kind = _SCRIPT_TYPE_RE.search(attrs)
+        if kind is None or kind.group(1).lower() in _RUNNABLE_TYPES:
+            return True
+    return False
 
 
 def _looks_like_html(body: bytes) -> bool:
@@ -563,12 +683,27 @@ def page_from_response(raw: RawResponse, *, collect_images: bool = False) -> Pag
     if "html" in raw.media_type or (not raw.media_type and _looks_like_html(raw.body)):
         # Sniff <meta charset>: a headerless GBK page is mojibake without it.
         html = decode_body(raw.body, raw.charset, sniff_meta=True)
-        doc = _parse(html, base_url=raw.url, collect_images=collect_images)
+        doc, own = _parse_page(html, base_url=raw.url, collect_images=collect_images)
         page.title = doc.title
         # An extraction that came back empty (framework shell, exotic markup)
         # is less useful than the markup itself.
         page.text = doc.text or html
         page.images = doc.images
+        if raw.status_code == 200 and own < _SCRIPT_SHELL_CHARS and _runs_scripts(html):
+            # Say it, or the model refetches the same empty shell.
+            page.note = (
+                "Little text here: the page likely builds its content with "
+                "JavaScript, which web_fetch does not run — a browser tool can "
+                "read it."
+            )
+        return page
+    if raw.media_type == "application/pdf" or raw.body.startswith(PDF_MAGIC):
+        if raw.size_capped:
+            # A PDF's index is at its end: a cut-short file reads as nothing.
+            page.text = "(PDF not read: larger than the download cap)"
+            return page
+        pdf = pdf_text(raw.body)
+        page.title, page.text = pdf.title, pdf.text
         return page
     if "json" in raw.media_type:
         page.text = compact_json(decode_body(raw.body, raw.charset))
@@ -584,11 +719,12 @@ class HttpReader:
     back nearly empty — swap in a :class:`PageReader` that drives a real
     browser when that matters.
 
-    Responses are cached by URL for ``cache_ttl`` seconds. That is mostly
+    Pages are cached by URL for ``cache_ttl`` seconds, parsed. That is mostly
     correctness rather than speed: continuing a long page with ``offset``
     would otherwise re-download it and could splice together two different
-    versions. The cache holds at most ``cache_size`` entries so a long-running
-    agent cannot accumulate page bodies indefinitely.
+    versions — and a long PDF would be read again for every slice. The cache
+    holds at most ``cache_size`` entries so a long-running agent cannot
+    accumulate pages indefinitely.
     """
 
     def __init__(
@@ -596,21 +732,25 @@ class HttpReader:
         *,
         timeout: float = 30.0,
         max_bytes: int = MAX_RESPONSE_BYTES,
+        pdf_max_bytes: int = PDF_MAX_BYTES,
         user_agent: str | None = None,
         cache_ttl: float = 300.0,
         cache_size: int = 32,
     ) -> None:
         self._timeout = timeout
         self._max_bytes = max_bytes
+        self._pdf_max_bytes = pdf_max_bytes
         self._user_agent = user_agent or default_user_agent()
         self._cache_ttl = cache_ttl
         self._cache_size = max(1, cache_size)
-        self._cache: OrderedDict[str, tuple[float, RawResponse]] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[float, Page]] = OrderedDict()
 
     async def read(self, url: str, *, images: bool = False) -> Page:
-        return page_from_response(await self._fetch(url), collect_images=images)
+        page = await self._page(url)
+        # A copy: what the caller does with it never reaches the cache.
+        return dataclasses.replace(page, images=list(page.images) if images else [])
 
-    async def _fetch(self, url: str) -> RawResponse:
+    async def _page(self, url: str) -> Page:
         if (cached := self._cache_get(url)) is not None:
             return cached
         raw = await fetch_raw(
@@ -618,28 +758,33 @@ class HttpReader:
             headers={"Accept": _ACCEPT},
             timeout=self._timeout,
             max_bytes=self._max_bytes,
+            pdf_max_bytes=self._pdf_max_bytes,
             user_agent=self._user_agent,
         )
-        self._cache_put(url, raw)
-        return raw
+        # Off the event loop: a 10 MB PDF, or a megabyte of markup, takes a
+        # while to read, and a web app has other chats to stream meanwhile.
+        # Images and all, once: either kind of read is served from it.
+        page = await asyncio.to_thread(page_from_response, raw, collect_images=True)
+        self._cache_put(url, page)
+        return page
 
-    def _cache_get(self, url: str) -> RawResponse | None:
+    def _cache_get(self, url: str) -> Page | None:
         if self._cache_ttl <= 0:
             return None
         entry = self._cache.get(url)
         if entry is None:
             return None
-        stored_at, raw = entry
+        stored_at, page = entry
         if time.monotonic() - stored_at > self._cache_ttl:
             del self._cache[url]
             return None
         self._cache.move_to_end(url)
-        return raw
+        return page
 
-    def _cache_put(self, url: str, raw: RawResponse) -> None:
+    def _cache_put(self, url: str, page: Page) -> None:
         if self._cache_ttl <= 0:
             return
-        self._cache[url] = (time.monotonic(), raw)
+        self._cache[url] = (time.monotonic(), page)
         self._cache.move_to_end(url)
         while len(self._cache) > self._cache_size:
             self._cache.popitem(last=False)
@@ -665,11 +810,10 @@ def _render_page(result: Any, ctx: Any) -> str:
     lines = [f"URL: {result.url}"]
     status = f"HTTP {result.status_code} · {display_media_type(result.media_type)}"
     if result.size_capped:
-        status += (
-            f" · download capped at {MAX_RESPONSE_BYTES / 1e6:.1f}MB "
-            "(the rest of the page was never fetched)"
-        )
+        status += " · download capped (the rest of the page was never fetched)"
     lines.append(status)
+    if result.note:
+        lines.append(result.note)
 
     # Title, text, and image alts are the page's words; URL, status, and the
     # truncation notice are ours.
@@ -718,8 +862,9 @@ def web_fetch(
         result_renderer=_render_page,
         retries=2,
         description=(
-            "Fetch a URL and return its content: web pages as Markdown, JSON "
-            "compacted, plain text as-is.\n"
+            "Fetch a URL and return its content: web pages as Markdown (their "
+            "main content when they mark one), PDFs as text, JSON compacted, "
+            "plain text as-is.\n"
             "- Headings, lists, links and images survive the conversion, so "
             "[text](url) in the result holds real URLs you can fetch next.\n"
             "- images=true also returns a deduplicated list of every image "

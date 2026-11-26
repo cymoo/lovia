@@ -15,6 +15,7 @@ from lovia.tools.page import (
     Page,
     PageImage,
     html_to_markdown,
+    page_from_response,
     web_fetch,
 )
 from lovia.tools.base import run_tool
@@ -424,6 +425,258 @@ async def test_web_fetch_falls_back_to_markup_when_extraction_is_empty(
     _html_page(monkeypatch, "<html><body><div id='root'></div></body></html>")
     page = await page_tool.invoke({"url": "https://example.com/spa"}, _ctx())
     assert "id='root'" in page.text or 'id="root"' in page.text
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_reads_the_main_content_a_page_marks(
+    monkeypatch: pytest.MonkeyPatch, page_tool: Tool
+) -> None:
+    body = "Body text of the article. " * 20
+    pages = {
+        # Navigation outside <main> is left out; the title still comes from <head>.
+        "/one-main": f"<head><title>T</title></head><nav><a href='/x'>Menu</a></nav>"
+        f"<main><h1>Topic</h1><p>{body}</p></main><footer>Footer</footer>",
+        # No <main>: the one <article> marks it.
+        "/one-article": f"<nav>Menu</nav><article><p>{body}</p></article>",
+        # Two of them: no landmark to trust, the whole page.
+        "/two": f"<nav>Menu</nav><article><p>{body}</p></article><article>B</article>",
+        # One inside a <template> is inert: the live one still marks it.
+        "/template": f"<nav>Menu</nav><article><p>{body}</p></article>"
+        "<template><article>card</article></template>",
+        # Short but whole: kept, not swapped for the navigation around it.
+        "/short": "<nav>" + "Menu entry " * 30 + "</nav><main>Gone fishing.</main>",
+        # A landmark a script fills in later: the whole page — and the note.
+        "/shell": "<nav>" + "Menu entry " * 30 + "</nav><main></main><script></script>",
+        # Images outside the main content still count for images=true.
+        "/images": f"<header><img src='/logo.png' alt='Logo'></header>"
+        f"<main><p>{body}</p><img src='/fig.png' alt='Fig'></main>",
+    }
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200,
+            text=f"<html>{pages[request.url.path]}</html>",
+            headers={"content-type": "text/html"},
+        ),
+    )
+
+    async def read(path: str, **args: Any) -> Any:
+        url = f"https://example.com{path}"
+        return await page_tool.invoke({"url": url, **args}, _ctx())
+
+    page = await read("/one-main")
+    assert page.title == "T" and page.text.startswith("# Topic")
+    assert "Menu" not in page.text and "Footer" not in page.text
+    assert "Menu" not in (await read("/one-article")).text
+    assert "Menu" in (await read("/two")).text
+    assert "Menu" not in (await read("/template")).text
+    short = await read("/short")
+    assert short.text == "Gone fishing." and short.note is None
+    shell = await read("/shell")
+    assert "Menu entry" in shell.text and shell.note is not None
+    page = await read("/images", images=True)
+    assert "logo.png" not in page.text  # the Markdown is the main content's
+    assert [i.alt for i in page.images] == ["Logo", "Fig"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_says_when_a_page_needs_javascript(
+    monkeypatch: pytest.MonkeyPatch, page_tool: Tool
+) -> None:
+    pages = {
+        "/app": "<div id='root'>Loading…</div><script src='/app.js'></script>",
+        # Text of its own, scripts or not: no such note.
+        "/doc": "<p>" + "words " * 100 + "</p><script>x()</script>",
+        # Short, and its only script is data a browser never runs: no note.
+        "/data": "<p>Closed today.</p><script type='application/ld+json'>{}</script>",
+    }
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200,
+            text=f"<html><body>{pages[request.url.path]}</body></html>",
+            headers={"content-type": "text/html"},
+        ),
+    )
+    page = await page_tool.invoke({"url": "https://example.com/app"}, _ctx())
+    assert page.note is not None and "JavaScript" in page.note
+    # Outside the fence: it is lovia's word, not the page's.
+    rendered = _render_page(page, None)
+    assert rendered.index("JavaScript") < rendered.index("--- BEGIN")
+    page = await page_tool.invoke({"url": "https://example.com/doc"}, _ctx())
+    assert page.note is None
+    page = await page_tool.invoke({"url": "https://example.com/data"}, _ctx())
+    assert page.note is None
+
+
+def _pdf(*pages: str) -> bytes:
+    """A minimal PDF: one Helvetica text line per page, a correct xref."""
+    kids = " ".join(f"{3 + 2 * i} 0 R" for i in range(len(pages)))
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode(),
+    ]
+    font = 3 + 2 * len(pages)
+    for i, text in enumerate(pages):
+        stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            f"/Contents {4 + 2 * i} 0 R /Resources << /Font << /F1 {font} 0 R >> >> >>".encode()
+        )
+        objects.append(
+            b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream)
+        )
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for n, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (n, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref,
+    )
+    return bytes(out)
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_reads_a_pdf_as_text(
+    monkeypatch: pytest.MonkeyPatch, page_tool: Tool
+) -> None:
+    pytest.importorskip("pypdf")
+    responses = iter(
+        [
+            # By its type, or — served as a download — by its first bytes.
+            httpx.Response(
+                200,
+                content=_pdf("First page", "Second page"),
+                headers={"content-type": "application/pdf"},
+            ),
+            httpx.Response(
+                200,
+                content=_pdf("Sniffed"),
+                headers={"content-type": "application/octet-stream"},
+            ),
+            httpx.Response(
+                200, content=_pdf(""), headers={"content-type": "application/pdf"}
+            ),
+        ]
+    )
+    _mock_http(monkeypatch, lambda request: next(responses))
+    page = await page_tool.invoke({"url": "https://example.com/a.pdf"}, _ctx())
+    assert page.text == "First page\n\nSecond page"
+    sniffed = await page_tool.invoke({"url": "https://example.com/dl"}, _ctx())
+    assert sniffed.text == "Sniffed"
+    scanned = await page_tool.invoke({"url": "https://example.com/scan.pdf"}, _ctx())
+    assert "no text layer" in scanned.text
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_gets_its_own_download_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("pypdf")
+    pdf = _pdf("x" * 100)
+    # Typed as a PDF, or a download that only its first bytes say is one.
+    types = {"/a.pdf": "application/pdf", "/dl": "application/octet-stream"}
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, content=pdf, headers={"content-type": types[request.url.path]}
+        ),
+    )
+
+    async def read(reader: HttpReader, path: str) -> Any:
+        url = f"https://example.com{path}"
+        return await web_fetch(reader).invoke({"url": url}, _ctx())
+
+    # Over the page cap, within the PDF cap: read whole, either way.
+    for path in types:
+        page = await read(HttpReader(max_bytes=100, cache_ttl=0), path)
+        assert page.text == "x" * 100
+    # Exactly the PDF cap is whole; one byte under it is cut short — said,
+    # not parsed: a PDF cut short reads as nothing.
+    exact = HttpReader(max_bytes=100, pdf_max_bytes=len(pdf), cache_ttl=0)
+    assert (await read(exact, "/a.pdf")).text == "x" * 100
+    tight = HttpReader(max_bytes=100, pdf_max_bytes=len(pdf) - 1, cache_ttl=0)
+    page = await read(tight, "/a.pdf")
+    assert page.size_capped and "larger than the download cap" in page.text
+
+
+def test_a_pdf_s_text_is_bounded_and_its_title_best_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("pypdf")
+    from lovia.tools import _pdf as pdf_module
+
+    monkeypatch.setattr(pdf_module, "MAX_TEXT_CHARS", 10)
+    out = pdf_module.pdf_text(_pdf("first page text", "second", "third"))
+    # Cut within the page that crossed the budget, and said.
+    assert out.text.startswith("first page\n\n(… text cut short")
+    assert "second" not in out.text and "page 1 of 3" in out.text
+    # A single page over the budget is cut, and said, too.
+    out = pdf_module.pdf_text(_pdf("one long page of text"))
+    assert out.text.startswith("one long p\n\n(… text cut short")
+    # A malformed /Info entry costs the title, never the text.
+    import pypdf
+
+    monkeypatch.setattr(
+        pypdf.PdfReader,
+        "metadata",
+        property(lambda self: (_ for _ in ()).throw(pypdf.errors.PdfReadError("bad"))),
+    )
+    monkeypatch.setattr(pdf_module, "MAX_TEXT_CHARS", 1_000)
+    out = pdf_module.pdf_text(_pdf("still here"))
+    assert (out.text, out.title) == ("still here", None)
+
+
+@pytest.mark.asyncio
+async def test_an_offset_read_is_a_slice_of_the_page_read_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parses = {"n": 0}
+    real = page_from_response
+
+    def counting(*args: Any, **kwargs: Any) -> Any:
+        parses["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("lovia.tools.page.page_from_response", counting)
+    _html_page(monkeypatch, "<p>" + "word " * 2_000 + "</p><img src='/a.png'>")
+    tool = web_fetch(HttpReader(), max_chars=1_000)
+    first = await tool.invoke({"url": "https://example.com/long"}, _ctx())
+    assert first.images == []  # not asked for
+    again = await tool.invoke(
+        {
+            "url": "https://example.com/long",
+            "offset": first.next_offset,
+            "images": True,
+        },
+        _ctx(),
+    )
+    assert parses["n"] == 1
+    assert [i.url for i in again.images] == ["https://example.com/a.png"]
+
+
+def test_a_pdf_without_pypdf_says_how_to_read_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_pypdf(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "pypdf":
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pypdf)
+    from lovia.tools._pdf import pdf_text
+
+    assert "lovia[pdf]" in pdf_text(_pdf("x")).text
 
 
 @pytest.mark.asyncio

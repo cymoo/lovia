@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import os
 import ssl
-import urllib.request
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -146,11 +145,9 @@ def proxy_note(
     ``url``. ``switch`` names the setting to flip, as the reader knows it.
     """
     try:
-        parts = urlsplit(url)
-        host = parts.hostname
-        proxies = urllib.request.getproxies()
-        proxy = proxies.get(parts.scheme) or proxies.get("all")
-        if not host or not proxy or _bypassed(host, proxies):
+        host = urlsplit(url).hostname
+        proxy = _proxy_for(url)
+        if not host or not proxy:
             return None
         where = _proxy_address(proxy)
     except Exception:  # noqa: BLE001 — a hint must never mask the failure it explains
@@ -166,8 +163,25 @@ def proxy_note(
     )
 
 
-# NO_PROXY matching as urllib does it: in every CPython 3, not in typeshed.
-_bypassed = urllib.request.proxy_bypass_environment  # type: ignore[attr-defined]
+def _proxy_for(url: str) -> str | None:
+    """The proxy httpx would route ``url`` through with ``trust_env`` on.
+
+    httpx's own rules (its private ``_utils``, so a change there only costs
+    the hint): ``NO_PROXY`` matching differs from urllib's in the details —
+    ports, an apex domain against ``.domain``.
+    """
+    import httpx
+    from httpx._utils import URLPattern, get_environment_proxies
+
+    target = httpx.URL(url)
+    # Most specific first, as httpx sorts its mounts.
+    mounts = [
+        (URLPattern(key), proxy) for key, proxy in get_environment_proxies().items()
+    ]
+    for pattern, proxy in sorted(mounts, key=lambda mount: mount[0]):
+        if pattern.matches(target):
+            return proxy
+    return None
 
 
 def _proxy_address(proxy: str) -> str:

@@ -360,6 +360,8 @@ Both adapters share one HTTP configuration layer:
 | `LOVIA_HTTP_INSECURE` | disable certificate verification | off |
 
 Constructor arguments (`timeout=`, `trust_env=`) win over the environment.
+(Before 0.9.290 the proxy switch was `LOVIA_PROVIDER_TRUST_ENV` and covered
+the providers only; MCP and `web_fetch` honored ambient proxies on their own.)
 TLS verification resolves in order: `LOVIA_HTTP_INSECURE` → the CA bundle →
 the OS trust store when the optional `truststore` package is installed
 (bundled with `lovia[web]`) → `certifi`.

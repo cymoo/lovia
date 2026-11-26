@@ -172,5 +172,17 @@ def test_proxy_note_is_quiet_when_no_proxy_applies(
     # Exempt by NO_PROXY, or a scheme with no proxy of its own.
     assert proxy_note("https://mcp.corp.example/mcp", True) is None
     assert proxy_note("http://plain.example/", True) is None
-    monkeypatch.setattr("urllib.request.getproxies", lambda: {})
+    monkeypatch.setattr("httpx._utils.getproxies", lambda: {})
     assert proxy_note("https://api.openai.com/v1", False) is None
+
+
+def test_proxy_note_routes_as_httpx_does(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
+    monkeypatch.setenv("NO_PROXY", ".corp.example,api.corp.test:8443")
+    # ".corp.example" exempts its subdomains, not the apex itself.
+    assert proxy_note("https://corp.example/mcp", True) is not None
+    # A host:port exception holds for that port only.
+    assert proxy_note("https://api.corp.test:8443/v1", True) is None
+    assert proxy_note("https://api.corp.test/v1", True) is not None

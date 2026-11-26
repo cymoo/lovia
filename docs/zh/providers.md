@@ -302,7 +302,9 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
 | `LOVIA_HTTP_CA_BUNDLE` | 出站 TLS 自定义 PEM bundle | — |
 | `LOVIA_HTTP_INSECURE` | 关闭证书校验 | 关闭 |
 
-构造器参数（`timeout=`、`trust_env=`）优先于环境变量。TLS 校验按顺序解析：
+构造器参数（`timeout=`、`trust_env=`）优先于环境变量。（0.9.290 之前代理开关叫
+`LOVIA_PROVIDER_TRUST_ENV`，只管 provider；MCP 和 `web_fetch` 会自行读取环境中的代理。）
+TLS 校验按顺序解析：
 `LOVIA_HTTP_INSECURE` → CA bundle → 安装了可选 `truststore` 包时使用 OS trust store
 （`lovia[web]` 会带上）→ `certifi`。
 

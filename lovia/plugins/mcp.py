@@ -672,9 +672,10 @@ class MCPServerStreamableHTTP(MCPServer):
             auth: Any = None,
         ) -> Any:
             if timeout is None:
+                # The SDK's defaults; mcp < 1.2x names no constants for them.
                 timeout = lib.Timeout(
-                    sdk_http.MCP_DEFAULT_TIMEOUT,
-                    read=sdk_http.MCP_DEFAULT_SSE_READ_TIMEOUT,
+                    getattr(sdk_http, "MCP_DEFAULT_TIMEOUT", 30.0),
+                    read=getattr(sdk_http, "MCP_DEFAULT_SSE_READ_TIMEOUT", 300.0),
                 )
             return lib.AsyncClient(
                 headers=headers,

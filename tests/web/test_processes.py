@@ -487,6 +487,7 @@ async def test_the_sweep_trims_the_oldest_and_drops_orphans(tmp_path) -> None:
         save_record(folder, _record(f"bg-{i}"), "x" * 1000)
         os.utime(folder / f"bg-{i}.log", (i + 1, i + 1))
     root = store.process_log_folder(chat).parent
+    store.make_folder(root / orphan)
     for name in (orphan, "notes"):
         save_record(root / name, _record("bg-9"), "x")
         os.utime(root / name, (1, 1))
@@ -495,6 +496,28 @@ async def test_the_sweep_trims_the_oldest_and_drops_orphans(tmp_path) -> None:
     assert [r.id for r in load_records(root / chat)] == ["bg-2"]
     assert [r.id for r in load_records(root / other)] == ["bg-1"]
     assert (root / "notes" / "bg-9.log").exists()
+
+
+async def test_another_stores_records_are_neither_trimmed_nor_dropped(
+    tmp_path,
+) -> None:
+    a = ChatStore.sqlite(tmp_path / "a.db")
+    b = ChatStore.sqlite(tmp_path / "b.db")
+    chat, gone = uuid.uuid4().hex, uuid.uuid4().hex
+    await b.upsert(chat, title="t")
+    for sid in (chat, gone):
+        folder = b.process_log_folder(sid)
+        b.make_folder(folder)
+        save_record(folder, _record("bg-1"), "x" * 1000)
+        os.utime(folder, (1, 1))
+    root = b.process_log_folder(chat).parent
+    await a.sweep_process_logs(max_age=60, max_bytes=0)
+    await a.delete(chat)  # not a's chat: its records are not a's to drop
+    await a.delete_all()
+    assert sorted(p.name for p in root.iterdir()) == sorted([chat, gone])
+    assert [r.id for r in load_records(root / chat)] == ["bg-1"]
+    await b.sweep_process_logs(max_age=60)
+    assert [p.name for p in root.iterdir()] == [chat]
 
 
 def test_the_total_cap_is_configurable(monkeypatch) -> None:

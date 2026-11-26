@@ -446,7 +446,10 @@ inline, and the composer offers nothing else.
 Forks and a chat's tasks share its folder, so a fork still shows the
 attachments its history mentions after the source is deleted. The folder goes
 when the last chat using it is deleted; a draft's uploads that were never sent
-are removed after a day.
+are removed after a day. Databases side by side (`create_app`'s
+`.lovia/<agent>.db`) share `attachments/`, and each removes only the folders
+its own chats use or it made: a `.lovia-owner` file inside says which. An
+unused folder from before 0.9.287 has none, and stays.
 
 A Markdown image whose path is workspace-relative — `![chart](charts/q3.png)`
 — displays the Workspace file itself, in a reply and in the Files panel's
@@ -565,7 +568,7 @@ and a server restart does not restore them. See
 
 What a process wrote outlives it: its record goes to `process-logs/` next to
 the chat database, one file per process, the newest 30 per chat, deleted with
-the chat. All of them together are held to 300 MB
+the chat. All of a database's together are held to 300 MB
 (`LOVIA_MAX_PROCESS_LOGS_MB`), oldest first. They are a cache: delete the
 folder whenever you like, and the chats just show no history.
 

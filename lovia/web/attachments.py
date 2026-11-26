@@ -407,7 +407,8 @@ def _stats(folder: Path) -> dict[str, tuple[int, float]]:
     stats: dict[str, tuple[int, float]] = {}
     for e in entries:
         try:
-            if e.is_file(follow_symlinks=False):
+            # Not the store's own (its owner mark): only what was uploaded.
+            if e.is_file(follow_symlinks=False) and is_attachment_name(e.name):
                 st = e.stat(follow_symlinks=False)
                 stats[e.name] = (st.st_size, st.st_mtime)
         except OSError:  # gone meanwhile

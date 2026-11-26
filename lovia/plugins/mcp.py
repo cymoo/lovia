@@ -649,7 +649,7 @@ class MCPServerStreamableHTTP(MCPServer):
             from importlib import import_module
 
             module = import_module("mcp.client.streamable_http")
-            from mcp.shared._httpx_utils import create_mcp_http_client
+            from mcp.shared import _httpx_utils as sdk_http
         except ImportError as exc:  # pragma: no cover - import guard
             raise UserError(
                 "MCP HTTP support requires the optional 'mcp' package.",
@@ -657,21 +657,30 @@ class MCPServerStreamableHTTP(MCPServer):
             ) from exc
         url, headers = self.url, self.headers
         options = client_options(self.trust_env)
+        # The SDK's HTTP library: httpx on 1.x, httpx2 on 2.x. Its own
+        # client factory takes no proxy or TLS options, and building one
+        # reads the ambient proxy (which may need a missing SOCKS package),
+        # so its client is built here, with its defaults and lovia's options.
+        lib: Any = getattr(sdk_http, "httpx2", None) or getattr(sdk_http, "httpx")
+        # 1.x has the client follow redirects; 2.x follows them itself,
+        # within the endpoint's origin.
+        follow_redirects = not hasattr(sdk_http, "httpx2")
 
         def http_client(
             headers: dict[str, str] | None = None,
             timeout: Any = None,
             auth: Any = None,
         ) -> Any:
-            # The SDK's own factory picks the HTTP library — httpx on 1.x,
-            # httpx2 on 2.x — and its timeout/redirect defaults, but takes no
-            # proxy or TLS options: rebuild its client with lovia's.
-            sdk = create_mcp_http_client(headers=headers, timeout=timeout, auth=auth)
-            return type(sdk)(
-                headers=sdk.headers,
-                timeout=sdk.timeout,
-                auth=sdk.auth,
-                follow_redirects=sdk.follow_redirects,
+            if timeout is None:
+                timeout = lib.Timeout(
+                    sdk_http.MCP_DEFAULT_TIMEOUT,
+                    read=sdk_http.MCP_DEFAULT_SSE_READ_TIMEOUT,
+                )
+            return lib.AsyncClient(
+                headers=headers,
+                timeout=timeout,
+                auth=auth,
+                follow_redirects=follow_redirects,
                 **options,
             )
 

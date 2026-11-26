@@ -42,8 +42,9 @@ def validate_connection(
     options = client_options()
     url = f"{conn.base_url}/models"
 
-    def noted(detail: str) -> str:
-        note = proxy_note(url, options["trust_env"])
+    def noted(detail: str, failed: str) -> str:
+        # ``failed``: where the request ended up, redirects followed.
+        note = proxy_note(failed, options["trust_env"])
         return f"{detail.rstrip('.')}. {note}" if note else detail
 
     try:
@@ -52,7 +53,13 @@ def validate_connection(
         ) as client:
             response = client.get(url, headers=conn.flavor.auth_headers(conn.api_key))
     except httpx.TransportError as exc:
-        return ValidationOutcome.UNREACHABLE, noted(str(exc) or type(exc).__name__)
+        try:
+            failed = str(exc.request.url)
+        except RuntimeError:  # raised before any request was built
+            failed = url
+        return ValidationOutcome.UNREACHABLE, noted(
+            str(exc) or type(exc).__name__, failed
+        )
     if response.status_code in (401, 403):
         return ValidationOutcome.AUTH_FAILED, f"HTTP {response.status_code}"
     if response.is_success:
@@ -62,7 +69,7 @@ def validate_connection(
     detail = f"HTTP {response.status_code}"
     # A gateway status through a proxy may be the proxy's own answer.
     if options["trust_env"] and response.status_code in (407, 502, 504):
-        detail = noted(detail)
+        detail = noted(detail, str(response.url))
     return ValidationOutcome.UNVERIFIABLE, detail
 
 

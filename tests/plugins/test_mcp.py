@@ -131,6 +131,35 @@ async def test_streamable_http_legacy_client(monkeypatch: pytest.MonkeyPatch) ->
     await clients[0].aclose()
 
 
+def test_streamable_http_never_builds_a_client_on_ambient_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The SDK's factory reads the ambient proxy as it builds a client, which
+    # fails outright for a SOCKS proxy without socksio: it must not be called.
+    from mcp.shared import _httpx_utils
+
+    def ambient(*args: Any, **kwargs: Any) -> None:
+        raise ImportError(
+            "Using SOCKS proxy, but the 'socksio' package is not installed"
+        )
+
+    monkeypatch.setattr(_httpx_utils, "create_mcp_http_client", ambient)
+    built: list[Any] = []
+
+    def legacy(url: str, **kwargs: Any) -> None:
+        built.append(kwargs["httpx_client_factory"](headers={"A": "b"}))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            importlib,
+            "import_module",
+            lambda _: SimpleNamespace(streamablehttp_client=legacy),
+        )
+        factory = MCPServerStreamableHTTP(url="https://x.example/mcp")._make_transport()
+    factory()
+    assert built[0].trust_env is False and built[0].headers["A"] == "b"
+
+
 def test_streamable_http_trust_env_follows_the_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

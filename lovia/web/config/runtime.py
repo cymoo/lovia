@@ -342,9 +342,11 @@ class ConfigRuntime:
             # it, a running one keeps what it began with.
             if config.assistant.max_turns != previous.assistant.max_turns:
                 deps.max_turns = self.max_turns()
-            # Built for nothing, unless the role changed.
+            # Built for nothing, unless the role changed — or this is the
+            # first build that serves one: the boot had none to build.
             stale_aux: object = aux_model
-            if config.aux_profile() != previous.aux_profile():
+            first = bool(self.serveable(previous)) and aux_model is not None
+            if first or config.aux_profile() != previous.aux_profile():
                 old_aux = deps.followup_model
                 stale_aux = old_aux if old_aux is not aux_model else None
                 deps.title_model = aux_model
@@ -362,6 +364,7 @@ class ConfigRuntime:
             # connection must not inherit a stale probe result.
             clear_endpoint_cache()
             served = {id(a.model) for a in agents.values()}
+            served |= {id(deps.title_model), id(deps.followup_model)}
             retired: set[int] = set()
             for agent in old:
                 if id(agent.model) not in served | retired:

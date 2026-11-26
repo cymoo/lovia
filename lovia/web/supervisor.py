@@ -1001,7 +1001,9 @@ class RunController:
                     context_policy=deps.context_policy,
                     cancel_token=self.cancel,
                     mailbox=self.mailbox,
-                    max_turns=own.max_turns or deps.max_turns_for(self.agent_name),
+                    max_turns=deps.max_turns_for(self.agent_name)
+                    if own.max_turns is None
+                    else own.max_turns,
                     budget=budget,
                     retry=deps.retry,
                     tracer=deps.tracer,

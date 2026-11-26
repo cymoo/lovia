@@ -21,6 +21,8 @@ from lovia.web.config import (  # noqa: E402
     AssistantConfig,
     ConfigRuntime,
     LoadedConfig,
+    ModelProfile,
+    Roles,
     ValidationOutcome,
     WebConfig,
     storage,
@@ -738,6 +740,42 @@ def test_transcribe_and_config_runtime_do_not_go_together(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="transcribe= or config_runtime="):
         create_app({}, config_runtime=runtime, transcribe=transcribe)
+
+
+async def test_the_first_save_that_serves_brings_the_aux_model_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    quiet = {"id": "quiet", "model": "gpt-small", "base_url": "https://gw.example/v1"}
+    config = _lean().model_copy(
+        update={
+            "models": [
+                ModelProfile(id="chat", model="openai:gpt-big"),  # no key yet
+                ModelProfile(**quiet, api_key="sk-quiet-12345678"),
+            ],
+            "roles": Roles(chat="chat", aux="quiet"),
+        }
+    )
+    loaded = _loaded(tmp_path)
+    loaded.config = config
+    runtime = ConfigRuntime(loaded=loaded, store=ChatStore.in_memory())
+    assert not runtime.configured
+    # As default_app boots unconfigured: no agents, no aux model built.
+    app = create_app({}, store=runtime.store, config_runtime=runtime, titles=False)
+    keyed = config.model_copy(
+        update={
+            "models": [
+                ModelProfile(
+                    id="chat", model="openai:gpt-big", api_key="sk-big-123456"
+                ),
+                config.models[1],
+            ]
+        }
+    )
+    await runtime.apply(keyed, persist=False)
+    # The aux role is unchanged, but nothing served it until now.
+    assert getattr(app.state.deps.title_model, "model", None) == "gpt-small"
 
 
 def test_the_page_learns_the_mode_an_unset_chat_runs_in(

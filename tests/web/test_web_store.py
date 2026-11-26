@@ -645,6 +645,28 @@ async def test_sweep_stale_runs_marks_running_interrupted() -> None:
     assert runs == {"a": "interrupted", "b": "completed"}  # terminal untouched
 
 
+async def test_a_tasks_own_limits_are_kept_on_its_row() -> None:
+    from dataclasses import dataclass
+
+    from lovia import RunBudget
+
+    @dataclass
+    class Tagged(RunBudget):
+        tag: str = "x"
+
+    store = ChatStore.in_memory()
+    await store.upsert("chat")
+    await store.upsert("task", max_turns=3, budget=Tagged(max_tool_calls=2))
+    assert await store.run_limits("chat") == (None, None)
+    turns, budget = await store.run_limits("task")
+    # A subclass comes back as the base budget with the base's limits.
+    assert turns == 3 and type(budget) is RunBudget
+    assert budget == RunBudget(max_tool_calls=2)
+    # Set on insert only.
+    await store.upsert("task", max_turns=9)
+    assert (await store.run_limits("task")).max_turns == 3
+
+
 async def test_delete_session_drops_its_run_records() -> None:
     store = ChatStore.in_memory()
     await store.upsert("s1")

@@ -1068,7 +1068,8 @@ class ChatStore:
         if budget is not None:
             limits["budget"] = {
                 f.name: getattr(budget, f.name)
-                for f in fields(budget)
+                # The base class's own limits: what run_limits() rebuilds.
+                for f in fields(RunBudget)
                 if f.init and getattr(budget, f.name) is not None
             }
         await self._write(

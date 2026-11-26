@@ -208,4 +208,5 @@ lovia web
 | 能力 | 安装命令 |
 | --- | --- |
 | MCP 客户端支持 | `pip install "lovia[mcp]"` |
+| `web_fetch` 读取 PDF | `pip install "lovia[pdf]"` |
 | FastAPI 服务端、聊天 UI 和定时任务（含 MCP） | `pip install "lovia[web]"` |

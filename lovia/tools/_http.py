@@ -100,9 +100,11 @@ async def fetch_raw(
     headers: dict[str, str] | None = None,
     timeout: float = 30.0,
     max_bytes: int = MAX_RESPONSE_BYTES,
+    pdf_max_bytes: int | None = None,
     user_agent: str | None = None,
 ) -> RawResponse:
-    """Perform one redirect-following GET, reading at most ``max_bytes``."""
+    """Perform one redirect-following GET, reading at most ``max_bytes`` —
+    ``pdf_max_bytes`` for a PDF, which is larger and useless cut short."""
     validate_url(url)
     request_headers = dict(headers or {})
     if user_agent:
@@ -112,23 +114,26 @@ async def fetch_raw(
         timeout=timeout, follow_redirects=True, **client_options()
     ) as client:
         async with client.stream("GET", url, headers=request_headers) as resp:
+            media_type = (
+                resp.headers.get("content-type", "").split(";")[0].strip().lower()
+            )
+            cap = max_bytes
+            if pdf_max_bytes is not None and media_type == "application/pdf":
+                cap = pdf_max_bytes
             chunks: list[bytes] = []
             received = 0
             size_capped = False
             async for chunk in resp.aiter_bytes():
                 chunks.append(chunk)
                 received += len(chunk)
-                if received >= max_bytes:
+                if received >= cap:
                     size_capped = True
                     break
             return RawResponse(
                 url=str(resp.url),
                 status_code=resp.status_code,
-                media_type=resp.headers.get("content-type", "")
-                .split(";")[0]
-                .strip()
-                .lower(),
-                body=b"".join(chunks)[:max_bytes],
+                media_type=media_type,
+                body=b"".join(chunks)[:cap],
                 # Unlike ``resp.encoding`` this is None when the header carries
                 # no charset, which is what lets decode_body fall back to
                 # sniffing the document itself.

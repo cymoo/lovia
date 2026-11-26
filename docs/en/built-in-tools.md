@@ -30,6 +30,20 @@ Tool is covered in [Ask a human](#ask-a-human) below.
 becomes Markdown that keeps its structure and links; JSON comes back
 compacted, text as-is, binary as metadata only.
 
+- **A page's main content.** When a page marks it — one `<main>`, else one
+  `<article>` — only that element is converted: navigation, sidebars and
+  footers stay out, and on a docs site they can outweigh the page many times
+  over. Without such a landmark, or one a script fills in later, the whole
+  page is.
+- **PDFs as text**, with the optional `pypdf` (`pip install "lovia[pdf]"`;
+  `lovia[web]` includes it): papers, reports and manuals, up to 10 MB
+  (`HttpReader(pdf_max_bytes=…)`). Layout and images are lost; a scanned PDF
+  has no text layer and says so.
+- **Pages that need JavaScript** come back nearly empty — no script runs. A
+  200 with next to no text from a page that loads scripts says so, outside
+  the page's own words, so the model reaches for a browser tool instead of
+  fetching the same shell again.
+
 The model sees three arguments:
 
 | Argument | Default | Notes |

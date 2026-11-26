@@ -1,7 +1,9 @@
 """Fetch a URL and return its content in a form the model can act on.
 
 ``web_fetch`` fetches one URL and returns a :class:`Page`: the final URL, the
-title, and the body — HTML as Markdown, JSON compacted, text as-is. Markdown
+title, and the body — HTML as Markdown (only its one ``<main>`` or
+``<article>`` when it has one: navigation can outweigh the page), a PDF as
+text (with the optional ``pypdf``), JSON compacted, text as-is. Markdown
 rather than plain text because headings, lists, links and images are exactly
 the structure a model needs — ``[docs](/guide)`` tells it where to go next,
 where flattened text tells it nothing. Set ``images=True`` and the page's
@@ -49,6 +51,7 @@ from ._http import (
     render_payload,
     validate_url,
 )
+from ._pdf import PDF_MAGIC, pdf_text
 from .base import Tool, result_to_text, tool
 from .fence import FENCE_NOTE, fence
 
@@ -90,6 +93,9 @@ class Page:
     so no ``offset`` will ever reach it."""
     next_offset: int | None = None
     """Pass back as ``offset`` to continue reading; ``None`` means the end."""
+    note: str | None = None
+    """A word on the fetch itself — say, that the page seems to need
+    JavaScript — shown outside the page's own words."""
 
 
 class PageReader(Protocol):
@@ -145,6 +151,10 @@ _MAX_ALT_CHARS = 200
 
 # An error page's HTML template is never worth a full character budget.
 _ERROR_PAGE_CHARS = 500
+# Less text than this from a page that runs scripts: an app shell, most likely.
+_SCRIPT_SHELL_CHARS = 200
+# Papers and manuals run to megabytes, and a PDF cut short reads as nothing.
+PDF_MAX_BYTES = 10_000_000
 # When clipping, back up to a line break within this much of the limit so the
 # cut lands between lines instead of mid-word.
 _CLIP_BACKTRACK = 200
@@ -188,10 +198,20 @@ class _MarkdownExtractor(HTMLParser):
     itself — HTML source indentation never reaches the result.
     """
 
-    def __init__(self, base_url: str = "", *, collect_images: bool = False) -> None:
+    def __init__(
+        self,
+        base_url: str = "",
+        *,
+        collect_images: bool = False,
+        scope: str | None = None,
+    ) -> None:
         super().__init__(convert_charrefs=True)
         self._base = base_url
         self._collect_images = collect_images
+        # With ``scope`` (``main`` / ``article``), only that element's content
+        # is converted; <head> is still read for the title, base and og:image.
+        self._scope = scope
+        self._scope_depth = 0
         self._out: list[str] = []
         self._skip_depth = 0
         self._pre_depth = 0
@@ -249,6 +269,11 @@ class _MarkdownExtractor(HTMLParser):
         if tag == "title":
             self._in_title = True
             return
+        if self._scope:
+            if tag == self._scope:
+                self._scope_depth += 1
+            elif not self._scope_depth:
+                return
         if tag == "img":
             self._handle_img(values)
             return
@@ -316,6 +341,11 @@ class _MarkdownExtractor(HTMLParser):
         if tag == "title":
             self._in_title = False
             return
+        if self._scope:
+            if not self._scope_depth:
+                return
+            if tag == self._scope:
+                self._scope_depth -= 1
         if tag == "pre":
             if self._pre_depth == 1:
                 self._break()
@@ -350,6 +380,8 @@ class _MarkdownExtractor(HTMLParser):
             return
         if self._in_title:
             self._title.append(data)
+            return
+        if self._scope and not self._scope_depth:
             return
         if self._pre_depth:
             self._emit(data)
@@ -537,14 +569,60 @@ def html_to_markdown(html: str, *, base_url: str = "") -> str:
     return _parse(html, base_url=base_url, collect_images=False).text
 
 
-def _parse(html: str, *, base_url: str, collect_images: bool) -> _MarkdownExtractor:
-    parser = _MarkdownExtractor(base_url, collect_images=collect_images)
+def _parse(
+    html: str, *, base_url: str, collect_images: bool, scope: str | None = None
+) -> _MarkdownExtractor:
+    parser = _MarkdownExtractor(base_url, collect_images=collect_images, scope=scope)
     try:
         parser.feed(html)
         parser.close()
     except Exception:  # malformed markup — keep whatever was collected
         pass
     return parser
+
+
+class _Landmarks(HTMLParser):
+    """Counts a document's <main> and <article> elements."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.counts = {"main": 0, "article": 0}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self.counts:
+            self.counts[tag] += 1
+
+
+def _main_content(html: str) -> str | None:
+    """The element holding the page's own content — its one <main>, else its
+    one <article> — or None. Navigation, sidebars and footers lie outside it,
+    and on a docs site they can outweigh the page (Kubernetes' run to 100k
+    characters, ahead of the text the reader came for)."""
+    landmarks = _Landmarks()
+    try:
+        landmarks.feed(html)
+        landmarks.close()
+    except Exception:  # malformed markup — no landmark to trust
+        return None
+    for tag in ("main", "article"):
+        if landmarks.counts[tag] == 1:
+            return tag
+    return None
+
+
+def _parse_page(
+    html: str, *, base_url: str, collect_images: bool
+) -> _MarkdownExtractor:
+    """The page's main content when it marks one with enough text in it,
+    else the whole document."""
+    if scope := _main_content(html):
+        doc = _parse(
+            html, base_url=base_url, collect_images=collect_images, scope=scope
+        )
+        # A landmark a script fills in later holds nothing yet.
+        if len(doc.text.strip()) >= _SCRIPT_SHELL_CHARS:
+            return doc
+    return _parse(html, base_url=base_url, collect_images=collect_images)
 
 
 def _looks_like_html(body: bytes) -> bool:
@@ -563,12 +641,31 @@ def page_from_response(raw: RawResponse, *, collect_images: bool = False) -> Pag
     if "html" in raw.media_type or (not raw.media_type and _looks_like_html(raw.body)):
         # Sniff <meta charset>: a headerless GBK page is mojibake without it.
         html = decode_body(raw.body, raw.charset, sniff_meta=True)
-        doc = _parse(html, base_url=raw.url, collect_images=collect_images)
+        doc = _parse_page(html, base_url=raw.url, collect_images=collect_images)
         page.title = doc.title
         # An extraction that came back empty (framework shell, exotic markup)
         # is less useful than the markup itself.
         page.text = doc.text or html
         page.images = doc.images
+        if (
+            raw.status_code == 200
+            and len(doc.text.strip()) < _SCRIPT_SHELL_CHARS
+            and "<script" in html.lower()
+        ):
+            # Say it, or the model refetches the same empty shell.
+            page.note = (
+                "Little text here: the page likely builds its content with "
+                "JavaScript, which web_fetch does not run — a browser tool can "
+                "read it."
+            )
+        return page
+    if raw.media_type == "application/pdf" or raw.body.startswith(PDF_MAGIC):
+        if raw.size_capped:
+            # A PDF's index is at its end: a cut-short file reads as nothing.
+            page.text = "(PDF not read: larger than the download cap)"
+            return page
+        pdf = pdf_text(raw.body)
+        page.title, page.text = pdf.title, pdf.text
         return page
     if "json" in raw.media_type:
         page.text = compact_json(decode_body(raw.body, raw.charset))
@@ -596,12 +693,14 @@ class HttpReader:
         *,
         timeout: float = 30.0,
         max_bytes: int = MAX_RESPONSE_BYTES,
+        pdf_max_bytes: int = PDF_MAX_BYTES,
         user_agent: str | None = None,
         cache_ttl: float = 300.0,
         cache_size: int = 32,
     ) -> None:
         self._timeout = timeout
         self._max_bytes = max_bytes
+        self._pdf_max_bytes = pdf_max_bytes
         self._user_agent = user_agent or default_user_agent()
         self._cache_ttl = cache_ttl
         self._cache_size = max(1, cache_size)
@@ -618,6 +717,7 @@ class HttpReader:
             headers={"Accept": _ACCEPT},
             timeout=self._timeout,
             max_bytes=self._max_bytes,
+            pdf_max_bytes=self._pdf_max_bytes,
             user_agent=self._user_agent,
         )
         self._cache_put(url, raw)
@@ -665,11 +765,10 @@ def _render_page(result: Any, ctx: Any) -> str:
     lines = [f"URL: {result.url}"]
     status = f"HTTP {result.status_code} · {display_media_type(result.media_type)}"
     if result.size_capped:
-        status += (
-            f" · download capped at {MAX_RESPONSE_BYTES / 1e6:.1f}MB "
-            "(the rest of the page was never fetched)"
-        )
+        status += " · download capped (the rest of the page was never fetched)"
     lines.append(status)
+    if result.note:
+        lines.append(result.note)
 
     # Title, text, and image alts are the page's words; URL, status, and the
     # truncation notice are ours.
@@ -718,8 +817,9 @@ def web_fetch(
         result_renderer=_render_page,
         retries=2,
         description=(
-            "Fetch a URL and return its content: web pages as Markdown, JSON "
-            "compacted, plain text as-is.\n"
+            "Fetch a URL and return its content: web pages as Markdown (their "
+            "main content when they mark one), PDFs as text, JSON compacted, "
+            "plain text as-is.\n"
             "- Headings, lists, links and images survive the conversion, so "
             "[text](url) in the result holds real URLs you can fetch next.\n"
             "- images=true also returns a deduplicated list of every image "

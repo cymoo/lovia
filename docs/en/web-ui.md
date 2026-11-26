@@ -47,8 +47,16 @@ the directory each chat works in, on every run, it reads:
   directories (`~/.agents/skills` by default; Settings → Skills).
 
 So a chat in another project follows that project's `AGENTS.md` and skills.
-Web search uses Tavily when its key is configured, otherwise it tries the
-optional DuckDuckGo backend.
+
+Web search asks a hosted search service over MCP, picked in **Settings → Web
+search**: Parallel (the default), Tavily or Exa — each answers without an API
+key within a free allowance, and a key (under Advanced) raises it — or Off.
+The page says where your searches go and tests the pick as soon as it is made,
+spending no search. The tool keeps one shape whichever service answers, and
+connects only when the model searches, so a message that doesn't search pays
+nothing for it. Exa's keyless allowance needs a direct connection; behind a
+proxy, give it a key. Any other search server can be added in Settings → MCP
+(and this one set to Off).
 
 Default features can make model calls outside the main Run. Memory performs one
 digest after each completed Run and another call when a periodic dream is due;
@@ -145,7 +153,7 @@ replies and background subagents that run on the profile, not titles,
 follow-ups or image descriptions, and the context policy's output reserve
 does not follow it.
 
-The search backend, Tavily key, and skill directories also live in
+The search service, its keys, and skill directories also live in
 `config.json`. Model connections, additional profiles, role assignments,
 search, and skills have no CLI flags; use Settings or maintain the file
 directly.

@@ -342,6 +342,11 @@ class MCPConnection:
         await self._load_tools(force=True)
         return list(self._tools or [])
 
+    async def call(self, name: str, args: dict[str, Any]) -> MCPToolResult:
+        """Call the server's tool ``name`` (its own name, unprefixed) directly,
+        outside any run — for code that wraps one tool in its own."""
+        return await self._call(name, args)
+
     # -- lifecycle ----------------------------------------------------------- #
     async def close(self) -> None:
         stack = self._exit_stack

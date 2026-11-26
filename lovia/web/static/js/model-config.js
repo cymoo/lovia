@@ -793,11 +793,25 @@ export function buildModelsPane() {
 
 // ---- Search pane ----------------------------------------------------------
 
-/** Settings → Web search: the backend web search uses, and its key. */
+// The hosted search services (lovia/web/search.py), in the strip's order.
+/** @type {[string, string][]} */
+const SEARCH_SERVICES = [
+  ['parallel', 'Parallel'],
+  ['tavily', 'Tavily'],
+  ['exa', 'Exa'],
+];
+
+/**
+ * Settings → Web search: which service `web_search` asks — or none — and,
+ * folded away, its optional key and proxy route. Picking one tests it at
+ * once (a connection, no search spent), so the line under the strip says
+ * whether it answers before anything is saved.
+ */
 export function buildSearchPane() {
   const pane = el('div', 'lv-cfg-pane');
 
-  (async () => {
+  // Drawn again after a save, from the config the save leaves.
+  const draw = async () => {
     if (!cfg()) {
       try {
         await loadConfig();
@@ -813,23 +827,68 @@ export function buildSearchPane() {
     if (ro) pane.appendChild(ro);
     const form = el('div', 'lv-cfg-form');
 
-    const select = /** @type {HTMLSelectElement} */ (el('select', 'lv-dialog-input'));
-    for (const [val, label] of [
-      ['auto', t('cfg.searchAuto')],
-      ['tavily', t('cfg.searchTavily')],
-      ['ddg', t('cfg.searchDdg')],
-      ['off', t('cfg.searchOff')],
-    ]) {
-      const opt = /** @type {HTMLOptionElement} */ (el('option', '', label));
-      opt.value = val;
-      select.appendChild(opt);
+    /** @type {string} */
+    let provider = c.search.provider;
+    /** @type {boolean | null} */
+    let trustEnv = c.search.trust_env ?? null;
+    /** The saved key of the picked service: { set, hint }, or none. */
+    const savedKey = () => c.search.keys[provider] || { set: false, hint: null };
+
+    const desc = el('div', 'lv-cfg-hint lv-search-desc');
+    const status = el('div', 'lv-mcp-status');
+    const describeService = () => {
+      const name = SEARCH_SERVICES.find(([id]) => id === provider)?.[1];
+      desc.textContent = name
+        ? t(`search.about.${provider}`) + t('search.sentTo', { name })
+        : t('search.offHint');
+      adv.hidden = !name;
+    };
+
+    let tested = 0; // a slower, older answer is dropped
+    async function test() {
+      const mine = ++tested;
+      status.hidden = provider === 'off';
+      if (status.hidden) return;
+      status.className = 'lv-mcp-status lv-mcp-status-testing';
+      status.replaceChildren(el('span', 'lv-mcp-dot'), el('span', '', t('mcp.testing')));
+      let res;
+      try {
+        res = await api.testSearch(formBody());
+      } catch (err) {
+        res = { ok: false, error: String(err.message || err) };
+      }
+      if (mine !== tested) return;
+      status.className = `lv-mcp-status ${res.ok ? 'lv-mcp-status-ok' : 'lv-mcp-status-fail'}`;
+      status.replaceChildren(
+        el('span', 'lv-mcp-dot'),
+        el('span', '', res.ok ? t('search.ok') : t('search.fail')),
+      );
+      if (!res.ok && res.error) status.appendChild(el('div', 'lv-mcp-error', res.error));
     }
-    select.value = c.search.backend;
-    form.appendChild(field(t('cfg.searchBackend'), select));
+
+    const strip = segmented(
+      [...SEARCH_SERVICES, ['off', t('search.off')]],
+      provider,
+      (val) => {
+        provider = val;
+        keyMode = savedKey().set ? 'keep' : 'edit';
+        keyIn.value = '';
+        renderKey();
+        describeService();
+        void test();
+      },
+    );
+    strip.setAttribute('aria-label', t('cfg.searchTitle'));
+    form.append(strip, desc, status);
+
+    // Advanced: only what a failure would send you looking for.
+    const adv = /** @type {HTMLDetailsElement} */ (el('details', 'lv-cfg-advanced'));
+    adv.appendChild(el('summary', '', t('cfg.advanced')));
 
     /** @type {'keep' | 'edit' | 'clear'} */
-    let keyMode = c.search.tavily_api_key.set ? 'keep' : 'edit';
-    const keyIn = input('', { type: 'password', placeholder: t('cfg.apiKeyNone') });
+    let keyMode = savedKey().set ? 'keep' : 'edit';
+    const keyIn = input('', { type: 'password', placeholder: t('search.keyNone') });
+    keyIn.addEventListener('change', () => void test());
     const keyBox = el('div', 'lv-cfg-key');
     const renderKey = () => {
       keyBox.replaceChildren();
@@ -837,7 +896,7 @@ export function buildSearchPane() {
         const row = el('div', 'lv-cfg-key-set');
         row.appendChild(el('span', 'lv-cfg-key-dot'));
         row.appendChild(
-          el('span', 'lv-cfg-key-mask', t('cfg.apiKeySet', { hint: c.search.tavily_api_key.hint || '' })),
+          el('span', 'lv-cfg-key-mask', t('cfg.apiKeySet', { hint: savedKey().hint || '' })),
         );
         row.appendChild(
           ghostBtn(t('cfg.replace'), () => {
@@ -855,7 +914,7 @@ export function buildSearchPane() {
         keyBox.appendChild(row);
       } else if (keyMode === 'clear') {
         const row = el('div', 'lv-cfg-key-set');
-        row.appendChild(el('span', 'lv-cfg-key-mask', t('cfg.apiKeyNone')));
+        row.appendChild(el('span', 'lv-cfg-key-mask', t('search.keyNone')));
         row.appendChild(
           ghostBtn(t('cfg.keep'), () => {
             keyMode = 'keep';
@@ -865,7 +924,7 @@ export function buildSearchPane() {
         keyBox.appendChild(row);
       } else {
         keyBox.appendChild(keyIn);
-        if (c.search.tavily_api_key.set) {
+        if (savedKey().set) {
           keyBox.appendChild(
             ghostBtn(t('cfg.keep'), () => {
               keyMode = 'keep';
@@ -877,7 +936,38 @@ export function buildSearchPane() {
       }
     };
     renderKey();
-    form.appendChild(field(t('cfg.tavilyKey'), keyBox, t('cfg.apiKeyNote')));
+    adv.appendChild(field(t('search.key'), keyBox, t('search.keyHint')));
+    adv.appendChild(
+      field(
+        t('cfg.proxy'),
+        segmented(
+          [
+            ['default', t('cfg.proxyDefault')],
+            ['off', t('cfg.proxyOff')],
+            ['on', t('cfg.proxyOn')],
+          ],
+          trustEnv === null ? 'default' : trustEnv ? 'on' : 'off',
+          (val) => {
+            trustEnv = val === 'default' ? null : val === 'on';
+            void test();
+          },
+        ),
+        t('search.proxyHint'),
+      ),
+    );
+    adv.open = savedKey().set || trustEnv !== null;
+    form.appendChild(adv);
+    describeService();
+
+    /** The form as the API takes it: the key only when it changes. */
+    function formBody() {
+      /** @type {{ provider: string, trust_env: boolean | null, api_key?: string }} */
+      const body = { provider, trust_env: trustEnv };
+      if (keyMode === 'clear') body.api_key = '';
+      else if (keyMode === 'edit' && keyIn.value) body.api_key = keyIn.value;
+      return body;
+    }
+    void test();
 
     const errBox = el('div', 'lv-cfg-error');
     errBox.hidden = true;
@@ -885,25 +975,24 @@ export function buildSearchPane() {
     const save = el('button', 'lv-btn lv-btn-primary', t('cfg.save'));
     save.setAttribute('type', 'button');
     save.addEventListener('click', async () => {
-      const body = { backend: select.value };
-      if (keyMode === 'clear') body.tavily_api_key = '';
-      else if (keyMode === 'edit' && keyIn.value) body.tavily_api_key = keyIn.value;
+      const body = formBody();
       save.disabled = true;
       errBox.hidden = true;
       try {
         await api.setSearch(body);
         await loadConfig();
         toast(t('cfg.saved'));
+        void draw();
       } catch (err) {
         errBox.textContent = String(err.message || err);
         errBox.hidden = false;
-      } finally {
         save.disabled = false;
       }
     });
     actions.appendChild(save);
     pane.append(form, errBox, actions);
-  })();
+  };
+  void draw();
 
   return pane;
 }

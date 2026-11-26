@@ -27,6 +27,7 @@ from lovia.web.config import (  # noqa: E402
     WebConfig,
     storage,
 )
+from lovia.web.mcp import MCPStatus  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 
@@ -364,26 +365,66 @@ def test_vision_role_wires_describe_image(served) -> None:
 # --------------------------------------------------------------- search -
 
 
-def test_search_backend_rebuilds_tools(served) -> None:
+def test_search_settings_rebuild_tools_and_keep_keys_per_service(served) -> None:
     client, runtime, app = served
     _add_model(client)
-    assert client.put("/api/config/search", json={"backend": "off"}).status_code == 200
+    assert client.put("/api/config/search", json={"provider": "off"}).status_code == 200
     agent = app.state.deps.agents["lovia"]
     assert "web_search" not in {t.name for t in agent.tools}
     client.put(
         "/api/config/search",
-        json={"backend": "tavily", "tavily_api_key": "tvly-secret-99"},
+        json={"provider": "tavily", "api_key": "tvly-secret-99", "trust_env": True},
     )
     agent = app.state.deps.agents["lovia"]
     assert "web_search" in {t.name for t in agent.tools}
+    # Another service's key is its own; the first one stays for a way back.
+    client.put(
+        "/api/config/search", json={"provider": "exa", "api_key": "exa-key-12345"}
+    )
     out = client.get("/api/config").json()["search"]
     assert out == {
-        "backend": "tavily",
-        "tavily_api_key": {"set": True, "hint": "tvl…t-99"},
+        "provider": "exa",
+        "keys": {
+            "tavily": {"set": True, "hint": "tvl…t-99"},
+            "exa": {"set": True, "hint": "exa…2345"},
+        },
+        "trust_env": True,  # left out: kept
     }
-    # "" clears the key.
-    client.put("/api/config/search", json={"tavily_api_key": ""})
-    assert runtime.config.search.tavily_api_key is None
+    # "" clears the picked service's key; trust_env null is "Default".
+    client.put("/api/config/search", json={"api_key": "", "trust_env": None})
+    assert runtime.config.search.keys == {"tavily": "tvly-secret-99"}
+    assert runtime.config.search.trust_env is None
+
+
+def test_testing_a_search_service_uses_the_form_s_settings(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _runtime, _app = served
+    _add_model(client)
+    res = client.put(
+        "/api/config/search", json={"provider": "exa", "api_key": "exa-saved"}
+    )
+    assert res.status_code == 200, res.text
+    tried: list[object] = []
+
+    async def fake_probe(cfg, timeout):
+        tried.append((cfg.url, cfg.headers, cfg.trust_env))
+        return MCPStatus(ok=False, at=0, error="no answer within 30 s")
+
+    monkeypatch.setattr("lovia.web.api.config.probe", fake_probe)
+    res = client.post(
+        "/api/config/search/test", json={"provider": "tavily", "trust_env": True}
+    )
+    assert res.json() == {"ok": False, "error": "no answer within 30 s"}
+    # Tavily has no saved key: it goes keyless, through the proxy as asked.
+    url, headers, trust_env = tried[-1]
+    assert "tavily" in url and headers == {"X-Tavily-Access-Mode": "keyless"}
+    assert trust_env is True
+    client.post("/api/config/search/test", json={})  # the saved: Exa, its key
+    assert tried[-1][1] == {"x-api-key": "exa-saved"}
+    # Off: nothing to reach, nothing tried.
+    assert client.post("/api/config/search/test", json={"provider": "off"}).json()["ok"]
+    assert len(tried) == 2
 
 
 # --------------------------------------------------------------- skills -
@@ -1039,7 +1080,7 @@ def test_read_only_config_boots_and_refuses_every_write(
         for method, url, body in (
             ("post", "/api/config/models", {"model": "m"}),
             ("put", ASSISTANT, {"memory": False}),
-            ("put", "/api/config/search", {"backend": "off"}),
+            ("put", "/api/config/search", {"provider": "off"}),
             ("put", "/api/config/skills", {"dirs": []}),
         ):
             res = client.request(method.upper(), url, json=body)

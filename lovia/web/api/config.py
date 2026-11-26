@@ -38,7 +38,8 @@ from ..config.schema import (
     Connection,
     FlavorName,
     ModelProfile,
-    SearchBackend,
+    SearchConfig,
+    SearchProvider,
     VisionMode,
     WebConfig,
     WorkspaceModeName,
@@ -52,6 +53,7 @@ from ..config.skills import scan_skills_status
 from ..errors import WebError
 from ..mcp import CONNECT_TIMEOUT, MCPStatus, probe
 from ..project_mcp import ProjectServer, read_project_servers
+from ..search import server_config
 from ..workspaces import WorkspaceRef
 from .deps import RouterDeps
 from .routing import GuardedRoute
@@ -117,10 +119,18 @@ class RolesIn(BaseModel):
 
 
 class SearchIn(BaseModel):
-    """Search updates; ``tavily_api_key`` follows the keep/clear convention."""
+    """Search updates; only the fields present change. ``api_key`` is the
+    picked service's and follows the keep/clear convention; ``trust_env``
+    null is "Default"."""
 
-    backend: SearchBackend | None = None
-    tavily_api_key: str | None = None
+    provider: SearchProvider | None = None
+    api_key: str | None = None
+    trust_env: bool | None = None
+
+
+class SearchTestIn(SearchIn):
+    """A search service to test as the form has it: absent fields are the
+    saved ones, ``api_key`` null the saved key."""
 
 
 class VoiceIn(BaseModel):
@@ -390,8 +400,9 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             ],
             "roles": cfg.roles.model_dump(),
             "search": {
-                "backend": cfg.search.backend,
-                "tavily_api_key": _mask(cfg.search.tavily_api_key),
+                "provider": cfg.search.provider,
+                "keys": {p: _mask(k) for p, k in cfg.search.keys.items()},
+                "trust_env": cfg.search.trust_env,
             },
             "skills": cfg.skills.model_dump(),
             "mcp": _mcp_out(),
@@ -547,16 +558,39 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         await _apply(_copy(roles=roles))
         return {"config": _config_out()}
 
+    def _search_as(body: SearchIn) -> SearchConfig:
+        """The saved search settings with ``body``'s changes on top."""
+        search = runtime.config.search.model_copy(deep=True)
+        sent = body.model_fields_set
+        if body.provider is not None:
+            search.provider = body.provider
+        if "trust_env" in sent:
+            search.trust_env = body.trust_env
+        if body.api_key is not None and search.provider != "off":
+            keys = dict(search.keys)
+            if body.api_key:
+                keys[search.provider] = body.api_key
+            else:  # "" clears
+                keys.pop(search.provider, None)
+            search.keys = keys
+        return search
+
     @router.put("/search")
     async def update_search(body: SearchIn, request: Request) -> dict[str, object]:
         _guard_write(request)
-        search = runtime.config.search.model_dump()
-        if body.backend is not None:
-            search["backend"] = body.backend
-        if body.tavily_api_key is not None:
-            search["tavily_api_key"] = body.tavily_api_key or None  # "" clears
-        await _apply(_copy(search=search))
+        await _apply(_copy(search=_search_as(body).model_dump()))
         return {"config": _config_out()}
+
+    @router.post("/search/test")
+    async def test_search(body: SearchTestIn, request: Request) -> dict[str, object]:
+        """Connect to the service as the form has it, list its tools, close:
+        whether search would work, without spending a search."""
+        _guard_host(request)
+        cfg = server_config(_search_as(body))
+        if cfg is None:
+            return {"ok": True, "error": None}
+        status = await probe(cfg, timeout=CONNECT_TIMEOUT)
+        return {"ok": status.ok, "error": status.error}
 
     @router.put("/voice")
     async def update_voice(body: VoiceIn, request: Request) -> dict[str, object]:

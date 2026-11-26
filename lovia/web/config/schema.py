@@ -53,7 +53,7 @@ ANTHROPIC_FLAVOR = ProviderFlavor("anthropic", _ANTHROPIC_BASE_URL, _ANTHROPIC_H
 
 FlavorName = Literal["openai", "anthropic"]
 VisionMode = Literal["auto", "on", "off"]
-SearchBackend = Literal["auto", "tavily", "ddg", "off"]
+SearchProvider = Literal["parallel", "tavily", "exa", "off"]
 
 
 def flavor_for_model(spec: str) -> ProviderFlavor:
@@ -160,12 +160,32 @@ class Roles(BaseModel):
 
 
 class SearchConfig(BaseModel):
-    """The ``web_search`` tool backend; ``auto`` = Tavily if a key is set."""
+    """The service ``web_search`` asks: a hosted search MCP server
+    (:mod:`lovia.web.search`), or none. ``keys`` holds an optional API key
+    per service — each answers without one, within a free allowance."""
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
-    backend: SearchBackend = "auto"
-    tavily_api_key: str | None = None
+    provider: SearchProvider = "parallel"
+    keys: dict[str, str] = Field(default_factory=dict)
+    # Through the system proxy or not; None: as ``--trust-env`` says.
+    trust_env: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_backend(cls, data: Any) -> Any:
+        # Before 0.9.292 the choice was a backend: Tavily with its key, or the
+        # DuckDuckGo scraper. Search turned off stays off; a Tavily key keeps
+        # Tavily; anything else lands on the default.
+        if not isinstance(data, dict) or "backend" not in data or "provider" in data:
+            return data
+        data = dict(data)
+        backend, key = data.pop("backend"), data.pop("tavily_api_key", None)
+        if backend == "off":
+            data["provider"] = "off"
+        elif key and backend in ("auto", "tavily"):
+            data.update(provider="tavily", keys={"tavily": key})
+        return data
 
 
 # The cross-agent conventions (shared with Claude Code, Codex, OpenCode). A

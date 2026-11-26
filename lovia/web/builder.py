@@ -25,9 +25,7 @@ from ..tools import (
     Tool,
     ask_human,
     current_date,
-    duckduckgo_search,
     now,
-    tavily_search,
     web_fetch,
 )
 from ..workspace import (
@@ -58,6 +56,7 @@ from .config import (
 from .html import show_html
 from .introspection import Introspection
 from .mcp import MCPBook, SettingsMCP
+from .search import search_tool
 from .project_mcp import DECISIONS_FILE, ProjectMCP
 from .run_deps import chat_project
 from .scheduling import Scheduling
@@ -189,38 +188,13 @@ def resolve_memory(enabled: bool, root: str | Path) -> Memory | None:
 def resolve_tools(
     search: SearchConfig | None = None, *, web_search: bool = True
 ) -> list[Tool]:
-    """The built-in tools every configured agent gets.
-
-    ``now`` and ``web_fetch`` have no extra dependencies.
-    Web search, unless the agent turned it off (``web_search=False``),
-    follows the configured backend: ``auto`` uses Tavily when a key is
-    configured and the keyless ``ddgs`` backend otherwise. When the chosen
-    backend can't run we load the rest and log how to enable it rather
-    than failing.
-    """
+    """The built-in tools every configured agent gets: ``now``,
+    ``web_fetch``, and — unless the agent turned it off
+    (``web_search=False``) or Settings did — ``web_search`` over the picked
+    service (:mod:`lovia.web.search`)."""
     tools: list[Tool] = [now, web_fetch()]
-    if not web_search:
-        return tools
-    search = search or SearchConfig()
-    backend = search.backend
-    if backend == "auto":
-        backend = "tavily" if search.tavily_api_key else "ddg"
-    if backend == "tavily":
-        if search.tavily_api_key:
-            tools.append(tavily_search(api_key=search.tavily_api_key))
-        else:
-            log.warning(
-                "search backend 'tavily' has no API key; web_search disabled "
-                "— set it in Settings (or config.json)."
-            )
-    elif backend == "ddg":
-        try:
-            tools.append(duckduckgo_search())
-        except UserError:
-            log.info(
-                "web_search disabled: configure a Tavily API key or install "
-                "the 'ddgs' backend (pip install 'lovia[ddg]')."
-            )
+    if web_search and (searching := search_tool(search or SearchConfig())):
+        tools.append(searching)
     return tools
 
 

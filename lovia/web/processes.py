@@ -143,6 +143,8 @@ class ProcessWatcher:
         if watch is not None:
             if started and title:
                 watch.titles[started] = title
+                if started in watch.known:  # seen, and listed, before its title
+                    self._announce(session_id, watch)
             watch.active = watch.marked = True
             self._wake.set()
 
@@ -391,7 +393,9 @@ class ProcessWatcher:
                 out[r.id] = ProcessInfo(
                     process_id=r.id,
                     command=r.command,
-                    title=r.title,
+                    # A command that ended before its title came keeps it
+                    # until a restart.
+                    title=r.title or (watch.titles.get(r.id, "") if watch else ""),
                     status=r.status,
                     exit_code=r.exit_code,
                     cwd=r.cwd,

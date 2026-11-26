@@ -125,7 +125,8 @@ def _described(arguments: str | None) -> str:
     except ValueError:
         return ""
     title = args.get("description") if isinstance(args, dict) else None
-    return " ".join(title.split()) if isinstance(title, str) else ""
+    # A title, not a page: the record keeps it on its first line.
+    return " ".join(title.split())[:200] if isinstance(title, str) else ""
 
 
 def _queued_entry(content: InjectedContent) -> JsonObject:

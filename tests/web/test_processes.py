@@ -197,6 +197,17 @@ async def test_a_record_keeps_the_whole_buffer_and_its_offsets(
         assert rest.text == body[100:] and rest.eof
 
 
+async def test_a_title_that_comes_after_the_end_is_still_shown(tmp_path) -> None:
+    async with _world(tmp_path) as w:
+        pid = await w.spawn("true")
+        await _until(lambda: load_records(w.folder))
+        assert w.record(pid)[0].title == ""
+        seen = len(w.events)
+        w.deps.processes.mark(CHAT, started=pid, title="Check")
+        assert len(w.events) == seen + 1  # the list is told to look again
+        assert (await w.info(pid)).title == "Check"
+
+
 async def test_who_stopped_a_command(tmp_path) -> None:
     async with _world(tmp_path) as w:
         by_user = await w.spawn("sleep 30")

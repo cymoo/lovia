@@ -536,7 +536,8 @@ deletes that directory.
 
 The panel's **Background** tab lists what runs behind the chat, and what ran:
 its [subagent tasks](#background-subagents) and the commands the Agent started
-with `shell(background=true)` — a dev server, a test run. What waits on you
+with `shell(background=true)` — a dev server, a test run — each named by what
+the Agent said it does, or by the command when it said nothing. What waits on you
 comes first; what is over is folded below. The topbar button shows how many
 run (a red dot: something failed since you last looked) and opens the tab; a
 chat with commands running has a hollow dot in the sidebar. An agent without a

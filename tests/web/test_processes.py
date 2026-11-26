@@ -375,7 +375,9 @@ async def test_a_dropped_connection_leaves_the_record_without_output(tmp_path) -
             assert (record.status, record.ended_by, body) == ("killed", "lost", "")
             # A reader that had got that far does not go back to 0.
             assert record.base == len("two\n")
-            assert w.events[-1] == {"session_id": CHAT, "running": 0}
+            # The announcement follows the records' writes (_wind_up): the
+            # files can be on disk a moment before it is made.
+            await _until(lambda: w.events[-1] == {"session_id": CHAT, "running": 0})
             # Asking again, as a page told of the change does, changes nothing.
             heard = len(w.events)
             for _ in range(3):

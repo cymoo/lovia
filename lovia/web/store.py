@@ -409,8 +409,8 @@ def _remove_folders(root: Path, names: Sequence[str], owner: str) -> None:
     for name in names:
         folder = root / name
         shutil.rmtree(folder, ignore_errors=True)
-        if folder.is_dir():
-            with contextlib.suppress(OSError):
+        with contextlib.suppress(OSError):
+            if folder.is_dir() and not folder.is_symlink():
                 (folder / OWNER_FILE).write_text(owner, encoding="utf-8")
 
 

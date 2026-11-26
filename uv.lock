@@ -1002,7 +1002,6 @@ mcp = [
 ]
 web = [
     { name = "croniter" },
-    { name = "ddgs" },
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "mcp" },
@@ -1020,7 +1019,6 @@ requires-dist = [
     { name = "croniter", marker = "extra == 'web'", specifier = ">=2.0" },
     { name = "ddgs", marker = "extra == 'ddg'", specifier = ">=7.0" },
     { name = "ddgs", marker = "extra == 'examples'", specifier = ">=7.0" },
-    { name = "ddgs", marker = "extra == 'web'", specifier = ">=7.0" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.110" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },

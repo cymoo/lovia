@@ -531,10 +531,21 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
-  /** @param {{ backend?: string, tavily_api_key?: string }} body */
+  // Settings → Web search. `api_key` is the picked service's: null keeps
+  // the saved one, '' clears it; `trust_env` null is "Default".
+  /** @param {{ provider?: string, api_key?: string | null, trust_env?: boolean | null }} body */
   setSearch: (body) =>
     request('/api/config/search', {
       method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
+  // Connect to the service as the form has it, list its tools, close:
+  // resolves to { ok, error }. Spends no search.
+  /** @param {{ provider?: string, api_key?: string | null, trust_env?: boolean | null }} body */
+  testSearch: (body) =>
+    request('/api/config/search/test', {
+      method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),

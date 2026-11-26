@@ -144,47 +144,34 @@ def test_resolve_tools_includes_builtins() -> None:
     assert {"now", "web_fetch"} <= names
 
 
-def test_resolve_tools_auto_uses_ddg_without_a_key() -> None:
-    pytest.importorskip("ddgs")
+def test_resolve_tools_searches_by_default_and_not_when_off() -> None:
+    # Built without a connection: one opens only when the model searches.
     assert "web_search" in {t.name for t in builder.resolve_tools()}
-
-
-def test_resolve_tools_off_disables_search() -> None:
-    names = {t.name for t in builder.resolve_tools(SearchConfig(backend="off"))}
+    names = {t.name for t in builder.resolve_tools(SearchConfig(provider="off"))}
+    assert names == {"now", "web_fetch"}
+    names = {t.name for t in builder.resolve_tools(web_search=False)}
     assert names == {"now", "web_fetch"}
 
 
-def test_resolve_tools_skips_search_when_backend_missing(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ({"backend": "off", "tavily_api_key": "k"}, ("off", {"tavily": "k"})),
+        ({"backend": "auto", "tavily_api_key": "k"}, ("tavily", {"tavily": "k"})),
+        ({"backend": "tavily", "tavily_api_key": "k"}, ("tavily", {"tavily": "k"})),
+        ({"tavily_api_key": "k"}, ("tavily", {"tavily": "k"})),
+        ({"backend": "auto"}, ("parallel", {})),
+        ({"backend": "ddg"}, ("parallel", {})),
+        ({"backend": "ddg", "tavily_api_key": "k"}, ("parallel", {"tavily": "k"})),
+    ],
+)
+def test_a_saved_search_backend_carries_over(
+    before: dict[str, str], after: tuple[str, dict[str, str]]
 ) -> None:
-    def _missing() -> object:
-        raise UserError("ddgs not installed")
-
-    monkeypatch.setattr(builder, "duckduckgo_search", _missing)
-    # The missing optional backend must degrade gracefully, not crash.
-    names = {t.name for t in builder.resolve_tools()}
-    assert names == {"now", "web_fetch"}
-
-
-def test_resolve_tools_prefers_tavily_when_key_configured(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _boom() -> object:
-        raise AssertionError("duckduckgo_search must not be constructed")
-
-    monkeypatch.setattr(builder, "duckduckgo_search", _boom)
-    search = SearchConfig(tavily_api_key="k")  # backend "auto"
-    names = {t.name for t in builder.resolve_tools(search)}
-    assert names == {"now", "web_fetch", "web_search"}
-
-
-def test_resolve_tools_tavily_without_key_warns_and_degrades(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    with caplog.at_level("WARNING", logger="lovia.web.builder"):
-        names = {t.name for t in builder.resolve_tools(SearchConfig(backend="tavily"))}
-    assert "web_search" not in names
-    assert "no API key" in caplog.text
+    # Off stays off: a search turned off is never quietly turned back on.
+    # A Tavily key is kept whatever was picked, for a way back to it.
+    search = SearchConfig.model_validate(before)
+    assert (search.provider, search.keys) == after
 
 
 # ---------------------------------------------------------- instructions -

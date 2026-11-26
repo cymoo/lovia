@@ -154,6 +154,13 @@ _MAX_ALT_CHARS = 200
 _ERROR_PAGE_CHARS = 500
 # Less text than this from a page that runs scripts: an app shell, most likely.
 _SCRIPT_SHELL_CHARS = 200
+# A <script> the browser runs: no type, or a JavaScript one — not the
+# JSON-LD and other data blocks server-rendered pages carry.
+_SCRIPT_TAG_RE = re.compile(r"<script\b([^>]*)>", re.IGNORECASE)
+_SCRIPT_TYPE_RE = re.compile(r"""\btype\s*=\s*["']?([^"'\s>]+)""", re.IGNORECASE)
+_RUNNABLE_TYPES = frozenset(
+    {"module", "text/javascript", "application/javascript", "text/ecmascript"}
+)
 # Papers and manuals run to megabytes, and a PDF cut short reads as nothing.
 PDF_MAX_BYTES = 10_000_000
 # When clipping, back up to a line break within this much of the limit so the
@@ -649,6 +656,15 @@ def _parse_page(
     return doc, len(doc.text.strip())
 
 
+def _runs_scripts(html: str) -> bool:
+    """Whether ``html`` has a script a browser would run."""
+    for attrs in _SCRIPT_TAG_RE.findall(html):
+        kind = _SCRIPT_TYPE_RE.search(attrs)
+        if kind is None or kind.group(1).lower() in _RUNNABLE_TYPES:
+            return True
+    return False
+
+
 def _looks_like_html(body: bytes) -> bool:
     head = body[:512].lstrip().lower()
     return head.startswith((b"<!doctype html", b"<html")) or b"<html" in head
@@ -671,11 +687,7 @@ def page_from_response(raw: RawResponse, *, collect_images: bool = False) -> Pag
         # is less useful than the markup itself.
         page.text = doc.text or html
         page.images = doc.images
-        if (
-            raw.status_code == 200
-            and own < _SCRIPT_SHELL_CHARS
-            and "<script" in html.lower()
-        ):
+        if raw.status_code == 200 and own < _SCRIPT_SHELL_CHARS and _runs_scripts(html):
             # Say it, or the model refetches the same empty shell.
             page.note = (
                 "Little text here: the page likely builds its content with "
@@ -705,11 +717,12 @@ class HttpReader:
     back nearly empty — swap in a :class:`PageReader` that drives a real
     browser when that matters.
 
-    Responses are cached by URL for ``cache_ttl`` seconds. That is mostly
+    Pages are cached by URL for ``cache_ttl`` seconds, parsed. That is mostly
     correctness rather than speed: continuing a long page with ``offset``
     would otherwise re-download it and could splice together two different
-    versions. The cache holds at most ``cache_size`` entries so a long-running
-    agent cannot accumulate page bodies indefinitely.
+    versions — and a long PDF would be read again for every slice. The cache
+    holds at most ``cache_size`` entries so a long-running agent cannot
+    accumulate pages indefinitely.
     """
 
     def __init__(
@@ -728,15 +741,13 @@ class HttpReader:
         self._user_agent = user_agent or default_user_agent()
         self._cache_ttl = cache_ttl
         self._cache_size = max(1, cache_size)
-        self._cache: OrderedDict[str, tuple[float, RawResponse]] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[float, Page]] = OrderedDict()
 
     async def read(self, url: str, *, images: bool = False) -> Page:
-        raw = await self._fetch(url)
-        # Off the event loop: a 10 MB PDF, or a megabyte of markup, takes a
-        # while to read, and a web app has other chats to stream meanwhile.
-        return await asyncio.to_thread(page_from_response, raw, collect_images=images)
+        page = await self._page(url)
+        return page if images else dataclasses.replace(page, images=[])
 
-    async def _fetch(self, url: str) -> RawResponse:
+    async def _page(self, url: str) -> Page:
         if (cached := self._cache_get(url)) is not None:
             return cached
         raw = await fetch_raw(
@@ -747,26 +758,30 @@ class HttpReader:
             pdf_max_bytes=self._pdf_max_bytes,
             user_agent=self._user_agent,
         )
-        self._cache_put(url, raw)
-        return raw
+        # Off the event loop: a 10 MB PDF, or a megabyte of markup, takes a
+        # while to read, and a web app has other chats to stream meanwhile.
+        # Images and all, once: either kind of read is served from it.
+        page = await asyncio.to_thread(page_from_response, raw, collect_images=True)
+        self._cache_put(url, page)
+        return page
 
-    def _cache_get(self, url: str) -> RawResponse | None:
+    def _cache_get(self, url: str) -> Page | None:
         if self._cache_ttl <= 0:
             return None
         entry = self._cache.get(url)
         if entry is None:
             return None
-        stored_at, raw = entry
+        stored_at, page = entry
         if time.monotonic() - stored_at > self._cache_ttl:
             del self._cache[url]
             return None
         self._cache.move_to_end(url)
-        return raw
+        return page
 
-    def _cache_put(self, url: str, raw: RawResponse) -> None:
+    def _cache_put(self, url: str, page: Page) -> None:
         if self._cache_ttl <= 0:
             return
-        self._cache[url] = (time.monotonic(), raw)
+        self._cache[url] = (time.monotonic(), page)
         self._cache.move_to_end(url)
         while len(self._cache) > self._cache_size:
             self._cache.popitem(last=False)

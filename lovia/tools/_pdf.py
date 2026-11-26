@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
+from typing import Any
 
 PDF_MAGIC = b"%PDF-"
 INSTALL_HINT = "pip install 'lovia[pdf]'"
+# Text kept from one PDF. A 10 MB file can inflate to far more, and the model
+# reads it 20k characters at a time anyway; a book's worth is plenty.
+MAX_TEXT_CHARS = 2_000_000
 
 
 @dataclass
@@ -26,19 +30,37 @@ def pdf_text(body: bytes) -> PdfText:
         from pypdf import PdfReader
     except ImportError:
         return PdfText(f"(PDF not read: text extraction needs pypdf — {INSTALL_HINT})")
+    pages: list[str] = []
+    kept = 0
     try:
         reader = PdfReader(io.BytesIO(body))
         if reader.is_encrypted and not reader.decrypt(""):
             return PdfText("(PDF not read: it is password-protected)")
-        pages = [page.extract_text() or "" for page in reader.pages]
-        title = reader.metadata.title if reader.metadata else None
+        count = len(reader.pages)
+        for page in reader.pages:
+            text = (page.extract_text() or "").strip()
+            pages.append(text)
+            kept += len(text)
+            if kept >= MAX_TEXT_CHARS:
+                break
     except Exception as exc:  # noqa: BLE001 — a bad file is an answer, not a crash
         # pypdf names a missing ``cryptography`` (AES) in its own message.
         return PdfText(f"(PDF not read: {type(exc).__name__}: {exc})")
-    text = "\n\n".join(p.strip() for p in pages if p.strip())
+    text = "\n\n".join(p for p in pages if p)
     if not text:
         return PdfText(
-            f"(PDF of {len(pages)} page(s) with no text layer — likely scanned; "
+            f"(PDF of {count} page(s) with no text layer — likely scanned; "
             "reading it needs OCR or a model that takes PDFs)"
         )
-    return PdfText(text, title=str(title).strip() or None if title else None)
+    if len(pages) < count:
+        text += f"\n\n(… text kept from the first {len(pages)} of {count} pages)"
+    return PdfText(text, title=_title(reader))
+
+
+def _title(reader: Any) -> str | None:
+    # Best effort: a malformed /Info entry must not cost the text.
+    try:
+        title = reader.metadata.title if reader.metadata else None
+    except Exception:  # noqa: BLE001 — no title is a fine answer
+        return None
+    return str(title).strip() or None if title else None

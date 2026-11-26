@@ -15,6 +15,7 @@ from lovia.tools.page import (
     Page,
     PageImage,
     html_to_markdown,
+    page_from_response,
     web_fetch,
 )
 from lovia.tools.base import run_tool
@@ -486,6 +487,8 @@ async def test_web_fetch_says_when_a_page_needs_javascript(
         "/app": "<div id='root'>Loading…</div><script src='/app.js'></script>",
         # Text of its own, scripts or not: no such note.
         "/doc": "<p>" + "words " * 100 + "</p><script>x()</script>",
+        # Short, and its only script is data a browser never runs: no note.
+        "/data": "<p>Closed today.</p><script type='application/ld+json'>{}</script>",
     }
     _mock_http(
         monkeypatch,
@@ -501,6 +504,8 @@ async def test_web_fetch_says_when_a_page_needs_javascript(
     rendered = _render_page(page, None)
     assert rendered.index("JavaScript") < rendered.index("--- BEGIN")
     page = await page_tool.invoke({"url": "https://example.com/doc"}, _ctx())
+    assert page.note is None
+    page = await page_tool.invoke({"url": "https://example.com/data"}, _ctx())
     assert page.note is None
 
 
@@ -599,6 +604,58 @@ async def test_a_pdf_gets_its_own_download_cap(
     tight = HttpReader(max_bytes=100, pdf_max_bytes=len(pdf) - 1, cache_ttl=0)
     page = await read(tight, "/a.pdf")
     assert page.size_capped and "larger than the download cap" in page.text
+
+
+def test_a_pdf_s_text_is_bounded_and_its_title_best_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("pypdf")
+    from lovia.tools import _pdf as pdf_module
+
+    monkeypatch.setattr(pdf_module, "MAX_TEXT_CHARS", 10)
+    out = pdf_module.pdf_text(_pdf("first page text", "second", "third"))
+    assert out.text.startswith("first page text")
+    assert "second" not in out.text
+    assert "the first 1 of 3 pages" in out.text
+    # A malformed /Info entry costs the title, never the text.
+    import pypdf
+
+    monkeypatch.setattr(
+        pypdf.PdfReader,
+        "metadata",
+        property(lambda self: (_ for _ in ()).throw(pypdf.errors.PdfReadError("bad"))),
+    )
+    monkeypatch.setattr(pdf_module, "MAX_TEXT_CHARS", 1_000)
+    out = pdf_module.pdf_text(_pdf("still here"))
+    assert (out.text, out.title) == ("still here", None)
+
+
+@pytest.mark.asyncio
+async def test_an_offset_read_is_a_slice_of_the_page_read_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parses = {"n": 0}
+    real = page_from_response
+
+    def counting(*args: Any, **kwargs: Any) -> Any:
+        parses["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("lovia.tools.page.page_from_response", counting)
+    _html_page(monkeypatch, "<p>" + "word " * 2_000 + "</p><img src='/a.png'>")
+    tool = web_fetch(HttpReader(), max_chars=1_000)
+    first = await tool.invoke({"url": "https://example.com/long"}, _ctx())
+    assert first.images == []  # not asked for
+    again = await tool.invoke(
+        {
+            "url": "https://example.com/long",
+            "offset": first.next_offset,
+            "images": True,
+        },
+        _ctx(),
+    )
+    assert parses["n"] == 1
+    assert [i.url for i in again.images] == ["https://example.com/a.png"]
 
 
 def test_a_pdf_without_pypdf_says_how_to_read_it(

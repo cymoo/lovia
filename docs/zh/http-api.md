@@ -128,7 +128,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `run_active` | 409 | 该聊天已有 Run 在执行 |
 | `run_stopping` | 409 | 已停止的 Run 仍在收尾，请稍后重试 |
 | `run_waiting` | 409 | 对话的 Run 因审批而暂停：回答审批卡片即可续跑，也可以停止它 |
-| `run_interrupted` | 409 | （reconnect）对话的 Run 因达到上限或出错而停下：向对话发一条消息即可接着运行 |
+| `run_interrupted` | 409 | 对话的 Run 因达到上限或出错而停下：向对话发一条消息即可接着运行（reconnect 和带 `busy="reject"` 的流式请求会被拒绝） |
 | `run_unfinished` | 409 | 该聊天的上一个 Run 被中断且仍可恢复；复制整个聊天要等它结束 |
 | `nothing_to_fork` | 409 | fork 结果会是空的：该位置之前没有已完成的历史 |
 | `run_cancelled` | 409 | 阻塞式 Turn 的 Run 被停止（取消、删除聊天或服务端关闭） |

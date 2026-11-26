@@ -315,6 +315,14 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         interrupted = (
             await find_interrupted(deps, sid) if waiting is None and not empty else None
         )
+        if interrupted is not None and req.busy == "reject":
+            # A queued message is its own turn, never read by another run.
+            raise WebError(
+                409,
+                "run_interrupted",
+                "this chat's run stopped and waits for a message",
+                hint='sent with busy="reject": send it without busy to continue the run',
+            )
         # A message for a live run joins it, in that run's context. Any other
         # starts one: the run_deps hook decides first, before anything is
         # written, so a refused message leaves no trace.

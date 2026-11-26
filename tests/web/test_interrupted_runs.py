@@ -178,6 +178,84 @@ async def test_a_message_continues_a_run_cut_off_by_max_turns() -> None:
     assert [m.content for m in seen if m.role == "user"] == ["long task", "go on"]
 
 
+async def _cut_by_max_turns(ac, sid: str = "s1") -> None:
+    await _stream(
+        ac, "/api/chat/stream", json={"message": "long task", "session_id": sid}
+    )
+    await _wait_run(ac, sid, gone=True)
+
+
+async def test_an_agent_served_under_another_key_is_continued() -> None:
+    """The run's record keeps the registry key ("alpha"); the snapshot names
+    the agent ("bot") — the message still continues the run."""
+    store = ChatStore.in_memory()
+    provider = ScriptedProvider(
+        [call("noop", {}, call_id="c1"), call("noop", {}, call_id="c2"), text("ok")]
+    )
+    agent = Agent(name="bot", model=provider, tools=[noop])
+    app = _app({"alpha": agent}, store=store, max_turns=1)
+    async with _client(app) as ac:
+        await _cut_by_max_turns(ac)
+        evs = await _stream(
+            ac, "/api/chat/stream", json={"message": "go on", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1", gone=True)
+    assert "snapshot" in [e for e, _ in evs]  # resumed, not started afresh
+    assert _saw(provider.calls[-1], "c1")
+
+
+async def test_a_queued_message_is_not_read_by_an_interrupted_run() -> None:
+    store = ChatStore.in_memory()
+    provider = ScriptedProvider([call("noop", {}, call_id="c1"), text("ok")])
+    app = _app(
+        Agent(name="bot", model=provider, tools=[noop]), store=store, max_turns=1
+    )
+    async with _client(app) as ac:
+        await _cut_by_max_turns(ac)
+        rid = await store.get_active_run_id("s1")
+        res = await ac.post(
+            "/api/chat/stream",
+            json={"message": "next", "session_id": "s1", "busy": "reject"},
+        )
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "run_interrupted"
+    assert await store.checkpointer.load(rid) is not None
+
+
+async def test_a_continuing_message_is_held_to_the_run_cap() -> None:
+    """Continuing a run is new work: at the cap it is refused (429), the
+    interrupted run left as it was."""
+    import asyncio
+
+    from .test_supervisor import _blocking_tool, _spawn
+
+    store = ChatStore.in_memory()
+    release = asyncio.Event()
+    provider = ScriptedProvider(
+        [
+            call("noop", {}, call_id="c1"),  # s1, cut by max_turns=1
+            call("block", {}, call_id="b1"),  # s2 holds the one slot
+        ]
+    )
+    agent = Agent(name="bot", model=provider, tools=[noop, _blocking_tool(release)])
+    app = _app(agent, store=store, max_turns=1, max_background_runs=1)
+    async with _client(app) as ac:
+        await _cut_by_max_turns(ac)
+        rid = await store.get_active_run_id("s1")
+        other, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s2"}
+        )
+        await _wait_run(ac, "s2")
+        res = await ac.post(
+            "/api/chat/stream", json={"message": "go on", "session_id": "s1"}
+        )
+        assert res.status_code == 429
+        assert await store.get_active_run_id("s1") == rid
+        assert await store.checkpointer.load(rid) is not None
+        release.set()
+        await asyncio.wait_for(other, timeout=5)
+
+
 async def test_a_run_cut_off_by_a_shutdown_still_reconnects() -> None:
     """A shutdown's cut is not the person's to answer: the pointer stays, and
     opening the chat resumes the run as before."""
@@ -231,3 +309,15 @@ def test_a_continued_runs_budget_counts_from_where_it_stopped() -> None:
     assert fresh.max_tool_calls == 9
     assert fresh.max_seconds == 67.5
     assert _counted_from(None, snap) is None
+    # A pending call replays (and counts) again: it is not carried.
+    from lovia.transcript import ToolCallEntry
+
+    pending = RunSnapshot(
+        run_id="p",
+        agent_name="a",
+        entries=[ToolCallEntry(call_id="x", name="noop", arguments="{}")],
+        usage=Usage(),
+        turns=1,
+        tool_calls=4,
+    )
+    assert _counted_from(budget, pending).max_tool_calls == 8  # type: ignore[union-attr]

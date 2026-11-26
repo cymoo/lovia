@@ -136,7 +136,7 @@ normalizes all three.
 | `run_active` | 409 | a run owns this chat |
 | `run_stopping` | 409 | a stopped run is still winding down; retry shortly |
 | `run_waiting` | 409 | the chat's run is suspended on an approval: answer its card to resume it, or stop it |
-| `run_interrupted` | 409 | (reconnect) the chat's run stopped at a limit or on a failure: a message to the chat continues it |
+| `run_interrupted` | 409 | the chat's run stopped at a limit or on a failure: a message to the chat continues it (refused by reconnect, and for a stream sent with `busy="reject"`) |
 | `run_unfinished` | 409 | the chat's last run was interrupted and can still resume; a whole-chat fork waits for it |
 | `nothing_to_fork` | 409 | the fork would be empty: no finished history before that point |
 | `run_cancelled` | 409 | a blocking turn's run was stopped (cancel, chat deletion, or shutdown) |

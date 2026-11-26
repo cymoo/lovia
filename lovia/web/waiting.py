@@ -223,7 +223,16 @@ def interrupted_by(snapshot: RunSnapshot) -> str | None:
     )
 
 
-async def find_interrupted(deps: RouterDeps, session_id: str) -> RunSnapshot | None:
+@dataclass(frozen=True)
+class Interrupted:
+    """A chat's interrupted run: the checkpoint it resumes from, and the
+    registry key of the agent it started on."""
+
+    snapshot: RunSnapshot
+    agent: str
+
+
+async def find_interrupted(deps: RouterDeps, session_id: str) -> Interrupted | None:
     """The chat's interrupted run, when a message may resume it: a resumable
     checkpoint the chat points at, with no live run and no card (see
     :func:`find_waiting`), whose agent is still served."""
@@ -238,26 +247,33 @@ async def find_interrupted(deps: RouterDeps, session_id: str) -> RunSnapshot | N
     snapshot = await store.checkpointer.load(run_id)
     if snapshot is None or snapshot.status not in RESUMABLE:
         return None
-    return snapshot if snapshot.agent_name in deps.agents else None
+    # The snapshot names the agent that was acting (a handoff target, or one
+    # served under another key); the run's record keeps the registry key it
+    # started on, from which the resume finds the acting one again.
+    record_id = await store.get_active_record_id(session_id, run_id)
+    records = await store.list_runs(run_id=record_id, limit=1)
+    name = (records[0].agent if records else None) or snapshot.agent_name
+    return Interrupted(snapshot, name) if name in deps.agents else None
 
 
 async def resume_interrupted(
     deps: RouterDeps,
     sid: str,
-    snapshot: RunSnapshot,
+    interrupted: Interrupted,
     *,
     message: InjectedContent,
     request: Request | None = None,
     await_approvals: bool = True,
 ) -> RunController | None:
-    """Resume chat ``sid``'s interrupted run (``snapshot``, from
-    :func:`find_interrupted`) now, with ``message`` read at its next turn and
-    its limits counted afresh from where it stopped; with no subscriber (the
-    caller attaches). None when it is no longer there to resume (another
-    request resumed or cleared it meanwhile)."""
+    """Resume chat ``sid``'s interrupted run (from :func:`find_interrupted`)
+    now, with ``message`` read at its next turn and its limits counted afresh
+    from where it stopped; with no subscriber (the caller attaches). None
+    when it is no longer there to resume (another request resumed or cleared
+    it meanwhile)."""
     store = deps.store
     assert store.checkpointer is not None  # find_interrupted found one
-    agent = deps.agents[snapshot.agent_name]
+    snapshot = interrupted.snapshot
+    agent = deps.agents[interrupted.agent]
     # Checked like a fresh turn: a chat whose directory this server no longer
     # allows is refused, not resumed elsewhere.
     binding = deps.chat_binding(agent, await store.get(sid))

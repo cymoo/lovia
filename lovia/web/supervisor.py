@@ -1368,7 +1368,11 @@ def _counted_from(budget: RunBudget | None, snapshot: RunSnapshot) -> RunBudget 
         max_input_tokens=more(budget.max_input_tokens, used.input_tokens),
         max_output_tokens=more(budget.max_output_tokens, used.output_tokens),
         max_total_tokens=more(budget.max_total_tokens, used.total_tokens),
-        max_tool_calls=more(budget.max_tool_calls, snapshot.tool_calls),
+        # As the loop carries it: pending calls count again when they replay.
+        max_tool_calls=more(
+            budget.max_tool_calls,
+            max(0, snapshot.tool_calls - len(pending_tool_calls(snapshot.entries))),
+        ),
         max_seconds=more(budget.max_seconds, snapshot.elapsed),
     )
 
@@ -1663,8 +1667,11 @@ class RunSupervisor:
         # One start at a time per chat: binding the workspace may switch
         # the chat session's policy (set_policy), which a start about to
         # lose to a concurrent one must never do under the winner's run.
+        # A resume a person's message asked for is new work, held to the run
+        # cap like a fresh start; a reconnect or an answer picks up old work.
+        cap = fresh_allowance
         async with self._start_lock(session_id):
-            self._check_slot(session_id, cap=False)
+            self._check_slot(session_id, cap=cap)
             meta = await self.deps.store.get(session_id)
             agent_name = self.deps.name_of(agent)  # before binding copies the agent
             grants = await self.deps.grant_owner(session_id)
@@ -1678,7 +1685,7 @@ class RunSupervisor:
             # its shell/file tools must land on the chat's one live session.
             folder = await attachments_for_run(self.deps.store, session_id, agent)
             agent = await self.deps.workspaces.bind(session_id, agent, folder)
-            self._check_slot(session_id, cap=False)  # as in start()
+            self._check_slot(session_id, cap=cap)  # as in start()
             client = dict(client or {})
             ckpt = CheckpointOptions(
                 checkpointer=self.deps.store.checkpointer,
@@ -1700,7 +1707,7 @@ class RunSupervisor:
                 if self.deps.session is not None
                 else []
             )
-            self._check_slot(session_id, cap=False)  # those awaits, as above
+            self._check_slot(session_id, cap=cap)  # those awaits, as above
             ctrl = RunController(
                 deps=self.deps,
                 supervisor=self,

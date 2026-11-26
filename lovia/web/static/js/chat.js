@@ -3709,6 +3709,9 @@ async function recoverDroppedStream(sessionId) {
   }
   if (store.chatEpoch !== epoch || store.sessionId !== sessionId || store.streaming) return;
   store.emit('render-history', data.entries || []);
+  // What the run stopped to wait on (a card, or a message after a limit or
+  // a failure), as a chat load shows it.
+  if (data.waiting) store.emit('waiting-card', data.waiting);
   // The run settled server-side while we were away; its chips (if any) were
   // cached by whichever client saw it finish — repaint them if the tail matches.
   maybeRestoreFollowups(data.entries || []);
@@ -3925,6 +3928,9 @@ export async function runStream(message, attachments = null, { busy, onAdmit } =
         outcome.refused = { code: err.code ?? '', message: err.message };
         return outcome;
       }
+      // Switched chats while the refusal was read: its message must not land
+      // in the composer of the chat now open.
+      if (store.chatEpoch !== streamEpoch) return outcome;
       _lastErrorCode = err.code ?? '';
       appendErrorNotice(err.message, err.code);
       restorePrompt(message); // never taken: send it again from the composer

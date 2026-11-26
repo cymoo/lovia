@@ -321,3 +321,41 @@ def test_a_continued_runs_budget_counts_from_where_it_stopped() -> None:
         tool_calls=4,
     )
     assert _counted_from(budget, pending).max_tool_calls == 8  # type: ignore[union-attr]
+
+
+async def test_a_message_for_a_run_that_stops_meanwhile_continues_it(
+    monkeypatch,
+) -> None:
+    """The live run a message came to join stops at its limit while the
+    request is under way: the message continues it, not a fresh run that
+    would drop its checkpoint."""
+    store = ChatStore.in_memory()
+    provider = ScriptedProvider(
+        [call("noop", {}, call_id="c1"), call("noop", {}, call_id="c2"), text("ok")]
+    )
+    app = _app(
+        Agent(name="bot", model=provider, tools=[noop]), store=store, max_turns=1
+    )
+    async with _client(app) as ac:
+        await _cut_by_max_turns(ac)
+        # Seen live when the request decides; stopped by the time it acts.
+        supervisor = app.state.deps.supervisor
+        real_get, upsert = supervisor.get, store.upsert
+        state = {"live": True}
+
+        def get(sid):
+            return object() if state["live"] else real_get(sid)
+
+        async def upsert_then_stop(*a, **k):
+            state["live"] = False
+            return await upsert(*a, **k)
+
+        monkeypatch.setattr(supervisor, "get", get)
+        monkeypatch.setattr(store, "upsert", upsert_then_stop)
+        evs = await _stream(
+            ac, "/api/chat/stream", json={"message": "go on", "session_id": "s1"}
+        )
+        monkeypatch.undo()
+        await _wait_run(ac, "s1", gone=True)
+    assert "snapshot" in [e for e, _ in evs]  # resumed
+    assert _saw(provider.calls[-1], "c1")  # with the run's work

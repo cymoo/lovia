@@ -44,6 +44,7 @@ from ..supervisor import RunController, forward
 from ..titles import provisional_title
 from ..waiting import (
     RESUMABLE,
+    Interrupted,
     Waiting,
     find_interrupted,
     find_waiting,
@@ -67,6 +68,17 @@ def _busy() -> WebError:
         "run_active",
         "a run is active for this session",
         hint='sent with busy="reject": send it again once that run has ended',
+    )
+
+
+def _interrupted_busy() -> WebError:
+    """The refusal of a ``busy="reject"`` message for a chat whose run was
+    interrupted: a queued message is its own turn, never read by another run."""
+    return WebError(
+        409,
+        "run_interrupted",
+        "this chat's run stopped and waits for a message",
+        hint='sent with busy="reject": send it without busy to continue the run',
     )
 
 
@@ -317,12 +329,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         )
         if interrupted is not None and req.busy == "reject":
             # A queued message is its own turn, never read by another run.
-            raise WebError(
-                409,
-                "run_interrupted",
-                "this chat's run stopped and waits for a message",
-                hint='sent with busy="reject": send it without busy to continue the run',
-            )
+            raise _interrupted_busy()
         # A message for a live run joins it, in that run's context. Any other
         # starts one: the run_deps hook decides first, before anything is
         # written, so a refused message leaves no trace.
@@ -370,10 +377,13 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                     run_id=resumed.record_id,
                 )
             )
-        if interrupted is not None:
+
+        async def continue_run(found: Interrupted) -> EventSourceResponse | None:
+            # The message resumes the interrupted run; None when it is gone
+            # meanwhile (resumed to its end, or cleared): a fresh run then.
             try:
                 resumed = await resume_interrupted(
-                    deps, sid, interrupted, message=content, request=request
+                    deps, sid, found, message=content, request=request
                 )
             except WebError as exc:
                 # Another request resumed it first: join that run.
@@ -381,21 +391,31 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 if exc.code == "run_active" and live is not None:
                     return attach(live)
                 raise
-            if resumed is not None:
-                return EventSourceResponse(
-                    forward(
-                        resumed.attach(with_snapshot=True),
-                        sid=sid,
-                        run_id=resumed.record_id,
-                    )
+            if resumed is None:
+                return None
+            return EventSourceResponse(
+                forward(
+                    resumed.attach(with_snapshot=True),
+                    sid=sid,
+                    run_id=resumed.record_id,
                 )
-            # Gone meanwhile (resumed to its end, or cleared): a fresh run.
+            )
+
+        if interrupted is not None and (res := await continue_run(interrupted)):
+            return res
         if not decided:  # ... and so did the one this message was to join
             run_deps = await build_run_deps(deps.run_deps, trigger)
             # Another may have started while the hook ran: join that one,
             # before the cleanup below could take its checkpoint for stale.
             if (live := deps.supervisor.get(sid)) is not None:
                 return attach(live)
+            # Or the live run it was to join stopped meanwhile, at a limit or
+            # on a failure: it is still the chat's run, and this continues it.
+            if interrupted is None and (late := await find_interrupted(deps, sid)):
+                if req.busy == "reject":
+                    raise _interrupted_busy()
+                if res := await continue_run(late):
+                    return res
 
         # No live run → start a fresh supervised run. An interrupted run left
         # behind (its agent no longer served) is superseded by it: read before

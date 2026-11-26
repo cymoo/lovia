@@ -210,7 +210,6 @@ lovia needs Python 3.10 or newer.
 | Core library | `pip install lovia` |
 | MCP | `pip install "lovia[mcp]"` |
 | Web app (includes MCP) | `pip install "lovia[web]"` |
-| DuckDuckGo search | `pip install "lovia[ddg]"` (Tavily needs no extra: set `TAVILY_API_KEY`) |
 | Runnable examples | `pip install "lovia[examples,web]"` |
 
 ## Status

@@ -185,7 +185,6 @@ lovia 需要 Python 3.10 或更新版本。
 | 核心库 | `pip install lovia` |
 | MCP | `pip install "lovia[mcp]"` |
 | Web 应用（含 MCP） | `pip install "lovia[web]"` |
-| DuckDuckGo 搜索 | `pip install "lovia[ddg]"`（Tavily 无需额外依赖，设置 `TAVILY_API_KEY` 即可） |
 | 可运行示例 | `pip install "lovia[examples,web]"` |
 
 ## 项目状态

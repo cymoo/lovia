@@ -33,7 +33,7 @@ lovia/
     base.py         #   core Tool/tool API
     _http.py        #   the capped GET transport web_fetch builds on
     page.py         #   web_fetch (PageReader backends)
-    search.py       #   duckduckgo_search (requires lovia[ddg]) / tavily_search (TAVILY_API_KEY)
+    search.py       #   web_search(backend) over the WebSearch protocol (no bundled backend)
     human.py        #   HumanChannel + ask_human
     recall.py       #   recall_tool_result (recovers compacted tool outputs)
     time.py         #   now

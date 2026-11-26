@@ -59,7 +59,7 @@ def current_date(tz: str | None = None) -> "InstructionsFn":
     current year into web searches and no longer wastes a turn calling ``now``
     first::
 
-        agent = Agent(name="researcher", tools=[duckduckgo_search()])
+        agent = Agent(name="researcher", tools=[web_search(my_backend)])
         agent.instruction(current_date())            # server-local timezone
         # or: agent.instruction(current_date(tz="Asia/Shanghai"))
 

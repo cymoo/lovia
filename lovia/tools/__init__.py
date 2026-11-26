@@ -30,19 +30,10 @@ from .page import (
     web_fetch,
 )
 from .recall import recall_tool_result
-from .search import (
-    DuckDuckGoSearch,
-    SearchResult,
-    TavilySearch,
-    WebSearch,
-    duckduckgo_search,
-    tavily_search,
-    web_search,
-)
+from .search import SearchResult, WebSearch, web_search
 from .time import current_date, now
 
 __all__ = [
-    "DuckDuckGoSearch",
     "FENCE_NOTE",
     "HttpReader",
     "HumanChannel",
@@ -54,7 +45,6 @@ __all__ = [
     "PermissionFn",
     "QuestionOption",
     "SearchResult",
-    "TavilySearch",
     "Tool",
     "ToolInvoker",
     "ToolPolicy",
@@ -62,13 +52,11 @@ __all__ = [
     "WebSearch",
     "ask_human",
     "current_date",
-    "duckduckgo_search",
     "fence",
     "html_to_markdown",
     "now",
     "recall_tool_result",
     "result_to_text",
-    "tavily_search",
     "tool",
     "web_fetch",
     "web_search",

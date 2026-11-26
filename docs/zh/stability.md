@@ -37,7 +37,7 @@ transcript，工具视图、审批规则和评测也按名字匹配，所以给�
 
 **命令与环境变量**：`lovia` 和 `lovia web` 命令及其子命令和参数（见 `lovia web --help`），以及文档中
 列出的环境变量：CLI 的见[CLI 选项](web-ui.md#cli-选项)，Provider 的见
-[模型字符串](providers.md#模型字符串)和[网络](providers.md#网络超时代理tls)，另有 `TAVILY_API_KEY`、
+[模型字符串](providers.md#模型字符串)和[网络](providers.md#网络超时代理tls)，另有
 `LOVIA_EMBEDDING_BASE_URL` / `LOVIA_EMBEDDING_API_KEY` 和 `LOVIA_EVAL_JUDGE_MODEL`。
 
 ## 不作承诺

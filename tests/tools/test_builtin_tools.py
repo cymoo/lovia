@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import sys
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -16,12 +14,7 @@ from lovia.run_context import RunContext
 from lovia.tools._http import decode_body
 from lovia.tools.base import run_tool
 from lovia.tools.human import HumanChannel, ask_human
-from lovia.tools.search import (
-    SearchResult,
-    duckduckgo_search,
-    tavily_search,
-    web_search,
-)
+from lovia.tools.search import SearchResult, web_search
 from lovia.tools.time import current_date, now
 
 
@@ -187,71 +180,6 @@ async def test_web_search_clamps_max_results() -> None:
 
 
 @pytest.mark.asyncio
-async def test_duckduckgo_backend_maps_rows_and_forwards_args() -> None:
-    from lovia.tools.search import DuckDuckGoSearch
-
-    seen: dict[str, Any] = {}
-
-    class FakeDDGS:
-        def __enter__(self) -> "FakeDDGS":
-            return self
-
-        def __exit__(self, *exc: object) -> None:
-            pass
-
-        def text(self, query: str, max_results: int, timelimit: str | None):  # type: ignore[no-untyped-def]
-            seen.update(query=query, max_results=max_results, timelimit=timelimit)
-            return [{"title": "T", "href": "https://x.example", "body": "B"}]
-
-    # Bypass __init__'s import dance — it is covered separately below.
-    backend = DuckDuckGoSearch.__new__(DuckDuckGoSearch)
-    backend._ddgs_cls = FakeDDGS
-    rows = await backend.search("q", max_results=7, time_range="w")
-    assert seen == {"query": "q", "max_results": 7, "timelimit": "w"}
-    assert rows == [SearchResult(title="T", url="https://x.example", snippet="B")]
-
-
-@pytest.mark.asyncio
-async def test_duckduckgo_no_results_is_an_empty_list_not_an_error() -> None:
-    """ddgs raises when every engine came back empty; that is still an answer."""
-    from lovia.tools.search import DuckDuckGoSearch
-
-    class EmptyDDGS:
-        def __enter__(self) -> "EmptyDDGS":
-            return self
-
-        def __exit__(self, *exc: object) -> None:
-            pass
-
-        def text(self, query: str, max_results: int, timelimit: str | None):  # type: ignore[no-untyped-def]
-            raise RuntimeError("No results found.")
-
-    backend = DuckDuckGoSearch.__new__(DuckDuckGoSearch)
-    backend._ddgs_cls = EmptyDDGS
-    assert await backend.search("nothing matches this") == []
-
-
-@pytest.mark.asyncio
-async def test_duckduckgo_other_backend_errors_still_raise() -> None:
-    from lovia.tools.search import DuckDuckGoSearch
-
-    class BrokenDDGS:
-        def __enter__(self) -> "BrokenDDGS":
-            return self
-
-        def __exit__(self, *exc: object) -> None:
-            pass
-
-        def text(self, query: str, max_results: int, timelimit: str | None):  # type: ignore[no-untyped-def]
-            raise RuntimeError("ConnectError: tls handshake eof")
-
-    backend = DuckDuckGoSearch.__new__(DuckDuckGoSearch)
-    backend._ddgs_cls = BrokenDDGS
-    with pytest.raises(RuntimeError, match="ConnectError"):
-        await backend.search("q")
-
-
-@pytest.mark.asyncio
 async def test_web_search_retries_a_dropped_connection() -> None:
     """One blip must not cost a model turn: the tool retries in place."""
 
@@ -267,156 +195,6 @@ async def test_web_search_retries_a_dropped_connection() -> None:
     out = await run_tool(web_search(Flaky()), {"query": "x"}, _ctx())
     assert out == [{"title": "t", "url": "https://x", "snippet": "s"}]
     assert attempts["n"] == 3
-
-
-def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Force both ddgs and duckduckgo_search imports to fail.
-    for mod in ("ddgs", "duckduckgo_search"):
-        if mod in sys.modules:
-            monkeypatch.delitem(sys.modules, mod)
-    monkeypatch.setattr(
-        "builtins.__import__",
-        lambda name, *a, **k: (
-            (_ for _ in ()).throw(ImportError(name))
-            if name in ("ddgs", "duckduckgo_search")
-            else __import__(name, *a, **k)
-        ),
-    )
-    with pytest.raises(UserError) as exc_info:
-        duckduckgo_search()
-    assert "lovia[ddg]" in str(exc_info.value)
-
-
-@pytest.mark.asyncio
-async def test_tavily_backend_maps_rows_and_forwards_args(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from lovia.tools.search import TavilySearch
-
-    seen: dict[str, Any] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["url"] = str(request.url)
-        seen["auth"] = request.headers["authorization"]
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(
-            200,
-            json={
-                "results": [
-                    {
-                        "title": "T",
-                        "url": "https://x.example",
-                        "content": "B",
-                        "score": 0.9,
-                    }
-                ]
-            },
-        )
-
-    _mock_http(monkeypatch, handler, "lovia.tools.search.httpx.AsyncClient")
-    rows = await TavilySearch(api_key="k").search("q", max_results=7, time_range="w")
-    assert seen["url"] == "https://api.tavily.com/search"
-    assert seen["auth"] == "Bearer k"
-    # 'w' passes through unmapped — Tavily accepts d/w/m/y directly.
-    assert seen["body"] == {"query": "q", "max_results": 7, "time_range": "w"}
-    assert rows == [SearchResult(title="T", url="https://x.example", snippet="B")]
-
-
-@pytest.mark.asyncio
-async def test_tavily_omits_time_range_when_none(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from lovia.tools.search import TavilySearch
-
-    seen: dict[str, Any] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"results": []})
-
-    _mock_http(monkeypatch, handler, "lovia.tools.search.httpx.AsyncClient")
-    rows = await TavilySearch(api_key="k").search("q")
-    assert "time_range" not in seen["body"]
-    assert rows == []
-
-
-def test_tavily_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    with pytest.raises(UserError) as exc_info:
-        tavily_search()
-    assert "TAVILY_API_KEY" in str(exc_info.value)
-
-
-def test_tavily_reads_key_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    from lovia.tools.search import TavilySearch
-
-    monkeypatch.setenv("TAVILY_API_KEY", "k")
-    TavilySearch()  # constructs without raising
-
-
-@pytest.mark.asyncio
-async def test_tavily_http_error_surfaces_as_tool_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from lovia.tools.search import TavilySearch
-
-    _mock_http(
-        monkeypatch,
-        lambda request: httpx.Response(401, json={"detail": {"error": "Unauthorized"}}),
-        "lovia.tools.search.httpx.AsyncClient",
-    )
-    with pytest.raises(ToolError) as exc_info:
-        await TavilySearch(api_key="bad").search("q")
-    msg = str(exc_info.value)
-    assert "401" in msg and "Unauthorized" in msg
-
-
-@pytest.mark.asyncio
-async def test_tavily_connection_failure_names_the_host(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A reset tunnel arrives as a blank ConnectError; say what failed anyway."""
-    from lovia.tools.search import TavilySearch
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("")  # what a dropped proxy tunnel looks like
-
-    _mock_http(monkeypatch, handler, "lovia.tools.search.httpx.AsyncClient")
-    with pytest.raises(ToolError) as exc_info:
-        await TavilySearch(api_key="k").search("q")
-    message = str(exc_info.value)
-    assert "api.tavily.com" in message and "ConnectError" in message
-    assert "network or proxy" in message
-
-
-@pytest.mark.asyncio
-async def test_tavily_tolerates_malformed_responses(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from lovia.tools.search import TavilySearch
-
-    responses = iter(
-        [
-            httpx.Response(200, text="<html>gateway</html>"),
-            httpx.Response(200, json=["unexpected"]),
-            httpx.Response(500, json=["unexpected"]),
-        ]
-    )
-    _mock_http(
-        monkeypatch,
-        lambda request: next(responses),
-        "lovia.tools.search.httpx.AsyncClient",
-    )
-    backend = TavilySearch(api_key="k")
-
-    # A 200 that isn't JSON must become a ToolError, not an AttributeError.
-    with pytest.raises(ToolError):
-        await backend.search("q")
-    # Non-dict JSON: a 200 yields no rows; an error status keeps its ToolError.
-    assert await backend.search("q") == []
-    with pytest.raises(ToolError) as exc_info:
-        await backend.search("q")
-    assert "500" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------- human

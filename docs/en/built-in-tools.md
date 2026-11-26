@@ -5,12 +5,12 @@ construction site therefore shows every external capability it can use.
 
 ```python
 from lovia import Agent
-from lovia.tools import duckduckgo_search, now, web_fetch
+from lovia.tools import now, web_fetch, web_search
 
 agent = Agent(
     name="researcher",
     model="<model>",
-    tools=[web_fetch(), duckduckgo_search(), now],
+    tools=[web_fetch(), web_search(MySearch()), now],  # MySearch: see Web search
 )
 ```
 
@@ -20,7 +20,7 @@ Tool is covered in [Ask a human](#ask-a-human) below.
 | Need | Tool |
 | --- | --- |
 | Read a URL: a web page as Markdown, JSON, text | `web_fetch()` |
-| Search the public web | `duckduckgo_search()` / `tavily_search()` |
+| Search the public web | `web_search(backend)`, or a search MCP server |
 | Read the current time | `now` |
 | Pause and ask the user | `ask_human` |
 
@@ -150,28 +150,10 @@ its cache is never shared with another tool. TLS honors the
 
 ## Web search
 
-`web_search` — a pluggable search tool. Two backends are bundled:
-DuckDuckGo (keyless, behind the `ddg` extra) and Tavily (no extra install —
-set `TAVILY_API_KEY` or pass `api_key=`):
-
-```bash
-pip install "lovia[ddg]"   # only needed for the DuckDuckGo backend
-```
-
-```python
-from lovia.tools import duckduckgo_search, tavily_search, web_search
-
-tools = [duckduckgo_search()]            # keyless, requires lovia[ddg]
-tools = [tavily_search()]                # Tavily API, reads TAVILY_API_KEY
-tools = [web_search(MySearchBackend())]  # or your own
-```
-
-The tool (named `web_search` by default; override with `name=`) takes
-`query`, `max_results` (1–20, default 5), and an optional `time_range`
-recency filter (`"d"` / `"w"` / `"m"` / `"y"`). Results render as readable
-title/URL/snippet blocks rather than raw JSON.
-
-A custom backend implements one method — the `WebSearch` protocol:
+`web_search(backend)` — a search tool over the backend you choose. lovia
+bundles none: search services are commercial APIs that come and go, and one
+takes a dozen lines. The backend implements one method — the `WebSearch`
+protocol:
 
 ```python
 class WebSearch(Protocol):
@@ -180,9 +162,48 @@ class WebSearch(Protocol):
     ) -> list[SearchResult]: ...
 ```
 
-Backends must be safe for concurrent calls. Passing the backend explicitly
-(`web_search(impl)`) means a missing optional dependency fails at
-construction time, not mid-run.
+Tavily's REST API, for instance:
+
+```python
+import os
+
+import httpx
+
+from lovia.http_config import client_options
+from lovia.tools import SearchResult, web_search
+
+
+class TavilySearch:
+    async def search(self, query, *, max_results=5, time_range=None):
+        body = {"query": query, "max_results": max_results}
+        if time_range:
+            body["time_range"] = time_range  # Tavily takes d/w/m/y as they are
+        async with httpx.AsyncClient(timeout=30, **client_options()) as client:
+            resp = await client.post(
+                "https://api.tavily.com/search",
+                json=body,
+                headers={"Authorization": f"Bearer {os.environ['TAVILY_API_KEY']}"},
+            )
+        resp.raise_for_status()
+        return [
+            SearchResult(title=r["title"], url=r["url"], snippet=r.get("content", ""))
+            for r in resp.json()["results"]
+        ]
+
+
+tools = [web_search(TavilySearch())]
+```
+
+The tool (named `web_search` by default; override with `name=`) takes
+`query`, `max_results` (1–20, default 5), and an optional `time_range`
+recency filter (`"d"` / `"w"` / `"m"` / `"y"`). Results render as readable
+title/URL/snippet blocks rather than raw JSON. Backends must be safe for
+concurrent calls; `client_options()` gives yours lovia's
+[proxy and TLS settings](providers.md#networking-timeouts-proxies-tls).
+
+A hosted search MCP server is the other way: several answer without a key
+within a free allowance — see [Web research with Parallel](mcp.md#web-research-with-parallel).
+lovia web uses those (Settings → Web search).
 
 ## Time
 
@@ -196,7 +217,7 @@ Two small utilities:
   the system prompt:
 
   ```python
-  agent = Agent(name="researcher", model="<model>", tools=[duckduckgo_search()])
+  agent = Agent(name="researcher", model="<model>", tools=[web_search(MySearch())])
   agent.instruction(current_date())
   ```
 
@@ -298,13 +319,8 @@ rewrites text, so don't fence content the model must reproduce byte for byte
   anything public-facing.
 - **`web_fetch` caches responses for 5 minutes by default.** A page that
   changes faster than that needs `web_fetch(HttpReader(cache_ttl=0))`.
-- **`duckduckgo_search()` / `tavily_search()` construct eagerly.** They
-  raise `UserError` at build time — missing `ddgs` package, missing
-  `TAVILY_API_KEY` — a fail-fast you want at startup, not one to catch and
-  ignore.
-- **Search result quality is the backend's.** The DDG backend is keyless
-  and rate-limited in practice; production apps usually use a keyed backend
-  (`tavily_search()`) or their own `WebSearch`.
+- **Search result quality is the backend's.** A keyless allowance is
+  rate-limited; production apps usually give their backend a key.
 
 ## See also
 

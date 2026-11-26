@@ -218,6 +218,4 @@ example `pip install "lovia[mcp,web]"`.
 | Capability | Install |
 | --- | --- |
 | MCP client support | `pip install "lovia[mcp]"` |
-| DuckDuckGo search backend | `pip install "lovia[ddg]"` |
-| Tavily search backend | no extra — set `TAVILY_API_KEY` |
 | FastAPI server, chat UI, and scheduling (includes MCP) | `pip install "lovia[web]"` |

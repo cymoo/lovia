@@ -31,7 +31,7 @@ def pdf_text(body: bytes) -> PdfText:
     except ImportError:
         return PdfText(f"(PDF not read: text extraction needs pypdf — {INSTALL_HINT})")
     pages: list[str] = []
-    kept = 0
+    budget = MAX_TEXT_CHARS
     try:
         reader = PdfReader(io.BytesIO(body))
         if reader.is_encrypted and not reader.decrypt(""):
@@ -39,9 +39,9 @@ def pdf_text(body: bytes) -> PdfText:
         count = len(reader.pages)
         for page in reader.pages:
             text = (page.extract_text() or "").strip()
-            pages.append(text)
-            kept += len(text)
-            if kept >= MAX_TEXT_CHARS:
+            pages.append(text[:budget])
+            budget -= len(text)
+            if budget <= 0:
                 break
     except Exception as exc:  # noqa: BLE001 — a bad file is an answer, not a crash
         # pypdf names a missing ``cryptography`` (AES) in its own message.
@@ -52,8 +52,8 @@ def pdf_text(body: bytes) -> PdfText:
             f"(PDF of {count} page(s) with no text layer — likely scanned; "
             "reading it needs OCR or a model that takes PDFs)"
         )
-    if len(pages) < count:
-        text += f"\n\n(… text kept from the first {len(pages)} of {count} pages)"
+    if budget < 0 or len(pages) < count:
+        text += f"\n\n(… text cut short at {MAX_TEXT_CHARS:,} characters, page {len(pages)} of {count})"
     return PdfText(text, title=_title(reader))
 
 

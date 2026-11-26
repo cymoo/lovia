@@ -157,7 +157,9 @@ _SCRIPT_SHELL_CHARS = 200
 # A <script> the browser runs: no type, or a JavaScript one — not the
 # JSON-LD and other data blocks server-rendered pages carry.
 _SCRIPT_TAG_RE = re.compile(r"<script\b([^>]*)>", re.IGNORECASE)
-_SCRIPT_TYPE_RE = re.compile(r"""\btype\s*=\s*["']?([^"'\s>]+)""", re.IGNORECASE)
+_SCRIPT_TYPE_RE = re.compile(
+    r"""(?<![\w-])type\s*=\s*["']?([^"'\s>]+)""", re.IGNORECASE
+)
 _RUNNABLE_TYPES = frozenset(
     {"module", "text/javascript", "application/javascript", "text/ecmascript"}
 )
@@ -745,7 +747,8 @@ class HttpReader:
 
     async def read(self, url: str, *, images: bool = False) -> Page:
         page = await self._page(url)
-        return page if images else dataclasses.replace(page, images=[])
+        # A copy: what the caller does with it never reaches the cache.
+        return dataclasses.replace(page, images=list(page.images) if images else [])
 
     async def _page(self, url: str) -> Page:
         if (cached := self._cache_get(url)) is not None:

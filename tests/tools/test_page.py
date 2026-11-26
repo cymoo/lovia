@@ -614,9 +614,12 @@ def test_a_pdf_s_text_is_bounded_and_its_title_best_effort(
 
     monkeypatch.setattr(pdf_module, "MAX_TEXT_CHARS", 10)
     out = pdf_module.pdf_text(_pdf("first page text", "second", "third"))
-    assert out.text.startswith("first page text")
-    assert "second" not in out.text
-    assert "the first 1 of 3 pages" in out.text
+    # Cut within the page that crossed the budget, and said.
+    assert out.text.startswith("first page\n\n(… text cut short")
+    assert "second" not in out.text and "page 1 of 3" in out.text
+    # A single page over the budget is cut, and said, too.
+    out = pdf_module.pdf_text(_pdf("one long page of text"))
+    assert out.text.startswith("one long p\n\n(… text cut short")
     # A malformed /Info entry costs the title, never the text.
     import pypdf
 

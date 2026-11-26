@@ -34,7 +34,7 @@ from ..followups import FollowupRequest, generate_followups
 from ..sse import ConfigChangedData
 from ..transcribe import TranscribeFn, openai_transcriber
 from .check import mask_key
-from .schema import DEFAULT_AGENT_ID, Connection, WebConfig
+from .schema import Connection, WebConfig
 from .storage import LoadedConfig, config_writable, save_config
 
 if TYPE_CHECKING:
@@ -197,13 +197,11 @@ class ConfigRuntime:
         )
         return {agent.name: agent}, resolve_aux_model(config.aux_profile())
 
-    def max_turns(self) -> dict[str, int]:
-        """The turn limit — ``create_app(max_turns=)`` — for the served
-        agent and its background child, which runs under its own name."""
-        from ..builder import SUBAGENT_SUFFIX
-
-        limit = self.config.assistant.max_turns
-        return {DEFAULT_AGENT_ID: limit, f"{DEFAULT_AGENT_ID}{SUBAGENT_SUFFIX}": limit}
+    def max_turns(self) -> int:
+        """The turn limit — ``create_app(max_turns=)`` — for every agent this
+        serves, by whatever key ``build`` serves it under, and for their
+        background children, which run under names of their own."""
+        return self.config.assistant.max_turns
 
     def workspace_for(self, agent: Agent[Any], root: Path, mode: str) -> LocalWorkspace:
         """A chat's workspace in ``mode`` — ``WorkspaceSwitch.build`` for the
@@ -314,7 +312,8 @@ class ConfigRuntime:
         new configuration proved it can build. In-flight runs keep their
         agent copies (and the run limits they started with); a replaced
         provider is retired (closed) once no live run still holds it.
-        Serialized — concurrent writes apply one at a time.
+        Serialized — concurrent writes apply one at a time. Besides the
+        agents it replaces only what changed: the turn limit, the aux model.
 
         ``settings_only`` marks a write that touches no model (the
         assistant's settings): before a model is configured there is nothing
@@ -322,25 +321,39 @@ class ConfigRuntime:
         refused.
         """
         async with self._lock:
+            # Adopted only once saved: a failed write leaves the old one,
+            # so a retry still sees what changed.
             if settings_only and self.serveable(config):
-                self.loaded.config = config
                 if persist:
                     save_config(config, self.loaded.path)
                     self.loaded.exists = True
+                self.loaded.config = config
                 return
             agents, aux_model = self.build(config)
-            self.loaded.config = config
+            previous = self.config
             if persist:
                 save_config(config, self.loaded.path)
                 self.loaded.exists = True
+            self.loaded.config = config
             deps = self._deps
             if deps is None:  # not bound yet (boot builds its own agents)
                 return
-            # Read when a run starts, so the next run gets these and a
-            # running one keeps what it began with.
-            deps.max_turns = self.max_turns()
+            # A save replaces only what it changed, so one that leaves the
+            # turn limit or the aux role alone keeps what create_app was
+            # given. The limit is read when a run starts: the next run gets
+            # it, a running one keeps what it began with.
+            if config.assistant.max_turns != previous.assistant.max_turns:
+                deps.max_turns = self.max_turns()
+            # Built for nothing, unless the role changed — or this is the
+            # first build that serves one: the boot had none to build.
+            stale_aux: object = aux_model
+            first = bool(self.serveable(previous)) and aux_model is not None
+            if first or config.aux_profile() != previous.aux_profile():
+                old_aux = deps.followup_model
+                stale_aux = old_aux if old_aux is not aux_model else None
+                deps.title_model = aux_model
+                deps.followup_model = aux_model
             old = list(deps.agents.values())
-            old_aux = deps.followup_model
             # In place: everything holding the registry sees the swap.
             deps.agents.clear()
             deps.agents.update(agents)
@@ -349,12 +362,11 @@ class ConfigRuntime:
             from ..subagents import _wire
 
             _wire(deps)
-            deps.title_model = aux_model
-            deps.followup_model = aux_model
             # Endpoint-window memos are keyed by (endpoint, model): a changed
             # connection must not inherit a stale probe result.
             clear_endpoint_cache()
             served = {id(a.model) for a in agents.values()}
+            served |= {id(deps.title_model), id(deps.followup_model)}
             retired: set[int] = set()
             for agent in old:
                 if id(agent.model) not in served | retired:
@@ -367,9 +379,10 @@ class ConfigRuntime:
             self._chat_models.clear()
             # The aux provider only ever serves transient title/follow-up
             # calls, which no supervisor entry holds — the retire grace
-            # period is what covers one caught mid-swap.
-            if old_aux is not None and old_aux is not aux_model:
-                self._retire(old_aux)
+            # period is what covers one caught mid-swap. A provider factory
+            # may hand back the very instance still served: that one stays.
+            if stale_aux is not None and id(stale_aux) not in served:
+                self._retire(stale_aux)
             profile = config.default_profile()
             assert profile is not None
             deps.emit(

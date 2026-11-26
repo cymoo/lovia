@@ -582,7 +582,6 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     loaded_target,
                     title=title,
                     db_path=db_path,
-                    max_turns=webconfig.DEFAULT_MAX_TURNS,
                     token=token or _generated_token(host),
                     followups=True,
                     suspend_after=SUSPEND_AFTER,

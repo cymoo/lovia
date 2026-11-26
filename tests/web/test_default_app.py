@@ -51,7 +51,7 @@ def test_it_is_the_app_lovia_web_serves(
         # Every permission mode, follow-ups on: what `lovia web` gives.
         assert info["workspace_modes"]["modes"] == ["readonly", "coding", "trusted"]
         assert info["features"]["followups"] is True
-        assert c.app.state.deps.max_turns_for("lovia") == 150
+        assert c.app.state.deps.max_turns_for("lovia") == 200
 
 
 def test_the_switches_are_the_command_lines(

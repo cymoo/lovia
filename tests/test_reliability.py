@@ -370,3 +370,22 @@ def test_budget_max_input_tokens_trips() -> None:
     budget = RunBudget(max_input_tokens=10)
     with pytest.raises(BudgetExceeded, match="input tokens"):
         budget.check(Usage(input_tokens=11))
+
+
+def test_one_default_turn_limit_everywhere() -> None:
+    import inspect
+
+    from lovia import Subagents
+    from lovia.eval import Case
+    from lovia.handoff import agent_as_tool
+    from lovia.reliability import DEFAULT_MAX_TURNS
+
+    def default(fn: Any) -> Any:
+        return inspect.signature(fn).parameters["max_turns"].default
+
+    assert DEFAULT_MAX_TURNS == 200
+    for fn in (Runner.run, Runner.stream, Agent.as_tool, agent_as_tool):
+        assert default(fn) == DEFAULT_MAX_TURNS, fn
+    assert Case(input="x").max_turns == DEFAULT_MAX_TURNS
+    # A child with no limit of its own inherits (Runner's, in-process).
+    assert Subagents().max_turns is None

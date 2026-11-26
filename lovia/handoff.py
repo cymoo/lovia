@@ -19,6 +19,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from .reliability import DEFAULT_MAX_TURNS
 from .types import JsonObject
 from .tools import Tool
 
@@ -128,7 +129,7 @@ def agent_as_tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    max_turns: int = 50,
+    max_turns: int = DEFAULT_MAX_TURNS,
     budget: "RunBudget | None" = None,
     retry: "RetryPolicy | None" = None,
     context_policy: "ContextPolicy | None" = None,

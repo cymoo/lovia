@@ -17,7 +17,7 @@ from .checkpointer import CheckpointOptions
 from .context import ContextPolicy
 from .exceptions import UserError
 from .messages import Message, Usage
-from .reliability import CancelToken, RetryPolicy, RunBudget
+from .reliability import DEFAULT_MAX_TURNS, CancelToken, RetryPolicy, RunBudget
 from .runtime.loop import RunLoop
 from .steering import Mailbox
 from .runtime.result import RunHandle, RunResult
@@ -38,7 +38,7 @@ class Runner:
         deps: TDeps | None = None,
         output_type: Any = None,
         extra_instructions: str | None = None,
-        max_turns: int = 50,
+        max_turns: int = DEFAULT_MAX_TURNS,
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
         mailbox: Mailbox | None = None,
@@ -130,7 +130,7 @@ class Runner:
         deps: TDeps | None = None,
         output_type: Any = None,
         extra_instructions: str | None = None,
-        max_turns: int = 50,
+        max_turns: int = DEFAULT_MAX_TURNS,
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
         mailbox: Mailbox | None = None,

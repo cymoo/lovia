@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ...providers._http import host_matches
+from ...reliability import DEFAULT_MAX_TURNS
 from ...providers.anthropic import _DEFAULT_BASE_URL as _ANTHROPIC_BASE_URL
 from ...providers.anthropic import _DEFAULT_VERSION as _ANTHROPIC_VERSION
 from ...providers.anthropic import _OFFICIAL_HOSTS as _ANTHROPIC_HOSTS
@@ -275,9 +276,8 @@ WorkspaceModeName = Literal["readonly", "coding", "trusted"]
 # behind each name live in :mod:`lovia.web.builder`.
 AutoAllowBundle = Literal["read-only", "dev-tools"]
 DEFAULT_AUTO_ALLOW: tuple[AutoAllowBundle, ...] = ("read-only", "dev-tools")
-# The web's own defaults, for an assistant the person works with in a
-# browser; core's Runner and RetryPolicy keep their library defaults.
-DEFAULT_MAX_TURNS = 150
+# The turn limit is core's; the retry count is the web's own, for an
+# assistant the person works with in a browser (RetryPolicy keeps its own).
 DEFAULT_MAX_RETRIES = 5
 # The served agent's name — what every chat stores as its agent.
 DEFAULT_AGENT_ID = "lovia"

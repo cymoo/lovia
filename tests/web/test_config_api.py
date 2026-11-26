@@ -21,6 +21,8 @@ from lovia.web.config import (  # noqa: E402
     AssistantConfig,
     ConfigRuntime,
     LoadedConfig,
+    ModelProfile,
+    Roles,
     ValidationOutcome,
     WebConfig,
     storage,
@@ -49,7 +51,14 @@ def served(
     runtime = ConfigRuntime(
         deployment=Deployment(), loaded=loaded, store=ChatStore.in_memory()
     )
-    app = create_app({}, store=runtime.store, config_runtime=runtime, titles=False)
+    # The file's limit, as default_app passes it.
+    app = create_app(
+        {},
+        store=runtime.store,
+        config_runtime=runtime,
+        max_turns=runtime.max_turns(),
+        titles=False,
+    )
     # base_url localhost => a loopback Host header, passing the rebinding guard.
     with TestClient(app, base_url="http://localhost") as client:
         yield client, runtime, app
@@ -213,6 +222,30 @@ def test_extra_body_rejects_runtime_owned_fields_and_non_objects(served) -> None
     assert "messages" in res.text
     res = client.post("/api/config/models", json={"model": "m", "extra_body": []})
     assert res.status_code == 422
+
+
+async def test_a_save_that_failed_to_write_is_applied_on_retry(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lovia.web.config import runtime as runtime_module
+
+    client, runtime, app = served
+    _add_model(client, id="chat")
+    _add_model(client, id="quiet", model="openai:gpt-small", api_key="sk-q-12345678")
+    roles = runtime.config.roles.model_copy(update={"aux": "quiet"})
+    wanted = runtime.config.model_copy(update={"roles": roles})
+
+    def full_disk(*args: Any, **kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    save = runtime_module.save_config
+    monkeypatch.setattr(runtime_module, "save_config", full_disk)
+    with pytest.raises(OSError):
+        await runtime.apply(wanted)
+    assert runtime.config.roles.aux is None  # not adopted
+    monkeypatch.setattr(runtime_module, "save_config", save)
+    await runtime.apply(wanted)
+    assert getattr(app.state.deps.title_model, "model", None) == "gpt-small"
 
 
 def test_aux_role_serves_titles_and_followups_with_its_extras(served) -> None:
@@ -635,7 +668,13 @@ def _served_with(
     runtime = ConfigRuntime(
         deployment=deployment, loaded=loaded, store=ChatStore.in_memory()
     )
-    app = create_app({}, store=runtime.store, config_runtime=runtime, titles=False)
+    app = create_app(
+        {},
+        store=runtime.store,
+        config_runtime=runtime,
+        max_turns=runtime.max_turns(),
+        titles=False,
+    )
     return TestClient(app, base_url="http://localhost"), runtime
 
 
@@ -645,8 +684,8 @@ async def test_run_settings_apply_to_the_next_run(served) -> None:
     client, runtime, app = served
     _add_model(client)
     deps = app.state.deps
-    # The web's own limits, where the file sets none.
-    assert deps.max_turns_for("lovia") == 150
+    # Core's turn limit and the web's retries, where the file sets none.
+    assert deps.max_turns_for("lovia") == 200
     assert deps.agents["lovia"].retry.max_attempts == 6
     res = client.put(ASSISTANT, json={"followups": False})
     assert res.status_code == 200, res.text
@@ -660,7 +699,7 @@ async def test_the_limits_are_the_files_to_set(served) -> None:
     _add_model(client)
     # Settings never writes them: naming one in a save is refused.
     assert client.put(ASSISTANT, json={"max_turns": 5}).status_code == 422
-    assert runtime.config.assistant.max_turns == 150
+    assert runtime.config.assistant.max_turns == 200
     assistant = runtime.config.assistant.model_copy(
         update={"max_turns": 7, "max_retries": 2}
     )
@@ -671,6 +710,96 @@ async def test_the_limits_are_the_files_to_set(served) -> None:
     # ...and a later save from Settings keeps them.
     client.put(ASSISTANT, json={"search": False})
     assert json.loads(runtime.loaded.path.read_text())["assistant"]["max_turns"] == 7
+
+
+def test_a_save_keeps_what_create_app_was_given_and_it_left_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from ..scripted_provider import ScriptedProvider
+
+    class Renamed(ConfigRuntime):
+        """Serves the assistant under a key of its own."""
+
+        def build(self, config: WebConfig | None = None) -> Any:
+            agents, aux = super().build(config)
+            return {"mine": agent for agent in agents.values()}, aux
+
+    monkeypatch.chdir(tmp_path)
+    runtime = Renamed(
+        deployment=Deployment(), loaded=_loaded(tmp_path), store=ChatStore.in_memory()
+    )
+    titler = ScriptedProvider([])
+    app = create_app(
+        {},
+        store=runtime.store,
+        config_runtime=runtime,
+        max_turns=200,
+        title_model=titler,
+        followup_model=titler,
+        titles=False,
+    )
+    with TestClient(app, base_url="http://localhost") as client:
+        _add_model(client)
+        deps = app.state.deps
+        assert list(deps.agents) == ["mine"]
+        # Neither the model's save nor a settings save swaps in a limit of
+        # the file's, keyed by names this registry doesn't use.
+        assert deps.max_turns_for("mine") == 200
+        assert client.put(ASSISTANT, json={"search": False}).status_code == 200
+        assert deps.max_turns_for("mine") == 200
+        assert deps.title_model is deps.followup_model is titler
+        # A save that changes one replaces it.
+        _add_model(
+            client, id="quiet", model="openai:gpt-small", api_key="sk-q-12345678"
+        )
+        client.put("/api/config/roles", json={"aux": "quiet"})
+        assert getattr(deps.title_model, "model", None) == "gpt-small"
+
+
+def test_transcribe_and_config_runtime_do_not_go_together(tmp_path: Path) -> None:
+    runtime = ConfigRuntime(loaded=_loaded(tmp_path), store=ChatStore.in_memory())
+
+    async def transcribe(request: Any) -> str:
+        return ""
+
+    with pytest.raises(ValueError, match="transcribe= or config_runtime="):
+        create_app({}, config_runtime=runtime, transcribe=transcribe)
+
+
+async def test_the_first_save_that_serves_brings_the_aux_model_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    quiet = {"id": "quiet", "model": "gpt-small", "base_url": "https://gw.example/v1"}
+    config = _lean().model_copy(
+        update={
+            "models": [
+                ModelProfile(id="chat", model="openai:gpt-big"),  # no key yet
+                ModelProfile(**quiet, api_key="sk-quiet-12345678"),
+            ],
+            "roles": Roles(chat="chat", aux="quiet"),
+        }
+    )
+    loaded = _loaded(tmp_path)
+    loaded.config = config
+    runtime = ConfigRuntime(loaded=loaded, store=ChatStore.in_memory())
+    assert not runtime.configured
+    # As default_app boots unconfigured: no agents, no aux model built.
+    app = create_app({}, store=runtime.store, config_runtime=runtime, titles=False)
+    keyed = config.model_copy(
+        update={
+            "models": [
+                ModelProfile(
+                    id="chat", model="openai:gpt-big", api_key="sk-big-123456"
+                ),
+                config.models[1],
+            ]
+        }
+    )
+    await runtime.apply(keyed, persist=False)
+    # The aux role is unchanged, but nothing served it until now.
+    assert getattr(app.state.deps.title_model, "model", None) == "gpt-small"
 
 
 def test_the_page_learns_the_mode_an_unset_chat_runs_in(
@@ -772,9 +901,11 @@ def test_a_background_child_runs_on_the_same_turn_limit(served) -> None:
     deps = app.state.deps
     (plugin,) = [p for p in deps.agents["lovia"].plugins if isinstance(p, Subagents)]
     (child,) = plugin.agents
-    # A child run goes by its own name (deps.name_of finds no registry key).
+    # The plugin sets no limit of its own, so a child run gets the server's,
+    # whatever its name (deps.name_of finds no registry key for it).
+    assert plugin.max_turns is None and plugin.budget is None
     assert deps.name_of(child) == child.name == "lovia.sub"
-    assert deps.max_turns_for(child.name) == 150
+    assert deps.max_turns_for(child.name) == 200
 
 
 def test_the_build_hooks_use_the_current_settings(

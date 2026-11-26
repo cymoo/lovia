@@ -83,10 +83,12 @@ async def _wait_alive(deps, sid: str, timeout: float = 5.0) -> None:
         await asyncio.sleep(0.02)
 
 
-def _blocking_tool(release: asyncio.Event):
+def _blocking_tool(release: asyncio.Event, entered: asyncio.Event | None = None):
     @tool
     async def block() -> str:
         """Block until the test releases it."""
+        if entered is not None:
+            entered.set()
         await release.wait()
         return "ok"
 
@@ -418,8 +420,8 @@ async def test_scheduler_skips_when_previous_run_active() -> None:
 
 
 async def test_scheduler_injects_into_live_session() -> None:
-    release = asyncio.Event()
-    block = _blocking_tool(release)
+    release, entered = asyncio.Event(), asyncio.Event()
+    block = _blocking_tool(release, entered)
     store = ChatStore.in_memory()
     agent = _agent([call("block", {}, call_id="c1"), text("done")], tools=[block])
     app = _app(agent, store)
@@ -435,7 +437,8 @@ async def test_scheduler_injects_into_live_session() -> None:
             title_message="orig",
             autostart=True,
         )
-        await _wait_alive(deps, "conv")
+        # Inside its tool, so the injected input waits in the mailbox.
+        await asyncio.wait_for(entered.wait(), 5.0)
 
         # A schedule targeting that live session injects rather than spawning.
         await store.add_schedule(

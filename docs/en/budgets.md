@@ -51,7 +51,7 @@ adapt instead of failing automatically.
 
 ## Turn limit
 
-`max_turns` defaults to `50` and raises `MaxTurnsExceeded` when exhausted. It
+`max_turns` defaults to `200` and raises `MaxTurnsExceeded` when exhausted. It
 is the clearest guard against an Agent repeatedly calling tools without
 reaching a final answer.
 

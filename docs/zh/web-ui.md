@@ -141,8 +141,9 @@ API Key 只写不读：服务端只返回是否已设置及脱敏提示，不会
 免确认命令，以及四个开关（网页搜索、长期记忆、后台子任务、追问建议）。项目之间的差别来自项目自己——它的
 [`AGENTS.md`](#项目指令)和 `.agents/skills`；对话之间的差别在输入框下方选（目录和权限模式）。
 
-- 最大轮数和重试次数不在设置页里：在 `config.json` 里改 `assistant.max_turns`（150）和
-  `assistant.max_retries`（5），重启后生效。助手页会显示当前的值和文件路径。
+- 最大轮数和重试次数不在设置页里：在 `config.json` 里改 `assistant.max_turns`（200）和
+  `assistant.max_retries`（5），重启后生效。助手页会显示当前的值和文件路径。0.9.289
+  之前在设置页保存过的文件写的是旧默认值 `150`，你改之前一直按它来。
 - 长期记忆按项目分层（见[记忆的作用域](memory.md#作用域)）：关于你的笔记只有一份，
   每个项目的对话都带上；关于项目的笔记和历史对话检索按对话所在的目录分开，**对话**分组（不属于任何项目）里的对话只有前一层。
   在**设置 → 记忆**里选要编辑的范围："关于我"，或从列表里选一个项目，默认是当前对话所在的目录。
@@ -159,7 +160,7 @@ API Key 只写不读：服务端只返回是否已设置及脱敏提示，不会
   "assistant": {
     "instructions": "先给结论。",
     "mode": "coding",
-    "max_turns": 150
+    "max_turns": 300
   }
 }
 ```
@@ -507,7 +508,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | **助手** → 后台子任务 | `assistant.subagents` | 开启 |
 | **助手** → 生成追问建议 | `assistant.followups` | 开启 |
 | **语音输入** | `voice`（`connection`，或 `base_url` 加 `api_key`；`model`；`language`） | 关闭，见[语音输入](#语音输入) |
-| —（只在文件里，重启后生效） | `assistant.max_turns` / `assistant.max_retries` | `150` / `5` |
+| —（只在文件里，重启后生效） | `assistant.max_turns` / `assistant.max_retries` | `200` / `5` |
 
 `config.json` 不可写时（比如只读挂载），服务照常启动，设置页里这些设置只能查看。
 

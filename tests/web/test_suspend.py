@@ -549,6 +549,38 @@ async def test_a_message_sent_to_a_waiting_task_is_read_after_the_resume() -> No
     assert "check the tags too" in _texts(provider)
 
 
+@pytest.mark.asyncio
+async def test_a_tasks_own_turn_limit_holds_on_its_resumed_leg() -> None:
+    from dataclasses import replace
+
+    @tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    # Two turns: the first parks on the card, the resumed leg runs the
+    # second and stops before a third. The server's limit would let it finish.
+    provider = ScriptedProvider(
+        [call("push", {}, call_id="c1"), call("ping", {}), text("done")]
+    )
+    app = _app(_agent(provider, []), suspend_after=0.2)
+    deps = app.state.deps
+    async with _client(app) as ac:
+        await deps.store.upsert("p1", agent="bot", title="parent")
+        child = _agent(provider, []).clone(name="bot-sub")
+        child = child.clone(tools=[*child.tools, ping])
+        spec = replace(_child_spec(child, CancelToken(), Mailbox()), max_turns=2)
+        run = asyncio.create_task(subagent_runner(deps)(spec))
+        sid = await _task_session(deps)
+        await _wait_run(ac, sid, status="waiting")
+        await ac.post(
+            "/api/chat/approve",
+            json={"session_id": sid, "call_id": "c1", "decision": "approve"},
+        )
+        with pytest.raises(RuntimeError, match="max_turns=2"):
+            await asyncio.wait_for(run, timeout=5)
+
+
 # ---- ask_human questions suspend too --------------------------------------
 
 

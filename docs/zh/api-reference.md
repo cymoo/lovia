@@ -18,7 +18,7 @@
 | `deps` | `None` | 作为 `ctx.deps` 暴露的应用依赖 |
 | `output_type` | Agent 配置 | 覆盖本次 Run 的结构化输出类型 |
 | `extra_instructions` | `None` | 追加 Run 级系统指令 |
-| `max_turns` | `50` | 限制逻辑模型 Turn 数量 |
+| `max_turns` | `200` | 限制逻辑模型 Turn 数量 |
 | `budget` | `None` | 应用 `RunBudget` |
 | `cancel_token` | 自动创建 | 提供协作式 `CancelToken` |
 | `mailbox` | 自动创建 | 提供用于 Run 中途引导的 `Mailbox` |

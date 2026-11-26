@@ -27,11 +27,12 @@ import uuid
 import weakref
 import zlib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, NamedTuple, TypeVar, cast
 
 from ..checkpointer import Checkpointer
+from ..reliability import RunBudget
 from ..types import JsonObject
 from ..session import Segment, Session
 from ..stores import (
@@ -357,6 +358,14 @@ def _attachments_id(conn: sqlite3.Connection) -> None:
     )
 
 
+def _run_limits(conn: sqlite3.Connection) -> None:
+    """A task's own run limits (0.9.289): the ``Subagents`` plugin's
+    ``max_turns`` and budget, as JSON; NULL runs on the server's."""
+    present = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
+    if "run_limits" not in present:
+        conn.execute("ALTER TABLE chat_sessions ADD COLUMN run_limits TEXT")
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     _reconcile_unversioned,
     _fork_origin,
@@ -370,6 +379,7 @@ _MIGRATIONS: tuple[Migration, ...] = (
     _chat_model,
     _run_waiting,
     _attachments_id,
+    _run_limits,
 )
 
 # What may name an attachment folder: the hex of a minted chat id. A
@@ -421,6 +431,14 @@ def _folder_names(root: Path) -> list[str]:
         return [p.name for p in root.iterdir() if ATTACHMENTS_ID.fullmatch(p.name)]
     except OSError:  # nothing there yet, or a root we can't read
         return []
+
+
+class RunLimits(NamedTuple):
+    """A chat's own run limits (:meth:`ChatStore.run_limits`); ``None``
+    runs on the server's."""
+
+    max_turns: int | None
+    budget: RunBudget | None
 
 
 class LatestRun(NamedTuple):
@@ -1019,6 +1037,8 @@ class ChatStore:
         workspace_root: str | None = None,
         workspace_mode: str | None = None,
         model: str | None = None,
+        max_turns: int | None = None,
+        budget: RunBudget | None = None,
         unarchive: bool = False,
     ) -> None:
         """Insert a row if missing, otherwise bump ``updated_at``.
@@ -1036,17 +1056,29 @@ class ChatStore:
         ``spawn_id`` (:class:`~lovia.plugins.ChildSpec`). The workspace binding
         too is set on insert only — :meth:`set_workspace_mode` is the one way
         to change it — and so is ``model`` (:meth:`set_model`), and the
-        attachment folder: the chat's own, a task's parent's.
+        attachment folder: the chat's own, a task's parent's. ``max_turns``
+        and ``budget`` are a task's own limits (:meth:`run_limits`), fixed
+        at insert as well.
         """
         now = time.time()
         kind = "spawn" if spawned_from else "schedule" if scheduled_by else None
+        limits: JsonObject = {}
+        if max_turns is not None:
+            limits["max_turns"] = max_turns
+        if budget is not None:
+            limits["budget"] = {
+                f.name: getattr(budget, f.name)
+                # The base class's own limits: what run_limits() rebuilds.
+                for f in fields(RunBudget)
+                if f.init and getattr(budget, f.name) is not None
+            }
         await self._write(
             """
             INSERT INTO chat_sessions (id, title, agent, created_at, updated_at,
                                        parent_id, origin_kind, origin_session_id,
                                        origin_ref, workspace_root, workspace_mode,
-                                       model, attachments_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(
+                                       model, run_limits, attachments_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(
                 (SELECT COALESCE(attachments_id, id) FROM chat_sessions
                  WHERE id = ?), ?))
             ON CONFLICT(id) DO UPDATE SET
@@ -1067,6 +1099,7 @@ class ChatStore:
                 workspace_root,
                 workspace_mode,
                 model,
+                json.dumps(limits) if limits else None,
                 # A task reads its chat's attachments: the parent's folder.
                 parent_id,
                 parent_id or session_id,
@@ -1223,6 +1256,22 @@ class ChatStore:
             f"SELECT {_META_COLS} FROM chat_sessions WHERE id = ?",
             (session_id,),
             ChatMeta.from_row,
+        )
+
+    async def run_limits(self, session_id: str) -> RunLimits:
+        """A chat's own ``(max_turns, budget)``, each ``None`` where it has
+        none (every chat but a task given limits of its own). The budget is
+        a fresh :class:`RunBudget` with the stored limits: a subclass's own
+        behaviour is not kept."""
+        text = await self._read_one(
+            "SELECT run_limits FROM chat_sessions WHERE id = ?",
+            (session_id,),
+            lambda row: row[0],
+        )
+        data = json.loads(text) if text else {}
+        budget = data.get("budget")
+        return RunLimits(
+            data.get("max_turns"), RunBudget(**budget) if budget is not None else None
         )
 
     async def fork(self, source_id: str, *, ref: str | None = None) -> str | None:

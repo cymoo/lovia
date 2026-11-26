@@ -336,6 +336,9 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 spawn_id=spec.spawn_id,
                 workspace_root=binding.root,
                 workspace_mode=binding.mode,
+                # The plugin's own limits, for every leg the task runs.
+                max_turns=spec.max_turns,
+                budget=spec.budget,
             )
             if parent is not None:
                 # A switch of the parent's mode reaches the tasks it lists;

@@ -51,7 +51,7 @@ serve(default_app(workspace=".", customize=customize))
 | Settings (models, assistant, skills, MCP, web search), the model chip, first-run setup | Yes | No — you configure in code |
 | The project's `AGENTS.md` and `.agents/skills`, per chat | Yes | With `WorkspaceSwitch(agent_for=)` |
 | Permission-mode chip | Every mode the launch allows | With `workspaces=WorkspaceSwitch()` |
-| Max turns / follow-ups / approval timeout | `150` / on / 600 s | `50` / off / none |
+| Max turns / follow-ups / approval timeout | `200` / on / 600 s | `200` / off / none |
 | Chat history | `<home>/lovia.db` | `./.lovia/<agent>.db` |
 
 `default_app(*, home="~/.lovia", workspace=".", readonly=False,
@@ -87,7 +87,7 @@ run the app under another ASGI server, skip `serve()`.
 | --- | --- | --- |
 | `agent_or_agents` | required | One Agent or a `{name: agent}` mapping; the first is the default, for a request that names none |
 | `db_path` / `store` / `session` | `./.lovia/<agent>.db` | Transcript and chat metadata storage |
-| `max_turns` / `budget` / `retry` / `context_policy` | — | Settings applied to every served Run; `max_turns` may also be a `{name: n}` mapping, one per agent (`50` for any left out) |
+| `max_turns` / `budget` / `retry` / `context_policy` | `200` / `None` / `None` / `None` | Settings applied to every served Run; `max_turns` may also be a `{name: n}` mapping, one per agent (`200` for any left out). A background subagent task runs on its `Subagents` plugin's own `max_turns` / `budget` where it sets them, and on these where it doesn't |
 | `tracer` | `None` | Span recorder for served Runs |
 | `titles` / `title_model` | `True` / Agent model | Generate conversation titles in the background |
 | `followups` / `followup_model` | `False` / Agent model | Suggest follow-up questions after a reply (see below) |

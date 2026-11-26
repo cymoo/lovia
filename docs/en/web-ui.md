@@ -201,8 +201,10 @@ and `.agents/skills` — and what differs between chats is picked in the
 composer (the folder and the permission mode).
 
 - The turn and retry limits are not in Settings: set `assistant.max_turns`
-  (150) and `assistant.max_retries` (5) in `config.json` and restart. The
-  Assistant page shows the current values and the file's path.
+  (200) and `assistant.max_retries` (5) in `config.json` and restart. The
+  Assistant page shows the current values and the file's path. A file saved
+  from Settings before 0.9.289 names the old default, `150`, and keeps it
+  until you change it.
 - Memory is split by project (see
   [Memory scopes](memory.md#scopes)): notes about you are one list, carried
   into chats in every project; notes about a project, and recall over its
@@ -224,7 +226,7 @@ In `config.json` a missing field takes its default ([below](#settings-that-apply
   "assistant": {
     "instructions": "Lead with the answer.",
     "mode": "coding",
-    "max_turns": 150
+    "max_turns": 300
   }
 }
 ```
@@ -718,7 +720,7 @@ finishes with what it started with.
 | **Assistant** → Background tasks | `assistant.subagents` | On |
 | **Assistant** → Suggest follow-up questions | `assistant.followups` | On |
 | **Voice input** | `voice` (`connection` or `base_url` + `api_key`, `model`, `language`) | Off — see [Voice input](#voice-input) |
-| — (the file only; restart to apply) | `assistant.max_turns` / `assistant.max_retries` | `150` / `5` |
+| — (the file only; restart to apply) | `assistant.max_turns` / `assistant.max_retries` | `200` / `5` |
 
 When `config.json` isn't writable (a read-only mount, say), the server still
 starts and Settings shows these as view-only.

@@ -118,12 +118,16 @@ export function taskGuest(first, { stop, open }) {
   const stats = document.createElement('div');
   stats.className = 'lv-proc-note';
   const answer = document.createElement('div');
-  content.append(prompt, step, stats, answer);
+  const note = document.createElement('div');
+  note.className = 'lv-proc-note';
+  note.hidden = true;
+  content.append(note, prompt, step, stats, answer);
 
   function renderBody() {
     if (!summary) return;
-    promptBody.textContent = summary.prompt;
-    prompt.hidden = !summary.prompt;
+    // Before the first checkpoint the transcript has nothing yet: the title
+    // is the prompt's start.
+    promptBody.textContent = summary.prompt || item.title;
     step.hidden = item.state !== 'running';
     step.textContent = stepLine(summary.step);
     const counts = [t('bg.toolCalls', { n: summary.tool_calls })];
@@ -174,15 +178,19 @@ export function taskGuest(first, { stop, open }) {
       return;
     }
     busy = true;
+    let gone = false;
     try {
       summary = await api.sessionSummary(item.id);
+      note.hidden = true;
       if (mounted) renderBody();
-    } catch {
-      /* transient: the next load tries again */
+    } catch (err) {
+      gone = err?.status === 404;
+      note.textContent = gone ? t('bg.taskGone') : err?.message || t('bg.logFailed');
+      note.hidden = false;
     } finally {
       busy = false;
     }
-    if (!mounted) return;
+    if (!mounted || gone) return;
     if (again) {
       again = false;
       return void load();
@@ -191,7 +199,8 @@ export function taskGuest(first, { stop, open }) {
   }
   function poll() {
     clearTimeout(timer);
-    if (!mounted || !item.live) return;
+    // An ended task is polled only until its summary has come.
+    if (!mounted || (!item.live && summary)) return;
     timer = setTimeout(() => {
       if (document.hidden || !shown()) poll();
       else void load();

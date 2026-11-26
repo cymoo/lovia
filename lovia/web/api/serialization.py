@@ -63,12 +63,16 @@ def session_info(
     )
 
 
-# A step's line shows this much of one argument at most.
+# The arguments a step's line is made of (static/js/builtin-views.js), each
+# this long at most: never a file's content, nor what a custom tool was given.
+_STEP_ARGS = frozenset(
+    {"path", "pattern", "query", "url", "command", "description", "process_id", "title"}
+)
 _STEP_ARG_CHARS = 300
 
 
 def step_info(name: str, arguments: str) -> StepInfo:
-    """A tool call as one line needs it: a file's content stays behind."""
+    """A tool call as one line needs it."""
     try:
         args = json.loads(arguments or "{}")
     except ValueError:
@@ -76,41 +80,37 @@ def step_info(name: str, arguments: str) -> StepInfo:
     return StepInfo(
         name=name,
         args={
-            key: value[:_STEP_ARG_CHARS] if isinstance(value, str) else value
+            key: value[:_STEP_ARG_CHARS]
             for key, value in (args.items() if isinstance(args, dict) else ())
-            if isinstance(value, (str, int, float, bool))
+            if key in _STEP_ARGS and isinstance(value, str)
         },
     )
 
 
 def session_summary(
-    view: Sequence[MessageOut], *, live: bool, last_run: LatestRun | None
+    view: Sequence[MessageOut],
+    *,
+    live: bool,
+    step: StepInfo | None,
+    last_run: LatestRun | None,
 ) -> SessionSummary:
     """``view`` (:func:`segments_to_out`) in short; ``live``: a run is under
-    way or waiting."""
-    open_calls: list[dict[str, Any]] = []
-    for m in view:
-        if m.tool_calls:
-            open_calls = list(m.tool_calls)
-        elif m.role == "tool":
-            # Of the newest calls only: a provider may reuse an id across turns.
-            open_calls = [tc for tc in open_calls if tc["id"] != m.tool_call_id]
+    way or waiting, at ``step``."""
     texts = {
         role: [_text_of(m.content) for m in view if m.role == role]
         for role in ("user", "assistant")
     }
-    failed = last_run is not None and last_run.status == "failed"
+    over = None if live or last_run is None else last_run.status
     return SessionSummary(
         prompt=next(iter(texts["user"]), ""),
-        step=step_info(open_calls[-1]["name"], open_calls[-1]["arguments"])
-        if open_calls and live
-        else None,
+        step=step if live else None,
         tool_calls=sum(len(m.tool_calls) for m in view),
         failed_calls=sum(m.is_error for m in view if m.role == "tool"),
+        # A stopped run's last words are no report.
         report=next((t for t in reversed(texts["assistant"]) if t.strip()), None)
-        if not live
+        if over == "completed"
         else None,
-        error=last_run.error if failed and not live and last_run else None,
+        error=last_run.error if over == "failed" and last_run else None,
     )
 
 

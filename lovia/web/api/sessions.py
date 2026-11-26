@@ -372,15 +372,18 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         meta = await store.get(session_id)
         if meta is None:
             raise WebError(404, "session_not_found", "session not found")
-        view, active, waiting = await _session_view(
+        view, _, waiting = await _session_view(
             deps,
             session_id,
             created_at=meta.created_at,
             updated_at=meta.updated_at,
         )
+        ctrl = deps.supervisor.get(session_id)
+        call = ctrl.open_call() if ctrl is not None else None
         return session_summary(
             view,
-            live=active is not None or waiting is not None,
+            live=ctrl is not None or waiting is not None,
+            step=step_info(call.name, call.arguments) if call is not None else None,
             last_run=(await store.latest_runs([session_id])).get(session_id),
         )
 

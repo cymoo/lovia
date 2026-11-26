@@ -4,9 +4,10 @@
 //
 // The tasks come with the session list (sessions.js keeps `currentTasks` and
 // the live runs); the commands are fetched here, when the server says they
-// changed (`processes_changed`) and when the list comes into view. The list
-// does not poll; an open detail does (process-view.js, task-view.js). The
-// list's rules are background-items.js's.
+// changed (`processes_changed`) and when the list comes into view. The only
+// polls are for what no event tells: an open detail's (process-view.js,
+// task-view.js), and the steps of tasks at work while the list is on screen.
+// The list's rules are background-items.js's.
 import { t } from './i18n.js';
 import { store } from './store.js';
 import { api } from './api.js';
@@ -210,6 +211,21 @@ function render() {
   renderButton();
   renderList();
   updateGuest();
+  pollSteps(list);
+}
+
+// A task's step changes with no event: ask for the live runs again while a
+// row that shows one is on screen.
+const STEPS_MS = 3000;
+let _stepsTimer = null;
+function pollSteps({ live }) {
+  if (_stepsTimer || !onScreen() || !live.some((i) => i.state === 'running' && i.kind === 'task')) {
+    return;
+  }
+  _stepsTimer = setTimeout(() => {
+    _stepsTimer = null;
+    if (onScreen()) void refreshRuns(); // its answer renders, and polls again
+  }, STEPS_MS);
 }
 
 function renderList() {

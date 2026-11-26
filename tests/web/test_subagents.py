@@ -771,7 +771,7 @@ async def test_a_tasks_step_and_summary() -> None:
     entered = asyncio.Event()
 
     @tool
-    async def dig(where: str, notes: list[str], depth: int = 1) -> str:
+    async def dig(path: str, content: str, depth: int = 1) -> str:
         """Dig."""
         entered.set()
         await gate.wait()
@@ -783,7 +783,7 @@ async def test_a_tasks_step_and_summary() -> None:
         model=ScriptedProvider(
             [
                 call("missing_tool", {}),
-                call("dig", {"where": "x" * 1000, "notes": ["n"], "depth": 2}),
+                call("dig", {"path": "x" * 1000, "content": "secret", "depth": 2}),
                 text("**found** it"),
             ]
         ),
@@ -812,8 +812,8 @@ async def test_a_tasks_step_and_summary() -> None:
         assert row["spawn_id"] and row["last_run_seconds"] is None
         runs = {r["session_id"]: r for r in (await c.get("/api/runs")).json()}
         step = runs[task]["step"]
-        # What a line needs of the call: short and plain.
-        assert step == {"name": "dig", "args": {"where": "x" * 300, "depth": 2}}
+        # What a line is made of, short: never what the call writes.
+        assert step == {"name": "dig", "args": {"path": "x" * 300}}
 
         live = (await c.get(f"/api/sessions/{task}/summary")).json()
         assert live["prompt"] == "dig in"
@@ -840,6 +840,29 @@ async def test_a_tasks_step_and_summary() -> None:
         }
         missing = await c.get("/api/sessions/nope/summary")
         assert missing.status_code == 404
+
+
+def test_a_summary_reports_only_a_run_that_completed() -> None:
+    from lovia.web.api.serialization import session_summary
+    from lovia.web.schemas import MessageOut
+    from lovia.web.store import LatestRun
+
+    view = [
+        MessageOut(role="user", content="go"),
+        MessageOut(role="assistant", content="I'll check the file"),
+    ]
+
+    def summary(status: str, live: bool = False) -> dict:
+        last = LatestRun(status, 1.0, 5.0, "boom" if status == "failed" else None)
+        return session_summary(view, live=live, step=None, last_run=last).model_dump()
+
+    assert summary("completed")["report"] == "I'll check the file"
+    assert summary("cancelled")["report"] is None  # its last words, not a report
+    assert (summary("failed")["report"], summary("failed")["error"]) == (None, "boom")
+    assert summary("completed", live=True)["report"] is None
+    # A run suspended on a card has a finish time, and resumes.
+    assert LatestRun("waiting", 1.0, 5.0, None).seconds is None
+    assert LatestRun("cancelled", 1.0, 5.0, None).seconds == 4.0
 
 
 async def test_a_failed_tasks_summary_says_why() -> None:

@@ -409,7 +409,11 @@ class LatestRun(NamedTuple):
 
     @property
     def seconds(self) -> float | None:
-        return None if self.finished_at is None else self.finished_at - self.started_at
+        """How long it took, once over: a ``waiting`` run has a finish time,
+        and resumes."""
+        if self.finished_at is None or self.status in ("running", "waiting"):
+            return None
+        return self.finished_at - self.started_at
 
 
 @dataclass(frozen=True)

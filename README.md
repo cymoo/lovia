@@ -193,8 +193,8 @@ serve(app)
 
 - **Concise.** An immutable `Agent`, a stateless `Runner`, `@tool`, and plugins
   as the one extension axis. Every piece fits one screen of mental model.
-- **Lightweight.** Three hard dependencies. MCP, the web app and search
-  backends are extras, imported only when used.
+- **Lightweight.** Three hard dependencies. MCP and the web app are extras,
+  imported only when used.
 - **Readable.** Model calls, tool execution, retries and persistence run in one
   explicit loop. When something surprises you, there is one chain to follow.
 - **Extensible, with restraint.** Extension points are dataclasses, Protocols

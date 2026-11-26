@@ -77,19 +77,24 @@ PRESETS: dict[str, SearchPreset] = {
 }
 
 
-def server_config(
-    search: SearchConfig, *, key: str | None = None
-) -> MCPServerConfig | None:
-    """The MCP server ``search`` picks — ``key`` in place of the stored one —
-    or None when search is off."""
+def server_config(search: SearchConfig) -> MCPServerConfig | None:
+    """The MCP server ``search`` picks, or None when search is off."""
     preset = PRESETS.get(search.provider)
     if preset is None:
         return None
-    key = key if key is not None else search.keys.get(search.provider)
+    key = search.keys.get(search.provider)
     headers = preset.key_headers(key) if key else dict(preset.keyless_headers)
     return MCPServerConfig(
         name="search", url=preset.url, headers=headers, trust_env=search.trust_env
     )
+
+
+def redact(text: str, search: SearchConfig) -> str:
+    """``text`` with ``search``'s keys masked: a header httpx refuses comes
+    back whole in its error, and errors reach the model and the page."""
+    for key in search.keys.values():
+        text = text.replace(key, "***")
+    return text
 
 
 def search_tool(search: SearchConfig) -> Tool | None:
@@ -128,8 +133,9 @@ def search_tool(search: SearchConfig) -> Tool | None:
             async with server.session() as conn:
                 result = await conn.call(preset.tool, preset.args(query, n, time_range))
         except Exception as exc:  # noqa: BLE001 — the reason is the answer
+            why = redact(describe(exc, cfg=cfg), search)
             raise ToolError(
-                f"{preset.label} search could not be reached: {describe(exc, cfg=cfg)}",
+                f"{preset.label} search could not be reached: {why}",
                 hint="A network problem, not a bad query; Settings → Web search "
                 "shows whether the service answers.",
             ) from exc

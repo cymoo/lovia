@@ -399,19 +399,23 @@ def test_search_settings_rebuild_tools_and_keep_keys_per_service(served) -> None
 def test_testing_a_search_service_uses_the_form_s_settings(
     served, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, _runtime, _app = served
+    client, runtime, _app = served
     _add_model(client)
+    # A pasted key's newline is not kept: in a header, httpx refuses it.
     res = client.put(
-        "/api/config/search", json={"provider": "exa", "api_key": "exa-saved"}
+        "/api/config/search", json={"provider": "exa", "api_key": "exa-saved\n"}
     )
     assert res.status_code == 200, res.text
+    assert runtime.config.search.keys == {"exa": "exa-saved"}
     tried: list[object] = []
+    answers: list[MCPStatus] = []
 
     async def fake_probe(cfg, timeout):
         tried.append((cfg.url, cfg.headers, cfg.trust_env))
-        return MCPStatus(ok=False, at=0, error="no answer within 30 s")
+        return answers.pop(0)
 
     monkeypatch.setattr("lovia.web.api.config.probe", fake_probe)
+    answers.append(MCPStatus(ok=False, at=0, error="no answer within 30 s"))
     res = client.post(
         "/api/config/search/test", json={"provider": "tavily", "trust_env": True}
     )
@@ -420,11 +424,26 @@ def test_testing_a_search_service_uses_the_form_s_settings(
     url, headers, trust_env = tried[-1]
     assert "tavily" in url and headers == {"X-Tavily-Access-Mode": "keyless"}
     assert trust_env is True
-    client.post("/api/config/search/test", json={})  # the saved: Exa, its key
+    # The saved: Exa, with its key — which never comes back in an error.
+    answers.append(MCPStatus(ok=False, at=0, error="bad header: exa-saved"))
+    res = client.post("/api/config/search/test", json={})
     assert tried[-1][1] == {"x-api-key": "exa-saved"}
+    assert res.json()["error"] == "bad header: ***"
+    # Listing tools is not enough: the one the search calls must be there.
+    answers.append(MCPStatus(ok=True, at=0, tools=("web_fetch_exa",)))
+    res = client.post("/api/config/search/test", json={})
+    assert res.json() == {
+        "ok": False,
+        "error": "the service no longer offers web_search_exa",
+    }
+    answers.append(MCPStatus(ok=True, at=0, tools=("web_search_exa", "web_fetch_exa")))
+    assert client.post("/api/config/search/test", json={}).json() == {
+        "ok": True,
+        "error": None,
+    }
     # Off: nothing to reach, nothing tried.
     assert client.post("/api/config/search/test", json={"provider": "off"}).json()["ok"]
-    assert len(tried) == 2
+    assert len(tried) == 4
 
 
 # --------------------------------------------------------------- skills -

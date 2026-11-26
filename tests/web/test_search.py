@@ -99,15 +99,19 @@ async def test_a_refusal_is_an_error_in_the_service_s_words(
         await _search(SearchConfig(provider="exa"), query="q")
 
 
-async def test_an_unreachable_service_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_an_unreachable_service_says_so_without_its_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     @asynccontextmanager
     async def session(self: MCPServerStreamableHTTP):  # type: ignore[no-untyped-def]
-        raise ConnectionError("refused")
+        # httpx quotes a header it refuses, key and all.
+        raise ValueError("Invalid header value b'Bearer par-secret '")
         yield  # pragma: no cover
 
     monkeypatch.setattr(MCPServerStreamableHTTP, "session", session)
-    with pytest.raises(ToolError, match="Parallel search could not be reached"):
-        await _search(SearchConfig(), query="q")
+    with pytest.raises(ToolError, match="Parallel search could not be reached") as err:
+        await _search(SearchConfig(keys={"parallel": "par-secret"}), query="q")
+    assert "par-secret" not in str(err.value) and "***" in str(err.value)
 
 
 def test_off_is_no_tool() -> None:

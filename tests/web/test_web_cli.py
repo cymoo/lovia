@@ -156,18 +156,20 @@ def test_resolve_tools_searches_by_default_and_not_when_off() -> None:
 @pytest.mark.parametrize(
     ("before", "after"),
     [
-        ({"backend": "off", "tavily_api_key": "k"}, ("off", {})),
+        ({"backend": "off", "tavily_api_key": "k"}, ("off", {"tavily": "k"})),
         ({"backend": "auto", "tavily_api_key": "k"}, ("tavily", {"tavily": "k"})),
         ({"backend": "tavily", "tavily_api_key": "k"}, ("tavily", {"tavily": "k"})),
+        ({"tavily_api_key": "k"}, ("tavily", {"tavily": "k"})),
         ({"backend": "auto"}, ("parallel", {})),
         ({"backend": "ddg"}, ("parallel", {})),
-        ({"backend": "ddg", "tavily_api_key": "k"}, ("parallel", {})),
+        ({"backend": "ddg", "tavily_api_key": "k"}, ("parallel", {"tavily": "k"})),
     ],
 )
 def test_a_saved_search_backend_carries_over(
     before: dict[str, str], after: tuple[str, dict[str, str]]
 ) -> None:
     # Off stays off: a search turned off is never quietly turned back on.
+    # A Tavily key is kept whatever was picked, for a way back to it.
     search = SearchConfig.model_validate(before)
     assert (search.provider, search.keys) == after
 

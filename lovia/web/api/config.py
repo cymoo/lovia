@@ -53,7 +53,7 @@ from ..config.skills import scan_skills_status
 from ..errors import WebError
 from ..mcp import CONNECT_TIMEOUT, MCPStatus, probe
 from ..project_mcp import ProjectServer, read_project_servers
-from ..search import server_config
+from ..search import PRESETS, redact, server_config
 from ..workspaces import WorkspaceRef
 from .deps import RouterDeps
 from .routing import GuardedRoute
@@ -568,8 +568,9 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             search.trust_env = body.trust_env
         if body.api_key is not None and search.provider != "off":
             keys = dict(search.keys)
-            if body.api_key:
-                keys[search.provider] = body.api_key
+            # A pasted key brings its newline: in a header, httpx refuses it.
+            if key := body.api_key.strip():
+                keys[search.provider] = key
             else:  # "" clears
                 keys.pop(search.provider, None)
             search.keys = keys
@@ -586,11 +587,18 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         """Connect to the service as the form has it, list its tools, close:
         whether search would work, without spending a search."""
         _guard_host(request)
-        cfg = server_config(_search_as(body))
+        search = _search_as(body)
+        cfg = server_config(search)
         if cfg is None:
             return {"ok": True, "error": None}
         status = await probe(cfg, timeout=CONNECT_TIMEOUT)
-        return {"ok": status.ok, "error": status.error}
+        if not status.ok:
+            return {"ok": False, "error": redact(status.error or "", search)}
+        # Listing tools is not enough: the search calls one by name.
+        tool = PRESETS[search.provider].tool
+        if tool not in status.tools:
+            return {"ok": False, "error": f"the service no longer offers {tool}"}
+        return {"ok": True, "error": None}
 
     @router.put("/voice")
     async def update_voice(body: VoiceIn, request: Request) -> dict[str, object]:

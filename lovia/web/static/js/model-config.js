@@ -909,6 +909,7 @@ export function buildSearchPane() {
           ghostBtn(t('cfg.clear'), () => {
             keyMode = 'clear';
             renderKey();
+            void test(); // keyless now: does it still answer?
           }),
         );
         keyBox.appendChild(row);
@@ -919,6 +920,7 @@ export function buildSearchPane() {
           ghostBtn(t('cfg.keep'), () => {
             keyMode = 'keep';
             renderKey();
+            void test();
           }),
         );
         keyBox.appendChild(row);
@@ -927,9 +929,11 @@ export function buildSearchPane() {
         if (savedKey().set) {
           keyBox.appendChild(
             ghostBtn(t('cfg.keep'), () => {
+              const typed = keyIn.value;
               keyMode = 'keep';
               keyIn.value = '';
               renderKey();
+              if (typed) void test(); // the typed key was what was tested
             }),
           );
         }

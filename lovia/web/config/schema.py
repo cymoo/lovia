@@ -175,16 +175,23 @@ class SearchConfig(BaseModel):
     @classmethod
     def _from_backend(cls, data: Any) -> Any:
         # Before 0.9.292 the choice was a backend: Tavily with its key, or the
-        # DuckDuckGo scraper. Search turned off stays off; a Tavily key keeps
-        # Tavily; anything else lands on the default.
-        if not isinstance(data, dict) or "backend" not in data or "provider" in data:
+        # DuckDuckGo scraper. Search turned off stays off; a Tavily key in
+        # use keeps Tavily; anything else lands on the default. The key is
+        # kept either way, for a way back to Tavily.
+        legacy = ("backend", "tavily_api_key")
+        if not isinstance(data, dict) or "provider" in data:
+            return data
+        if not any(name in data for name in legacy):
             return data
         data = dict(data)
-        backend, key = data.pop("backend"), data.pop("tavily_api_key", None)
+        backend = data.pop("backend", "auto")
+        key = data.pop("tavily_api_key", None)
+        if key:
+            data["keys"] = {"tavily": key}
         if backend == "off":
             data["provider"] = "off"
         elif key and backend in ("auto", "tavily"):
-            data.update(provider="tavily", keys={"tavily": key})
+            data["provider"] = "tavily"
         return data
 
 

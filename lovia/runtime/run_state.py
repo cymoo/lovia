@@ -18,6 +18,7 @@ Three layers, by lifetime:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -125,6 +126,11 @@ class RunState:
     # resumed run keeps it — for the finished segment's ``timing`` meta. ``None``
     # when resumed from a snapshot that predates it: the segment goes untimed.
     started_at: float | None = None
+    # Seconds run by the legs before this one (the snapshot's ``elapsed``) and
+    # when this leg began (``time.monotonic``): together the run's running
+    # time, which each checkpoint saves for a resumed budget's ``max_seconds``.
+    elapsed_before: float = 0.0
+    leg_started: float = field(default_factory=time.monotonic)
     # The run's most recent compaction, as a typed
     # :class:`~lovia.events.CompactionNotice`. Stowed (as a dict) under
     # ``context_notice`` in the finished segment's ``meta`` by ``_persist_session``
@@ -166,6 +172,11 @@ class RunState:
     def agent(self) -> Agent[Any]:
         """The active agent. Mirror of ``active.agent`` / ``run_ctx.agent``."""
         return self.active.agent
+
+    @property
+    def elapsed(self) -> float:
+        """Seconds the run has been running, across its legs."""
+        return self.elapsed_before + (time.monotonic() - self.leg_started)
 
     @property
     def transcript(self) -> list[TranscriptEntry]:

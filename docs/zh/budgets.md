@@ -42,6 +42,10 @@ Runner 会在 Turn 之间、每次模型回复后，以及每个 Tool 调用的�
     `RunBudget` 会保存开始时间和 Tool 调用计数。复用同一个实例，会把已经消耗的时间和次数
     带入下一次 Run。
 
+[从 checkpoint 恢复](sessions-and-checkpoints.md)的 Run 即使拿到新的预算，也会接着之前的用量计算：
+Token 来自保存的用量，Tool 调用次数来自 transcript，`max_seconds` 来自已经运行的时间——
+两段之间挂起等待的时间不计入。
+
 [Agent-as-tool](multi-agent.md#agent-as-tool) 子 Run 使用独立复制的预算。子 Run 超限时，父 Run
 会收到 Tool 错误并决定如何处理，而不是自动失败。
 

@@ -39,6 +39,11 @@ class RunBudget:
     Any limit set to ``None`` is unconstrained. ``max_seconds`` measures wall
     clock from the first :meth:`check` call.
 
+    A run resumed from its checkpoint keeps counting where it stopped: the
+    runner seeds the budget (:meth:`resume`) with the run's tool calls so far
+    and its running time, which leaves out time spent suspended between legs.
+    Tokens carry over too, through the run's restored usage.
+
     An instance carries single-run state (the wall-clock start, the tool-call
     count): create a fresh budget per run rather than reusing one across runs,
     or its clock and counters carry over. :func:`~lovia.handoff.agent_as_tool`
@@ -67,6 +72,12 @@ class RunBudget:
 
     def record_tool_call(self) -> None:
         self._tool_calls += 1
+
+    def resume(self, *, tool_calls: int, elapsed: float) -> None:
+        """Continue a resumed run's count: ``tool_calls`` already made, and
+        ``elapsed`` seconds already run, both charged against the limits."""
+        self._tool_calls = tool_calls
+        self._started_at = time.monotonic() - elapsed
 
     def check(self, usage: Usage) -> None:
         """Raise :class:`BudgetExceeded` if any limit is exceeded."""

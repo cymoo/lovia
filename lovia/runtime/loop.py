@@ -686,6 +686,15 @@ class RunLoop:
             # Pending calls stay raw for the resume drain to re-reject.
             run_ctx.entries.extend(normalize_replayed_entries(snapshot.entries))
             run_ctx.usage.add(snapshot.usage)
+            if self.budget is not None:
+                # Every call the run requested went through preflight once,
+                # except those still pending: the resume drain preflights
+                # (and counts) them now.
+                requested = sum(isinstance(e, ToolCallEntry) for e in snapshot.entries)
+                self.budget.resume(
+                    tool_calls=requested - len(pending_tool_calls(snapshot.entries)),
+                    elapsed=snapshot.elapsed,
+                )
             # These entries are already in the checkpoint; only persist new ones.
             self.checkpoints.resume_at(len(snapshot.entries))
         else:
@@ -735,6 +744,7 @@ class RunLoop:
             started_at=(
                 snapshot.started_at if snapshot is not None else self._invoked_at
             ),
+            elapsed_before=snapshot.elapsed if snapshot is not None else 0.0,
             pending_handoff=(
                 resolve_pending_handoff(agent, snapshot)
                 if snapshot is not None

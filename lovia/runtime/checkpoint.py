@@ -180,6 +180,7 @@ class CheckpointWriter:
             context_state=state.context_state,
             pending_handoff=pending.handoff.target.name if pending else None,
             started_at=state.started_at,
+            elapsed=state.elapsed,
         )
         checkpointer = self.checkpointer
 

@@ -32,14 +32,17 @@ const OUTCOME = {
 /**
  * How a task stands, in a word or two.
  * @param {import('./background-items.js').BackgroundItem} item
+ * @param {{ took?: boolean }} [opts] `took: false` leaves out how long it ran.
  */
-export function taskStatusText(item) {
+export function taskStatusText(item, { took: withTook = true } = {}) {
   if (item.state === 'approval') {
     return t(item.waitsFor === 'question' ? 'bg.needsAnswer' : 'task.needsApproval');
   }
   if (item.live) return t(item.state === 'stopping' ? 'bg.stopping' : 'task.running');
   const took =
-    item.endedAt && item.startedAt ? ` · ${fmtElapsed(item.endedAt - item.startedAt)}` : '';
+    withTook && item.endedAt && item.startedAt
+      ? ` · ${fmtElapsed(item.endedAt - item.startedAt)}`
+      : '';
   return t(OUTCOME[item.state] || 'task.completed') + took;
 }
 

@@ -222,8 +222,9 @@ export function buildVoicePane() {
       }
     });
     actions.appendChild(save);
+    // In the form, as the Models page's connection test is, not after Save.
+    if (voice.enabled) form.appendChild(trial());
     pane.append(form, errBox, actions);
-    if (voice.enabled) pane.appendChild(trial());
   }
 
   void render();
@@ -236,17 +237,17 @@ export function buildVoicePane() {
  * look at the endpoint's model list can't vouch for.
  */
 function trial() {
-  const box = el('div', 'lv-cfg-field');
-  const btn = el('button', 'lv-btn lv-btn-ghost', t('voice.try'));
+  const box = el('div', 'lv-cfg-test-row');
+  const btn = el('button', 'lv-btn lv-cfg-test-btn', t('voice.try'));
   btn.setAttribute('type', 'button');
-  const out = el('div', 'lv-cfg-hint', t('voice.tryHint'));
+  const out = el('span', 'lv-cfg-test-result', t('voice.tryHint'));
   out.setAttribute('role', 'status');
   /** @type {import('./voice-recorder.js').Capture | null} */
   let capture = null;
   let busy = false;
   const say = (text, bad = false) => {
     out.textContent = text;
-    out.classList.toggle('lv-cfg-error', bad);
+    out.classList.toggle('lv-bad', bad);
   };
 
   async function stop() {

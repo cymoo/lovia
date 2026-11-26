@@ -1485,6 +1485,26 @@ body.lv-view-open #files-btn {
 .lv-transcript > .lv-turn:last-child .lv-bubble > .lv-activity:last-child {
   margin-bottom: 0;
 }
+/* A reply that is only a folded step line, between two cards (task reports):
+   the line sits evenly between them. Its action row floats in the turn's
+   margin, as a user bubble's does, instead of padding the gap under it. */
+.lv-transcript > .lv-turn.lv-assistant:not(:last-child)
+  > .lv-bubble:not(:has(> :not(.lv-activity, .lv-turn-footer))) {
+  position: relative;
+}
+.lv-transcript > .lv-turn.lv-assistant:not(:last-child)
+  > .lv-bubble:not(:has(> :not(.lv-activity, .lv-turn-footer)))
+  > .lv-activity {
+  margin: 0;
+}
+.lv-transcript > .lv-turn.lv-assistant:not(:last-child)
+  > .lv-bubble:not(:has(> :not(.lv-activity, .lv-turn-footer)))
+  > .lv-turn-footer {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin: 0;
+}
 
 /* ---- Empty state --------------------------------------------------------- */
 .lv-empty-state {
@@ -5375,27 +5395,50 @@ body.lv-files-resizing {
 }
 
 /* ---- Background tab: tasks and commands (background.js) ---- */
+/* Each item a card; a group's chevron (or its label, unfolded) stands in the
+   cards' icon column, so the two read as one left edge. */
+.lv-bg-list {
+  padding-top: 4px;
+}
+.lv-bg-list > .lv-files-group-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 8px;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.lv-bg-list > .lv-files-group-toggle svg {
+  color: var(--lv-muted-2);
+}
 .lv-bg-row {
   position: relative;
   display: flex;
   align-items: flex-start;
-  border-radius: var(--lv-radius-sm);
-  transition: background var(--lv-t-fast);
+  margin-bottom: 6px;
+  background: var(--lv-sidebar-hover);
+  border: 1px solid transparent;
+  border-radius: var(--lv-radius);
+  transition:
+    background var(--lv-t-fast),
+    border-color var(--lv-t-fast);
 }
 .lv-bg-row:hover {
-  background: var(--lv-sidebar-hover);
+  background: var(--lv-sidebar-active);
 }
 .lv-bg-row.lv-active {
   background: var(--lv-sidebar-active);
+  border-color: var(--lv-border-strong);
 }
 .lv-bg-main {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: var(--lv-radius-sm);
+  gap: 10px;
+  padding: 9px 4px 9px 11px;
+  border-radius: var(--lv-radius);
   text-align: left;
   cursor: pointer;
 }
@@ -5458,19 +5501,20 @@ body.lv-files-resizing {
 .lv-bg-row.lv-failed .lv-bg-line {
   color: var(--lv-danger);
 }
+/* How long it has run, or ran: on the title's line, at the right edge. */
 .lv-bg-clock {
   flex-shrink: 0;
-  padding: 7px 8px 0 4px;
+  padding: 9px 12px 0 6px;
   font-size: 11.5px;
-  line-height: 17px;
+  line-height: 18px;
   color: var(--lv-muted-2);
   font-variant-numeric: tabular-nums;
 }
 /* The stop takes the clock's place while the row is pointed at. */
 .lv-bg-stop {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: 5px;
+  right: 6px;
   width: 26px;
   height: 26px;
   opacity: 0;
@@ -7638,35 +7682,53 @@ body.lv-files-resizing {
     pointer-events: auto;
   }
 }
-/* Inline editor swapped in for the bubble text. */
+/* Inline editor swapped in for the bubble text: the bubble itself becomes
+   the field — the text where it was, in its own type, the buttons under it —
+   lifted as the composer is while it has focus. */
 .lv-turn.lv-user .lv-bubble:has(.lv-edit-area) {
   width: 100%;
   max-width: 680px;
+  padding: 12px 12px 10px 17px;
+  border-color: var(--lv-border);
+}
+.lv-turn.lv-user .lv-bubble:has(.lv-edit-area:focus-within) {
+  border-color: var(--lv-border-strong);
+  box-shadow: var(--lv-shadow-md);
+}
+/* Copy and edit under a bubble being edited would act on the old text. */
+.lv-turn.lv-user .lv-bubble:has(.lv-edit-area) > .lv-turn-footer {
+  display: none;
 }
 .lv-edit-area {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 .lv-edit-area textarea {
+  display: block;
   width: 100%;
-  min-height: 64px;
-  resize: vertical;
-  padding: 8px 10px;
+  max-height: 40vh; /* startEditUserTurn grows it to its text up to here */
+  padding: 0 5px 0 0;
+  resize: none;
+  overflow-y: auto;
   font: inherit;
+  font-size: calc(14.5px * var(--lv-chat-font-scale, 1));
+  line-height: 1.6;
   color: var(--lv-ink);
-  background: var(--lv-surface);
-  border: 1px solid var(--lv-border);
-  border-radius: var(--lv-radius-sm);
-}
-.lv-edit-area textarea:focus {
+  background: none;
+  border: 0;
   outline: none;
-  border-color: var(--lv-muted);
 }
 .lv-edit-actions {
   display: flex;
-  gap: 8px;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+.lv-edit-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--lv-muted-2);
 }
 
 /* ---- Settings dialog: left-rail shell (General / Models / Search / About) - */

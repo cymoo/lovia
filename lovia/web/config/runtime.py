@@ -321,18 +321,20 @@ class ConfigRuntime:
         refused.
         """
         async with self._lock:
+            # Adopted only once saved: a failed write leaves the old one,
+            # so a retry still sees what changed.
             if settings_only and self.serveable(config):
-                self.loaded.config = config
                 if persist:
                     save_config(config, self.loaded.path)
                     self.loaded.exists = True
+                self.loaded.config = config
                 return
             agents, aux_model = self.build(config)
             previous = self.config
-            self.loaded.config = config
             if persist:
                 save_config(config, self.loaded.path)
                 self.loaded.exists = True
+            self.loaded.config = config
             deps = self._deps
             if deps is None:  # not bound yet (boot builds its own agents)
                 return
@@ -377,8 +379,9 @@ class ConfigRuntime:
             self._chat_models.clear()
             # The aux provider only ever serves transient title/follow-up
             # calls, which no supervisor entry holds — the retire grace
-            # period is what covers one caught mid-swap.
-            if stale_aux is not None:
+            # period is what covers one caught mid-swap. A provider factory
+            # may hand back the very instance still served: that one stays.
+            if stale_aux is not None and id(stale_aux) not in served:
                 self._retire(stale_aux)
             profile = config.default_profile()
             assert profile is not None

@@ -224,6 +224,30 @@ def test_extra_body_rejects_runtime_owned_fields_and_non_objects(served) -> None
     assert res.status_code == 422
 
 
+async def test_a_save_that_failed_to_write_is_applied_on_retry(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lovia.web.config import runtime as runtime_module
+
+    client, runtime, app = served
+    _add_model(client, id="chat")
+    _add_model(client, id="quiet", model="openai:gpt-small", api_key="sk-q-12345678")
+    roles = runtime.config.roles.model_copy(update={"aux": "quiet"})
+    wanted = runtime.config.model_copy(update={"roles": roles})
+
+    def full_disk(*args: Any, **kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    save = runtime_module.save_config
+    monkeypatch.setattr(runtime_module, "save_config", full_disk)
+    with pytest.raises(OSError):
+        await runtime.apply(wanted)
+    assert runtime.config.roles.aux is None  # not adopted
+    monkeypatch.setattr(runtime_module, "save_config", save)
+    await runtime.apply(wanted)
+    assert getattr(app.state.deps.title_model, "model", None) == "gpt-small"
+
+
 def test_aux_role_serves_titles_and_followups_with_its_extras(served) -> None:
     client, _runtime, app = served
     _add_model(client, id="chat")

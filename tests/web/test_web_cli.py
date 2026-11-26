@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable
+from typing import Callable, cast
 
 import pytest
 
@@ -551,7 +551,11 @@ def _capture_serving(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         captured.update(kwargs)
         # What main() reads back off a built app: its runtime, for the summary.
         deps = SimpleNamespace(config_runtime=kwargs.get("config_runtime"))
-        return SimpleNamespace(state=SimpleNamespace(deps=deps))
+        routes = cast("list[str]", captured.setdefault("routes", []))
+        return SimpleNamespace(
+            state=SimpleNamespace(deps=deps),
+            add_api_route=lambda path, *a, **k: routes.append(path),
+        )
 
     monkeypatch.setattr(cli, "create_app", fake_create_app)  # --app
     monkeypatch.setattr(default, "create_app", fake_create_app)  # default_app
@@ -627,8 +631,28 @@ def test_main_serves_a_built_app_as_is(
     assert rc == 0
     assert served["app"] is sys.modules["appmod_b"].app
     assert served["port"] == 9124
+    # Served as built: no /health of ours over one the app may define.
+    from fastapi.testclient import TestClient
+
+    assert TestClient(served["app"]).get("/health").status_code == 404  # type: ignore[arg-type]
     err = capsys.readouterr().err
     assert "ignoring options it was built without: --title" in err
+
+
+def test_health_alias_answers_beside_healthz() -> None:
+    from fastapi.testclient import TestClient
+
+    from ..scripted_provider import ScriptedProvider, text
+
+    app = cli.create_app(
+        Agent(name="bot", model=ScriptedProvider([text("hi")])),
+        store=ChatStore.in_memory(),
+        token="s3cret",
+    )
+    cli._add_health_alias(app)
+    c = TestClient(app)
+    assert c.get("/health").json() == {"status": "ok"}  # open, like /healthz
+    assert app.url_path_for("healthz") == "/healthz"  # its own name kept
 
 
 def _unexpected_create_app(*a: object, **k: object) -> None:
@@ -1027,6 +1051,7 @@ def test_main_missing_model_serves_the_setup_ui(
     rc = cli.main([])
     assert rc == 0
     assert captured["agent"] == {}  # nothing to chat with yet
+    assert captured["routes"] == ["/health"]  # the probe alias the CLI adds
     runtime = captured["config_runtime"]
     assert runtime is not None and not runtime.configured  # type: ignore[union-attr]
     out = capsys.readouterr().out

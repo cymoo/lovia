@@ -928,7 +928,8 @@ serve(agent, host="0.0.0.0")                                # 自动生成并打
 ```
 
 token 会保护 `build_api_router` 注册的业务路由。`/healthz`、`/api/docs`、
-`/api/openapi.json`、UI 页面和静态资源默认不要求认证。客户端可以通过以下方式提交 token：
+`/api/openapi.json`、UI 页面和静态资源默认不要求认证。`lovia web` 自己构建的 app 还会在
+`/health` 上应答健康检查（`--app` 传入的 app 按原样提供）。客户端可以通过以下方式提交 token：
 
 - **普通 API 请求和聊天 SSE**：发送 `Authorization: Bearer <token>`。聊天流由
   `fetch` 读取，可以携带请求头。

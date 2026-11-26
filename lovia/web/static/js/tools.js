@@ -557,20 +557,26 @@ function isPlainEdit(node, text) {
   );
 }
 
-// What shell(background=true) answers (workspace/tools.py _render_command_result).
+// What shell(background=true) answers (workspace/tools.py _render_command_result),
+// and spawn_subagent (plugins/subagents.py): tests/web pins both.
 const STARTED_PROCESS = /^started background process (\S+) \(pid /;
+const STARTED_TASK = /^Subagent \S+ \(.*\) started in the background \[spawn ([0-9a-f]+)\]/;
 
-/** A card that started a background command opens its log. */
-function offerOutput(node, result) {
-  const id = node.dataset.tool === 'shell' ? STARTED_PROCESS.exec(result)?.[1] : null;
-  if (!id || node.querySelector('.lv-tool-open-output')) return;
-  const open = toolActionBtn('terminal', t('bg.viewOutput'));
-  open.classList.add('lv-tool-open-file', 'lv-tool-open-output');
+/** A card that started something in the background opens it in the panel. */
+function offerBackground(node, result) {
+  if (node.querySelector('.lv-tool-open-background')) return;
+  const { tool } = node.dataset;
+  const id = tool === 'shell' ? STARTED_PROCESS.exec(result)?.[1] : null;
+  const spawnId = tool === 'spawn_subagent' ? STARTED_TASK.exec(result)?.[1] : null;
+  if (!id && !spawnId) return;
+  const open = toolActionBtn(id ? 'terminal' : 'bot', t(id ? 'bg.viewOutput' : 'bg.viewTask'));
+  open.classList.add('lv-tool-open-file', 'lv-tool-open-background');
   open.addEventListener('click', (e) => {
     // Inside <summary>: don't let the click also toggle the card.
     e.preventDefault();
     e.stopPropagation();
-    store.emit('open-process', { id });
+    if (id) store.emit('open-process', { id });
+    else store.emit('open-task', { spawnId });
   });
   node.querySelector('summary')?.appendChild(open);
 }
@@ -598,7 +604,7 @@ export function setToolResult(node, result, isError, images, live = false) {
   node.dataset.status = isError ? 'error' : 'done';
   renderToolImages(node, images);
   refreshTool(node, live);
-  if (!isError) offerOutput(node, String(result ?? ''));
+  if (!isError) offerBackground(node, String(result ?? ''));
   const pre = /** @type {HTMLElement | null} */ (node.querySelector('.lv-tool-result'));
   if (!pre) return;
   const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);

@@ -444,6 +444,11 @@ export const api = {
     url(
       `/api/sessions/${encodeURIComponent(sessionId)}/tool-images/${encodeURIComponent(callId)}/${index}`,
     ),
+  // A chat's run in short (a subagent task's detail) → { prompt, step,
+  // tool_calls, failed_calls, report, error }.
+  /** @param {string} sessionId */
+  sessionSummary: (sessionId) =>
+    request(`/api/sessions/${encodeURIComponent(sessionId)}/summary`).then(_json),
   // ---- background commands (chat-scoped; the panel's Background tab) ----
   // Keyed by session id: they belong to the chat, not to the agent. The live
   // ones, and the records of those that are over.

@@ -4,8 +4,10 @@
 //
 // The tasks come with the session list (sessions.js keeps `currentTasks` and
 // the live runs); the commands are fetched here, when the server says they
-// changed (`processes_changed`) and when the list comes into view. Nothing
-// polls. The list's rules are background-items.js's.
+// changed (`processes_changed`) and when the list comes into view. The only
+// polls are for what no event tells: an open detail's (process-view.js,
+// task-view.js), and the steps of tasks at work while the list is on screen.
+// The list's rules are background-items.js's.
 import { t } from './i18n.js';
 import { store } from './store.js';
 import { api } from './api.js';
@@ -13,9 +15,10 @@ import { icon } from './icons.js';
 import { toast } from './toast.js';
 import { plainText } from './log-text.js';
 import { elapsedNode, fmtElapsed } from './elapsed.js';
-import { switchSession } from './sessions.js';
+import { loadCurrentTasks, refreshRuns, switchSession } from './sessions.js';
 import { buildItems, buttonState, createFailureWatch } from './background-items.js';
 import { outcomeText, processGuest } from './process-view.js';
+import { CONFIRM_MS, stepLine, taskGuest, taskStatusText } from './task-view.js';
 import { openGuest, panelState, setPanel, viewedGuest } from './files.js';
 
 const els = {};
@@ -62,9 +65,17 @@ function take(sid, procs) {
   // Without file tabs, a panel with nothing to list is an empty box.
   const { live, ended } = items();
   if (inView() && !panelState().files && !live.length && !ended.length) setPanel(null);
-  const guest = viewedGuest();
-  const row = guest && procs.find((p) => `cmd:${p.process_id}` === guest.key);
-  if (row) /** @type {any} */ (guest).update?.(row);
+}
+
+/** Tell an open detail how what it shows stands now. */
+function updateGuest() {
+  const guest = /** @type {any} */ (viewedGuest());
+  if (!guest) return;
+  const { live, ended } = items();
+  const item = [...live, ...ended].find((i) => i.key === guest.key);
+  if (!item) return;
+  if (item.kind === 'task') guest.update(item);
+  else guest.update(_procs.find((p) => p.process_id === item.id));
 }
 
 async function stopCommand(processId) {
@@ -100,30 +111,54 @@ async function openProcess(id) {
 
 // ---- Tasks ------------------------------------------------------------------
 
+/** Open a task's detail in the panel. */
+function openTask(item) {
+  setPanel('background');
+  openGuest(taskGuest(item, { stop: stopTask, open: openTaskChat }));
+}
+
+/** The task a `spawn_subagent` card started. */
+async function openSpawn(spawnId) {
+  const sid = store.sessionId;
+  const find = () => (store.currentTasks || []).find((s) => s.spawn_id === spawnId);
+  if (!find()) await loadCurrentTasks();
+  if (store.sessionId !== sid) return;
+  const key = `task:${find()?.id}`;
+  const { live, ended } = items();
+  const item = [...live, ...ended].find((i) => i.key === key);
+  if (item) openTask(item);
+  else toast(t('bg.taskGone'));
+}
+
 /** A task's own chat. On a phone the panel covers it: out of the way. */
-function openTask(id) {
+function openTaskChat(id) {
   if (window.matchMedia('(max-width: 720px)').matches) setPanel(null);
   void switchSession(id);
 }
 
-/** A task's stop asks once more: it ends where it is, and reports nothing. */
-async function stopTask(item) {
-  if (_armed !== item.key) {
-    arm(item.key);
-    return;
-  }
-  arm(null);
+async function stopTask(id) {
   try {
-    await api.cancel(item.id);
+    await api.cancel(id);
   } catch (err) {
     toast(err?.message || t('bg.stopFailed'), { type: 'error' });
+    return;
   }
+  // Off the live runs at once; the event comes once a tool under way is done.
+  void refreshRuns();
+  void loadCurrentTasks();
+}
+
+/** A task's stop asks once more: it ends where it is, and reports nothing. */
+function confirmStop(item) {
+  if (_armed !== item.key) return arm(item.key);
+  arm(null);
+  void stopTask(item.id);
 }
 
 function arm(key) {
   clearTimeout(_armedTimer);
   _armed = key;
-  if (key) _armedTimer = setTimeout(() => arm(null), 4000);
+  if (key) _armedTimer = setTimeout(() => arm(null), CONFIRM_MS);
   renderList();
 }
 
@@ -175,6 +210,23 @@ function render() {
   }
   renderButton();
   renderList();
+  updateGuest();
+  pollSteps(list);
+}
+
+// A task's step changes with no event: ask for the live runs again while a
+// row that shows one is on screen.
+const STEPS_MS = 3000;
+let _stepsTimer = null;
+function pollSteps({ live }) {
+  if (_stepsTimer || !onScreen() || !live.some((i) => i.state === 'running' && i.kind === 'task')) {
+    return;
+  }
+  _stepsTimer = setTimeout(() => {
+    _stepsTimer = null;
+    // Its answer renders; a failed one doesn't, so look again either way.
+    if (onScreen()) void refreshRuns().finally(() => pollSteps(items()));
+  }, STEPS_MS);
 }
 
 function renderList() {
@@ -236,23 +288,17 @@ function renderList() {
   }
 }
 
-const TASK_OUTCOME = {
-  completed: 'task.completed',
-  failed: 'task.failed',
-  stopped: 'task.cancelled',
-  interrupted: 'task.interrupted',
-};
-
 /** The second line: what it is doing, or how it ended and how long it took. */
 function detailText(item) {
-  if (item.state === 'approval') {
-    return t(item.waitsFor === 'question' ? 'bg.needsAnswer' : 'task.needsApproval');
+  if (item.kind === 'task') {
+    return item.state === 'running' ? stepLine(item.step) : taskStatusText(item);
   }
-  if (item.live) return item.kind === 'cmd' ? plainText(item.line) : t('task.running');
-  const how =
-    item.kind === 'task'
-      ? t(TASK_OUTCOME[item.state] || 'task.completed')
-      : outcomeText({ status: item.endedBy === 'exit' ? 'exited' : 'killed', exit_code: item.exitCode, ended_by: item.endedBy });
+  if (item.live) return plainText(item.line);
+  const how = outcomeText({
+    status: item.endedBy === 'exit' ? 'exited' : 'killed',
+    exit_code: item.exitCode,
+    ended_by: item.endedBy,
+  });
   const took =
     item.endedAt && item.startedAt ? ` · ${fmtElapsed(item.endedAt - item.startedAt)}` : '';
   return how + took;
@@ -287,13 +333,6 @@ function row(item, active) {
   name.className = 'lv-bg-name';
   name.textContent = item.title;
   head.append(name);
-  if (item.kind === 'task') {
-    // It leaves the panel: the task's own chat opens.
-    const out = document.createElement('span');
-    out.className = 'lv-bg-out';
-    out.innerHTML = icon('external-link', { size: 11 });
-    head.append(out);
-  }
   body.append(head);
   const detail = detailText(item);
   if (detail) {
@@ -304,12 +343,12 @@ function row(item, active) {
   }
   main.append(glyph, body);
   main.addEventListener('click', () => {
-    if (item.kind === 'task') openTask(item.id);
+    if (item.kind === 'task') openTask(item);
     else void openProcess(item.id);
   });
   el.append(main);
 
-  if (item.live) {
+  if (item.live && item.state !== 'stopping') {
     if (item.startedAt && item.state !== 'approval') {
       const clock = elapsedNode(item.startedAt);
       clock.classList.add('lv-bg-clock');
@@ -328,7 +367,7 @@ function row(item, active) {
       stop.setAttribute('aria-label', label);
     }
     stop.addEventListener('click', async () => {
-      if (item.kind === 'task') return void stopTask(item);
+      if (item.kind === 'task') return confirmStop(item);
       stop.disabled = true;
       await stopCommand(item.id);
       stop.disabled = false;
@@ -375,9 +414,12 @@ export function initBackground() {
   store.on('panel-changed', () => {
     const shown = inView();
     render();
-    if (shown) void loadProcs(); // their last lines, as of now
+    if (!shown) return;
+    void loadProcs(); // their last lines, as of now
+    void refreshRuns(); // and the tasks' steps
   });
   store.on('open-process', ({ id }) => void openProcess(id));
+  store.on('open-task', ({ spawnId }) => void openSpawn(spawnId));
   store.on('viewer-changed', render);
   document.addEventListener('visibilitychange', render);
   if (store.sessionId) void loadProcs();

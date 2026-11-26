@@ -484,6 +484,7 @@ async def test_a_message_injected_while_the_run_suspends_waits_with_it() -> None
 def _child_spec(agent: Agent[Any], token: CancelToken, mailbox: Mailbox) -> ChildSpec:
     return ChildSpec(
         id="t1",
+        spawn_id="s1",
         agent=agent,
         prompt="go",
         token=token,

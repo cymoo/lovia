@@ -1,6 +1,6 @@
 # 后台任务：子任务和后台命令放进一个面板
 
-> 状态：设计稿，未实现 · 2026-11-26 · 范围：`lovia/workspace`（`local.py`、`types.py`、`protocol.py`、`tools.py`、`remote/`）、`lovia/plugins/subagents.py`（一个字段）、`lovia/web`（`workspaces.py`、`api/workspace.py`、`api/sessions.py`、`subagents.py`、`store.py`、`static/js/files.js`、`sessions.js`、`chat.js`、`i18n.js`、`static/styles.css`、`templates/index.html`，新增一个监视模块和一个面板模块）。不加依赖。
+> 状态：已实现（#540–#542、#544、#545，v0.9.281–0.9.285）· 2026-11-26 · 范围：`lovia/workspace`（`local.py`、`types.py`、`protocol.py`、`tools.py`、`remote/`）、`lovia/plugins/subagents.py`（一个字段）、`lovia/web`（`workspaces.py`、`api/workspace.py`、`api/sessions.py`、`subagents.py`、`store.py`、`static/js/files.js`、`sessions.js`、`chat.js`、`i18n.js`、`static/styles.css`、`templates/index.html`，新增一个监视模块和一个面板模块）。不加依赖。
 >
 > 行号指向 `main`（`89be7230`，v0.9.280）。
 
@@ -282,5 +282,7 @@ class ProcessChunk:
 3. **监视和记录（web）**：监视任务、收尾函数、记录文件、清扫、`processes_changed` 事件、`/output` 和 `/log` 接口。这一步没有新界面。测试覆盖：进程退出后后代继续写输出，记录里要有后写的部分；带着运行中的 dev server 关闭会话，记录里要有已有的日志。
 4. **面板（web）**：面板开关拆出、「后台」页、统一列表、命令详情、顶栏按钮的新状态、侧边栏指示；删除旧进程条和弹层。子任务行仍然打开完整对话。同步两份 README 和截图。
 5. **子任务详情（core 一个字段 + web）**：`ChildSpec.spawn_id`、子会话的关联、步骤摘要、子任务详情、工具卡的链接。
+
+实现时和设计的出入：`ProcessStatus` 多一个 `output_closed`（监视任务据此判断，不用为每个进程多一次调用）；`eof` 以管道关闭为准，缩减要等进程也退出；列表在有子任务运行且可见时，每 3 秒刷新一次步骤（没有事件告诉步骤变了），打开的子任务详情也是；`spawn_id` 写在 `spawn_subagent` 结果的文本里（`[spawn <id>]`），存在任务行的 `origin_ref`；停止一个正在执行工具的子任务时，界面显示「停止中」，直到工具返回、记录落定。
 
 第 2 步是公开行为变化（`Workspace` 协议多两个方法，`ProcessStatus` 多字段）。1.0 之前，补丁版本直接改，不留兼容层。

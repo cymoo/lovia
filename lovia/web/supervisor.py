@@ -31,7 +31,7 @@ from ..approvals import Approval, _Suspension
 from ..checkpointer import CheckpointOptions
 from ..exceptions import RunSuspended
 from ..log_config import CURRENT_AGENT
-from ..messages import Message, Usage
+from ..messages import Message, ToolCall, Usage
 from ..reliability import CancelToken
 from ..parts import coerce_parts
 from ..runner import Runner
@@ -815,6 +815,16 @@ class RunController:
                 for e in self.in_flight_buffer
                 if not isinstance(e, (events.TextDelta, events.ReasoningDelta))
             ]
+
+    def open_call(self) -> ToolCall | None:
+        """The tool call under way, the newest of several; None between calls."""
+        started: list[ToolCall] = []
+        for ev in self.in_flight_buffer:
+            if isinstance(ev, events.ToolCallStarted):
+                started.append(ev.call)
+            elif isinstance(ev, events.ToolCallCompleted):
+                started = [call for call in started if call.id != ev.call.id]
+        return started[-1] if started else None
 
     def _publish(self, ev: events.Event) -> None:
         if isinstance(ev, events.ToolCallCompleted) and isinstance(

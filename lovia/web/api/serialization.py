@@ -12,6 +12,8 @@ change the wire format.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any, Literal, NamedTuple, cast
 
@@ -24,13 +26,20 @@ from ...transcript import (
     TranscriptEntry,
     entries_to_messages,
 )
-from ..schemas import ChatSessionInfo, MessageOut, RunRecordInfo, ToolImageOut
+from ..schemas import (
+    ChatSessionInfo,
+    MessageOut,
+    RunRecordInfo,
+    SessionSummary,
+    StepInfo,
+    ToolImageOut,
+)
 from ..stop_check import without_stop_check
-from ..store import ChatMeta, RunRow
+from ..store import ChatMeta, LatestRun, RunRow
 
 
 def session_info(
-    meta: ChatMeta, *, last_run_status: str | None = None, processes_running: int = 0
+    meta: ChatMeta, *, last_run: LatestRun | None = None, processes_running: int = 0
 ) -> ChatSessionInfo:
     """Project a metadata row onto the public session-list shape."""
     return ChatSessionInfo(
@@ -42,13 +51,75 @@ def session_info(
         pinned=meta.pinned,
         archived=meta.archived,
         parent_id=meta.parent_id,
-        last_run_status=last_run_status,
+        spawn_id=meta.origin_ref if meta.parent_id else None,
+        last_run_status=last_run.status if last_run else None,
+        last_run_seconds=last_run.seconds if last_run else None,
         origin_kind=origin_kind(meta.origin_kind),
         workspace_mode=meta.workspace_mode,
         workspace_mode_rev=meta.workspace_mode_rev,
         workspace_root=meta.workspace_root,
         model=meta.model,
         processes_running=processes_running,
+    )
+
+
+# The arguments a step's line is made of (static/js/builtin-views.js), each
+# this long at most: never a file's content, nor what a custom tool was given.
+_STEP_ARGS = frozenset(
+    {"path", "pattern", "query", "url", "command", "description", "process_id", "title"}
+)
+_STEP_ARG_CHARS = 300
+
+
+def step_info(name: str, arguments: str) -> StepInfo:
+    """A tool call as one line needs it."""
+    try:
+        args = json.loads(arguments or "{}")
+    except ValueError:
+        args = None
+    return StepInfo(
+        name=name,
+        args={
+            key: value[:_STEP_ARG_CHARS]
+            for key, value in (args.items() if isinstance(args, dict) else ())
+            if key in _STEP_ARGS and isinstance(value, str)
+        },
+    )
+
+
+def session_summary(
+    view: Sequence[MessageOut],
+    *,
+    live: bool,
+    step: StepInfo | None,
+    last_run: LatestRun | None,
+) -> SessionSummary:
+    """``view`` (:func:`segments_to_out`) in short; ``live``: a run is under
+    way or waiting, at ``step``."""
+    texts = {
+        role: [_text_of(m.content) for m in view if m.role == role]
+        for role in ("user", "assistant")
+    }
+    over = None if live or last_run is None else last_run.status
+    return SessionSummary(
+        prompt=next(iter(texts["user"]), ""),
+        step=step if live else None,
+        tool_calls=sum(len(m.tool_calls) for m in view),
+        failed_calls=sum(m.is_error for m in view if m.role == "tool"),
+        # A stopped run's last words are no report.
+        report=next((t for t in reversed(texts["assistant"]) if t.strip()), None)
+        if over == "completed"
+        else None,
+        error=last_run.error if over == "failed" and last_run else None,
+    )
+
+
+def _text_of(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    parts = content if isinstance(content, list) else []
+    return "\n".join(
+        p["text"] for p in parts if isinstance(p, dict) and p.get("type") == "text"
     )
 
 

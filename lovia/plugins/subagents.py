@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Annotated, Any, Awaitable, Callable, Sequence
 
@@ -105,6 +106,10 @@ class ChildSpec:
     id: str
     """Run-scoped task id (``t1``, ``t2``, …)."""
 
+    spawn_id: str
+    """Unique id of this spawn, across runs: what the ``spawn_subagent``
+    result names it by, so whoever keeps the child can be found from there."""
+
     agent: "Agent[Any]"
     """The child agent to run."""
 
@@ -145,6 +150,7 @@ RunChildFn = Callable[[ChildSpec], Awaitable["RunResult"]]
 @dataclass
 class _Record:
     id: str
+    spawn_id: str
     agent_name: str
     prompt: str
     token: CancelToken
@@ -403,6 +409,7 @@ class Subagents:
                 rec.result = await self.run_child(
                     ChildSpec(
                         id=rec.id,
+                        spawn_id=rec.spawn_id,
                         agent=child,
                         prompt=rec.prompt,
                         token=rec.token,
@@ -500,6 +507,7 @@ class Subagents:
                 return str(exc)
             rec = _Record(
                 id=registry.next_id(),
+                spawn_id=uuid.uuid4().hex[:12],
                 agent_name=child.name,
                 prompt=prompt,
                 token=CancelToken(),
@@ -511,10 +519,12 @@ class Subagents:
             if self.deliver is not None:
                 self._detached.add(rec.task)
                 rec.task.add_done_callback(self._detached.discard)
+            # The web chat finds the task of a card by the spawn id in this
+            # text (web/static/js/tools.js); tests/web pins the two together.
             return (
                 f"Subagent {rec.id} ({rec.agent_name}) started in the "
-                "background; its report will arrive as a message when it "
-                "finishes. Keep working in the meantime."
+                f"background [spawn {rec.spawn_id}]; its report will arrive "
+                "as a message when it finishes. Keep working in the meantime."
             )
 
         return Tool(

@@ -343,7 +343,7 @@ async def test_a_refused_subagent_task_leaves_no_task_chat() -> None:
     await deps.store.upsert("parent", agent="bot")
     deps.supervisor.last_client["parent"] = {"kb": "secret"}
     spec = ChildSpec(
-        id="t1", agent=_agent([text("ok")]), prompt="dig", token=CancelToken(),
+        id="t1", spawn_id="s1", agent=_agent([text("ok")]), prompt="dig", token=CancelToken(),
         parent_session_id="parent", max_turns=5, budget=None, mailbox=Mailbox(),
     )  # fmt: skip
     with pytest.raises(HTTPException):

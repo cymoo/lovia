@@ -211,7 +211,8 @@ async def _stopped(deps: "RouterDeps", sid: str) -> bool:
     record reads "cancelled" only once it has), or the newest record says so."""
     if deps.supervisor.stopping(sid):
         return True
-    return (await deps.store.latest_run_statuses([sid])).get(sid) == "cancelled"
+    last = (await deps.store.latest_runs([sid])).get(sid)
+    return last is not None and last.status == "cancelled"
 
 
 async def _hold(deps: "RouterDeps", report: SubagentReport, sid: str) -> None:
@@ -331,6 +332,7 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 agent=agent_key,
                 title=f"[{spec.id}] {provisional_title(spec.prompt)}",
                 parent_id=parent,
+                spawn_id=spec.spawn_id,
                 workspace_root=binding.root,
                 workspace_mode=binding.mode,
             )

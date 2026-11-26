@@ -178,7 +178,8 @@ budget=None, max_result_chars=16_000, instructions=None)`：
 - `run_child` 是面向服务层的高级扩展点，用来接管子 Agent 的执行过程。它接收
   `ChildSpec` 并返回子运行的 `RunResult`；Web 层借此把任务交给自己的运行管理器。
   应将它与 `deliver` 配套设置。若只替换 `run_child`，当前 Run 结束时，
-  `Subagents` 无法取消由外部管理的任务。`ChildSpec` 有意不带 deps：一个可能比父运行
+  `Subagents` 无法取消由外部管理的任务。`ChildSpec.spawn_id` 跨 Run 唯一（`id` 即 `t1` 不是），
+  也写在 `spawn_subagent` 的结果里，UI 可以据此从这次调用找到它保存的子任务。`ChildSpec` 有意不带 deps：一个可能比父运行
   活得更久、或者在另一个进程里运行的子任务，需要自己的 deps。由替换实现来构造，就像
   Web 层通过 [`create_app(run_deps=...)`](web-server.md#运行依赖) 所做的那样，此时 trigger 的
   `source` 是 `"subagent:<session>"`。

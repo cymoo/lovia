@@ -407,6 +407,10 @@ def test_testing_a_search_service_uses_the_form_s_settings(
     )
     assert res.status_code == 200, res.text
     assert runtime.config.search.keys == {"exa": "exa-saved"}
+    # One a header cannot carry at all is refused, not saved.
+    res = client.put("/api/config/search", json={"api_key": "exa\tkey"})
+    assert res.status_code == 400 and "header" in res.text
+    assert runtime.config.search.keys == {"exa": "exa-saved"}
     tried: list[object] = []
     answers: list[MCPStatus] = []
 

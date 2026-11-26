@@ -92,11 +92,47 @@ async def test_a_refusal_is_an_error_in_the_service_s_words(
     # Tavily's spent allowance: a JSON message flagged as no error.
     spent = json.dumps({"code": "monthly_cap_reached", "message": "Limit reached."})
     server.answers.append(MCPToolResult(content=[_text(spent)]))
-    with pytest.raises(ToolError, match="Tavily search failed: Limit reached."):
+    with pytest.raises(ToolError, match="Tavily search failed:") as err:
         await _search(SearchConfig(provider="tavily"), query="q")
+    # The service's words, fenced like any answer of its.
+    assert "BEGIN EXTERNAL CONTENT" in str(err.value)
+    assert "Limit reached." in str(err.value)
     server.answers.append(MCPToolResult(content=[_text("bad args")], is_error=True))
-    with pytest.raises(ToolError, match="Exa search failed: bad args"):
+    with pytest.raises(ToolError, match="Exa search failed:"):
         await _search(SearchConfig(provider="exa"), query="q")
+    # A refusal is answered once, not replayed.
+    assert len(server.calls) == 2
+
+
+async def test_only_a_connection_that_never_opened_is_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opens: list[str] = []
+
+    def fake_server(fail_open: int, fail_call: bool) -> None:
+        @asynccontextmanager
+        async def session(self: MCPServerStreamableHTTP):  # type: ignore[no-untyped-def]
+            opens.append("open")
+            if len(opens) <= fail_open:
+                raise ConnectionResetError()
+
+            async def call(name: str, args: dict[str, Any]) -> MCPToolResult:
+                if fail_call:
+                    raise ConnectionResetError()  # the reply lost, the search run
+                return MCPToolResult(content=[_text("ok")])
+
+            yield SimpleNamespace(call=call)
+
+        monkeypatch.setattr(MCPServerStreamableHTTP, "session", session)
+
+    fake_server(fail_open=1, fail_call=False)
+    assert "ok" in await _search(SearchConfig(), query="q")
+    assert len(opens) == 2
+    opens.clear()
+    fake_server(fail_open=0, fail_call=True)
+    with pytest.raises(ToolError, match="could not be reached"):
+        await _search(SearchConfig(), query="q")
+    assert len(opens) == 1  # never searched twice
 
 
 async def test_an_unreachable_service_says_so_without_its_key(

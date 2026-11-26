@@ -568,8 +568,15 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             search.trust_env = body.trust_env
         if body.api_key is not None and search.provider != "off":
             keys = dict(search.keys)
-            # A pasted key brings its newline: in a header, httpx refuses it.
+            # A pasted key brings its newline: in a header, httpx refuses it —
+            # quoting the whole value in its error, which reaches the model.
             if key := body.api_key.strip():
+                if not (key.isascii() and key.isprintable()):
+                    raise WebError(
+                        400,
+                        "invalid_request",
+                        "the API key has characters a request header cannot carry",
+                    )
                 keys[search.provider] = key
             else:  # "" clears
                 keys.pop(search.provider, None)

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Literal
 
 from ..exceptions import ToolError
-from ..plugins.mcp import render_mcp_content
+from ..plugins.mcp import MCPToolResult, render_mcp_content
 from ..tools import Tool, tool
 from ..tools.fence import FENCE_NOTE, fence
 from .config.schema import MCPServerConfig, SearchConfig
@@ -106,12 +106,27 @@ def search_tool(search: SearchConfig) -> Tool | None:
     # Only the search tool: the service's own fetch would rival web_fetch.
     server = replace(server_for(cfg), include_tools=[preset.tool])
 
-    # One retry: a hosted service drops the odd connection, and a retry
-    # costs a second where a failure costs the model a turn. The timeout
-    # bounds a server that accepts the connection and never answers.
+    async def ask(args: dict[str, Any]) -> MCPToolResult:
+        # A connection that fails to open is tried once more: a hosted
+        # service drops the odd one, and a retry costs a second where a
+        # failure costs the model a turn. Never the search itself — a lost
+        # reply may have run, and billed, it already.
+        for attempt in range(2):
+            sent = False
+            try:
+                async with server.session() as conn:
+                    sent = True
+                    return await conn.call(preset.tool, args)
+            except Exception:
+                if sent or attempt:
+                    raise
+        raise AssertionError("unreachable")
+
+    # No tool-level retries (``ask`` has its own); the timeout bounds a server
+    # that accepts the connection and never answers.
     @tool(
         name="web_search",
-        retries=1,
+        retries=0,
         timeout=60,
         description=(
             "Search the web; returns the top results — title, url and an "
@@ -130,8 +145,7 @@ def search_tool(search: SearchConfig) -> Tool | None:
     ) -> str:
         n = max(1, min(int(max_results), 20))
         try:
-            async with server.session() as conn:
-                result = await conn.call(preset.tool, preset.args(query, n, time_range))
+            result = await ask(preset.args(query, n, time_range))
         except Exception as exc:  # noqa: BLE001 — the reason is the answer
             why = redact(describe(exc, cfg=cfg), search)
             raise ToolError(
@@ -140,10 +154,13 @@ def search_tool(search: SearchConfig) -> Tool | None:
                 "shows whether the service answers.",
             ) from exc
         text = render_mcp_content(result.content)
-        # In its own words: a spent free allowance says what to do next.
+        # In its own words — a spent free allowance says what to do next —
+        # fenced like any answer of the service's.
         refusal = text if result.is_error else _refusal(text)
         if refusal is not None:
-            raise ToolError(f"{preset.label} search failed: {_clip(refusal, 1_000)}")
+            raise ToolError(
+                f"{preset.label} search failed:\n{fence(_clip(refusal, 1_000))}"
+            )
         return fence(compact_results(text, n))
 
     return web_search

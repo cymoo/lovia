@@ -547,9 +547,13 @@ async function unpark(slot) {
   if (!slot) return;
   if (!('path' in slot)) return openGuest(slot);
   await openFile(slot.path, { silent: true, view: slot.view });
-  // As it was shown: its diff or its source, not just the file.
-  if (state.viewing?.path === slot.path && slot.raw && !state.viewing.raw) {
-    state.viewing.raw = true;
+  const v = state.viewing;
+  if (v?.path !== slot.path) return;
+  // As it was shown: its diff or its source, not just the file — and the
+  // diff may have come or gone meanwhile.
+  if (state.mode !== 'changes') void refreshChangeMap();
+  if (slot.raw && !v.raw && typeof v.content === 'string') {
+    v.raw = true;
     renderViewerContent();
   }
 }
@@ -1883,7 +1887,10 @@ async function followViewerLink(href) {
   const base = dirname(state.viewing?.path || '');
   // A link in a task's report: the file opens on the Files tab, and the task
   // waits on Background.
-  if (state.mode === 'background') void setMode(state.fileMode, { restore: false });
+  if (state.mode === 'background') {
+    if (!state.available) return; // no files to open
+    void setMode(state.fileMode, { restore: false });
+  }
   const joined = href.startsWith('/')
     ? href.slice(1)
     : (base ? `${base}/` : '') + href;
@@ -2207,7 +2214,8 @@ export function initFiles() {
     else refresh();
   });
   els.tabFiles.addEventListener('click', () => {
-    if (state.mode === 'background') void setMode(state.fileMode);
+    // Like any tab, also the way back to its list from a file covering it.
+    if (state.mode === 'background' || (state.viewing && !isWide())) void setMode(state.fileMode);
   });
   els.tabChanges.addEventListener('click', () => setMode('changes'));
   els.tabBrowse.addEventListener('click', () => setMode('browse'));

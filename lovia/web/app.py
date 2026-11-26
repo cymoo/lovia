@@ -414,9 +414,7 @@ def create_app(
 
     # Auth guards the API router only. The probe, the UI shell and the static
     # assets carry no data; serving the shell lets the UI collect the token.
-    # ``/health`` too: the path many probes and monitors try by default.
     @app.get("/healthz")
-    @app.get("/health")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 

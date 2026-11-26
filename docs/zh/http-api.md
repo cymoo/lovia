@@ -80,7 +80,7 @@ app.mount("/lovia", lovia_app)            # 页面位于 /lovia/，API 位于 /l
 
 普通请求以及 `POST /api/chat/stream`、`POST /api/chat/reconnect` 应发送
 `Authorization: Bearer <token>`。`GET /api/events` 使用 `EventSource`，无法自定义请求头，
-内置 UI 因此通过 `lovia_token` cookie 认证。`GET /healthz`（也可用 `/health`）由 `create_app` 在认证依赖之外提供，
+内置 UI 因此通过 `lovia_token` cookie 认证。`GET /healthz` 由 `create_app` 在认证依赖之外提供，
 无论使用 `token` 还是 `auth` 都保持开放。凭据缺失或错误时，
 服务端返回 `401`，错误码为 `server_token`；模型 Provider 拒绝 API Key 则是另一回事，
 会以运行错误 `provider_auth` 出现。
@@ -157,7 +157,7 @@ API 路由抛出的错误都使用同一种响应体：
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| `GET /healthz` · `GET /health` | 存活检查（由 `create_app` 提供，不属于 `build_api_router`） |
+| `GET /healthz` | 存活检查（由 `create_app` 提供，不属于 `build_api_router`） |
 | `GET /api/info` | 标题、Agent 列表、默认 Agent、版本和功能开关；对话可以选择权限模式时（`create_app(workspaces=)`）还有 `workspace_modes: {modes, default}`，否则为 `null`；服务能在自己的桌面上显示文件时还有 `desktop: {reveal, edit}`（`reveal` 取 `finder`、`explorer` 或 `folder`），否则为 `null`。`take_seconds` 是转写服务接受的最长语音输入秒数，服务端不知道时为 `null` |
 | `GET /api/agents` · `GET /api/agents/{name}` | 查看 Agent 的 instructions、工具和能力（`workspace`、`vision`：模型能否看图） |
 | `POST /api/chat` | 执行一次**阻塞式** Turn → `{output, session_id, usage}`：托管 Run，请求等待其结束（[详见](#阻塞式-turn)） |

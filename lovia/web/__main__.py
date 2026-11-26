@@ -429,6 +429,19 @@ def _warn_ignored_app_flags(args: argparse.Namespace) -> None:
         )
 
 
+def _add_health_alias(app: FastAPI) -> None:
+    """Answer ``/health`` too, the path many probes and monitors try first.
+
+    Only on the apps the CLI builds: an app built in code may serve its own
+    ``/health``, which a route added by ``create_app`` would shadow.
+    """
+
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    app.add_api_route("/health", health, name="health", include_in_schema=False)
+
+
 def _warn_if_exposed(host: str, workspace: object) -> None:
     """Warn when a write/shell-capable workspace is reachable off-host.
 
@@ -586,6 +599,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     followups=True,
                     suspend_after=SUSPEND_AFTER,
                 )
+                _add_health_alias(built_app)
             for custom_agent in custom_agents:
                 _warn_if_exposed(host, custom_agent.workspace)
             # stdout, not the logger: the summary must be visible at every
@@ -614,6 +628,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 title=title,
                 token=token or _generated_token(host),
             )
+            _add_health_alias(built_app)
             runtime = built_app.state.deps.config_runtime
             _warn_if_remote_capable(host, runtime.deployment)
             print(_summary(runtime, url=url, db_path=db_path), flush=True)

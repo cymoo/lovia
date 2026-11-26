@@ -1081,8 +1081,9 @@ serve(agent, host="0.0.0.0")                                # generated + printe
 ```
 
 The token guards the business routes registered by `build_api_router`.
-`/healthz` and `/health`, `/api/docs`, `/api/openapi.json`, the UI shell, and static assets
-remain public. Clients can supply the token in two ways:
+`/healthz`, `/api/docs`, `/api/openapi.json`, the UI shell, and static assets
+remain public. The apps `lovia web` builds also answer the probe at `/health`
+(an `--app` app is served as built). Clients can supply the token in two ways:
 
 - **Plain API requests and chat SSE** send
   `Authorization: Bearer <token>`. Chat streams use `fetch`, so headers work.

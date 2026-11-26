@@ -605,9 +605,8 @@ async function unpark(slot) {
   await openFile(slot.path, { silent: true, view: slot.view });
   const v = state.viewing;
   if (v?.path !== slot.path) return;
-  // As it was shown: its diff or its source, not just the file — and the
-  // diff may have come or gone meanwhile.
-  if (state.mode !== 'changes') void refreshChangeMap();
+  // As it was shown: its diff or its source, not just the file. Whether the
+  // diff came or went meanwhile, the tab's own refresh asks.
   if (slot.raw && !v.raw && typeof v.content === 'string') {
     v.raw = true;
     renderViewerContent();
@@ -2278,7 +2277,7 @@ export function initFiles() {
   els.close.addEventListener('click', () => setOpen(false));
   els.refresh.addEventListener('click', () => {
     if (state.mode === 'background') store.emit('panel-changed'); // lists anew
-    else refresh();
+    refresh(); // the file tab's list, or (off it) the Changes count
   });
   els.tabChanges.addEventListener('click', () => setMode('changes'));
   els.tabBrowse.addEventListener('click', () => setMode('browse'));

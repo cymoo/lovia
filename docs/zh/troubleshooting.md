@@ -34,9 +34,10 @@ enable_logging("DEBUG")
 
 ## 代理与 TLS
 
-lovia 的 HTTP 客户端（provider、HTTP 方式的 MCP、`web_fetch`）默认忽略环境中的
-`HTTP_PROXY` / `HTTPS_PROXY` 和系统代理。如果确实需要代理，请设置 `LOVIA_HTTP_TRUST_ENV=1`；
-模型请求或 MCP 连接失败时，会说明是跳过了代理还是走了代理。
+lovia 的 HTTP 客户端（provider、HTTP 方式的 MCP、`web_fetch`）的路由和浏览器一致：经
+`HTTP_PROXY` / `HTTPS_PROXY` 或系统代理，绕过列表里的主机和本机地址直连；不读 PAC 文件。
+模型请求或 MCP 连接失败时，会说明是跳过了代理还是走了代理；代理访问不到的内网地址应加进
+绕过列表，`LOVIA_HTTP_TRUST_ENV=0`（lovia web 里是 设置 → 通用 → 系统代理）则让所有请求直连。
 
 私有 CA 使用 `LOVIA_HTTP_CA_BUNDLE=/path/to/ca.pem`。安装 Web 可选依赖后，也会使用操作系统
 信任存储。`LOVIA_HTTP_INSECURE=1` 会关闭证书校验，只应短暂用于本地诊断，不能用于生产环境。

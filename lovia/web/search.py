@@ -139,13 +139,8 @@ def server_config(search: SearchConfig, name: str) -> MCPServerConfig:
     # Stripped here too: a hand-edited config.json skips the API's check.
     key = (search.keys.get(name) or "").strip()
     headers = preset.key_headers(key) if key else dict(preset.keyless_headers)
-    # Through the system proxy unless set to direct: a search service is
-    # always on the internet, where a proxy, if the machine has one, leads.
     return MCPServerConfig(
-        name="search",
-        url=preset.url,
-        headers=headers,
-        trust_env=search.trust_env is not False,
+        name="search", url=preset.url, headers=headers, trust_env=search.trust_env
     )
 
 

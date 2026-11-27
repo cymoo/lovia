@@ -282,12 +282,6 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         f"(env LOVIA_PROVIDER_TIMEOUT, default {DEFAULT_TIMEOUT:g})",
     )
     advanced.add_argument(
-        "--trust-env",
-        action="store_true",
-        help="honor HTTP(S)_PROXY / NO_PROXY for outbound requests: models, "
-        "MCP, web fetch (env LOVIA_HTTP_TRUST_ENV)",
-    )
-    advanced.add_argument(
         "--log-level",
         metavar="LEVEL",
         help="debug, info, warning, error (env LOVIA_LOG_LEVEL, default info)",
@@ -546,8 +540,6 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 )
             # The providers read these when constructing their HTTP client.
             os.environ["LOVIA_PROVIDER_TIMEOUT"] = str(args.provider_timeout)
-        if args.trust_env:
-            os.environ["LOVIA_HTTP_TRUST_ENV"] = "1"
 
         host = _first(args.host, os.getenv("LOVIA_HOST")) or "127.0.0.1"
         port = args.port if args.port is not None else _env_int("LOVIA_PORT", 8000)

@@ -55,8 +55,8 @@ your account with that service and may be billed by it — or Off. Auto asks
 Parallel, and Exa then Tavily only when the one before can't be reached (a
 network that blocks it, say); an answer, a spent allowance included, is never
 passed on to another service, and the one that answered goes first for the next
-ten minutes. Search goes through the machine's proxy, if it has one, unless
-Advanced sets it to Direct.
+ten minutes. Search's proxy route follows Settings → General → System proxy
+unless Advanced sets its own.
 A pick is saved as it is made and tested at once, spending no search; the page
 says where your searches go and, under Auto, which service answers. The tool
 keeps one shape whichever service answers, and connects only when the model
@@ -124,11 +124,11 @@ schedule opens run on the default. Vision and auxiliary
 work such as titles and follow-up suggestions can be assigned to separate
 profiles.
 
-**System proxy** (Advanced) decides whether requests to that model honor the
-proxy configured on the machine: **Default** follows `--trust-env` /
-`LOVIA_HTTP_TRUST_ENV` (off unless set), **Direct** ignores it, **Use proxy**
-honors it — `HTTP(S)_PROXY` and `NO_PROXY`, else the OS proxy — for a model
-reachable only through the office proxy while intranet ones stay direct.
+**System proxy** (Advanced) decides whether requests to that model go
+through the proxy configured on the machine: **Default** follows Settings →
+General → System proxy, **Direct** ignores it, **Use proxy** goes through it —
+`HTTP(S)_PROXY`, else the OS proxy — with hosts in its bypass list and this
+machine direct, as a browser routes them.
 **Test** uses the setting as the form has it, and a failed test or chat says
 when a proxy was skipped or in the way.
 
@@ -305,8 +305,8 @@ rewrites its key in the JSON, and writing the key by hand works the same:
   saves is the definitions of the tools it doesn't use. Approvals and
   "always allow" count per tool, as for a direct call.
 - **System proxy** (a url only): "Use proxy" / "Direct" (`"trustEnv": true`
-  / `false`) sends it through the system proxy or not, whatever
-  `--trust-env` says for the rest; "Default" leaves the key out. A failed
+  / `false`) sends it through the system proxy or not, whatever Settings →
+  General says for the rest; "Default" leaves the key out. A failed
   connection says when a proxy was skipped or in the way.
 
 - **Connected per message.** Each run connects to the servers as it starts,
@@ -760,6 +760,7 @@ finishes with what it started with.
 | **Assistant** → Background tasks | `assistant.subagents` | On |
 | **Assistant** → Suggest follow-up questions | `assistant.followups` | On |
 | **Voice input** | `voice` (`connection` or `base_url` + `api_key`, `model`, `language`) | Off — see [Voice input](#voice-input) |
+| **General** → System proxy | `trust_env` | As lovia was started: through the machine's proxy, its bypass list and this machine direct, unless `LOVIA_HTTP_TRUST_ENV=0`. Covers every request whose own setting (a model's, an MCP server's, web search's) is Default — `web_fetch` included |
 | — (the file only; restart to apply) | `assistant.max_turns` / `assistant.max_retries` | `200` / `5` |
 
 When `config.json` isn't writable (a read-only mount, say), the server still
@@ -861,7 +862,7 @@ Each resolves as flag, environment variable, then default.
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent (or: an Agent, mapping, or app of your own) |
 | `--title` | `LOVIA_TITLE` | `lovia` |
 | `--provider-timeout SECS` | `LOVIA_PROVIDER_TIMEOUT` | `300`; how long one model request may take |
-| `--trust-env` | `LOVIA_HTTP_TRUST_ENV` | Off. On, outbound requests — models, MCP, web fetch — honor `HTTP(S)_PROXY` / `NO_PROXY` ([details](providers.md#networking-timeouts-proxies-tls)) |
+| — | `LOVIA_HTTP_TRUST_ENV` | On: outbound requests — models, MCP, web fetch — go through `HTTP(S)_PROXY` or the OS proxy, its bypass list kept; `0` sends them direct. Settings → General → System proxy overrides it ([details](providers.md#networking-timeouts-proxies-tls)) |
 | `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--check` | — | Check model configuration and exit |
 

@@ -146,7 +146,7 @@ def test_transport_error_hint_names_the_setting_that_decided(
 ) -> None:
     monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
     inherited = _transport_hint(proxy_route(None, owns_client=True))
-    assert "skipped the proxy proxy.corp:8080" in inherited
+    assert "went through the proxy proxy.corp:8080" in inherited
     assert "LOVIA_HTTP_TRUST_ENV" in inherited
     # Set for the model, the environment variable would change nothing.
     explicit = _transport_hint(proxy_route(False, owns_client=True))

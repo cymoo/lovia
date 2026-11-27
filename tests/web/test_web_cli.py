@@ -1216,9 +1216,8 @@ def test_the_agent_carries_its_run_posture(
 
 
 def test_parser_reliability_flags() -> None:
-    args = cli.build_parser().parse_args(["--provider-timeout", "90", "--trust-env"])
+    args = cli.build_parser().parse_args(["--provider-timeout", "90"])
     assert args.provider_timeout == 90.0
-    assert args.trust_env is True
 
 
 # ------------------------------------------------- config-driven launch -
@@ -1509,7 +1508,7 @@ def test_main_gives_the_agent_its_retry_and_context_policy(
     assert captured["max_turns"] == 7
 
 
-def test_main_provider_timeout_and_trust_env_set_env(
+def test_main_provider_timeout_sets_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -1517,12 +1516,10 @@ def test_main_provider_timeout_and_trust_env_set_env(
     # setenv (not delenv) so monkeypatch restores/removes them on teardown even
     # though main() mutates os.environ directly.
     monkeypatch.setenv("LOVIA_PROVIDER_TIMEOUT", "60")
-    monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "")
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
-    rc = cli.main(["--provider-timeout", "150", "--trust-env"])
+    rc = cli.main(["--provider-timeout", "150"])
     assert rc == 0
     assert os.environ["LOVIA_PROVIDER_TIMEOUT"] == "150.0"
-    assert os.environ["LOVIA_HTTP_TRUST_ENV"] == "1"
 
 
 def test_main_rejects_bad_provider_timeout(

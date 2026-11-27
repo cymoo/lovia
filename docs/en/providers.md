@@ -355,7 +355,7 @@ Both adapters share one HTTP configuration layer:
 | Env var | Effect | Default |
 | --- | --- | --- |
 | `LOVIA_PROVIDER_TIMEOUT` | request timeout, seconds | `300` |
-| `LOVIA_HTTP_TRUST_ENV` | honor `HTTP(S)_PROXY` / `NO_PROXY` | off |
+| `LOVIA_HTTP_TRUST_ENV` | go through the machine's proxy (`0` turns it off) | on |
 | `LOVIA_HTTP_CA_BUNDLE` | custom PEM bundle for outbound TLS | — |
 | `LOVIA_HTTP_INSECURE` | disable certificate verification | off |
 
@@ -376,10 +376,19 @@ request. Your own code gets the same options from
 httpx.AsyncClient(timeout=30, **client_options())
 ```
 
+Requests route the way a browser routes them: `HTTP(S)_PROXY` if set, else
+the OS proxy (Windows registry, macOS settings), and a host in that proxy's
+bypass list — `NO_PROXY`, the registry's `ProxyOverride`, macOS's exceptions —
+or on loopback goes direct. So an intranet host and the internet both answer
+on a network whose browser reaches both. A PAC file is not read: where the
+machine is set up only by one, requests go direct; name the proxy instead
+(`HTTPS_PROXY=http://proxy:8080 NO_PROXY=.corp.example`). Bypass decisions
+are cached: a changed bypass list needs a restart.
+
 When a request fails and a proxy is configured on the machine, the error's
 hint says whether lovia used it — "skipped the proxy … since trust_env is
-off", or "went through the proxy …" for an intranet host the proxy cannot
-reach.
+off", or "went through the proxy …" for a host the proxy cannot reach, which
+belongs in its bypass list.
 
 **Error classification** feeds the [retry machinery](retries.md):
 HTTP 408/429/5xx and transport-level timeouts/disconnects are retryable
@@ -400,13 +409,10 @@ triggers reactive compaction instead of retries. That error also carries
   agent loops on the official API without it re-pay the full prompt —
   history included — every turn. The flag's name predates the history
   breakpoint; it now covers tools, system, and conversation alike.
-- **`trust_env` defaults to off** — deliberate, so ambient proxy settings
-  can't silently reroute provider traffic. In proxied environments set
-  `LOVIA_HTTP_TRUST_ENV=1` or nothing connects. With no `HTTP(S)_PROXY` set,
-  httpx falls back to the OS proxy (Windows registry, macOS settings) but
-  not its bypass list or PAC file, so turning it on sends intranet hosts
-  through the proxy too: name the proxy and the exceptions explicitly
-  (`HTTPS_PROXY=http://proxy:8080 NO_PROXY=.corp.example`). Setting
+- **A stale system proxy breaks every request.** A proxy app that quit
+  but left the OS proxy set makes lovia's requests fail as it makes the
+  browser's; the error names the proxy. Turn it off, or set
+  `LOVIA_HTTP_TRUST_ENV=0` (or `trust_env=False` per client). Setting
   `NO_PROXY` alone turns the OS proxy off entirely — Python then reads only
   the environment.
 - **Providers built from strings are run-owned; instances are yours.**

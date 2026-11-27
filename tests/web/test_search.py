@@ -288,8 +288,9 @@ async def test_auto_moves_on_only_from_a_service_it_cannot_reach(
     assert all(f"- {p.label}: " in str(err.value) for p in PRESETS.values())
 
 
-def test_search_goes_through_the_proxy_unless_set_to_direct() -> None:
-    assert server_config(SearchConfig(), "exa").trust_env is True
+def test_search_s_proxy_follows_settings_unless_set() -> None:
+    # Unset: as Settings → General says (through the proxy by default).
+    assert server_config(SearchConfig(), "exa").trust_env is None
     direct = SearchConfig(trust_env=False)
     assert server_config(direct, "exa").trust_env is False
 

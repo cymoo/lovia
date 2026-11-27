@@ -38,9 +38,10 @@ MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, trust_e
 ```
 
 An HTTP server's client takes lovia's [proxy and TLS settings](providers.md#networking-timeouts-proxies-tls):
-proxies off unless `LOVIA_HTTP_TRUST_ENV=1`, and `trust_env=True` / `False`
-decides for one server — say, a public server reachable only through the
-office proxy, beside intranet ones that must not use it.
+through the machine's proxy, its bypass list kept (`LOVIA_HTTP_TRUST_ENV=0`
+turns it off), and `trust_env=True` / `False` decides for one server — say,
+an intranet server the office proxy cannot reach and its bypass list
+doesn't name.
 
 Shared options (on either config):
 

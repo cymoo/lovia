@@ -629,6 +629,13 @@ export const api = {
   // Probe a connection (a real /models request server-side). Either free-form
   // fields or { profile_id } — the stored key is reused server-side, so the
   // page never holds it.
+  // Settings → General's System proxy: { trust_env: true | false | null }.
+  setProxy: (body) =>
+    request('/api/config/proxy', {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
   // Voice input's settings. `api_key`: null keeps, '' clears.
   setVoice: (body) =>
     request('/api/config/voice', {

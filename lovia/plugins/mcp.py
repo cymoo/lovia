@@ -646,8 +646,8 @@ class MCPServerStreamableHTTP(MCPServer):
 
     url: str
     headers: dict[str, str] | None = None
-    # Honor proxy settings; None: LOVIA_HTTP_TRUST_ENV, else off (see
-    # lovia.http_config.resolve_trust_env).
+    # Through the machine's proxy, its bypass list kept; None:
+    # LOVIA_HTTP_TRUST_ENV, else on (see lovia.http_config.resolve_trust_env).
     trust_env: bool | None = None
 
     def _make_transport(self) -> Callable[[], Any]:
@@ -662,12 +662,12 @@ class MCPServerStreamableHTTP(MCPServer):
                 hint=_MCP_INSTALL_HINT,
             ) from exc
         url, headers = self.url, self.headers
-        options = client_options(self.trust_env)
         # The SDK's HTTP library: httpx on 1.x, httpx2 on 2.x. Its own
         # client factory takes no proxy or TLS options, and building one
         # reads the ambient proxy (which may need a missing SOCKS package),
         # so its client is built here, with its defaults and lovia's options.
         lib: Any = getattr(sdk_http, "httpx2", None) or getattr(sdk_http, "httpx")
+        options = client_options(self.trust_env, lib=lib)
         # 1.x has the client follow redirects; 2.x follows them itself,
         # within the endpoint's origin.
         follow_redirects = not hasattr(sdk_http, "httpx2")

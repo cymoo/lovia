@@ -250,12 +250,11 @@ class OpenAIChatProvider:
             (:data:`lovia.http_config.DEFAULT_TIMEOUT`).
         default_headers: Extra headers merged into every request (useful for
             providers that require custom auth headers).
-        trust_env: Whether the provider-created HTTP client should honor proxy
-            and certificate environment variables. ``None`` (default) reads
-            ``LOVIA_HTTP_TRUST_ENV``, else ``False`` — so an ambient proxy
-            setting cannot reroute the provider, or make it require optional
-            dependencies such as SOCKS support. Pass a custom client for more
-            advanced transport configuration.
+        trust_env: Whether the provider-created HTTP client goes through
+            the machine's proxy — ``HTTP(S)_PROXY`` or the OS proxy, with hosts
+            in its bypass list and loopback direct, as a browser routes.
+            ``None`` (default) reads ``LOVIA_HTTP_TRUST_ENV``, else on. Pass a
+            custom client for more advanced transport configuration.
         replay_reasoning: Whether ``reasoning_content`` from earlier turns is
             replayed on assistant input messages. ``None`` (default) resolves
             per endpoint host: DeepSeek requires the replay, the official

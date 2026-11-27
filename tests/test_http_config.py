@@ -113,42 +113,102 @@ def test_resolve_timeout_ignores_non_positive_env(
 
 def test_resolve_trust_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
-    assert resolve_trust_env(None) is False
+    assert resolve_trust_env(None) is True
 
 
 def test_resolve_trust_env_explicit_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "1")
     assert resolve_trust_env(False) is False
+    monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "0")
+    assert resolve_trust_env(True) is True
 
 
 def test_resolve_trust_env_truthy_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    for val in ("1", "true", "yes", "on", "ON", "True"):
+    for val in ("1", "true", "yes", "on", "ON", "True", ""):
         monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", val)
         assert resolve_trust_env(None) is True
 
 
 def test_resolve_trust_env_falsey_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    for val in ("0", "false", "no", ""):
+    for val in ("0", "false", "no", "off", " OFF "):
         monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", val)
         assert resolve_trust_env(None) is False
 
 
-def test_client_options_carry_both_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "1")
-    monkeypatch.setenv("LOVIA_HTTP_INSECURE", "1")
-    assert client_options() == {"trust_env": True, "verify": False}
-    assert client_options(False)["trust_env"] is False
+def _route_of(options: dict) -> object | None:
+    return (options.get("mounts") or {}).get("all://")
+
+
+@pytest.fixture
+def no_proxy_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    for name in (
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+        "LOVIA_HTTP_TRUST_ENV",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+def test_client_options_carry_both_settings(no_proxy_env: pytest.MonkeyPatch) -> None:
+    no_proxy_env.setenv("LOVIA_HTTP_INSECURE", "1")
+    # httpx's own proxy reading stays off: it would skip the bypass list.
+    assert client_options() == {"trust_env": False, "verify": False}
+    no_proxy_env.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
+    assert _route_of(client_options()) is not None
+    assert _route_of(client_options(False)) is None
+    # A test's transport is kept, and routes nothing.
+    kept = object()
+    assert client_options(transport=kept)["transport"] is kept
+    assert "mounts" not in client_options(transport=kept)
+
+
+async def test_the_route_sends_bypassed_and_loopback_hosts_direct(
+    no_proxy_env: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    no_proxy_env.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
+    no_proxy_env.setenv("NO_PROXY", ".corp.example")
+    route = _route_of(client_options())
+    assert route is not None
+    direct, proxied = route._every[0], route._every[1]  # type: ignore[attr-defined]
+    pick = route._pick  # type: ignore[attr-defined]
+    assert pick(httpx.URL("https://api.openai.com/v1")) is proxied
+    for url in (
+        "https://mcp.corp.example/mcp",
+        "https://corp.example/",
+        "http://localhost:11434/v1",
+        "https://127.0.0.1:8443/",
+        "https://[::1]/",
+    ):
+        assert pick(httpx.URL(url)) is direct, url
+    # No proxy for plain http here: it goes direct.
+    assert pick(httpx.URL("http://plain.example/")) is direct
+    await route.aclose()
+
+
+def test_an_unusable_proxy_is_skipped_not_fatal(
+    no_proxy_env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    no_proxy_env.setenv("HTTPS_PROXY", "ftp://proxy.corp:21")
+    assert _route_of(client_options()) is None
+    assert "not using the https proxy proxy.corp:21" in caplog.text
 
 
 # ----------------------------------------------------------- proxy_note -
 
 
 @pytest.fixture
-def proxied(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "no_proxy"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("HTTPS_PROXY", "http://user:secret@proxy.corp:8080")
-    monkeypatch.setenv("NO_PROXY", ".corp.example")
+def proxied(no_proxy_env: pytest.MonkeyPatch) -> None:
+    no_proxy_env.setenv("HTTPS_PROXY", "http://user:secret@proxy.corp:8080")
+    no_proxy_env.setenv("NO_PROXY", ".corp.example")
 
 
 def test_proxy_note_says_the_proxy_was_skipped(proxied: None) -> None:
@@ -160,29 +220,18 @@ def test_proxy_note_says_the_proxy_was_skipped(proxied: None) -> None:
 
 
 def test_proxy_note_says_the_proxy_was_used(proxied: None) -> None:
-    note = proxy_note("https://api.openai.com/v1", True, switch='"trustEnv"')
+    note = proxy_note("https://api.openai.com/v1", True, switch="the System proxy")
     assert note is not None
     assert "went through the proxy proxy.corp:8080" in note
-    assert '"trustEnv" off' in note
+    assert "bypass list" in note and "the System proxy off" in note
 
 
 def test_proxy_note_is_quiet_when_no_proxy_applies(
     proxied: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Exempt by NO_PROXY, or a scheme with no proxy of its own.
+    # Bypassed, loopback, or a scheme with no proxy of its own.
     assert proxy_note("https://mcp.corp.example/mcp", True) is None
+    assert proxy_note("http://localhost:8000/v1", True) is None
     assert proxy_note("http://plain.example/", True) is None
-    monkeypatch.setattr("httpx._utils.getproxies", lambda: {})
+    monkeypatch.delenv("HTTPS_PROXY")
     assert proxy_note("https://api.openai.com/v1", False) is None
-
-
-def test_proxy_note_routes_as_httpx_does(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "no_proxy"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
-    monkeypatch.setenv("NO_PROXY", ".corp.example,api.corp.test:8443")
-    # ".corp.example" exempts its subdomains, not the apex itself.
-    assert proxy_note("https://corp.example/mcp", True) is not None
-    # A host:port exception holds for that port only.
-    assert proxy_note("https://api.corp.test:8443/v1", True) is None
-    assert proxy_note("https://api.corp.test/v1", True) is not None

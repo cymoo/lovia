@@ -112,7 +112,7 @@ class ModelProfile(BaseModel):
     # ``extra_body`` (reasoning knobs, vLLM's ``chat_template_kwargs``, ...).
     # Stored as written: the endpoint's own dialect, no translation.
     extra_body: dict[str, Any] = Field(default_factory=dict)
-    # Through the system proxy or not; None: as ``--trust-env`` says.
+    # Through the system proxy or not; None: as Settings → General says.
     trust_env: bool | None = None
 
     @model_validator(mode="after")
@@ -168,8 +168,7 @@ class SearchConfig(BaseModel):
 
     provider: SearchProvider = "auto"
     keys: dict[str, str] = Field(default_factory=dict)
-    # False: direct. Else through the system proxy, if the machine has one:
-    # a search service is on the internet, where the proxy leads.
+    # Through the system proxy or not; None: as Settings → General says.
     trust_env: bool | None = None
 
     @model_validator(mode="before")
@@ -274,8 +273,8 @@ class MCPServerConfig(BaseModel):
     cwd: str | None = None
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
-    # Honor proxy settings (``trustEnv``); None: lovia's default, off unless
-    # ``--trust-env``.
+    # Through the system proxy (``trustEnv``) or not; None: as Settings →
+    # General says.
     trust_env: bool | None = None
     # Only the tools' names reach the prompt; the model looks a definition
     # up with ``search_mcp_tools`` (core ``MCPServer.defer``).
@@ -429,6 +428,10 @@ class WebConfig(BaseModel):
     mcp: list[MCPServerConfig] = Field(default_factory=list)
     assistant: AssistantConfig = Field(default_factory=AssistantConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    # Settings → General's System proxy: through the machine's proxy (its
+    # bypass list kept) or direct, for every request whose own setting is
+    # the default. None: as lovia was started (LOVIA_HTTP_TRUST_ENV, else on).
+    trust_env: bool | None = None
 
     @model_validator(mode="after")
     def _check_references(self) -> "WebConfig":

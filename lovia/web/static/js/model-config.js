@@ -620,7 +620,7 @@ export function buildModelsPane() {
         t('cfg.visionHint'),
       ),
     );
-    // Through the system proxy or not; null follows --trust-env.
+    // Through the system proxy or not; null follows Settings → General.
     /** @type {boolean | null} */
     let trustEnv = stored?.trust_env ?? null;
     const proxyKey = () => (trustEnv === null ? 'default' : trustEnv ? 'on' : 'off');
@@ -972,23 +972,24 @@ export function buildSearchPane() {
     renderKey();
     const keyField = field(t('search.key'), keyBox, t('search.keyHint'));
     adv.appendChild(keyField);
-    // Through the proxy unless set to direct: search is always the internet.
-    const direct = saved().trust_env === false;
+    // Through the system proxy or not; null follows Settings → General.
+    const trustEnv = saved().trust_env ?? null;
     adv.appendChild(
       field(
         t('cfg.proxy'),
         segmented(
           [
-            ['on', t('cfg.proxyOn')],
+            ['default', t('cfg.proxyDefault')],
             ['off', t('cfg.proxyOff')],
+            ['on', t('cfg.proxyOn')],
           ],
-          direct ? 'off' : 'on',
-          (val) => void apply({ trust_env: val === 'off' ? false : null }),
+          trustEnv === null ? 'default' : trustEnv ? 'on' : 'off',
+          (val) => void apply({ trust_env: val === 'default' ? null : val === 'on' }),
         ),
-        t('search.proxyHint'),
+        t('cfg.proxyHint'),
       ),
     );
-    adv.open = (single() && savedKey().set) || direct;
+    adv.open = (single() && savedKey().set) || trustEnv !== null;
     form.appendChild(adv);
     describeService();
     void test();

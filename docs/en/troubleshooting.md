@@ -38,10 +38,13 @@ available. Endpoint dialect rules are in [Providers & models](providers.md).
 
 ## Proxies and TLS
 
-lovia's HTTP clients — providers, MCP over HTTP, `web_fetch` — ignore ambient
-`HTTP_PROXY` / `HTTPS_PROXY` and the OS proxy by default. Set
-`LOVIA_HTTP_TRUST_ENV=1` when those settings are intentional; a failed model
-request or MCP connection says whether a proxy was skipped or used.
+lovia's HTTP clients — providers, MCP over HTTP, `web_fetch` — route as a
+browser does: through `HTTP_PROXY` / `HTTPS_PROXY` or the OS proxy, with hosts
+in its bypass list and loopback direct. A PAC file is not read. A failed model
+request or MCP connection says whether a proxy was skipped or used; an
+intranet host the proxy can't reach belongs in its bypass list, and
+`LOVIA_HTTP_TRUST_ENV=0` (or Settings → General → System proxy in lovia web)
+sends everything direct.
 
 For a private CA, use `LOVIA_HTTP_CA_BUNDLE=/path/to/ca.pem`. The Web extra
 also enables the operating-system trust store. `LOVIA_HTTP_INSECURE=1`

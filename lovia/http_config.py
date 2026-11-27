@@ -6,17 +6,22 @@ fetching tools, embeddings — takes its proxy and TLS options from
 behind an intranet CA or proxy). The request timeout
 (:func:`resolve_timeout`) is provider-scoped: the tools keep their own.
 
-Proxies are off unless asked for (:func:`resolve_trust_env`). httpx reads the
-OS proxy (the Windows registry, macOS system settings) but not its bypass
-list or PAC file, so honoring it by default would send intranet hosts to a
-proxy that cannot reach them.
+Proxies route as the machine says, the way a browser does: a host in the
+proxy's bypass list (the Windows registry's, macOS's exceptions, or
+``NO_PROXY`` beside ``HTTP(S)_PROXY``) and loopback go direct, the rest
+through the proxy — so an intranet and the internet both answer
+(:func:`resolve_trust_env` turns it off). A PAC file is not read: on a
+network configured only by one, requests go direct.
 """
 
 from __future__ import annotations
 
+import functools
+import ipaddress
 import logging
 import os
 import ssl
+import urllib.request
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -38,6 +43,7 @@ _TRUST_ENV_ENV = "LOVIA_HTTP_TRUST_ENV"
 DEFAULT_TIMEOUT = 300.0
 """Default provider request timeout in seconds (see :func:`resolve_timeout`)."""
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+_FALSY = frozenset({"0", "false", "no", "off"})
 
 
 def _env_truthy(name: str) -> bool:
@@ -108,27 +114,45 @@ def resolve_timeout(timeout: float | None) -> float:
 
 
 def resolve_trust_env(trust_env: bool | None) -> bool:
-    """Whether an outbound HTTP client honors proxy / netrc settings.
+    """Whether an outbound HTTP client goes through the machine's proxy.
 
-    Explicit argument wins, then ``LOVIA_HTTP_TRUST_ENV`` (truthy:
-    ``1``/``true``/``yes``/``on``), else ``False``. Enabling it lets httpx pick
-    up ``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``NO_PROXY`` — and, when none is set,
-    the OS proxy, without its bypass list.
+    Explicit argument wins, then ``LOVIA_HTTP_TRUST_ENV`` (a false value —
+    ``0``/``false``/``no``/``off`` — turns it off), else on. On, a request
+    goes through ``HTTP(S)_PROXY`` — or, when none is set, the OS proxy —
+    unless its host is in the bypass list or loopback.
     """
     if trust_env is not None:
         return trust_env
-    return _env_truthy(_TRUST_ENV_ENV)
+    return os.environ.get(_TRUST_ENV_ENV, "").strip().lower() not in _FALSY
 
 
-def client_options(trust_env: bool | None = None) -> dict[str, Any]:
+def client_options(
+    trust_env: bool | None = None,
+    *,
+    lib: Any = None,
+    sync: bool = False,
+    transport: Any = None,
+) -> dict[str, Any]:
     """The proxy and TLS options of every httpx client lovia builds.
 
     Splat into the constructor —
     ``httpx.AsyncClient(timeout=..., **client_options())`` — so no client can
     take one setting and miss the other. ``trust_env`` as in
-    :func:`resolve_trust_env`.
+    :func:`resolve_trust_env`; ``lib`` is the HTTP library the client comes
+    from (httpx unless named — MCP's SDK may use httpx2), ``sync`` for a
+    blocking client. A ``transport`` of the caller's (a test's) is kept, and
+    routes nothing.
     """
-    return {"trust_env": resolve_trust_env(trust_env), "verify": resolve_verify()}
+    verify = resolve_verify()
+    # httpx's own proxy reading is off: it skips the bypass list.
+    options: dict[str, Any] = {"trust_env": False, "verify": verify}
+    if transport is not None:
+        options["transport"] = transport
+    elif resolve_trust_env(trust_env):
+        route = _route(lib, verify, sync)
+        if route is not None:
+            options["mounts"] = {"all://": route}
+    return options
 
 
 def proxy_note(
@@ -140,7 +164,7 @@ def proxy_note(
     """How the proxy settings bore on a failed request to ``url``, in a sentence.
 
     A failure is where a proxy surprise shows — an endpoint reachable only
-    through the proxy lovia skipped, or an intranet host sent to one — and
+    through the proxy lovia skipped, or one the proxy cannot reach — and
     nothing else in the error says which. ``None`` when no proxy applies to
     ``url``. ``switch`` names the setting to flip, as the reader knows it.
     """
@@ -155,7 +179,8 @@ def proxy_note(
     if trust_env:
         return (
             f"It went through the proxy {where}; if {host} is on your own "
-            f"network, turn {switch} off or add the host to NO_PROXY."
+            f"network, add it to the proxy's bypass list (or NO_PROXY), or "
+            f"turn {switch} off."
         )
     return (
         f"It skipped the proxy {where} set on this machine, since {switch} is "
@@ -163,25 +188,103 @@ def proxy_note(
     )
 
 
+def _proxies() -> dict[str, str]:
+    """The ``http`` and ``https`` proxies: ``HTTP(S)_PROXY``/``ALL_PROXY`` if
+    any is set, else the OS's (urllib's reading, as httpx's is)."""
+    found = urllib.request.getproxies()
+    proxies = {}
+    for scheme in ("http", "https"):
+        if proxy := found.get(scheme) or found.get("all"):
+            proxies[scheme] = proxy if "://" in proxy else f"http://{proxy}"
+    return proxies
+
+
+@functools.lru_cache(maxsize=1024)
+def _bypassed(host: str) -> bool:
+    """Whether ``host`` goes direct: loopback always, as a browser does, else
+    as the bypass list says (by name: macOS's matching would miss a port).
+    Cached: some Pythons look the name up in DNS to decide, which would
+    stall the loop on every request — so a changed list needs a restart."""
+    name = host.strip("[]").lower()
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        if ipaddress.ip_address(name).is_loopback:
+            return True
+    except ValueError:
+        pass
+    try:
+        return bool(urllib.request.proxy_bypass(name))
+    except Exception:  # noqa: BLE001 — an unreadable list bypasses nothing
+        return False
+
+
 def _proxy_for(url: str) -> str | None:
-    """The proxy httpx would route ``url`` through with ``trust_env`` on.
+    """The proxy a request to ``url`` goes through with proxies on."""
+    parts = urlsplit(url)
+    if not parts.hostname or _bypassed(parts.hostname):
+        return None
+    return _proxies().get(parts.scheme)
 
-    httpx's own rules (its private ``_utils``, so a change there only costs
-    the hint): ``NO_PROXY`` matching differs from urllib's in the details —
-    ports, an apex domain against ``.domain``.
-    """
-    import httpx
-    from httpx._utils import URLPattern, get_environment_proxies
 
-    target = httpx.URL(url)
-    # Most specific first, as httpx sorts its mounts.
-    mounts = [
-        (URLPattern(key), proxy) for key, proxy in get_environment_proxies().items()
-    ]
-    for pattern, proxy in sorted(mounts, key=lambda mount: mount[0]):
-        if pattern.matches(target):
-            return proxy
-    return None
+def _route(lib: Any, verify: ssl.SSLContext | bool, sync: bool) -> Any:
+    """A transport sending each request direct or through its scheme's
+    proxy, by :func:`_bypassed`; None when the machine names no proxy."""
+    if lib is None:
+        import httpx as lib
+    make = lib.HTTPTransport if sync else lib.AsyncHTTPTransport
+    via = {}
+    for scheme, proxy in _proxies().items():
+        try:
+            via[scheme] = make(verify=verify, trust_env=False, proxy=proxy)
+        except Exception as exc:  # noqa: BLE001 — say why, and go direct
+            # A SOCKS proxy without socksio, a scheme httpx has no support for.
+            logger.warning(
+                "not using the %s proxy %s: %s", scheme, _proxy_address(proxy), exc
+            )
+    if not via:
+        return None
+    direct = make(verify=verify, trust_env=False)
+
+    def pick(url: Any) -> Any:
+        if _bypassed(url.host):
+            return direct
+        return via.get(url.scheme, direct)
+
+    return _route_class(lib, sync)(pick, [direct, *via.values()])
+
+
+@functools.cache
+def _route_class(lib: Any, sync: bool) -> Any:
+    """The routing transport's class, on ``lib``'s own base class (the
+    client enters and closes it as one of its own)."""
+    if sync:
+
+        class Route(lib.BaseTransport):  # type: ignore[misc]
+            def __init__(self, pick: Any, every: list[Any]) -> None:
+                self._pick, self._every = pick, every
+
+            def handle_request(self, request: Any) -> Any:
+                return self._pick(request.url).handle_request(request)
+
+            def close(self) -> None:
+                for transport in self._every:
+                    transport.close()
+
+        return Route
+
+    class AsyncRoute(lib.AsyncBaseTransport):  # type: ignore[misc]
+        def __init__(self, pick: Any, every: list[Any]) -> None:
+            self._pick, self._every = pick, every
+
+        async def handle_async_request(self, request: Any) -> Any:
+            return await self._pick(request.url).handle_async_request(request)
+
+        async def aclose(self) -> None:
+            for transport in self._every:
+                await transport.aclose()
+
+    return AsyncRoute
 
 
 def _proxy_address(proxy: str) -> str:

@@ -150,7 +150,7 @@ def openai_transcriber(
 
     def client() -> httpx.AsyncClient:
         return httpx.AsyncClient(
-            timeout=timeout, transport=transport, **client_options(trust_env)
+            timeout=timeout, **client_options(trust_env, transport=transport)
         )
 
     async def key_refused() -> str | None:

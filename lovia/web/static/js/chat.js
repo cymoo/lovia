@@ -2236,7 +2236,9 @@ function appendImagesWithheld(data) {
   main.textContent = data.unsupported
     ? t('chat.imagesUnsupported')
     : t('chat.imagesWithheld', { n: data.count });
-  if (data.unsupported && store.canConfigure && !cfg()?.roles?.vision) {
+  // A vision role helps only where the chat has a workspace to read from.
+  const reads = !!store.agents.find((a) => a.name === store.agent)?.workspace;
+  if (data.unsupported && reads && store.canConfigure && !cfg()?.roles?.vision) {
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-mcp-notice-open';

@@ -1014,7 +1014,10 @@ class RunLoop:
                 # turn's view — pairing it with the estimate of the larger view
                 # that just overflowed would drag the calibration ratio down
                 # exactly when the estimate must stay conservative.
-                failed_tokens = ctx_result.tokens_after
+                # Unless an image refusal reshaped the attempt (fewer images,
+                # other tools): that estimate no longer measures what failed,
+                # so the shrink check can't judge — the retry goes.
+                failed_tokens = None if images.changed else ctx_result.tokens_after
                 request.last_input_tokens = None
                 request.last_view_id = None
                 request.overflow = True

@@ -25,6 +25,7 @@ from lovia.plugins.mcp import (
     MCPServerStdio,
     MCPServerStreamableHTTP,
     MCPToolResult,
+    deferred_tools,
     normalize_schema,
     render_mcp_content,
 )
@@ -819,6 +820,52 @@ async def test_deferred_name_clash_with_exposed_raises() -> None:
     exposed = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]))
     with pytest.raises(UserError, match="clash with exposed"):
         await MCP(deferred, exposed).setup(_ctx())
+
+
+def test_deferred_tools_over_nothing_is_nothing() -> None:
+    assert deferred_tools([]) == ([], None)
+    assert deferred_tools([("gh", []), (None, [])]) == ([], None)
+
+
+async def test_deferred_tools_lists_only_servers_with_tools() -> None:
+    conn = await _loaded(FakeSession(pages=_issue_pages()), prefix="gh")
+    pair, note = deferred_tools([("empty", []), ("gh", conn.tools())])
+    assert [t.name for t in pair] == ["search_mcp_tools", "call_mcp_tool"]
+    assert note is not None and "gh (3 tools)" in note and "empty" not in note
+
+
+def _flaky(retries: int | None) -> tuple[Tool, list[int]]:
+    attempts: list[int] = []
+
+    async def invoke(args: dict[str, Any], ctx: RunContext[Any]) -> str:
+        attempts.append(1)
+        raise RuntimeError("connection lost")
+
+    target = Tool(
+        name="push",
+        description="",
+        parameters={"type": "object", "properties": {}},
+        invoke=invoke,
+        retries=retries,
+    )
+    return target, attempts
+
+
+@pytest.mark.parametrize(
+    ("target_retries", "expected"),
+    [(0, 1), (2, 3), (None, 2)],  # None: the agent's default (1) applies, once
+)
+async def test_call_retries_once_by_the_targets_rule(
+    target_retries: int | None, expected: int
+) -> None:
+    target, attempts = _flaky(target_retries)
+    (_, call_tool), _ = deferred_tools([(None, [target])])
+    agent = SimpleNamespace(default_tool_retries=1, default_tool_timeout=None)
+    ctx = RunContext(deps=None, entries=[], agent=agent)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError):
+        # As the runner calls it: with the agent's default retries.
+        await run_tool(call_tool, {"tool": "push"}, ctx, default_retries=1)
+    assert len(attempts) == expected
 
 
 async def test_defer_flag_flows_from_server_config(

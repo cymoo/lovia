@@ -50,6 +50,7 @@ import {
 import {
   approvalHeading,
   approvalOutcome,
+  askedTool,
   badgeText,
   outcomeText,
   pendingTaskApprovals,
@@ -933,7 +934,7 @@ function appendApproval(call, { restored = false } = {}) {
   if (restored) return;
   // The run is now blocked on the user — say so past the aria-busy transcript,
   // and put the keyboard on the decision unless it's busy typing elsewhere.
-  announce(t('a11y.approvalNeeded', { name: call.name }), { assertive: true });
+  announce(t('a11y.approvalNeeded', { name: askedTool(call.name, call.arguments) }), { assertive: true });
   focusApprovalCard(node);
 }
 
@@ -1035,7 +1036,7 @@ function buildApprovalCard(call, sessionId, { decided, remembered, resumed, fail
   // The question leads, in the UI's words; the server's reason (only when
   // something stands out) goes under it; the call itself stays visible below,
   // because a summary can be wrong and the arguments cannot.
-  const heading = approvalHeading(call.name);
+  const heading = approvalHeading(call.name, call.arguments);
   node.tabIndex = -1;
   node.setAttribute('role', 'group');
   node.setAttribute('aria-label', heading);
@@ -1240,7 +1241,7 @@ function renderTaskApprovals() {
     _trayItems.set(key, item);
     taskTray.append(item);
     // Said, not focused: whoever is typing in the composer keeps the keyboard.
-    announce(t('a11y.taskApprovalNeeded', { task: taskName(task), name: call.name }));
+    announce(t('a11y.taskApprovalNeeded', { task: taskName(task), name: askedTool(call.name, call.arguments) }));
   }
   taskTray.hidden = _trayItems.size === 0;
 }

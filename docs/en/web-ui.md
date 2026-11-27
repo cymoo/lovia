@@ -284,11 +284,25 @@ by pasting the `mcpServers` JSON other clients use; several at once is fine:
 A server is a `command` run on the lovia web host (stdio) — for a remote
 chat too — or a `url` (streamable HTTP; SSE is not supported). Its name
 prefixes its tools (`docs__search`), so it is letters, digits, `-` and `_`.
-A command may name the directory it starts in (`cwd`). `"disabled": true`
-saves it switched off; a url's `"trustEnv": true` (or `false`) sends it
-through the system proxy (or not), whatever `--trust-env` says for the rest
-— a failed connection says when a proxy was skipped or in the way. Other
-keys are ignored.
+When two servers spell the same tool name (`a`'s `b__c` and `a__b`'s `c`),
+the later one's tool is left out. A command may name the directory it
+starts in (`cwd`). `"disabled": true` saves it switched off. Other keys are
+ignored.
+
+With one server in the editor, two **options** sit under it; picking one
+rewrites its key in the JSON, and writing the key by hand works the same:
+
+- **Tool definitions**: "Load all" (the default) sends every tool's
+  definition to the model each time; "On demand" (`"defer": true`) lists
+  only the tool names in the prompt, and the model looks a definition up
+  with `search_mcp_tools` before calling it through `call_mcp_tool`. For
+  servers with many tools: each run still connects and lists them — what it
+  saves is the definitions of the tools it doesn't use. Approvals and
+  "always allow" count per tool, as for a direct call.
+- **System proxy** (a url only): "Use proxy" / "Direct" (`"trustEnv": true`
+  / `false`) sends it through the system proxy or not, whatever
+  `--trust-env` says for the rest; "Default" leaves the key out. A failed
+  connection says when a proxy was skipped or in the way.
 
 - **Connected per message.** Each run connects to the servers as it starts,
   one after another, and closes them when it ends — an `npx` server makes

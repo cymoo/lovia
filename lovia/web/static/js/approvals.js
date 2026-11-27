@@ -2,15 +2,30 @@
 // itself lives in chat.js (it is woven into the bubble and the composer);
 // what it says is decided here.
 
+import { deferredTarget } from './builtin-views.js';
 import { currentLang, t } from './i18n.js';
 import { toolLabel } from './tool-views.js';
 
 /**
- * The card's question, by the tool's own label ("Run command?"), or by its
- * name when it has none. The server's reason, when there is one, goes under.
+ * The tool a call asks to run: its own name, or for `call_mcp_tool` the
+ * deferred tool it runs — what a person is asked about.
  * @param {string} name
+ * @param {unknown} [args] The call's arguments (object or JSON text).
  */
-export function approvalHeading(name) {
+export function askedTool(name, args) {
+  return (name === 'call_mcp_tool' && deferredTarget(args)) || name;
+}
+
+/**
+ * The card's question, by the tool's own label ("Run command?"), or by its
+ * name when it has none — for `call_mcp_tool`, the tool it runs. The
+ * server's reason, when there is one, goes under.
+ * @param {string} name
+ * @param {unknown} [args] The call's arguments (object or JSON text).
+ */
+export function approvalHeading(name, args) {
+  const target = askedTool(name, args);
+  if (target !== name) return t('approval.askTool', { name: target });
   const label = toolLabel(name);
   return label === name ? t('approval.askTool', { name }) : t('approval.ask', { label });
 }

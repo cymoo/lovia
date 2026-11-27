@@ -956,7 +956,7 @@ export function buildSearchPane() {
             void test();
           },
         ),
-        t('search.proxyHint'),
+        t('cfg.proxyHint'),
       ),
     );
     adv.open = savedKey().set || trustEnv !== null;

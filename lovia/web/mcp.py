@@ -10,7 +10,11 @@ Each server is opened the same way (docs/design/coding-features.md §6):
   unless the workspace runs any shell command unasked ("full access"): a
   shell free to ``curl`` or ``gh`` reaches the same outside systems, so a
   prompt there would protect nothing (:func:`_permission`);
-- one connection per run, closed when the run ends.
+- one connection per run, closed when the run ends;
+- with ``defer``, its tools wait behind ``search_mcp_tools`` /
+  ``call_mcp_tool`` (core :func:`~lovia.plugins.mcp.deferred_tools`), only
+  their names in the prompt — asked and granted as themselves;
+- a tool whose full name an earlier server's already has is left out.
 
 Unlike the core :class:`~lovia.plugins.mcp.MCP` plugin, a server that cannot
 be reached within :data:`CONNECT_TIMEOUT` does not fail the run: the run goes
@@ -41,6 +45,7 @@ from ..plugins.mcp import (
     MCPServer,
     MCPServerStdio,
     MCPServerStreamableHTTP,
+    deferred_tools,
 )
 from ..run_context import RunContext
 from ..tools import Tool
@@ -95,7 +100,8 @@ class MCPBook:
 
 
 def _as_connected(cfg: MCPServerConfig) -> MCPServerConfig:
-    return cfg if cfg.enabled else cfg.model_copy(update={"enabled": True})
+    """``cfg`` without what doesn't change how it connects."""
+    return cfg.model_copy(update={"enabled": True, "defer": False})
 
 
 def server_for(cfg: MCPServerConfig) -> MCPServer:
@@ -202,16 +208,29 @@ def _cause(exc: BaseException, timeout: float, cfg: MCPServerConfig | None) -> s
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
-def _usable(conn: MCPConnection) -> list[Tool]:
+def _usable(conn: MCPConnection, taken: dict[str, str] | None = None) -> list[Tool]:
     """The connection's tools a model request can carry. One name over the
     limit (a long server name before a long tool name) would make the
-    provider refuse every request of the run — such a tool is left out."""
+    provider refuse every request of the run — such a tool is left out.
+
+    So is one whose full name a server before it in ``taken`` (full name ->
+    server) already has: unique server names still meet, as ``a`` +
+    ``b__c`` and ``a__b`` + ``c`` do. Adds this server's names to it."""
     tools = []
     for t in conn.tools():
-        if _TOOL_NAME.match(t.name):
-            tools.append(t)
-        else:
+        if not _TOOL_NAME.match(t.name):
             log.warning("MCP tool %r left out: not a valid tool name", t.name)
+        elif taken is not None and t.name in taken:
+            log.warning(
+                "MCP tool %r of %s left out: server %s has one of that name",
+                t.name,
+                conn.prefix,
+                taken[t.name],
+            )
+        else:
+            tools.append(t)
+            if taken is not None:
+                taken[t.name] = conn.prefix or ""
     return tools
 
 
@@ -288,6 +307,8 @@ class SettingsMCP:
 
     async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         tools: list[Tool] = []
+        deferred: list[tuple[str | None, list[Tool]]] = []
+        taken: dict[str, str] = {}  # full tool name -> its server
         opened: list[MCPConnection] = []
         failed: list[str] = []  # the servers' names
 
@@ -317,23 +338,32 @@ class SettingsMCP:
                         self.book.unavailable(ctx, [(cfg.name, why)])
                     continue
                 opened.append(conn)
-                usable = _usable(conn)
-                tools.extend(replace(t, permission=_permission(t.name)) for t in usable)
+                usable = _usable(conn, taken)
+                mounted = [replace(t, permission=_permission(t.name)) for t in usable]
+                if cfg.defer:
+                    deferred.append((conn.prefix, mounted))
+                else:
+                    tools.extend(mounted)
                 self.book.record(
                     cfg,
                     MCPStatus(ok=True, at=time.time(), tools=_raw_names(conn, usable)),
                 )
+            # Inside the try: it may raise, and what opened must still close.
+            pair, listed = deferred_tools(deferred)
         except BaseException:
             # Cancelled (a stop) while opening: what opened must not leak.
             await aclose()
             raise
-        instructions = None
+        missing = None
         if failed:
             # Names only: why it failed can be the server's own words, and
             # those don't belong in the system prompt.
-            instructions = (
+            missing = (
                 f"These MCP servers could not be reached for this run, so their "
                 f"tools are missing: {', '.join(failed)}. If the user asks for "
                 "them, say the server did not connect."
             )
-        return PluginInstance(tools=tools, instructions=instructions, aclose=aclose)
+        instructions = "\n\n".join(s for s in (listed, missing) if s) or None
+        return PluginInstance(
+            tools=[*tools, *pair], instructions=instructions, aclose=aclose
+        )

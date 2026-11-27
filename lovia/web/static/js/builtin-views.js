@@ -45,7 +45,26 @@ const TOOLS = {
   show_html: ['toolview.page', (a) => str(a.title) ?? ''],
   show_chart: ['toolview.chart', (a) => chartTitle(a.option) ?? ''],
   start_session: ['toolview.startSession', (a) => quoted(a.title) ?? ''],
+  // A deferred MCP server's tools: found, then called through one tool.
+  search_mcp_tools: ['toolview.searchMcp', (a) => quoted(a.query)],
 };
+
+/**
+ * The tool a `call_mcp_tool` call runs, from its arguments (an object, or
+ * the JSON text a card holds); null when they don't name one.
+ * @param {unknown} args
+ * @returns {string | null}
+ */
+export function deferredTarget(args) {
+  if (typeof args === 'string') {
+    try {
+      args = JSON.parse(args);
+    } catch {
+      return null;
+    }
+  }
+  return args && typeof args === 'object' ? str(/** @type {any} */ (args).tool) : null;
+}
 
 /** @param {any} option An ECharts option: `title` is an object or a list. */
 function chartTitle(option) {
@@ -61,6 +80,8 @@ function chartTitle(option) {
  */
 export function builtinSummary(name, args) {
   if (name === 'shell') return shellSummary(args);
+  // Reads as the tool it runs, as that tool's own card would.
+  if (name === 'call_mcp_tool') return deferredTarget(args);
   // Own keys only: a tool may be named `constructor`.
   const spec = Object.hasOwn(TOOLS, name) ? TOOLS[name] : null;
   if (!spec) return null;
@@ -137,8 +158,9 @@ function renderStartedChat(el, tool) {
   el.append(open);
 }
 
-for (const name of ['shell', ...Object.keys(TOOLS)]) {
-  const key = name === 'shell' ? 'toolview.shell' : TOOLS[name][0];
+const LABELS = { shell: 'toolview.shell', call_mcp_tool: 'toolview.callMcp' };
+for (const name of [...Object.keys(LABELS), ...Object.keys(TOOLS)]) {
+  const key = Object.hasOwn(LABELS, name) ? LABELS[name] : TOOLS[name][0];
   setDefaultView(name, {
     summary: (tool) => builtinSummary(tool.name, tool.args),
     render: name === 'start_session' ? renderStartedChat : undefined,

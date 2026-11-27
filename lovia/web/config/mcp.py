@@ -3,9 +3,11 @@
 Most MCP clients write servers as ``{"mcpServers": {name: {...}}}``: a
 ``command`` with ``args`` and ``env``, or a ``url`` with ``headers``. That is
 what the editor takes — the whole document, or just the object inside it —
-and what it shows when a server is edited. One key is lovia's own: a url's
-``trustEnv`` (true / false) sends it through the system proxy or not,
-whatever ``--trust-env`` says for the rest.
+and what it shows when a server is edited. Two keys are lovia's own (the
+form sets them, see ``mcp-config.js``): a url's ``trustEnv`` (true / false)
+sends it through the system proxy or not, whatever ``--trust-env`` says for
+the rest; ``defer`` (true) puts only its tools' names in the prompt, their
+definitions behind ``search_mcp_tools``.
 
 ``env`` and ``headers`` values are secrets as often as not (API tokens), so
 they leave the server masked (``ghp…a1b2``) and come back the way API keys
@@ -77,6 +79,7 @@ def parse_server(name: str, spec: Any) -> MCPServerConfig:
             url=_text(name, "url", url),
             headers=_mapping(name, "headers", spec.get("headers")),
             trust_env=_flag(name, "trustEnv", spec.get("trustEnv")),
+            defer=bool(_flag(name, "defer", spec.get("defer"))),
         )
     except ValidationError as exc:
         first = exc.errors()[0]
@@ -146,6 +149,8 @@ def spec_of(server: MCPServerConfig, *, masked: bool = True) -> dict[str, Any]:
             spec["headers"] = {k: hide(v) for k, v in server.headers.items()}
         if server.trust_env is not None:
             spec["trustEnv"] = server.trust_env
+    if server.defer:
+        spec["defer"] = True
     if not server.enabled:
         spec["disabled"] = True
     return spec

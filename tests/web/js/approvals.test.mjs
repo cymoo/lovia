@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import {
   approvalHeading,
   approvalOutcome,
+  askedTool,
   badgeText,
   outcomeText,
   pendingTaskApprovals,
@@ -26,6 +27,11 @@ test('the question uses the tool label, else names the tool', () => {
   setDefaultView('shell', { label: () => 'Run command' });
   assert.equal(approvalHeading('shell'), 'Run command?');
   assert.equal(approvalHeading('create_schedule'), 'Allow create_schedule?');
+  // A deferred MCP tool is asked as itself, not as the tool that runs it.
+  assert.equal(approvalHeading('call_mcp_tool', '{"tool": "gh__push"}'), 'Allow gh__push?');
+  assert.equal(approvalHeading('call_mcp_tool', 'not json'), 'MCP tool?');
+  assert.equal(askedTool('call_mcp_tool', { tool: 'gh__push' }), 'gh__push');
+  assert.equal(askedTool('shell', { tool: 'gh__push' }), 'shell');
 });
 
 test('scope chips: the command for shell, a verb for paths, else verbatim', () => {

@@ -319,6 +319,8 @@ const MESSAGES = {
     'toolview.page': '页面',
     'toolview.chart': '图表',
     'toolview.startSession': '新建对话',
+    'toolview.searchMcp': '查找 MCP 工具',
+    'toolview.callMcp': 'MCP 工具',
     'toolview.openChat': '打开对话',
     'tool.image': '工具结果图片',
     'tool.source': '查看原始数据',
@@ -770,6 +772,10 @@ const MESSAGES = {
     'mcp.jsonHint':
       '和其他客户端相同的 mcpServers 写法，一次可以添加多个。支持 command（本机进程）和 url（streamable HTTP），不支持 SSE。密钥请放在 env 或 headers 里，这两处会打码；command、args 和 url 会原样显示。',
     'mcp.maskHint': 'env 和 headers 里打码的值不动就保持原值，清空表示删除，填新值则替换。',
+    'mcp.tools': '工具定义',
+    'mcp.toolsAll': '全部加载',
+    'mcp.toolsDefer': '按需加载',
+    'mcp.toolsHint': '按需加载：提示词里只列工具名，模型用到时再查定义。适合工具多的服务器。',
     'mcp.jsonEmpty': '先粘贴或填写配置',
     'mcp.jsonInvalid': '不是有效的 JSON：{error}',
 
@@ -811,7 +817,7 @@ const MESSAGES = {
     'cfg.proxyDefault': '跟随全局',
     'cfg.proxyOff': '直连',
     'cfg.proxyOn': '经代理',
-    'cfg.proxyHint': '只能经公司代理访问的模型选“经代理”（仍遵循 NO_PROXY）；“跟随全局”默认直连，启动时加 --trust-env 则经代理',
+    'cfg.proxyHint': '跟随全局：默认直连，启动时加了 --trust-env 才经代理。',
     'cfg.extraBody': '额外请求参数',
     'cfg.extraBodyHint':
       '原样合并进发给该端点的每个请求（如 reasoning_effort、thinking、vLLM 的 chat_template_kwargs）；null 表示删除该字段。按端点自己的写法填，不做转换',
@@ -950,7 +956,6 @@ const MESSAGES = {
     'search.key': 'API key',
     'search.keyNone': '未设置',
     'search.keyHint': '可选。填了之后搜索算在你在该服务的账户上，可能按量计费；只保存在服务器上',
-    'search.proxyHint': '只能经公司代理访问时选“经代理”；“跟随全局”默认直连',
     'cfg.skillsTitle': '技能目录',
     'cfg.skillsIntro':
       '按顺序从这些目录加载技能，重名时靠前的优先，新增的技能立即可用。项目里的 .agents/skills 总会加载，并且优先于这里。',
@@ -1280,6 +1285,8 @@ const EN = {
   'toolview.page': 'Page',
   'toolview.chart': 'Chart',
   'toolview.startSession': 'Start a chat',
+  'toolview.searchMcp': 'Find MCP tools',
+  'toolview.callMcp': 'MCP tool',
   'toolview.openChat': 'Open chat',
   'tool.image': 'Tool result image',
   'tool.source': 'Show source',
@@ -1731,6 +1738,10 @@ const EN = {
   'mcp.jsonHint':
     'The mcpServers JSON other clients use; add several at once if you like. command (a local process) and url (streamable HTTP) work; SSE doesn’t. Put secrets in env or headers, which are masked — command, args and url are shown as written.',
   'mcp.maskHint': 'Masked env and header values keep what is saved as long as you leave them; clear one to remove it, or type a new value to replace it.',
+  'mcp.tools': 'Tool definitions',
+  'mcp.toolsAll': 'Load all',
+  'mcp.toolsDefer': 'On demand',
+  'mcp.toolsHint': 'On demand: only the tool names go in the prompt; the model looks a definition up when it needs one. For servers with many tools.',
   'mcp.jsonEmpty': 'Paste or write a configuration first',
   'mcp.jsonInvalid': 'Not valid JSON: {error}',
 
@@ -1773,8 +1784,7 @@ const EN = {
   'cfg.proxyDefault': 'Default',
   'cfg.proxyOff': 'Direct',
   'cfg.proxyOn': 'Use proxy',
-  'cfg.proxyHint':
-    'Use proxy for a model reachable only through the office proxy (NO_PROXY still applies). Default is direct, or the proxy when lovia web runs with --trust-env',
+  'cfg.proxyHint': 'Default: direct, unless lovia started with --trust-env.',
   'cfg.extraBody': 'Extra request fields',
   'cfg.extraBodyHint':
     "Merged verbatim into every request to this endpoint (reasoning_effort, thinking, vLLM's chat_template_kwargs…); null removes a field. Written in the endpoint's own dialect — nothing is translated",
@@ -1919,7 +1929,6 @@ const EN = {
   'search.keyNone': 'Not set',
   'search.keyHint':
     'Optional. With it, searches run on your account with the service and may be billed; kept on the server',
-  'search.proxyHint': 'Use proxy when it is reachable only through the office proxy; Default is direct',
   'cfg.skillsTitle': 'Skill directories',
   'cfg.skillsIntro':
     'Skills load from these directories in order; on a duplicate name the '

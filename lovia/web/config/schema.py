@@ -276,6 +276,9 @@ class MCPServerConfig(BaseModel):
     # Honor proxy settings (``trustEnv``); None: lovia's default, off unless
     # ``--trust-env``.
     trust_env: bool | None = None
+    # Only the tools' names reach the prompt; the model looks a definition
+    # up with ``search_mcp_tools`` (core ``MCPServer.defer``).
+    defer: bool = False
 
     @model_validator(mode="after")
     def _one_transport(self) -> "MCPServerConfig":

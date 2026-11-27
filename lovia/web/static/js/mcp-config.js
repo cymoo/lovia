@@ -20,6 +20,7 @@ import { confirmDialog, segmented } from './ui.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
 import { backButton, cfg, el, field, ghostBtn, loadConfig, readOnlyNotice } from './model-config.js';
 import { switchControl } from './assistant-config.js';
+import { optionsOf, soleServer, withOption } from './mcp-options.js';
 import { scopeRoot, workspaceChoices, workspaceName, workspacesOn } from './workspaces.js';
 
 /** @typedef {{ ok: boolean, at: number, tools: string[], error: string | null }} McpStatus */
@@ -370,6 +371,7 @@ function buildPane(pick, projects) {
     const info = el('div', 'lv-model-row-info');
     const name = el('div', 'lv-model-row-name', s.name);
     if (s.state === 'pending' && !s.error) name.appendChild(el('span', 'lv-badge', t('pmcp.undecided')));
+    if (s.spec.defer === true) name.appendChild(el('span', 'lv-badge lv-badge-plain', t('mcp.toolsDefer')));
     const where = el('div', 'lv-model-row-meta lv-mono lv-mcp-target', specTarget(s.spec));
     where.title = specTarget(s.spec);
     info.append(name, where);
@@ -416,6 +418,7 @@ function buildPane(pick, projects) {
     else if (here) note = here.on === here.enabled ? undefined : t(here.on ? 'pmcp.onHere' : 'pmcp.offHere');
     else if (!s.enabled) note = s.projects.length ? t('mcp.onlyIn', { n: s.projects.length }) : t('mcp.off');
     if (note) name.appendChild(el('span', 'lv-badge lv-badge-plain', note));
+    if (s.spec.defer === true) name.appendChild(el('span', 'lv-badge lv-badge-plain', t('mcp.toolsDefer')));
     const where = el('div', 'lv-model-row-meta lv-mono lv-mcp-target', target(s));
     where.title = target(s);
     const busyNow = testing.has(s.name);
@@ -459,6 +462,70 @@ function buildPane(pick, projects) {
     // The switch is state, not an action: always in view, unlike the rest.
     node.append(actions, sw.node);
     return node;
+  }
+
+  /**
+   * The editor's lovia-only options, for a document naming one server:
+   * how its tools reach the model (`defer`) and, for a url, the proxy
+   * (`trustEnv`). Controls over `area`'s JSON, which stays the truth.
+   * Hidden for none or several servers; held, disabled, while the JSON
+   * doesn't parse, so the form doesn't jump mid-edit.
+   * @param {HTMLTextAreaElement} area
+   * @param {() => void} fit Regrow the editor after a rewrite.
+   */
+  function optionsSection(area, fit) {
+    const node = el('div', 'lv-mcp-options');
+    /** @param {'defer' | 'proxy'} option @param {boolean | 'default' | 'on' | 'off'} value */
+    const set = (option, value) => {
+      const next = withOption(area.value, option, value);
+      if (next === null) return;
+      area.value = next;
+      fit();
+    };
+    const tools = segmented(
+      [
+        ['all', t('mcp.toolsAll')],
+        ['defer', t('mcp.toolsDefer')],
+      ],
+      'all',
+      (v) => set('defer', v === 'defer'),
+    );
+    const proxy = segmented(
+      [
+        ['default', t('cfg.proxyDefault')],
+        ['off', t('cfg.proxyOff')],
+        ['on', t('cfg.proxyOn')],
+      ],
+      'default',
+      (v) => set('proxy', /** @type {'default' | 'on' | 'off'} */ (v)),
+    );
+    const proxyField = field(t('cfg.proxy'), proxy, t('cfg.proxyHint'));
+    node.append(field(t('mcp.tools'), tools, t('mcp.toolsHint')), proxyField);
+
+    /** @param {HTMLElement} seg @param {string} value */
+    const pick = (seg, value) => {
+      for (const r of seg.querySelectorAll('input')) r.checked = r.value === value;
+    };
+    const sync = () => {
+      const raw = area.value.trim();
+      let doc;
+      try {
+        doc = raw ? JSON.parse(raw) : null;
+      } catch {
+        for (const r of node.querySelectorAll('input')) r.disabled = true;
+        return;
+      }
+      const spec = soleServer(doc);
+      node.hidden = !spec;
+      if (!spec) return;
+      for (const r of node.querySelectorAll('input')) r.disabled = false;
+      const o = optionsOf(spec);
+      pick(tools, o.defer ? 'defer' : 'all');
+      pick(proxy, o.proxy);
+      proxyField.hidden = !o.http;
+    };
+    sync();
+    return { node, sync };
   }
 
   /**
@@ -510,9 +577,10 @@ function buildPane(pick, projects) {
     form.appendChild(field(t('mcp.json'), area, hints.join(' ')));
     const syntax = el('div', 'lv-cfg-error lv-mcp-syntax');
     syntax.hidden = true;
+    const options = optionsSection(area, fit);
     const results = el('div', 'lv-mcp-results');
     results.setAttribute('aria-live', 'polite');
-    form.append(syntax, results);
+    form.append(syntax, options.node, results);
     box.appendChild(form);
 
     /** The editor's JSON, or null (said under it) when it isn't any. */
@@ -537,6 +605,7 @@ function buildPane(pick, projects) {
     };
     area.addEventListener('input', () => {
       fit();
+      options.sync();
       // Quiet while typing; say what's wrong again only once it was said.
       if (!syntax.hidden) parse();
     });

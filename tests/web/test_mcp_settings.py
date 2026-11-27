@@ -115,6 +115,18 @@ def test_trust_env_is_kept_per_server_and_reaches_the_connection() -> None:
     assert server_for(servers["out"]).trust_env is True
 
 
+def test_defer_is_kept_per_server_and_written_back_only_when_on() -> None:
+    servers = {
+        s.name: s
+        for s in parse_servers({"big": {**_stub(), "defer": True}, "small": _stub()})
+    }
+    assert servers["big"].defer is True and servers["small"].defer is False
+    assert spec_of(servers["big"])["defer"] is True
+    assert "defer" not in spec_of(servers["small"])
+    with pytest.raises(ValueError, match="defer must be true or false"):
+        parse_servers({"x": {**_stub(), "defer": "yes"}})
+
+
 def test_a_failed_connection_says_whether_a_proxy_was_in_the_way(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -332,6 +344,11 @@ def test_a_status_counts_for_the_server_as_it_was_tested(served) -> None:
     assert _servers(client)["stub"]["status"]["ok"] is True
     client.put("/api/config/mcp/stub/enabled", json={"enabled": False})
     assert _servers(client)["stub"]["status"]["ok"] is True
+    # Nor does defer: it changes what reaches the prompt, not the connection.
+    spec = {**_servers(client)["stub"]["spec"], "defer": True}
+    client.put("/api/config/mcp/stub", json={"document": {"stub": spec}})
+    assert _servers(client)["stub"]["spec"]["defer"] is True
+    assert _servers(client)["stub"]["status"]["ok"] is True
     spec = {**_servers(client)["stub"]["spec"], "args": [STUB, "--edited"]}
     client.put("/api/config/mcp/stub", json={"document": {"stub": spec}})
     assert _servers(client)["stub"]["status"] is None
@@ -408,6 +425,87 @@ async def test_tools_ask_with_a_grant_unless_the_shell_runs_unasked() -> None:
     finally:
         assert inst.aclose is not None
         await inst.aclose()
+
+
+async def test_a_deferred_server_is_searched_and_asks_as_its_tools() -> None:
+    from types import SimpleNamespace
+
+    from lovia.run_context import RunContext
+    from lovia.web.mcp import MCPBook
+    from lovia.workspace import WorkspacePolicy
+
+    book = MCPBook()
+    servers = [
+        MCPServerConfig(name="big", command=sys.executable, args=[STUB], defer=True),
+        MCPServerConfig(name="small", command=sys.executable, args=[STUB]),
+        MCPServerConfig(name="gone", command="no-such-cmd", defer=True),
+    ]
+    inst = await SettingsMCP(servers, book).setup(
+        RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
+    )
+    try:
+        names = {t.name for t in inst.tools}
+        assert {"search_mcp_tools", "call_mcp_tool", "small__add"} <= names
+        assert not any(n.startswith("big__") for n in names)
+        note = inst.instructions or ""
+        assert "## Deferred MCP tools" in note and "big__add" in note
+        assert "small__add" not in note
+        assert "could not be reached" in note and "gone" in note
+        # Settings still lists the deferred server's tools.
+        assert "add" in book.get(servers[0]).tools  # type: ignore[union-attr]
+
+        call_tool = next(t for t in inst.tools if t.name == "call_mcp_tool")
+
+        def verdict(policy: WorkspacePolicy) -> tuple[str, tuple[str, ...]]:
+            ctx = RunContext(
+                deps=None,
+                entries=[],
+                agent=None,
+                workspace=SimpleNamespace(policy=policy),
+            )  # type: ignore[arg-type]
+            v = call_tool.decide({"tool": "big__add", "arguments": {}}, ctx)
+            return v.action, v.scopes  # type: ignore[union-attr]
+
+        assert verdict(WorkspacePolicy.coding()) == ("ask", ("mcp:big__add",))
+        assert verdict(WorkspacePolicy.trusted()) == ("allow", ())
+    finally:
+        assert inst.aclose is not None
+        await inst.aclose()
+
+
+async def test_a_deferred_server_that_fails_leaves_only_the_failure_note() -> None:
+    from lovia.run_context import RunContext
+    from lovia.web.mcp import MCPBook
+
+    servers = [MCPServerConfig(name="gone", command="no-such-cmd", defer=True)]
+    inst = await SettingsMCP(servers, MCPBook()).setup(
+        RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
+    )
+    assert inst.tools == []
+    assert "Deferred" not in (inst.instructions or "")
+    assert "gone" in (inst.instructions or "")
+
+
+def test_a_tool_whose_full_name_an_earlier_server_has_is_left_out() -> None:
+    # Unique server names still meet: a + b__c and a__b + c.
+    from dataclasses import replace
+
+    from lovia.plugins.mcp import MCPConnection
+    from lovia.tools import tool
+    from lovia.web.mcp import _usable
+
+    @tool
+    async def t() -> str:
+        """x"""
+        return ""
+
+    first = MCPConnection(transport=lambda: None, prefix="a")
+    first._tools = [replace(t, name="a__b__c")]
+    second = MCPConnection(transport=lambda: None, prefix="a__b")
+    second._tools = [replace(t, name="a__b__c"), replace(t, name="a__b__d")]
+    taken: dict[str, str] = {}
+    assert [x.name for x in _usable(first, taken)] == ["a__b__c"]
+    assert [x.name for x in _usable(second, taken)] == ["a__b__d"]
 
 
 def test_a_tool_whose_name_a_provider_refuses_is_left_out() -> None:

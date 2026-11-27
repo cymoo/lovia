@@ -120,8 +120,10 @@ the directory you started from; `lovia web ~/code/app` picks another.
   or a model outage carries on, plan and all, with your next message. Optional voice input turns
   speech into text through a transcription service you choose.
 - **Settings without restarts.** Models, MCP servers, skills and the
-  assistant's instructions live in Settings. Everything is kept in one home
-  directory, `~/.lovia`, never in your repository.
+  assistant's instructions live in Settings; an MCP server with many tools
+  can load them on demand, keeping their definitions out of every prompt.
+  Everything is kept in one home directory, `~/.lovia`, never in your
+  repository.
 
 On `127.0.0.1` no credentials are needed; binding any other address requires a
 token. `lovia web --help` lists the flags.

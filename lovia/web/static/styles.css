@@ -8181,6 +8181,21 @@ body.lv-files-resizing {
 .lv-mcp-syntax {
   margin-top: -4px;
 }
+/* lovia's own options of the one server in the editor, spaced as the form. */
+.lv-mcp-options {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.lv-mcp-options[hidden],
+.lv-mcp-options .lv-cfg-field[hidden] {
+  display: none;
+}
+/* Held while the JSON doesn't parse: the editor is what to fix. */
+.lv-seg-btn:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
 .lv-mcp-results:empty {
   display: none;
 }

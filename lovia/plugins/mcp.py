@@ -62,6 +62,7 @@ from typing import (
     Awaitable,
     Callable,
     Protocol,
+    Sequence,
     cast,
 )
 
@@ -828,6 +829,10 @@ def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
             "are called directly."
         ),
         permission=_permission,
+        # Retries happen once, inside, by the target's own rule: retrying the
+        # wrapper too would multiply them — and replay a call the target
+        # chose never to repeat (``retries=0``) after a single approval.
+        retries=0,
     )
     async def call_mcp_tool(
         ctx: RunContext[Any],
@@ -853,15 +858,22 @@ def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
                 tool_name="call_mcp_tool",
             )
         # Full delegation: run_tool honors the underlying tool's retries and
-        # timeout; rendering + truncation below honor its renderer and output
-        # cap, so a deferred tool behaves like its exposed self. (Approval is
-        # the runner's job and is delegated via ``_needs``.) The agent-level
+        # timeout, falling back to the agent's defaults as the runner would;
+        # rendering + truncation below honor its renderer and output cap, so
+        # a deferred tool behaves like its exposed self. (Approval is the
+        # runner's job and is delegated via ``_permission``.) The agent-level
         # default renderer is passed for exact parity with the runner's own
         # render call. One deliberate difference: the runner then also caps
         # this tool's (string) result by the agent's max_tool_output_chars, so
         # a deferred result is bounded by min(server cap, agent cap) — never
         # looser than either.
-        raw = await run_tool(target, dict(arguments or {}), ctx)
+        raw = await run_tool(
+            target,
+            dict(arguments or {}),
+            ctx,
+            default_retries=getattr(ctx.agent, "default_tool_retries", 0),
+            default_timeout=getattr(ctx.agent, "default_tool_timeout", None),
+        )
         # An image result passes through as parts, as it would from the
         # exposed tool; one whose text trips the cap degrades to that text,
         # the runner's own rule for an over-long parts result.
@@ -881,6 +893,42 @@ def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
         return rendered if parts is None else parts
 
     return call_mcp_tool
+
+
+def deferred_tools(
+    groups: Sequence[tuple[str | None, Sequence[Tool]]],
+) -> tuple[list[Tool], str | None]:
+    """Defer ``groups`` — one ``(server prefix, its tools)`` per server.
+
+    Returns ``search_mcp_tools`` + ``call_mcp_tool`` over one catalog of
+    every tool, and the system-prompt fragment naming them; ``([], None)``
+    when no group has a tool, so the model never sees a search over nothing.
+    :class:`MCP` uses it for servers with ``defer=True``, the web app's
+    Settings MCP for its own (not in ``__all__``: two callers, both in
+    lovia). Raises :class:`UserError` when two groups
+    name the same tool — so call it where a failure still closes what the
+    plugin opened.
+    """
+    catalog: dict[str, Tool] = {}
+    named: list[tuple[str | None, list[str]]] = []
+    for prefix, tools in groups:
+        if not tools:
+            continue
+        for t in tools:
+            if t.name in catalog:
+                raise UserError(
+                    f"deferred MCP tool name clash: {t.name!r} is provided by "
+                    "two servers.",
+                    hint="Set MCPServer(name=...) to prefix one server's tools.",
+                )
+            catalog[t.name] = t
+        named.append((prefix, [t.name for t in tools]))
+    if not catalog:
+        return [], None
+    return (
+        [_make_search_tool(catalog), _make_call_tool(catalog)],
+        _deferred_instructions(named),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -923,8 +971,7 @@ class MCP:
 
     async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         exposed: list[Tool] = []
-        deferred: dict[str, Tool] = {}
-        deferred_by_server: list[tuple[str | None, list[str]]] = []
+        deferred: list[tuple[str | None, list[Tool]]] = []
         closers: list[Callable[[], Awaitable[None]]] = []
 
         async def aclose() -> None:
@@ -940,32 +987,23 @@ class MCP:
                 if server.close_after_run:
                     closers.append(conn.close)
                 if server.defer:
-                    names: list[str] = []
-                    for t in conn.tools():
-                        if t.name in deferred:
-                            raise UserError(
-                                f"deferred MCP tool name clash: {t.name!r} is "
-                                "provided by two servers.",
-                                hint=(
-                                    "Set MCPServer(name=...) to prefix one "
-                                    "server's tools."
-                                ),
-                            )
-                        deferred[t.name] = t
-                        names.append(t.name)
-                    deferred_by_server.append((conn.prefix, names))
+                    deferred.append((conn.prefix, conn.tools()))
                 else:
                     exposed.extend(conn.tools())
             # The catalog and the tool list form one namespace in the model's
             # eyes — a name on both sides would make call_mcp_tool and the
             # direct call subtly diverge, so refuse it outright.
-            overlap = sorted(deferred.keys() & {t.name for t in exposed})
+            overlap = sorted(
+                {t.name for _, tools in deferred for t in tools}
+                & {t.name for t in exposed}
+            )
             if overlap:
                 raise UserError(
                     f"deferred MCP tool name clash with exposed tools: "
                     f"{', '.join(overlap)}.",
                     hint="Set MCPServer(name=...) to prefix one server's tools.",
                 )
+            pair, instructions = deferred_tools(deferred)
         except BaseException:
             # A later server failed to open (or validation failed): the runner
             # never receives the instance, so close the connections opened so
@@ -973,12 +1011,9 @@ class MCP:
             # leak.
             await aclose()
             raise
-        instructions: str | None = None
-        if deferred:
-            exposed.append(_make_search_tool(deferred))
-            exposed.append(_make_call_tool(deferred))
-            instructions = _deferred_instructions(deferred_by_server)
-        return PluginInstance(tools=exposed, instructions=instructions, aclose=aclose)
+        return PluginInstance(
+            tools=[*exposed, *pair], instructions=instructions, aclose=aclose
+        )
 
 
 __all__ = [

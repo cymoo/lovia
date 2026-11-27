@@ -323,6 +323,69 @@ async def test_deny_with_reason_reaches_the_model(tmp_path: Path) -> None:
     assert done == {"id": "c1", "approved": False, "cause": "user"}
 
 
+@pytest.mark.asyncio
+async def test_a_grant_covers_an_mcp_tool_called_directly_or_deferred(
+    tmp_path: Path,
+) -> None:
+    # The same server's tool, exposed one run and deferred the next (its
+    # ``defer`` switched in Settings): one grant, the tool's own scope.
+    from lovia.plugins.mcp import deferred_tools
+
+    def mcp_tool(name: str):
+        @tool(name=name, permission=Verdict("ask", scopes=(f"mcp:{name}",)))
+        async def it() -> str:
+            return f"{name} ran"
+
+        return it
+
+    pair, _ = deferred_tools([("srv", [mcp_tool("srv__push"), mcp_tool("srv__pull")])])
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider(
+            [
+                call("srv__push", {}, call_id="c1"),
+                text("direct"),
+                call("call_mcp_tool", {"tool": "srv__push"}, call_id="c2"),
+                call("call_mcp_tool", {"tool": "srv__pull"}, call_id="c3"),
+                text("deferred"),
+            ]
+        ),
+        tools=[mcp_tool("srv__push"), *pair],
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+    )
+    async with _client(_app(agent)) as ac:
+        task, _ = await _run_until_approval(ac, "s1")
+        await ac.post(
+            "/api/chat/approve",
+            json={
+                "session_id": "s1",
+                "call_id": "c1",
+                "decision": "approve",
+                "remember": True,
+            },
+        )
+        await asyncio.wait_for(task, timeout=5)
+        await _wait_run(ac, "s1", gone=True)
+
+        task2, lines2 = _spawn(
+            ac, "/api/chat/stream", json={"message": "again", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1", status="blocked_on_approval")
+        await ac.post(
+            "/api/chat/approve",
+            json={"session_id": "s1", "call_id": "c3", "decision": "approve"},
+        )
+        await asyncio.wait_for(task2, timeout=5)
+    asked = {d["id"]: d for d in _frames(lines2, "approval_required")}
+    assert asked["c2"]["granted"] is True and asked["c2"]["scopes"] == ["mcp:srv__push"]
+    # Another tool of the same server still asks.
+    assert asked["c3"]["granted"] is False and asked["c3"]["scopes"] == [
+        "mcp:srv__pull"
+    ]
+    results = [str(d.get("result")) for d in _frames(lines2, "tool_result")]
+    assert any("srv__push ran" in r for r in results)
+
+
 def _chained_agent(tmp_path: Path, *steps) -> Agent:
     @tool(permission=Verdict("ask", "", ("shell:pwd", "shell:python", "shell:git")))
     async def chain() -> str:

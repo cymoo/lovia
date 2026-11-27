@@ -38,6 +38,14 @@ test('a call reads as what it did and to what', () => {
   );
   assert.equal(builtinSummary('show_table', { columns: ['a'], rows: [] }), 'Table');
   assert.equal(builtinSummary('start_session', { instruction: 'x', title: 'Tides' }), 'Start a chat “Tides”');
+  // A deferred MCP tool reads as the tool it runs; its search, as a search.
+  assert.equal(
+    builtinSummary('call_mcp_tool', { tool: 'gh__create_issue', arguments: { title: 'x' } }),
+    'gh__create_issue',
+  );
+  assert.equal(builtinSummary('call_mcp_tool', '{"tool": "gh__get_pr"}'), 'gh__get_pr');
+  assert.equal(builtinSummary('call_mcp_tool', {}), null);
+  assert.equal(builtinSummary('search_mcp_tools', { query: 'issue' }), 'Find MCP tools “issue”');
   assert.equal(builtinSummary('start_session', { instruction: 'x' }), 'Start a chat');
 });
 

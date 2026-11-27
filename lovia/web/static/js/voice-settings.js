@@ -175,17 +175,28 @@ export function buildVoicePane() {
     }
 
     /** Saves ``body``; the pane is drawn again from what was saved. */
-    const apply = async (body, done = '') => {
+    /**
+     * Saves ``body``, then draws the pane again from what was saved. A failed
+     * save leaves the form as typed, to correct and retry — ``revert`` puts
+     * back a pick that saves itself.
+     * @param {Record<string, string | null>} body
+     * @param {string} [done] a toast on success
+     * @param {() => void} [revert]
+     */
+    const apply = async (body, done = '', revert) => {
       // Held still while it saves: the redraw would drop newer edits.
       form.inert = true;
       try {
         await api.setVoice(body);
         await loadConfig();
-        if (done) toast(done);
       } catch (err) {
         toast(String(err.message || err), { type: 'error' });
-        await loadConfig().catch(() => {});
+        form.inert = false;
+        revert?.();
+        syncSave();
+        return;
       }
+      if (done) toast(done);
       await render();
     };
 
@@ -243,6 +254,11 @@ export function buildVoicePane() {
         mode === OFF
           ? { connection: null, base_url: null, api_key: '' }
           : { connection: mode, base_url: null, model: model.value.trim() || null },
+        '',
+        () => {
+          where.value = stored;
+          sync();
+        },
       );
     });
     language.addEventListener('change', async () => {
@@ -251,7 +267,7 @@ export function buildVoicePane() {
         await loadConfig();
       } catch (err) {
         toast(String(err.message || err), { type: 'error' });
-        await render();
+        language.value = cfg().voice.language ?? OFF;
       }
     });
     baseUrl.addEventListener('input', sync);

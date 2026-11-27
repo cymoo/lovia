@@ -396,6 +396,14 @@ def test_search_settings_rebuild_tools_and_keep_keys_per_service(served) -> None
     assert runtime.config.search.trust_env is None
 
 
+def test_search_saves_before_a_model_is_configured(served) -> None:
+    client, runtime, _app = served
+    # Names no chat model: a first run can pick search before one.
+    res = client.put("/api/config/search", json={"provider": "exa"})
+    assert res.status_code == 200, res.text
+    assert runtime.config.search.provider == "exa"
+
+
 def test_testing_a_search_service_uses_the_form_s_settings(
     served, monkeypatch: pytest.MonkeyPatch
 ) -> None:

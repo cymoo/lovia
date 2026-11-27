@@ -57,7 +57,7 @@ AUTO_ORDER = ("parallel", "exa", "tavily")
 _REMEMBER = 600.0
 # How long a service has to open a connection and list its tools: one that
 # hangs (a network dropping its packets) must leave time for the next.
-_OPEN_TIMEOUT = 15.0
+OPEN_TIMEOUT = 15.0
 _clock = time.monotonic  # what ``_REMEMBER`` counts on
 _NETWORK_HINT = (
     "A network problem, not a bad query; Settings → Web search shows whether "
@@ -185,7 +185,7 @@ def search_tool(search: SearchConfig) -> Tool | None:
             preset, sent = PRESETS[name], False
             try:
                 async with AsyncExitStack() as stack:
-                    async with deadline(_OPEN_TIMEOUT):
+                    async with deadline(OPEN_TIMEOUT):
                         conn = await stack.enter_async_context(servers[name].session())
                     # Listed with only its search tool: none means it is gone.
                     if not conn.tools():
@@ -198,7 +198,7 @@ def search_tool(search: SearchConfig) -> Tool | None:
                         preset.tool, preset.args(query, n, time_range)
                     )
             except Exception as exc:
-                why = describe(exc, _OPEN_TIMEOUT, configs[name])
+                why = describe(exc, OPEN_TIMEOUT, configs[name])
                 why = redact(why, search)
                 # Never the search itself, here or elsewhere: a lost reply
                 # may have run, and billed, it already.
@@ -232,7 +232,7 @@ def search_tool(search: SearchConfig) -> Tool | None:
     @tool(
         name="web_search",
         retries=0,
-        timeout=60 + _OPEN_TIMEOUT * (len(order()) - 1),
+        timeout=60 + OPEN_TIMEOUT * (len(order()) - 1),
         description=(
             "Search the web; returns the top results — title, url and an "
             "excerpt each.\n"

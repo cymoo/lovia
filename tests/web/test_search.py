@@ -301,7 +301,7 @@ async def test_auto_passes_over_a_hanging_service_or_one_without_its_tool(
 
     from lovia.web import search as search_mod
 
-    monkeypatch.setattr(search_mod, "_OPEN_TIMEOUT", 0.05)
+    monkeypatch.setattr(search_mod, "OPEN_TIMEOUT", 0.05)
     clock = [1_000.0]
     monkeypatch.setattr(search_mod, "_clock", lambda: clock[0])
     opened: list[str] = []

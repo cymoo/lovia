@@ -53,7 +53,7 @@ from ..config.skills import scan_skills_status
 from ..errors import WebError
 from ..mcp import CONNECT_TIMEOUT, MCPStatus, probe
 from ..project_mcp import ProjectServer, read_project_servers
-from ..search import PRESETS, redact, server_config, services
+from ..search import OPEN_TIMEOUT, PRESETS, redact, server_config, services
 from ..workspaces import WorkspaceRef
 from .deps import RouterDeps
 from .routing import GuardedRoute
@@ -587,7 +587,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
     @router.put("/search")
     async def update_search(body: SearchIn, request: Request) -> dict[str, object]:
         _guard_write(request)
-        await _apply(_copy(search=_search_as(body).model_dump()))
+        # Names no chat model: before one is configured, this saves for later.
+        await _apply(_copy(search=_search_as(body).model_dump()), settings_only=True)
         return {"config": _config_out()}
 
     @router.post("/search/test")
@@ -601,7 +602,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         skipped: list[dict[str, str]] = []
         for name in services(search):
             preset = PRESETS[name]
-            status = await probe(server_config(search, name), timeout=CONNECT_TIMEOUT)
+            # As long as a search gives it to open.
+            status = await probe(server_config(search, name), timeout=OPEN_TIMEOUT)
             # Listing tools is not enough: the search calls one by name.
             if status.ok and preset.tool in status.tools:
                 return {"ok": True, "service": preset.label, "skipped": skipped}

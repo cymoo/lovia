@@ -63,6 +63,8 @@ export function modeLabel(mode) {
 
 export function buildAssistantPane() {
   const pane = el('div', 'lv-cfg-pane');
+  /** Instructions typed and not saved, carried through a redraw. @type {string | null} */
+  let draft = null;
 
   async function render() {
     if (!cfg()) {
@@ -110,7 +112,9 @@ export function buildAssistantPane() {
           await refreshAgents();
           if (done) toast(done);
         } catch (err) {
+          // Back to what is saved — but what was typed stays, to retry.
           toast(String(err.message || err), { type: 'error' });
+          draft = prompt.value;
           await loadConfig().catch(() => {});
           render();
         }
@@ -120,7 +124,8 @@ export function buildAssistantPane() {
 
     const prompt = /** @type {HTMLTextAreaElement} */ (el('textarea', 'lv-dialog-input lv-cfg-input'));
     prompt.rows = 5;
-    prompt.value = a.instructions || '';
+    prompt.value = draft ?? (a.instructions || '');
+    draft = null;
     prompt.placeholder = t('cfg.instructionsPlaceholder');
     const promptField = field(t('cfg.instructions'), prompt, t('cfg.instructionsHint'));
     // Typed text has a Save, live once it differs from what is saved.

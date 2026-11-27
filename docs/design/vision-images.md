@@ -1,6 +1,6 @@
 # 图片发不出去时：拒收恢复与默认看图
 
-> 状态：设计第 3 版（已吸收两轮审阅）· 2026-11-28 · 关闭 [#532](https://github.com/cymoo/lovia/issues/532) · 范围：`lovia/runtime`、`lovia/providers`、`lovia/parts.py`、`lovia/plugins/mcp.py`、`lovia/workspace/tools.py`、`lovia/web`。
+> 状态：已实现（PR 1 #569，PR 2 见其后；实现中又经三轮 Codex 审阅，细节已回写本文）· 2026-11-28 · 关闭 [#532](https://github.com/cymoo/lovia/issues/532) · 范围：`lovia/runtime`、`lovia/providers`、`lovia/parts.py`、`lovia/plugins/mcp.py`、`lovia/workspace/tools.py`、`lovia/web`。
 >
 > 行号指向 `main`（`13bfaeba`，v0.9.302）。
 
@@ -122,7 +122,7 @@ class ImagesWithheld(ContextEvent):
 ### 1. 视觉能力只有两种状态 ⚠️ breaking
 
 - 所有 provider 默认 `supports_vision=True`，包括没有声明这个属性的第三方实现（`providers/base.py:203`）。
-- 显式 `False` 由循环在视图里去掉全部图片（第 2 节的同一函数），覆盖 SDK 传入的用户图片；不再由适配器的 `include_images` 只管工具结果，适配器给什么编码什么。
+- 显式 `False` 由循环在视图里去掉全部图片（第 2 节的同一函数），覆盖 SDK 传入的用户图片和插件注入的图片。适配器的 `include_images` 保留：发到它那里时图片已经去掉了，它不再是唯一的关口。
 - `config.json` 的 `vision`：`on` 与 `auto` 同义（发图），`off` 从不发图。编辑模型的其他字段时保留原值。
 
 ### 2. 按每次调用提供工具 ⚠️ breaking
@@ -135,7 +135,7 @@ class ImagesWithheld(ContextEvent):
 ### 3. `describe_image`
 
 - 只要配置了视觉角色且该角色不是显式 `off`，就构建；是否提供由第 2 节按每次调用决定。
-- 直接调用视觉 provider（一次 `stream`，不跑 `Runner`）。视觉模型也拒收图片时直接返回工具错误，不会对着占位符生成一段「描述」。
+- 视觉子运行一旦出现 `ImagesWithheld` 就取消，返回工具错误，不会对着占位符生成一段「描述」。仍走 `Runner`，保留通用重试（PR 1 已实现）。
 
 ### 4. Web
 

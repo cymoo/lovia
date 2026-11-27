@@ -400,9 +400,6 @@ export function buildModelsPane() {
       if (p.id === c.roles.chat) {
         name.appendChild(el('span', 'lv-badge lv-badge-default', t('cfg.default')));
       }
-      if (p.vision === 'on') {
-        name.appendChild(el('span', 'lv-badge lv-badge-plain', t('cfg.visionBadge')));
-      }
       const host = hostOf(p.base_url);
       info.append(name, el('div', 'lv-model-row-meta', host ? `${p.model} · ${host}` : p.model));
       row.appendChild(info);
@@ -641,25 +638,10 @@ export function buildModelsPane() {
       field(t('cfg.maxTokens'), maxTokensIn),
     );
     adv.body.appendChild(limits);
-    let vision = stored?.vision || 'auto';
-    adv.body.appendChild(
-      field(
-        t('cfg.vision'),
-        segmented(
-          [
-            ['auto', t('cfg.visionAuto')],
-            ['on', t('cfg.visionOn')],
-            ['off', t('cfg.visionOff')],
-          ],
-          vision,
-          (val) => {
-            vision = val;
-            sayAdvanced();
-          },
-        ),
-        t('cfg.visionHint'),
-      ),
-    );
+    // Not a control: every model is sent images, and one that refuses them
+    // is remembered per chat. A hand-written `"vision": "off"` in
+    // config.json still holds, and saving keeps it.
+    const vision = stored?.vision || 'auto';
     // Through the system proxy or not; null follows Settings → General.
     /** @type {boolean | null} */
     let trustEnv = stored?.trust_env ?? null;
@@ -693,9 +675,6 @@ export function buildModelsPane() {
       if (win) set.push(t('cfg.advWindow', { n: win.toLocaleString() }));
       const most = positiveInt(maxTokensIn.value);
       if (most) set.push(t('cfg.advMaxTokens', { n: most.toLocaleString() }));
-      if (vision !== 'auto') {
-        set.push(t('cfg.advPair', { k: t('cfg.vision'), v: t(vision === 'on' ? 'cfg.visionOn' : 'cfg.visionOff') }));
-      }
       if (trustEnv !== null) set.push(t(trustEnv ? 'cfg.proxyOn' : 'cfg.proxyOff'));
       if (/[^\s{}]/.test(extras.node.querySelector('textarea')?.value || '')) set.push(t('cfg.extraBody'));
       adv.say(set.join(' · ') || t('cfg.advancedNone'));
@@ -1384,10 +1363,7 @@ async function openChipMenu() {
   };
   for (const p of c.models) {
     // The default says so: a chat on it moves when the default does.
-    const notes = [
-      p.id === c.roles.chat ? t('cfg.default') : null,
-      p.vision === 'on' ? t('cfg.visionBadge') : null,
-    ].filter(Boolean);
+    const notes = [p.id === c.roles.chat ? t('cfg.default') : null].filter(Boolean);
     option(profileName(p), p.id, notes.join(' · ') || undefined);
   }
   menu.appendChild(el('div', 'lv-model-chip-menu-divider'));

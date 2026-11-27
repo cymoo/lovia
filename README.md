@@ -116,7 +116,8 @@ the directory you started from; `lovia web ~/code/app` picks another.
   skills and `@` mentions a file.
 - **A complete chat.** Streaming, branching from any reply, steering a run
   while it works, attachments, scheduled runs, and long-term memory you can
-  edit. A run keeps going when you close the tab; one stopped by a turn limit
+  edit. Images go to any model; one that refuses them gets a text note in
+  their place, or a vision model you assign describes them. A run keeps going when you close the tab; one stopped by a turn limit
   or a model outage carries on, plan and all, with your next message. Optional voice input turns
   speech into text through a transcription service you choose.
 - **Settings without restarts.** Models, MCP servers, skills and the

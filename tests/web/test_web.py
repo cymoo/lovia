@@ -436,7 +436,7 @@ def test_list_agents_single() -> None:
             "tools": [],
             "workspace": False,
             "remote": False,
-            "vision": False,
+            "vision": True,  # undeclared: taken to see
             "memory": False,
             "memory_projects": False,
             "context_window": None,
@@ -1311,7 +1311,7 @@ def test_get_agent_by_name() -> None:
         "tools": [],
         "workspace": False,
         "remote": False,
-        "vision": False,
+        "vision": True,  # undeclared: taken to see
         "memory": False,
         "memory_projects": False,
         "context_window": None,
@@ -1517,7 +1517,7 @@ def test_build_api_router_is_embeddable() -> None:
             "tools": [],
             "workspace": False,
             "remote": False,
-            "vision": False,
+            "vision": True,  # undeclared: taken to see
             "memory": False,
             "memory_projects": False,
             "context_window": None,

@@ -97,7 +97,7 @@ from ..providers.base import (
     discover_context_window,
     supports_vision,
 )
-from .images import ImageCall, sends_tool_images
+from .images import ImageCall
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
@@ -135,13 +135,24 @@ _logged_once: set[tuple[object, ...]] = set()
 def _log_once(*key: object) -> bool:
     """True the first time ``key`` is seen this process.
 
-    For static per-model facts (an unreported context window, a tool withheld
-    from a text-only model) that would otherwise repeat on every run.
+    For static per-model facts (an unreported context window) that would
+    otherwise repeat on every run.
     """
     if key in _logged_once:
         return False
     _logged_once.add(key)
     return True
+
+
+def _offered(tools: dict[str, Tool], sees: bool) -> dict[str, Tool]:
+    """The tools a model call offers: one that returns images only while the
+    model sees them, one that describes them only while it doesn't. The
+    rest always — and a call to one not offered still runs."""
+    return {
+        name: t
+        for name, t in tools.items()
+        if not (t.returns_images and not sees) and not (t.describes_images and sees)
+    }
 
 
 def _carried_count(meta: dict[str, Any]) -> tuple[int | None, str | None]:
@@ -800,9 +811,7 @@ class RunLoop:
             contribute = getattr(agent.workspace, "view_injectors", None)
             if contribute is not None:
                 plugins.view_injectors.extend(contribute())
-        tools_by_name = self._collect_tools(
-            agent, workspace_tools, plugins.tools, provider
-        )
+        tools_by_name = self._collect_tools(agent, workspace_tools, plugins.tools)
         active = ActiveAgent(
             agent=agent,
             provider=provider,
@@ -914,6 +923,7 @@ class RunLoop:
         # The images the chat withholds from this model (runtime/images.py),
         # applied before the policy sees the entries, so it estimates what is
         # sent; and those this call withholds if the provider refuses some.
+        # What it knows of the model's sight picks the tools a call offers.
         images = ImageCall(
             state.context_state,
             state.transcript,
@@ -922,7 +932,7 @@ class RunLoop:
             # endpoint-and-model key (no base_url, no model).
             model=f"{getattr(provider, 'name', type(provider).__name__)}\x00"
             + window_key(provider, model),
-            tool_images=sends_tool_images(provider),
+            sees=supports_vision(provider),
         )
         request = CompactionRequest(
             # A shallow snapshot, not the live list: the policy contract says
@@ -937,7 +947,7 @@ class RunLoop:
             model=model,
             # The same tool set _call_model serializes into the request, so
             # the policy can count the schema payload it will actually pay for.
-            tools=list(state.active.tools_by_name.values()),
+            tools=list(_offered(state.active.tools_by_name, images.sees).values()),
             last_input_tokens=state.calibration_tokens,
             last_view_id=state.calibration_view,
             overflow=False,
@@ -968,9 +978,15 @@ class RunLoop:
             # it builds: a re-compaction after an overflow can't send back an
             # image a refusal took out.
             sent = images.apply(view)
+            # Read again each try: an "unsupported" refusal just taught the
+            # call that the model can't see, so view_image goes and a
+            # describe_images tool comes in for the retry.
+            tools = _offered(state.active.tools_by_name, images.sees)
             forwarded = False
             try:
-                async for ev in self._call_model(state, provider, sent, turn, tracer):
+                async for ev in self._call_model(
+                    state, provider, sent, tools, turn, tracer
+                ):
                     # A retry notice is no output: re-running the turn won't repeat it.
                     if not isinstance(ev, events.ModelRetrying):
                         forwarded = True
@@ -998,11 +1014,17 @@ class RunLoop:
                 # turn's view — pairing it with the estimate of the larger view
                 # that just overflowed would drag the calibration ratio down
                 # exactly when the estimate must stay conservative.
-                failed_tokens = ctx_result.tokens_after
+                # Unless an image refusal reshaped the attempt (fewer images,
+                # other tools): that estimate no longer measures what failed,
+                # so the shrink check can't judge — the retry goes.
+                failed_tokens = None if images.changed else ctx_result.tokens_after
                 request.last_input_tokens = None
                 request.last_view_id = None
                 request.overflow = True
                 request.reported_window = overflow.reported_window
+                # The tools the failed attempt sent: an image refusal may have
+                # swapped them since the first compaction.
+                request.tools = list(tools.values())
                 async for ev in self._compact(state, request, results):
                     yield ev
                 ctx_result = results.pop()
@@ -1179,6 +1201,7 @@ class RunLoop:
         state: RunState,
         provider: Provider,
         view: list[TranscriptEntry],
+        tools: dict[str, Tool],
         turn: ModelTurnResult,
         tracer: Tracer,
     ) -> AsyncIterator[events.Event]:
@@ -1189,7 +1212,7 @@ class RunLoop:
             agent=state.agent,
             provider=provider,
             input_entries=view,
-            tools_by_name=state.active.tools_by_name,
+            tools_by_name=tools,
             structured_output=state.active.structured_output,
             tracer=tracer,
             turn=state.turns,
@@ -1684,7 +1707,6 @@ class RunLoop:
         agent: Agent[Any],
         workspace_tools: list[Tool],
         plugin_tools: list[Tool] | None = None,
-        provider: Provider | None = None,
     ) -> dict[str, Tool]:
         tools: dict[str, Tool] = {}
 
@@ -1698,30 +1720,14 @@ class RunLoop:
                 )
             tools[t.name] = t
 
-        def ambient_ok(source: str, t: Tool) -> bool:
-            # Ambient sources (workspace/plugin bundles) skip tools whose
-            # results this model cannot see; ``agent.tools`` is the user's own
-            # explicit wiring and is never filtered — the adapters' wire
-            # degrade covers it, so the flag stays a UX hint, never a
-            # correctness gate.
-            if provider is None or not t.returns_images or supports_vision(provider):
-                return True
-            if _log_once("returns_images", t.name, getattr(provider, "model", None)):
-                logger.info(
-                    "tool %r (%s) returns images the model cannot see; not offering it",
-                    t.name,
-                    source,
-                )
-            return False
-
+        # Every tool goes in: which ones a call offers depends on whether the
+        # model sees images, which can change mid-run (_offered).
         for t in agent.tools:
             add_tool("agent.tools", t)
         for t in plugin_tools or []:
-            if ambient_ok("plugin", t):
-                add_tool("plugin", t)
+            add_tool("plugin", t)
         for t in workspace_tools:
-            if ambient_ok("agent.workspace", t):
-                add_tool("agent.workspace", t)
+            add_tool("agent.workspace", t)
         for h in agent.handoffs:
             handoff_obj = h if isinstance(h, Handoff) else Handoff(target=h)
             add_tool("handoff", build_handoff_tool(handoff_obj))

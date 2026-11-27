@@ -203,18 +203,22 @@ async def screenshot(url: str) -> list:
     return ["The page as rendered:", ImagePart.from_path(await capture(url))]
 ```
 
-The flag only matters for tools a workspace or Plugin contributes: they are
-not offered to a model whose provider can't see images
-([`supports_vision`](providers.md#the-openai-provider)). Tools in
-`Agent(tools=...)` are always offered; a text-only model gets a short marker
-in place of each image.
+Its dual, `@tool(describes_images=True)`, marks a tool that tells the model
+what an image shows (one backed by a vision model, say). Every model call
+offers one or the other, wherever the tool comes from: `returns_images`
+tools while the model sees images, `describes_images` tools while it
+doesn't — because its provider says `supports_vision=False`
+([providers](providers.md#the-openai-provider)), or because it refused
+images earlier in the chat. A call to a tool not offered still runs, and
+its images are withheld.
 
-A provider may still refuse an image it is sent: over its size or pixel
-limit, one too many, or a model that takes none. The run goes on: the model
-call is sent again with images replaced by the same marker — first the ones
-added since the last call that succeeded, then all — and the chat remembers
-the decision, so the next calls don't trip on the same images. The
-transcript keeps them. Each new decision is announced with an
+A provider may refuse an image it is sent: over its size or pixel limit,
+one too many, or a model that takes none. The run goes on: the model call
+is sent again with images replaced by a text marker — first the ones added
+after the model's last answer, then all — and the chat remembers the
+decision, so the next calls don't trip on the same images. When the model
+takes no images, the retry already offers the `describes_images` tools.
+The transcript keeps the images. Each new decision is announced with an
 [`ImagesWithheld`](streaming.md#transitions-and-context) event.
 
 ## Tool approval

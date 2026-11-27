@@ -181,6 +181,7 @@ def _every_chat_event() -> list[events.Event | LegFrame]:
         UserTurnRefs(refs=["r:0"]),
         LegTiming(finished_at=1.0, duration=1.0),
         MCPUnavailable(servers=[("github", "no answer within 30 s")]),
+        events.ImagesWithheld(count=1),
         ApprovalAsked(
             request=events.ApprovalRequired(call=call, scopes=("shell:t",)),
             granted=True,

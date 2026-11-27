@@ -528,14 +528,18 @@ after each run, so files the Agent made show up. The list stops at about 20,000
 entries; past that the menu says how many files it has, and the rest can be
 typed by path.
 
-Vision configuration controls whether images are sent inline:
+Attached images are sent inline to every model:
 
-- Official OpenAI and Anthropic endpoints are treated as vision-capable by
-  default. For another multimodal endpoint, set the profile's vision
-  capability to supported (`"vision": "on"` in `config.json`).
-- A text-only main model can assign the vision role to another profile. The
-  main model then receives text through the `describe_image` Tool; raw image
-  data does not enter its conversation history.
+- A model that refuses them is found out at the first image of a chat: the
+  reply goes on with text markers in their place, a line in the chat says
+  so, and the rest of that chat withholds them. The chat still keeps the
+  image (that first request did send it); only what the model receives
+  changes. Only `"vision": "off"` written in a profile in `config.json`
+  keeps images from being tried at all.
+- With a vision role assigned (Settings → Models → Role assignment), a model
+  that takes no images gets the `describe_image` Tool instead — in the very
+  reply that found it out. It receives text; raw image data does not enter
+  its conversation history.
 
 Uploads default to 25 MiB per file (`LOVIA_MAX_UPLOAD_MB`). Named extensions
 must match the built-in allowlist; override it with

@@ -1,17 +1,17 @@
 """Vision-as-a-tool: let a text-only main model "see" images via a VLM.
 
-When the app is configured with a dedicated vision model and the main model
-itself isn't vision-capable, the builder registers a ``describe_image`` tool.
-The main model calls it with an image's path (one the user attached, as the
-message's note names it, or one the run produced) and a question; the tool runs a
-one-shot turn on the vision model with the image inlined as an
-:class:`~lovia.ImagePart` and returns its text answer.
+When the app is configured with a dedicated vision model, the builder registers
+a ``describe_image`` tool, and a model call offers it while the main model
+can't see images (``describes_images``: its provider says so, or it refused
+them in this chat). The main model calls it with an image's path (one the
+user attached, as the message's note names it, or one the run produced) and
+a question; the tool runs a one-shot turn on the vision model with the image
+inlined as an :class:`~lovia.ImagePart` and returns its text answer.
 
 The name states the contract: the model gets a *description*, never the
 pixels — the counterpart of the core ``view_image`` tool, which returns the
-image itself and is what a vision-capable main model gets instead (the two
-are never registered together; see ``resolve_vision_tool`` in
-``lovia.web.builder``).
+image itself and is what a model that sees gets instead (a call offers one
+or the other).
 
 Same "separate ad-hoc model for a sub-task" pattern as :mod:`lovia.web.titles`.
 Paths go through the same read pipeline as ``read_file``/``view_image``: the
@@ -30,7 +30,7 @@ from ..agent import Agent
 from ..exceptions import ToolError
 from ..messages import user
 from ..parts import ImagePart, TextPart, image_mime, sniff_image_mime
-from ..providers import Provider
+from ..providers import Provider, supports_vision
 from ..run_context import RunContext
 from ..runner import Runner
 from ..tools import Tool, tool
@@ -84,6 +84,7 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
             "- Supported: jpg, jpeg, png, gif, webp; over 3.75 MB is refused."
         ),
         permission=path_permission("read"),
+        describes_images=True,
     )
     async def describe_image(
         ctx: RunContext[Any],
@@ -95,6 +96,12 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
             str, "What to ask about the image; defaults to a full description."
         ] = DEFAULT_QUESTION,
     ) -> str:
+        # A vision model whose provider says it takes no images would get the
+        # image's text marker (the runner withholds it without asking) and
+        # "describe" that.
+        # (A "vendor:model" string resolves to a provider that does.)
+        if not isinstance(vision_model, str) and not supports_vision(vision_model):
+            raise ToolError(_REFUSED.format(path=path))
         session = require_workspace(ctx)
         mime = image_mime(path)
         if mime is None:

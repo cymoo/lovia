@@ -446,3 +446,42 @@ async def test_a_blind_custom_provider_does_not_blind_another() -> None:
         Agent(name="a", model=sees), ask(png("B")), session=session, session_id="s"
     )
     assert [len(s) for s in sees.sent] == [2]
+
+
+async def test_the_retry_after_no_images_offers_the_describing_tool() -> None:
+    # A text model with a vision role: the first refusal swaps view_image-like
+    # tools for describe_image in the very same call, so the model can have
+    # the picture described without the user asking again.
+    @tool(returns_images=True)
+    async def look() -> list[Any]:
+        """Look at the screen."""
+        return [png("L")]
+
+    @tool(describes_images=True)
+    async def describe(path: str) -> str:
+        """Describe an image."""
+        return "a cat"
+
+    offered: list[list[str]] = []
+
+    class Tools(Gate):
+        async def stream(self, entries, *, tools=None, **kwargs):
+            offered.append(sorted(t["function"]["name"] for t in tools or []))
+            async for d in super().stream(entries, tools=tools, **kwargs):
+                yield d
+
+    gate = Tools(lambda imgs: NO_IMAGES if imgs else None)
+    agent = Agent(name="a", model=gate, tools=[look, describe])
+    await run(agent, ask(png("A")))
+    image_tools = [[n for n in names if n in {"look", "describe"}] for names in offered]
+    assert image_tools == [["look"], ["describe"]]
+
+
+async def test_a_model_declared_blind_never_gets_an_image() -> None:
+    # supports_vision=False: from the first call, an SDK caller's own image too.
+    gate = Gate(lambda imgs: NO_IMAGES if imgs else None)
+    gate.supports_vision = False  # type: ignore[misc]
+    result, seen = await run(Agent(name="a", model=gate), ask(png("A")))
+    assert result.output == "ok"
+    assert [len(s) for s in gate.sent] == [0]
+    assert withheld(seen) == []

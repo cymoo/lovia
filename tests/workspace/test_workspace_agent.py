@@ -194,49 +194,95 @@ async def test_readonly_workspace_exposes_no_shell_or_write(tmp_path) -> None:
     assert "not available" in tool_msg.content
 
 
+class _Offers(ScriptedProvider):
+    """Records the tool names each call offers."""
+
+    def __init__(self, script, sees: bool | None = None) -> None:
+        super().__init__(script)
+        if sees is not None:
+            self.supports_vision = sees
+        self.offered: list[list[str]] = []
+
+    async def stream(self, entries, *, tools=None, **kwargs):
+        self.offered.append(sorted(t["function"]["name"] for t in tools or []))
+        async for delta in super().stream(entries, tools=tools, **kwargs):
+            yield delta
+
+
+@tool(returns_images=True)
+def _shot() -> list:
+    """Return an image."""
+    from lovia.parts import ImagePart
+
+    return [ImagePart(data="iVBORw0KGgo=", mime_type="image/png")]
+
+
+@tool(describes_images=True)
+def _describe(path: str) -> str:
+    """Describe an image."""
+    return "a cat"
+
+
 @pytest.mark.asyncio
-async def test_view_image_filtered_for_text_only_models(tmp_path) -> None:
-    """The workspace bundle carries view_image, but an ambient tool whose
-    results the model cannot see is not offered — calling it reports
-    "not available" like any unknown tool."""
-    (tmp_path / "s.png").write_bytes(b"png-bytes")
-    provider = ScriptedProvider(
-        [call("view_image", {"path": "s.png"}, call_id="v"), text("done")]
+async def test_a_call_offers_the_image_tools_for_what_the_model_sees(tmp_path) -> None:
+    """returns_images tools while the model sees, describes_images tools while
+    it doesn't — wherever they come from, workspace or agent.tools."""
+    for sees, expected in (
+        (None, ["_shot", "view_image"]),  # undeclared: taken to see
+        (False, ["_describe"]),
+    ):
+        provider = _Offers([text("ok")], sees=sees)
+        agent = Agent(
+            name="t",
+            model=provider,
+            tools=[_shot, _describe],
+            workspace=Workspace.local(str(tmp_path), mode="readonly"),
+        )
+        await Runner.run(agent, "go")
+        image_tools = [
+            n for n in provider.offered[0] if n in {"_shot", "_describe", "view_image"}
+        ]
+        assert image_tools == expected, sees
+
+
+@pytest.mark.asyncio
+async def test_a_tool_not_offered_still_runs_and_its_image_is_withheld(
+    tmp_path,
+) -> None:
+    from lovia.parts import ImagePart
+    from lovia.transcript import InputEntry, ToolResultEntry
+
+    (tmp_path / "s.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    provider = _Offers(
+        [call("view_image", {"path": "s.png"}, call_id="v"), text("done")], sees=False
     )
+    seen: list = []
+    original = provider.stream
+
+    async def stream(entries, **kwargs):
+        seen.append(entries)
+        async for d in original(entries, **kwargs):
+            yield d
+
+    provider.stream = stream  # type: ignore[method-assign]
     agent = Agent(
         name="t",
         model=provider,
         workspace=Workspace.local(str(tmp_path), mode="readonly"),
     )
-
     result = await Runner.run(agent, "look at s.png")
 
-    tool_msg = next(m for m in result.messages if m.role == "tool")
-    assert "not available" in tool_msg.content
-
-
-@pytest.mark.asyncio
-async def test_view_image_gating_logged_once_per_model(tmp_path, caplog) -> None:
-    """The 'not offering it' hint fires once per process, keyed by model."""
-    import logging
-
-    from lovia.runtime import loop as loop_mod
-
-    class NamedScripted(ScriptedProvider):
-        model = "textonly-model"
-
-    provider = NamedScripted([text("one"), text("two")])
-    agent = Agent(
-        name="t",
-        model=provider,
-        workspace=Workspace.local(str(tmp_path), mode="readonly"),
-    )
-    loop_mod._logged_once.clear()
-    with caplog.at_level(logging.INFO, logger="lovia.runtime.loop"):
-        await Runner.run(agent, "first")
-        await Runner.run(agent, "second")
-    hints = [r for r in caplog.records if "not offering it" in r.getMessage()]
-    assert len(hints) == 1
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert entry.parts is not None  # the transcript keeps the image
+    for e in seen[1]:
+        parts = (
+            e.parts
+            if isinstance(e, ToolResultEntry)
+            else e.content
+            if isinstance(e, InputEntry) and isinstance(e.content, list)
+            else None
+        )
+        assert not any(isinstance(p, ImagePart) for p in parts or [])
 
 
 @pytest.mark.asyncio
@@ -273,28 +319,6 @@ async def test_view_image_offered_to_vision_models(tmp_path) -> None:
     assert jpeg.output == "j.png\n[image: image/jpeg, 4 B]"
     assert bad.is_error and "not PNG, JPEG, GIF or WebP" in bad.output
     assert result.output == "saw it"
-
-
-@pytest.mark.asyncio
-async def test_explicit_returns_images_tool_survives_text_model(tmp_path) -> None:
-    """agent.tools is the user's own wiring — never filtered; the text-only
-    model sees the projection (adapter degrade), not a missing tool."""
-    from lovia.parts import ImagePart
-    from lovia.transcript import ToolResultEntry
-
-    @tool(returns_images=True)
-    def fake_shot() -> list:
-        """Return an image."""
-        return [ImagePart(data="YQ==", mime_type="image/png")]
-
-    provider = ScriptedProvider([call("fake_shot", {}, call_id="f"), text("ok")])
-    agent = Agent(name="t", model=provider, tools=[fake_shot])
-
-    result = await Runner.run(agent, "shoot")
-
-    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
-    assert entry.output == "[image: image/png, 1 B]"
-    assert entry.parts is not None
 
 
 @pytest.mark.asyncio

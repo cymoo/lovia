@@ -110,11 +110,8 @@ class AnthropicProvider:
         # dialect is request shape only — the API-key requirement and the
         # /models probe follow the real host.
         official_dialect: bool | None = None,
-        # Whether this deployment's model accepts image inputs. ``None``
-        # (default) resolves to the official-host heuristic below: an
-        # ``ANTHROPIC_BASE_URL`` pointing at a compatible gateway may front a
-        # text-only model, so only the real Anthropic host is assumed
-        # multimodal. Pass True/False to declare it explicitly.
+        # ``False`` never sends this model an image; ``None``/``True`` sends
+        # them, and a refusal is the run loop's to recover from.
         supports_vision: bool | None = None,
         # Fields merged verbatim into every request body — what this endpoint
         # always needs (``output_config.effort``, ``thinking``,
@@ -192,16 +189,9 @@ class AnthropicProvider:
 
     @property
     def supports_vision(self) -> bool:
-        """True when the endpoint's model accepts image inputs.
-
-        Every current Claude model is multimodal, so this defaults to True on
-        the official Anthropic host; a compatible gateway
-        (``ANTHROPIC_BASE_URL``) may front a text-only model, so it defaults to
-        False there. Override via the constructor parameter.
-        """
-        if self._supports_vision is not None:
-            return self._supports_vision
-        return self._on_official_host()
+        """False only when declared so: images are sent to every other model,
+        and a refusal is the run loop's to recover from."""
+        return self._supports_vision is not False
 
     def _on_official_host(self) -> bool:
         """The endpoint literally is the official API (auth requirements)."""

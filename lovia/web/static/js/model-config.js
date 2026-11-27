@@ -206,6 +206,33 @@ export function ghostBtn(label, onClick) {
   return btn;
 }
 
+// What the Anthropic adapter asks for when a profile sets no max_tokens
+// (lovia/providers/anthropic.py `default_max_tokens`): its API requires one.
+const ANTHROPIC_MAX_TOKENS = 16_384;
+
+/**
+ * A folded section of a form: a chevron row naming it, and — while folded —
+ * what is set inside, so nothing set hides behind it. Starts folded.
+ * @param {string} title
+ */
+export function fold(title) {
+  const node = /** @type {HTMLDetailsElement} */ (el('details', 'lv-cfg-advanced'));
+  const summary = el('summary');
+  summary.innerHTML = icon('chevron-right', { size: 14 });
+  const said = el('span', 'lv-cfg-advanced-set');
+  summary.append(el('span', 'lv-cfg-advanced-title', title), said);
+  const body = el('div', 'lv-cfg-advanced-body');
+  node.append(summary, body);
+  return { node, body, say: (/** @type {string} */ text) => void (said.textContent = text) };
+}
+
+/** A form foot's right end: its Cancel and Save (a test sits on the left). */
+export function formEnd(...buttons) {
+  const end = el('div', 'lv-cfg-form-end');
+  end.append(...buttons);
+  return end;
+}
+
 /**
  * Common request shapes per API flavor, offered as chips. Each chip writes
  * its object into the JSON below — nothing here is a capability claim, and
@@ -447,10 +474,13 @@ export function buildModelsPane() {
     const c = cfg();
     const box = el('div', 'lv-cfg-roles');
     box.appendChild(el('div', 'lv-cfg-pane-title', t('cfg.roles')));
+    const card = el('div', 'lv-settings-group');
+    box.appendChild(card);
 
+    // Settings → General's row: what it is on the left, the pick on the right.
     const roleRow = (labelText, current, emptyLabel, role, hint) => {
       const select = /** @type {HTMLSelectElement} */ (
-        el('select', 'lv-dialog-input lv-cfg-role-select')
+        el('select', 'lv-dialog-input lv-settings-select lv-cfg-role-select')
       );
       const none = el('option', '', emptyLabel);
       none.setAttribute('value', '');
@@ -470,17 +500,15 @@ export function buildModelsPane() {
           select.value = cfg()?.roles?.[role] || '';
         }
       });
-      const row = el('div', 'lv-cfg-role-row');
-      row.appendChild(el('label', 'lv-cfg-role-label', labelText));
-      row.appendChild(select);
-      row.appendChild(el('span', 'lv-cfg-role-hint', hint));
+      const row = el('label', 'lv-settings-row');
+      const text = el('span', 'lv-settings-text');
+      text.append(el('span', 'lv-settings-label', labelText), el('span', 'lv-settings-hint', hint));
+      row.append(text, select);
       return row;
     };
 
-    box.appendChild(
+    card.append(
       roleRow(t('cfg.roleVision'), c.roles.vision, t('cfg.roleNone'), 'vision', t('cfg.roleVisionHint')),
-    );
-    box.appendChild(
       roleRow(t('cfg.roleAux'), c.roles.aux, t('cfg.roleFollow'), 'aux', t('cfg.roleAuxHint')),
     );
     return box;
@@ -503,7 +531,6 @@ export function buildModelsPane() {
     const form = el('div', 'lv-cfg-form');
 
     const nameIn = input(stored?.name || '', { placeholder: stored?.model || '' });
-    form.appendChild(field(t('cfg.name'), nameIn, t('cfg.nameHint')));
 
     let flavor = stored?.flavor || 'openai';
     const urlIn = input(stored?.base_url || '', {
@@ -519,6 +546,7 @@ export function buildModelsPane() {
       (val) => {
         flavor = val;
         urlIn.placeholder = flavorDefault(flavor);
+        maxTokensIn.placeholder = maxTokensDefault();
         extras.syncFlavor();
       },
     );
@@ -588,22 +616,33 @@ export function buildModelsPane() {
 
     const modelIn = input(stored?.model || '', { mono: true, placeholder: 'deepseek-v4-pro' });
     form.appendChild(field(t('cfg.modelId'), modelIn));
+    // Last: optional, and only how the model is named here.
+    form.appendChild(field(t('cfg.name'), nameIn, t('cfg.nameHint')));
 
-    // Advanced: context window + vision capability.
-    const adv = /** @type {HTMLDetailsElement} */ (el('details', 'lv-cfg-advanced'));
-    adv.appendChild(el('summary', '', t('cfg.advanced')));
+    // Advanced: folded, its row saying what is set in it.
+    const adv = fold(t('cfg.advanced'));
     const windowIn = input(stored?.context_window ? String(stored.context_window) : '', {
       placeholder: t('cfg.contextWindowAuto'),
     });
     windowIn.inputMode = 'numeric';
-    adv.appendChild(field(t('cfg.contextWindow'), windowIn));
+    // What the request asks for when this is empty: the Anthropic adapter
+    // must send a number (lovia's own default), the OpenAI one sends none.
+    const maxTokensDefault = () =>
+      flavor === 'anthropic'
+        ? t('cfg.maxTokensDefault', { n: ANTHROPIC_MAX_TOKENS.toLocaleString() })
+        : t('cfg.maxTokensAuto');
     const maxTokensIn = input(stored?.max_tokens ? String(stored.max_tokens) : '', {
-      placeholder: t('cfg.maxTokensAuto'),
+      placeholder: maxTokensDefault(),
     });
     maxTokensIn.inputMode = 'numeric';
-    adv.appendChild(field(t('cfg.maxTokens'), maxTokensIn, t('cfg.maxTokensHint')));
+    const limits = el('div', 'lv-cfg-pair');
+    limits.append(
+      field(t('cfg.contextWindow'), windowIn),
+      field(t('cfg.maxTokens'), maxTokensIn),
+    );
+    adv.body.appendChild(limits);
     let vision = stored?.vision || 'auto';
-    adv.appendChild(
+    adv.body.appendChild(
       field(
         t('cfg.vision'),
         segmented(
@@ -615,6 +654,7 @@ export function buildModelsPane() {
           vision,
           (val) => {
             vision = val;
+            sayAdvanced();
           },
         ),
         t('cfg.visionHint'),
@@ -624,7 +664,7 @@ export function buildModelsPane() {
     /** @type {boolean | null} */
     let trustEnv = stored?.trust_env ?? null;
     const proxyKey = () => (trustEnv === null ? 'default' : trustEnv ? 'on' : 'off');
-    adv.appendChild(
+    adv.body.appendChild(
       field(
         t('cfg.proxy'),
         segmented(
@@ -636,6 +676,7 @@ export function buildModelsPane() {
           proxyKey(),
           (val) => {
             trustEnv = val === 'default' ? null : val === 'on';
+            sayAdvanced();
           },
         ),
         t('cfg.proxyHint'),
@@ -645,18 +686,23 @@ export function buildModelsPane() {
     // endpoint, in the endpoint's own dialect. The textarea is the truth;
     // the chips just write common shapes into it.
     const extras = extraBodyEditor(stored?.extra_body, () => flavor);
-    adv.appendChild(field(t('cfg.extraBody'), extras.node, t('cfg.extraBodyHint')));
-    const hasExtras = stored && Object.keys(stored.extra_body || {}).length > 0;
-    if (
-      stored?.context_window ||
-      stored?.max_tokens ||
-      (stored && stored.vision !== 'auto') ||
-      trustEnv !== null ||
-      hasExtras
-    ) {
-      adv.open = true;
-    }
-    form.appendChild(adv);
+    adv.body.appendChild(field(t('cfg.extraBody'), extras.node, t('cfg.extraBodyHint')));
+    const sayAdvanced = () => {
+      const set = [];
+      const win = positiveInt(windowIn.value);
+      if (win) set.push(t('cfg.advWindow', { n: win.toLocaleString() }));
+      const most = positiveInt(maxTokensIn.value);
+      if (most) set.push(t('cfg.advMaxTokens', { n: most.toLocaleString() }));
+      if (vision !== 'auto') {
+        set.push(t('cfg.advPair', { k: t('cfg.vision'), v: t(vision === 'on' ? 'cfg.visionOn' : 'cfg.visionOff') }));
+      }
+      if (trustEnv !== null) set.push(t(trustEnv ? 'cfg.proxyOn' : 'cfg.proxyOff'));
+      if (/[^\s{}]/.test(extras.node.querySelector('textarea')?.value || '')) set.push(t('cfg.extraBody'));
+      adv.say(set.join(' · ') || t('cfg.advancedNone'));
+    };
+    adv.node.addEventListener('input', sayAdvanced);
+    sayAdvanced();
+    form.appendChild(adv.node);
 
     // Test connection — the wizard's probe over HTTP, same classifications.
     const testRow = el('div', 'lv-cfg-test-row');
@@ -692,7 +738,6 @@ export function buildModelsPane() {
       }
     });
     testRow.append(testBtn, testOut);
-    form.appendChild(testRow);
 
     // A probe without a model ID can't mean anything — keep the button dead
     // until it can.
@@ -740,7 +785,7 @@ export function buildModelsPane() {
     save.addEventListener('click', async () => {
       const extraBody = extras.read();
       if (extraBody === null) {
-        adv.open = true;
+        adv.node.open = true;
         extras.focus();
         return;
       }
@@ -781,7 +826,7 @@ export function buildModelsPane() {
         save.disabled = false;
       }
     });
-    actions.append(cancel, save);
+    actions.append(testRow, formEnd(cancel, save));
 
     box.append(form, errBox, actions);
     return box;
@@ -842,6 +887,7 @@ export function buildSearchPane() {
         try {
           await api.setSearch(body);
           await loadConfig();
+          sayAdvanced();
           void test();
         } catch (err) {
           toast(String(err.message || err), { type: 'error' });
@@ -866,8 +912,17 @@ export function buildSearchPane() {
       if (provider === 'auto') desc.textContent = t('search.about.auto');
       else if (name) desc.textContent = t(`search.about.${provider}`) + t('search.sentTo', { name });
       else desc.textContent = t('search.offHint');
-      adv.hidden = provider === 'off';
+      adv.node.hidden = provider === 'off';
       keyField.hidden = !single();
+      sayAdvanced();
+    };
+    // Folded, the row says what is set: a saved key, a proxy of its own.
+    const sayAdvanced = () => {
+      const set = [];
+      if (single() && savedKey().set) set.push(t('search.keySaved'));
+      const own = saved().trust_env ?? null;
+      if (own !== null) set.push(t(own ? 'cfg.proxyOn' : 'cfg.proxyOff'));
+      adv.say(set.join(' · ') || t('cfg.advancedNone'));
     };
 
     let tested = 0; // a slower, older answer is dropped
@@ -915,8 +970,7 @@ export function buildSearchPane() {
     form.append(strip, desc, status);
 
     // Advanced: only what a failure would send you looking for.
-    const adv = /** @type {HTMLDetailsElement} */ (el('details', 'lv-cfg-advanced'));
-    adv.appendChild(el('summary', '', t('cfg.advanced')));
+    const adv = fold(t('cfg.advanced'));
 
     /** Typing a key replaces the saved one; Save (or Enter) saves it. */
     let editing = false;
@@ -971,10 +1025,10 @@ export function buildSearchPane() {
     };
     renderKey();
     const keyField = field(t('search.key'), keyBox, t('search.keyHint'));
-    adv.appendChild(keyField);
+    adv.body.appendChild(keyField);
     // Through the system proxy or not; null follows Settings → General.
     const trustEnv = saved().trust_env ?? null;
-    adv.appendChild(
+    adv.body.appendChild(
       field(
         t('cfg.proxy'),
         segmented(
@@ -989,8 +1043,7 @@ export function buildSearchPane() {
         t('cfg.proxyHint'),
       ),
     );
-    adv.open = (single() && savedKey().set) || trustEnv !== null;
-    form.appendChild(adv);
+    form.appendChild(adv.node);
     describeService();
     void test();
 

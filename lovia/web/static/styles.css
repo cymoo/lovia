@@ -113,6 +113,10 @@
     "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
   --lv-mono:
     ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Settings → Appearance → Message font: serif */
+  --lv-serif:
+    "Iowan Old Style", "Palatino Linotype", Charter, Georgia,
+    "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif;
 
   /* shape */
   --lv-radius-xs: 5px;
@@ -244,6 +248,9 @@ select,
 textarea {
   font-family: inherit;
   font-size: inherit;
+  /* Where you type blinks in the accent: a field stays neutral on focus,
+     the caret is the one live mark in it. */
+  caret-color: var(--lv-accent);
 }
 .lv-vh {
   position: absolute;
@@ -271,6 +278,68 @@ textarea {
 ::selection {
   background: color-mix(in srgb, var(--lv-accent) 28%, transparent);
 }
+
+/* ---- Appearance looks (Settings → Appearance, appearance.js) -------------
+   A data-lv-* attribute on <html> per look a person picked, absent at its
+   default — so a deployer's tokens still set the defaults. Each pair sets
+   the same tokens in both themes, the dark one winning on specificity. The
+   swatches in Settings repeat these colours (.lv-swatch). Kept out of the
+   token section above: `lovia web init-ui` copies that one as the defaults. */
+[data-lv-accent="blue"] { --lv-accent: #2f6bd8; }
+[data-lv-accent="violet"] { --lv-accent: #7054d4; }
+[data-lv-accent="orange"] { --lv-accent: #c75a1c; }
+[data-lv-accent="pink"] { --lv-accent: #c4407c; }
+[data-lv-accent="graphite"] { --lv-accent: #262624; --lv-accent-hover: #46463f; }
+[data-theme="dark"][data-lv-accent="blue"] { --lv-accent: #5c9bf4; --lv-on-accent: #0b1f3d; }
+[data-theme="dark"][data-lv-accent="violet"] { --lv-accent: #a191f4; --lv-on-accent: #221a48; }
+[data-theme="dark"][data-lv-accent="orange"] { --lv-accent: #f1904f; --lv-on-accent: #3a1906; }
+[data-theme="dark"][data-lv-accent="pink"] { --lv-accent: #ef7cab; --lv-on-accent: #3d0d22; }
+[data-theme="dark"][data-lv-accent="graphite"] {
+  --lv-accent: #e6e6e3;
+  --lv-on-accent: #1b1b1a;
+  --lv-accent-hover: #ffffff;
+}
+
+[data-lv-tone="warm"] {
+  --lv-bg: #fbfaf7;
+  --lv-sidebar-surface: #f3f1ea;
+  --lv-surface: #fffefc;
+  --lv-surface-2: #f3f1eb;
+  --lv-surface-3: #e9e6de;
+  --lv-border: #e7e4dc;
+  --lv-border-strong: #d7d3c8;
+}
+[data-theme="dark"][data-lv-tone="warm"] {
+  --lv-bg: #1e1c19;
+  --lv-sidebar-surface: #181714;
+  --lv-surface: #24221f;
+  --lv-surface-2: #2c2a26;
+  --lv-surface-3: #37342f;
+  --lv-border: #322f2b;
+  --lv-border-strong: #423e38;
+}
+[data-lv-tone="cool"] {
+  --lv-bg: #fcfcfd;
+  --lv-sidebar-surface: #f2f4f7;
+  --lv-surface: #ffffff;
+  --lv-surface-2: #f1f3f6;
+  --lv-surface-3: #e6e9ee;
+  --lv-border: #e4e7ec;
+  --lv-border-strong: #d2d6de;
+}
+[data-theme="dark"][data-lv-tone="cool"] {
+  --lv-bg: #17191c;
+  --lv-sidebar-surface: #121417;
+  --lv-surface: #1e2024;
+  --lv-surface-2: #26282d;
+  --lv-surface-3: #303238;
+  --lv-border: #2b2d32;
+  --lv-border-strong: #3a3d44;
+}
+
+:root[data-lv-size="sm"] { --lv-chat-font-scale: 0.92; }
+:root[data-lv-size="lg"] { --lv-chat-font-scale: 1.14; }
+:root[data-lv-width="wide"] { --lv-content-w: 1040px; }
 
 /* ---- Scrollbars --------------------------------------------------------- */
 html {
@@ -576,9 +645,11 @@ body.lv-sidebar-resizing {
   background: var(--lv-border-strong);
 }
 /* Only commands at work: a still dot. A dev server runs for hours. */
-[data-tone="running"] > .lv-bg-dot,
 [data-tone="steady"] > .lv-bg-dot {
   background: var(--lv-ok);
+}
+[data-tone="running"] > .lv-bg-dot {
+  background: var(--lv-accent);
 }
 [data-tone="running"] > .lv-bg-dot {
   animation: lv-run-pulse 1.6s var(--lv-ease) infinite;
@@ -729,7 +800,7 @@ body.lv-sidebar-resizing {
   height: 6px;
   margin: 0 auto 0 -1px; /* 7px off the text with the row's 8px gap */
   border-radius: 50%;
-  background: var(--lv-ok);
+  background: var(--lv-accent); /* live state: the accent, as every spinner */
   animation: lv-run-pulse 1.6s var(--lv-ease) infinite;
 }
 /* A run suspended on an approval card: still, not running, but waiting on
@@ -841,11 +912,13 @@ body.lv-sidebar-resizing {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 6px 10px;
+  padding: 7px 10px;
   border-radius: var(--lv-radius-sm);
   /* A heading over its chats, quieter than they are: the titles are what
-     the eye is looking for. */
+     the eye is looking for. A fixed line box: a CJK name falls back to a
+     taller font, and its row must not stand taller than a Latin one. */
   font-size: 13px;
+  line-height: 18px;
   font-weight: 550;
   color: var(--lv-muted);
   text-align: left;
@@ -893,7 +966,7 @@ body.lv-sidebar-resizing {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--lv-ok);
+  background: var(--lv-accent);
   animation: lv-run-pulse 1.6s var(--lv-ease) infinite;
 }
 .lv-ws-group-head.lv-running .lv-ws-group-chevron {
@@ -906,7 +979,7 @@ body.lv-sidebar-resizing {
   display: flex;
   align-items: center;
   gap: 1px;
-  padding-right: 4px;
+  padding-right: 3px;
   opacity: 0;
   transition: opacity var(--lv-t-fast);
 }
@@ -943,10 +1016,18 @@ body.lv-sidebar-resizing {
     opacity: 1; /* no hover on touch — the controls must be visible */
   }
 }
+/* A chat row's "⋯", sized and tinted alike: inset evenly in the heading,
+   its hover a step over the heading's own fill. */
 .lv-ws-group-btn {
   width: 26px;
   height: 26px;
+  border-radius: var(--lv-radius-xs);
   color: var(--lv-muted);
+}
+.lv-sidebar .lv-ws-group-btn:hover,
+.lv-ws-group-btn[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--lv-ink) 7%, var(--lv-head-bg));
+  color: var(--lv-ink);
 }
 .lv-ws-group-link {
   padding: 3px 8px;
@@ -1779,6 +1860,9 @@ body.lv-view-open #files-btn {
   color: var(--lv-ink);
   font-size: calc(14.5px * var(--lv-chat-font-scale, 1));
 }
+[data-lv-font="serif"] .lv-turn .lv-body {
+  font-family: var(--lv-serif);
+}
 .lv-turn .lv-body > :first-child {
   margin-top: 0;
 }
@@ -1948,7 +2032,7 @@ body.lv-view-open #files-btn {
   color: var(--lv-ink);
 }
 .lv-btn-copy-code.lv-copied {
-  color: var(--lv-ok);
+  color: var(--lv-accent-text);
 }
 
 /* ---- Mermaid diagrams ----------------------------------------------------- */
@@ -2238,7 +2322,7 @@ body.lv-view-open #files-btn {
   background: var(--lv-surface-2);
 }
 .lv-btn-copy.lv-copied {
-  color: var(--lv-ok);
+  color: var(--lv-accent-text);
   opacity: 1;
 }
 
@@ -4221,7 +4305,7 @@ dialog.lv-custom-dialog::backdrop {
   padding: 9px 13px;
   border: 1px solid var(--lv-border);
   border-radius: var(--lv-radius-sm);
-  background: var(--lv-bg);
+  background-color: var(--lv-bg);
   color: var(--lv-ink);
   font-size: 14px;
   outline: none;
@@ -4235,9 +4319,31 @@ dialog.lv-custom-dialog::backdrop {
   border-color: var(--lv-border-strong);
 }
 .lv-dialog-input:focus {
-  background: var(--lv-surface);
+  background-color: var(--lv-surface);
   border-color: var(--lv-muted);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--lv-ink) 8%, transparent);
+}
+/* A select draws its own chevron, inset as far from the edge as the text
+   is: the native one hugs the border. --lv-select-chevron is the muted ink
+   of each theme (an image can't read a custom property). */
+select.lv-dialog-input {
+  --lv-select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23666660' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  background-image: var(--lv-select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 14px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+[data-theme="dark"] select.lv-dialog-input {
+  --lv-select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239e9e98' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+select.lv-dialog-input:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 .lv-dialog-actions {
   display: flex;
@@ -5459,7 +5565,7 @@ body.lv-files-resizing {
   color: var(--lv-muted-2);
 }
 .lv-bg-row.lv-running .lv-bg-icon {
-  color: var(--lv-ok);
+  color: var(--lv-accent);
 }
 .lv-bg-row.lv-approval .lv-bg-icon {
   color: var(--lv-warn);
@@ -6324,7 +6430,7 @@ body.lv-files-resizing {
    rendering of the same list would only repeat it (copy still copies it). A
    row without a list — a failed or clearing update — keeps its text. */
 .lv-tool--plan .lv-tool-params,
-.lv-tool--plan .lv-tool-result-box:has(> .lv-plan-list) :is(.lv-tool-result, .lv-tool-expand) {
+.lv-tool--plan .lv-tool-result-box:has(> .lv-plan-list) .lv-tool-result {
   display: none;
 }
 .lv-tool--plan .lv-tool-result-box > .lv-plan-list {
@@ -6794,9 +6900,6 @@ body.lv-files-resizing {
   color: var(--lv-ink);
   background: var(--lv-surface-3);
   border-color: var(--lv-border-strong);
-}
-.lv-tool .lv-tool-result.lv-expanded {
-  max-height: none;
 }
 /* Open-in-files sits at the summary's right edge, revealed on hover. */
 .lv-tool summary .lv-tool-open-file {
@@ -7345,6 +7448,14 @@ body.lv-files-resizing {
 .lv-followup {
   text-align: left;
 }
+/* A suggestion is one click from sending: on hover it takes a breath of the
+   accent, like a link, where the other chips just lift. */
+.lv-followup:hover,
+.lv-empty-example.lv-chip:hover {
+  color: var(--lv-accent-text);
+  background: var(--lv-accent-soft);
+  border-color: color-mix(in srgb, var(--lv-accent) 35%, transparent);
+}
 
 /* ---- Files panel: filter + wrap toggle -------------------------------------------------------------- */
 .lv-files-search {
@@ -7517,6 +7628,201 @@ body.lv-files-resizing {
 .lv-settings-row:has(.lv-switch) {
   cursor: pointer;
 }
+/* A pane of preferences: rows that belong together on one card, a card per
+   kind (ChatGPT's settings read this way). */
+.lv-settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.lv-settings-group {
+  padding: 0 16px;
+  border: 1px solid var(--lv-border);
+  border-radius: var(--lv-radius);
+}
+.lv-settings-group:empty {
+  display: none;
+}
+.lv-settings-group .lv-settings-row {
+  padding: 12px 0;
+}
+.lv-look-reset {
+  align-self: flex-end;
+  color: var(--lv-muted);
+}
+.lv-look-reset[hidden] {
+  display: none;
+}
+
+/* Appearance: radios drawn as theme previews and swatches. */
+.lv-look-choice {
+  position: relative; /* holds its hidden radio */
+  display: block;
+  cursor: pointer;
+}
+.lv-look-choice input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.lv-theme-cards {
+  display: flex;
+  gap: 12px;
+}
+.lv-theme-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.lv-theme-card-pic {
+  position: relative;
+  display: block;
+  width: 84px;
+  height: 54px;
+  overflow: hidden;
+  border-radius: 9px;
+  box-shadow: 0 0 0 1px var(--lv-border-strong);
+  transition: box-shadow var(--lv-t-fast);
+}
+.lv-look-choice:hover .lv-theme-card-pic {
+  box-shadow: 0 0 0 1px var(--lv-muted-2);
+}
+.lv-look-choice:has(:checked) .lv-theme-card-pic {
+  box-shadow: 0 0 0 2px var(--lv-accent);
+}
+.lv-look-choice:has(:focus-visible) :is(.lv-theme-card-pic, .lv-swatch) {
+  outline: 2px solid var(--lv-accent);
+  outline-offset: 3px;
+}
+.lv-theme-card-name {
+  font-size: 12px;
+  color: var(--lv-muted);
+}
+.lv-look-choice:has(:checked) .lv-theme-card-name {
+  color: var(--lv-ink);
+  font-weight: 560;
+}
+/* A window in miniature, in fixed colours: it shows the theme, not the
+   page's current one. System is half of each. */
+.lv-theme-thumb {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  background: var(--lv-tb-bg);
+}
+.lv-theme-thumb[data-mode="light"] {
+  --lv-tb-bg: #ffffff;
+  --lv-tb-side: #f2f2ee;
+  --lv-tb-line: #dededa;
+  --lv-tb-edge: #e2e2de;
+}
+.lv-theme-thumb[data-mode="dark"] {
+  --lv-tb-bg: #1b1b1a;
+  --lv-tb-side: #131312;
+  --lv-tb-line: #3c3c39;
+  --lv-tb-edge: #3c3c39;
+}
+.lv-theme-thumb + .lv-theme-thumb {
+  clip-path: inset(0 0 0 50%);
+}
+.lv-theme-thumb-side {
+  width: 28%;
+  background: var(--lv-tb-side);
+}
+.lv-theme-thumb-main {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 8px;
+}
+.lv-theme-thumb-main i {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--lv-tb-line);
+}
+.lv-theme-thumb-main i:nth-child(1) { width: 62%; }
+.lv-theme-thumb-main i:nth-child(2) { width: 88%; }
+.lv-theme-thumb-main i:nth-child(3) { width: 46%; }
+.lv-theme-thumb-main b {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 7px;
+  height: 9px;
+  border-radius: 5px;
+  background: var(--lv-tb-bg);
+  box-shadow: 0 0 0 1px var(--lv-tb-edge);
+}
+.lv-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.lv-swatch {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--lv-sw);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lv-ink) 10%, transparent);
+  transition: box-shadow var(--lv-t-fast);
+}
+.lv-look-choice:hover .lv-swatch {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--lv-ink) 10%, transparent),
+    0 0 0 2px var(--lv-surface),
+    0 0 0 3px var(--lv-border-strong);
+}
+.lv-look-choice:has(:checked) .lv-swatch {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--lv-ink) 10%, transparent),
+    0 0 0 2px var(--lv-surface),
+    0 0 0 4px var(--lv-sw-ring, var(--lv-sw));
+}
+/* The accents of [data-lv-accent] above; Default is lovia's own. */
+.lv-swatch-accent[data-value="default"] { --lv-sw: #2d8a6e; }
+.lv-swatch-accent[data-value="blue"] { --lv-sw: #2f6bd8; }
+.lv-swatch-accent[data-value="violet"] { --lv-sw: #7054d4; }
+.lv-swatch-accent[data-value="orange"] { --lv-sw: #c75a1c; }
+.lv-swatch-accent[data-value="pink"] { --lv-sw: #c4407c; }
+.lv-swatch-accent[data-value="graphite"] { --lv-sw: #262624; }
+[data-theme="dark"] .lv-swatch-accent[data-value="default"] { --lv-sw: #3ecb8f; }
+[data-theme="dark"] .lv-swatch-accent[data-value="blue"] { --lv-sw: #5c9bf4; }
+[data-theme="dark"] .lv-swatch-accent[data-value="violet"] { --lv-sw: #a191f4; }
+[data-theme="dark"] .lv-swatch-accent[data-value="orange"] { --lv-sw: #f1904f; }
+[data-theme="dark"] .lv-swatch-accent[data-value="pink"] { --lv-sw: #ef7cab; }
+[data-theme="dark"] .lv-swatch-accent[data-value="graphite"] { --lv-sw: #e6e6e3; }
+/* A tone is its sidebar beside its canvas, as the page shows them. */
+.lv-swatch-tone {
+  --lv-sw-ring: var(--lv-ink);
+  width: 32px;
+  border-radius: 7px;
+  background: linear-gradient(90deg, var(--lv-sw-side) 0 38%, var(--lv-sw) 38%);
+  box-shadow: inset 0 0 0 1px var(--lv-border-strong);
+}
+.lv-look-choice:hover .lv-swatch-tone {
+  box-shadow:
+    inset 0 0 0 1px var(--lv-border-strong),
+    0 0 0 2px var(--lv-surface),
+    0 0 0 3px var(--lv-border-strong);
+}
+.lv-look-choice:has(:checked) .lv-swatch-tone {
+  box-shadow:
+    inset 0 0 0 1px var(--lv-border-strong),
+    0 0 0 2px var(--lv-surface),
+    0 0 0 4px var(--lv-sw-ring);
+}
+.lv-swatch-tone[data-value="default"] { --lv-sw: #ffffff; --lv-sw-side: #f5f5f1; }
+.lv-swatch-tone[data-value="warm"] { --lv-sw: #fbfaf7; --lv-sw-side: #f1eee5; }
+.lv-swatch-tone[data-value="cool"] { --lv-sw: #fcfcfd; --lv-sw-side: #eef1f5; }
+[data-theme="dark"] .lv-swatch-tone[data-value="default"] { --lv-sw: #1b1b1a; --lv-sw-side: #131312; }
+[data-theme="dark"] .lv-swatch-tone[data-value="warm"] { --lv-sw: #1e1c19; --lv-sw-side: #151411; }
+[data-theme="dark"] .lv-swatch-tone[data-value="cool"] { --lv-sw: #17191c; --lv-sw-side: #0f1114; }
 
 /* On/off switch — a role="switch" button holding its knob (settings toggles,
    a schedule's pause/resume). */
@@ -7740,7 +8046,7 @@ body.lv-files-resizing {
 
 /* ---- Settings dialog: left-rail shell (General / Models / Search / About) - */
 .lv-custom-dialog.lv-dialog-xl {
-  max-width: 760px;
+  max-width: 800px;
   width: 94%;
 }
 .lv-settings-shell {
@@ -7786,9 +8092,22 @@ body.lv-files-resizing {
   background: var(--lv-surface-2);
 }
 .lv-settings-rail-item.lv-active {
+  position: relative;
   background: var(--lv-surface-2);
   color: var(--lv-ink);
   font-weight: 570;
+}
+/* The sidebar's mark of the open row, so the two rails read alike. */
+.lv-settings-rail-item.lv-active::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 1px;
+  inset-block: 0;
+  margin-block: auto;
+  width: 2px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--lv-accent);
 }
 /* Between the groups: yours, the server's, About. */
 .lv-settings-rail-sep {
@@ -7817,6 +8136,9 @@ body.lv-files-resizing {
   }
   .lv-settings-rail-item {
     white-space: nowrap;
+  }
+  .lv-settings-rail-item.lv-active::before {
+    display: none; /* a row of pills: the fill says which */
   }
   .lv-settings-rail-sep {
     width: 1px;
@@ -8092,8 +8414,10 @@ body.lv-files-resizing {
   border-radius: 50%;
   background: var(--lv-border-strong);
 }
+/* Settings' "this works" marks (a connection, a saved key, a passing test)
+   take the accent; --lv-ok stays for records of what happened (diffs, runs). */
 .lv-mcp-status-ok .lv-mcp-dot {
-  background: var(--lv-ok);
+  background: var(--lv-accent);
 }
 .lv-mcp-status-fail .lv-mcp-dot {
   background: var(--lv-danger);
@@ -8157,12 +8481,6 @@ body.lv-files-resizing {
   color: var(--lv-ink-2);
   background: var(--lv-surface-2);
   border-radius: var(--lv-radius-sm);
-}
-/* JSON keeps its shape: the editor takes the pane's width and scrolls
-   sideways instead of wrapping a long path into the next line. */
-.lv-cfg-form.lv-mcp-form,
-.lv-mcp-form ~ .lv-cfg-form-actions {
-  max-width: none;
 }
 /* A server's name is case-sensitive: shown as written, not as a heading. */
 .lv-mcp-title-name {
@@ -8253,32 +8571,15 @@ body.lv-files-resizing {
   margin-top: 0;
 }
 .lv-cfg-roles {
-  margin-top: 18px;
-  border-top: 1px solid var(--lv-border);
-  padding-top: 12px;
+  margin-top: 24px;
 }
-.lv-cfg-role-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 0;
-  flex-wrap: wrap;
-}
-.lv-cfg-role-label {
-  width: 76px;
-  flex-shrink: 0;
-  font-size: 13px;
-  color: var(--lv-ink-2);
+.lv-cfg-roles > .lv-cfg-pane-title {
+  display: block;
+  margin-bottom: 10px;
 }
 .lv-cfg-role-select {
-  width: auto;
-  min-width: 170px;
-  margin-top: 0;
-}
-.lv-cfg-role-hint {
-  flex: 1 1 160px;
-  font-size: 11.5px;
-  color: var(--lv-muted-2);
+  flex-shrink: 0;
+  width: 180px;
 }
 .lv-cfg-footnote {
   margin-top: 14px;
@@ -8288,8 +8589,18 @@ body.lv-files-resizing {
 .lv-cfg-form {
   display: flex;
   flex-direction: column;
-  gap: 13px;
-  max-width: 460px;
+  gap: 18px;
+}
+/* Two short fields side by side (Models → Advanced's two limits). */
+.lv-cfg-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 560px) {
+  .lv-cfg-pair {
+    grid-template-columns: 1fr;
+  }
 }
 .lv-cfg-form-head {
   display: flex;
@@ -8308,9 +8619,9 @@ body.lv-files-resizing {
 }
 .lv-cfg-field .lv-cfg-label {
   display: block;
-  font-size: 12.5px;
-  font-weight: 570;
-  color: var(--lv-ink-2);
+  font-size: 13px;
+  font-weight: 560;
+  color: var(--lv-ink);
 }
 .lv-cfg-input {
   width: 100%;
@@ -8320,9 +8631,10 @@ body.lv-files-resizing {
   font-size: 12.5px;
 }
 .lv-cfg-hint {
-  margin-top: 4px;
-  font-size: 11.5px;
-  color: var(--lv-muted-2);
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--lv-muted);
 }
 .lv-cfg-key {
   margin-top: 6px;
@@ -8360,7 +8672,7 @@ body.lv-files-resizing {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--lv-ok);
+  background: var(--lv-accent);
   flex-shrink: 0;
 }
 .lv-cfg-key-mask {
@@ -8369,19 +8681,57 @@ body.lv-files-resizing {
   font-size: 12px;
   color: var(--lv-ink-2);
 }
+/* A folded section (model-config.js fold()): a chevron row, and while folded
+   what is set inside at its end — the schedule form's Advanced. */
 .lv-cfg-advanced {
   border-top: 1px solid var(--lv-border);
-  padding-top: 10px;
+  padding-top: 14px;
+}
+.lv-cfg-advanced[hidden] {
+  display: none;
 }
 .lv-cfg-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   cursor: pointer;
-  font-size: 12.5px;
-  color: var(--lv-muted);
-  margin-bottom: 10px;
+  list-style: none;
   user-select: none;
 }
-.lv-cfg-advanced .lv-cfg-field {
-  margin-bottom: 12px;
+.lv-cfg-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+.lv-cfg-advanced > summary svg {
+  flex-shrink: 0;
+  color: var(--lv-muted);
+  transition: transform var(--lv-t-fast) var(--lv-ease);
+}
+.lv-cfg-advanced[open] > summary svg {
+  transform: rotate(90deg);
+}
+.lv-cfg-advanced-title {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 560;
+  color: var(--lv-ink);
+}
+.lv-cfg-advanced-set {
+  margin-left: auto;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--lv-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lv-cfg-advanced[open] .lv-cfg-advanced-set {
+  visibility: hidden; /* open, the fields say it */
+}
+.lv-cfg-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-top: 16px;
 }
 /* Extra request fields: a JSON textarea with snippet chips under it. */
 .lv-cfg-extra textarea {
@@ -8428,6 +8778,7 @@ body.lv-files-resizing {
   padding: 4px 13px;
   border-radius: 999px;
   font-size: 12.5px;
+  line-height: 20px; /* a CJK label's fallback font stands no taller */
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -8471,7 +8822,7 @@ body.lv-files-resizing {
   color: var(--lv-muted);
 }
 .lv-cfg-test-result.lv-ok {
-  color: var(--lv-ok);
+  color: var(--lv-accent-text);
 }
 .lv-cfg-test-result.lv-bad {
   color: var(--lv-danger);
@@ -8489,7 +8840,6 @@ body.lv-files-resizing {
    the deployment narrows what the file says. */
 .lv-cfg-notice {
   margin-bottom: 14px;
-  max-width: 460px;
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--lv-ink-2);
@@ -8519,27 +8869,49 @@ body.lv-files-resizing {
   opacity: 0.5;
   cursor: not-allowed;
 }
-/* Save stays in reach at the foot of the pane while a long form scrolls. */
+/* Save stays in reach at the foot of the pane while a long form scrolls:
+   a test and what it found on the left, Cancel and Save on the right. */
 .lv-cfg-form-actions {
   position: sticky;
   bottom: 0;
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 12px;
-  max-width: 460px; /* the form's width */
-  margin-top: 18px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 20px;
   padding: 12px 0 2px;
   border-top: 1px solid var(--lv-border);
   background: var(--lv-surface);
 }
+.lv-cfg-form-actions[hidden] {
+  display: none;
+}
+/* A field's label with a control of its own at the row's end (MCP's
+   Show secrets). */
+.lv-cfg-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: -4px 0 -2px;
+}
+.lv-mcp-reveal {
+  gap: 5px;
+  color: var(--lv-muted);
+}
+.lv-cfg-form-actions > .lv-cfg-test-row {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.lv-cfg-form-end {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
 
 /* The assistant form: the schedule form's layout — sections divided by a
    rule, tabs over a card, switch lists on a card. */
-.lv-assistant-form,
-.lv-assistant-form ~ .lv-cfg-form-actions {
-  max-width: 560px;
-}
 .lv-assistant-form {
   gap: 20px;
 }

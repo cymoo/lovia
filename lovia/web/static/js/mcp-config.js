@@ -18,9 +18,10 @@ import { t } from './i18n.js';
 import { toast } from './toast.js';
 import { confirmDialog, segmented } from './ui.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
-import { backButton, cfg, el, field, ghostBtn, loadConfig, readOnlyNotice } from './model-config.js';
+import { backButton, cfg, el, field, formEnd, ghostBtn, loadConfig, readOnlyNotice } from './model-config.js';
 import { switchControl } from './assistant-config.js';
-import { optionsOf, soleServer, withOption } from './mcp-options.js';
+import { optionsOf, soleServer, swapSecrets, withOption } from './mcp-options.js';
+import { icon } from './icons.js';
 import { scopeRoot, workspaceChoices, workspaceName, workspacesOn } from './workspaces.js';
 
 /** @typedef {{ ok: boolean, at: number, tools: string[], error: string | null }} McpStatus */
@@ -88,6 +89,50 @@ function testingLine() {
   const line = el('div', 'lv-mcp-status lv-mcp-status-testing');
   line.append(el('span', 'lv-mcp-dot'), el('span', '', t('mcp.testing')));
   return line;
+}
+
+/**
+ * Show / hide a saved server's env and header values in its editor. They
+ * arrive masked; the stored ones are asked for on the first show, and only
+ * values still as they were swap — one typed over stays as typed.
+ * @param {HTMLTextAreaElement} area
+ * @param {McpServer} stored
+ * @param {() => void} changed After the editor's text is swapped.
+ */
+function revealButton(area, stored, changed) {
+  const btn = el('button', 'lv-btn lv-btn-ghost lv-btn-sm lv-mcp-reveal');
+  btn.setAttribute('type', 'button');
+  const masked = /** @type {import('./mcp-options.js').Secrets} */ ({
+    env: stored.spec.env,
+    headers: stored.spec.headers,
+  });
+  /** @type {import('./mcp-options.js').Secrets | null} */
+  let real = null;
+  let shown = false;
+  const draw = () => {
+    btn.innerHTML = icon(shown ? 'eye-off' : 'eye', { size: 14 });
+    btn.append(t(shown ? 'mcp.hideSecrets' : 'mcp.showSecrets'));
+    btn.setAttribute('aria-pressed', String(shown));
+  };
+  btn.addEventListener('click', async () => {
+    try {
+      real ??= await api.getMcpSecrets(stored.name);
+    } catch (err) {
+      toast(String(err.message || err), { type: 'error' });
+      return;
+    }
+    const text = shown ? swapSecrets(area.value, real, masked) : swapSecrets(area.value, masked, real);
+    if (text === null) {
+      toast(t('mcp.revealNeedsJson'), { type: 'error' });
+      return;
+    }
+    area.value = text;
+    shown = !shown;
+    draw();
+    changed();
+  });
+  draw();
+  return btn;
 }
 
 /**
@@ -574,7 +619,17 @@ function buildPane(pick, projects) {
     const hints = [t('mcp.jsonHint')];
     if (hasSecrets) hints.push(t('mcp.maskHint'));
     if (forProject) hints.push(t('pmcp.addHint', { name: projectName() }));
-    form.appendChild(field(t('mcp.json'), area, hints.join(' ')));
+    // Sentences run on; a full-width stop needs no space after it.
+    const hint = hints.reduce((all, next) => all + (/[。！？]$/.test(all) ? '' : ' ') + next);
+    const jsonField = field(t('mcp.json'), area, hint);
+    if (stored && hasSecrets) {
+      // The label's row carries the switch that shows the saved values.
+      const label = /** @type {HTMLElement} */ (jsonField.querySelector('.lv-cfg-label'));
+      const labelRow = el('div', 'lv-cfg-label-row');
+      label.replaceWith(labelRow);
+      labelRow.append(label, revealButton(area, stored, () => (fit(), options.sync())));
+    }
+    form.appendChild(jsonField);
     const syntax = el('div', 'lv-cfg-error lv-mcp-syntax');
     syntax.hidden = true;
     const options = optionsSection(area, fit);
@@ -613,7 +668,7 @@ function buildPane(pick, projects) {
     const errBox = el('div', 'lv-cfg-error');
     errBox.hidden = true;
     const actions = el('div', 'lv-cfg-form-actions');
-    const test = el('button', 'lv-btn', t('mcp.test'));
+    const test = el('button', 'lv-btn lv-cfg-test-btn', t('mcp.test'));
     test.setAttribute('type', 'button');
     const save = el('button', 'lv-btn lv-btn-primary', t('cfg.save'));
     save.setAttribute('type', 'button');
@@ -682,7 +737,9 @@ function buildPane(pick, projects) {
       }
     });
 
-    actions.append(test, save, cancel);
+    const testRow = el('div', 'lv-cfg-test-row');
+    testRow.append(test);
+    actions.append(testRow, formEnd(cancel, save));
     box.append(errBox, actions);
     queueMicrotask(() => area.focus());
     return box;

@@ -1,11 +1,12 @@
 // settings.js — the Settings dialog: a left-rail shell in a wide dialog, its
 // tabs in three groups. Yours: General (this browser's preferences in
-// localStorage — language, theme, text size, Enter behavior, notifications,
-// sound) and Memory (memory.js; when an agent has it). The server's, shared
-// by everyone on it, shown only when it reports features.settings:
-// Models, Assistant, Skills, MCP, Web search (config.json through
-// model-config.js, assistant-config.js, mcp-config.js). Then About.
-import { segmented, showDialog, setThemePref, themePref } from './ui.js';
+// localStorage — language, Enter behavior, notifications, sound),
+// Appearance (appearance.js) and Memory (memory.js; when an agent has it).
+// The server's, shared by everyone on it, shown only when it reports
+// features.settings: Models, Assistant, Skills, MCP, Web search, Voice input
+// (config.json through model-config.js, assistant-config.js, mcp-config.js,
+// voice-settings.js). Then About.
+import { segmented, showDialog } from './ui.js';
 import { t, languages, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
@@ -16,44 +17,11 @@ import { buildAssistantPane } from './assistant-config.js';
 import { mcpPane } from './mcp-config.js';
 import { buildVoicePane } from './voice-settings.js';
 import { hasMemory, memoryPane } from './memory.js';
+import { buildAppearancePane, initAppearance } from './appearance.js';
 
 const NOTIF_KEY = 'lovia-notify';
 const SOUND_KEY = 'lovia-sound';
 const ENTER_KEY = 'lovia-enter-send';
-const TEXT_SIZE_KEY = 'lovia-text-size';
-const FOLLOWUPS_KEY = 'lovia-followups-on';
-
-// Until v0.9.236 this preference shared 'lovia-followups' with the chip cache
-// (followup-cache.js), which owns that key now. Carry a saved "off" over once.
-try {
-  if (localStorage.getItem('lovia-followups') === '0' && localStorage.getItem(FOLLOWUPS_KEY) === null) {
-    localStorage.setItem(FOLLOWUPS_KEY, '0');
-    localStorage.removeItem('lovia-followups');
-  }
-} catch {
-  /* storage disabled — nothing to carry over */
-}
-
-// ---- Message text size ----------------------------------------------------
-// Scales the transcript's prose via the --lv-chat-font-scale CSS var (styles.css
-// multiplies the message font-sizes by it). 'md' is the default → var unset.
-const TEXT_SCALES = { sm: '0.92', md: '1', lg: '1.14' };
-
-function textSizePref() {
-  const v = localStorage.getItem(TEXT_SIZE_KEY);
-  return v === 'sm' || v === 'lg' ? v : 'md';
-}
-
-/**
- * Apply the saved (or given) message text size to the document. Exported so boot
- * can set it before the first paint, alongside the theme.
- * @param {'sm' | 'md' | 'lg' | string} [size]
- */
-export function applyTextSize(size = textSizePref()) {
-  const root = document.documentElement;
-  if (size === 'md') root.style.removeProperty('--lv-chat-font-scale');
-  else root.style.setProperty('--lv-chat-font-scale', TEXT_SCALES[size] || TEXT_SCALES.md);
-}
 
 // ---- Enter-to-send --------------------------------------------------------
 /**
@@ -79,18 +47,6 @@ export function notificationsEnabled() {
 /** @returns {boolean} Whether the completion sound is enabled (off by default). */
 export function soundEnabled() {
   return localStorage.getItem(SOUND_KEY) === '1';
-}
-
-// ---- Follow-up suggestions ------------------------------------------------
-/**
- * Whether to ask the server for follow-up chips after a reply (on by default,
- * matching the server's willingness). This is the *preference* half of the
- * feature — `store.canSuggest` is the capability half, and both must hold. Read
- * before the request goes out, so turning it off costs the user nothing.
- * @returns {boolean}
- */
-export function followupsEnabled() {
-  return localStorage.getItem(FOLLOWUPS_KEY) !== '0';
 }
 
 let _audioCtx = null;
@@ -123,7 +79,7 @@ export function playCompletionSound() {
   } catch { /* audio blocked/unavailable — stay silent */ }
 }
 
-// ---- General pane ---------------------------------------------------------
+// ---- Rows and groups ------------------------------------------------------
 
 /**
  * A settings row: label (with an optional hint under it) and its control. A
@@ -152,6 +108,14 @@ function field(labelText, control, hint) {
   if (group) control.setAttribute('aria-label', labelText);
   row.append(text, control);
   return row;
+}
+
+/** Rows that belong together, on one card. @param {(HTMLElement | null)[]} rows */
+export function settingsGroup(...rows) {
+  const card = document.createElement('div');
+  card.className = 'lv-settings-group';
+  card.append(...rows.filter((r) => r !== null));
+  return card;
 }
 
 function select(options, value) {
@@ -191,6 +155,8 @@ function toggle(checked, onChange) {
   return sw;
 }
 
+// ---- General pane ---------------------------------------------------------
+
 function buildGeneralPane() {
   const panel = document.createElement('div');
   panel.className = 'lv-settings-panel';
@@ -204,34 +170,6 @@ function buildGeneralPane() {
   });
   const langRow = field(t('settings.language'), lang, t('settings.reloadNote'));
   langRow.dataset.part = 'language';
-  panel.appendChild(langRow);
-
-  // Theme — applies live.
-  const theme = segmented(
-    [
-      ['light', t('settings.themeLight'), 'sun'],
-      ['dark', t('settings.themeDark'), 'moon'],
-      ['system', t('settings.themeSystem'), 'monitor'],
-    ],
-    themePref(),
-    setThemePref,
-  );
-  panel.appendChild(field(t('settings.theme'), theme));
-
-  // Message text size — applies live.
-  const textSize = segmented(
-    [
-      ['sm', t('settings.textSmall')],
-      ['md', t('settings.textDefault')],
-      ['lg', t('settings.textLarge')],
-    ],
-    textSizePref(),
-    (size) => {
-      localStorage.setItem(TEXT_SIZE_KEY, size);
-      applyTextSize(size);
-    },
-  );
-  panel.appendChild(field(t('settings.textSize'), textSize));
 
   // Enter behavior — read live by the composer, so no reload needed. The
   // hint spells out the other key of the pair.
@@ -249,9 +187,9 @@ function buildGeneralPane() {
     },
   );
   const enterRow = field(t('settings.enterBehavior'), enter, enterHint(enterNow));
-  panel.appendChild(enterRow);
 
   // Desktop notifications for finished background runs.
+  let notifRow = null;
   if (typeof Notification !== 'undefined') {
     const notif = toggle(notificationsEnabled(), async (on, set) => {
       if (!on) {
@@ -266,7 +204,7 @@ function buildGeneralPane() {
         toast(t('settings.notifDenied'), { type: 'error' });
       }
     });
-    panel.appendChild(field(t('settings.notifications'), notif));
+    notifRow = field(t('settings.notifications'), notif);
   }
 
   // Completion sound — play a preview when switched on so it's not a mystery.
@@ -274,17 +212,11 @@ function buildGeneralPane() {
     localStorage.setItem(SOUND_KEY, on ? '1' : '0');
     if (on) playCompletionSound();
   });
-  panel.appendChild(field(t('settings.sound'), sound));
 
-  // Follow-up chips — only offered when the server can actually produce them,
-  // so this is never a switch that does nothing (same guard as notifications).
-  if (store.canSuggest) {
-    const followups = toggle(followupsEnabled(), (on) => {
-      localStorage.setItem(FOLLOWUPS_KEY, on ? '1' : '0');
-    });
-    panel.appendChild(field(t('settings.followups'), followups));
-  }
-
+  panel.append(
+    settingsGroup(langRow, enterRow),
+    settingsGroup(notifRow, field(t('settings.sound'), sound)),
+  );
   // The server's System proxy: config.json, so only where Settings edits it.
   if (store.canConfigure) panel.appendChild(proxyField());
   return panel;
@@ -292,7 +224,7 @@ function buildGeneralPane() {
 
 /** Settings → General → System proxy: saved as it is picked. */
 function proxyField() {
-  const wrap = document.createElement('div');
+  const wrap = settingsGroup();
   const draw = () => {
     const c = cfg();
     if (!c) return;
@@ -328,7 +260,7 @@ function proxyField() {
 
 /**
  * Open the Settings dialog on a given tab.
- * @param {'general' | 'memory' | 'models' | 'assistant' | 'skills' | 'mcp' | 'search' | 'about'} [initialTab]
+ * @param {'general' | 'appearance' | 'memory' | 'models' | 'assistant' | 'skills' | 'mcp' | 'search' | 'voice' | 'about'} [initialTab]
  * @param {{ root?: string }} [opts] Open Memory and MCP on this directory's project.
  */
 export function openSettings(initialTab = 'general', opts = {}) {
@@ -337,6 +269,11 @@ export function openSettings(initialTab = 'general', opts = {}) {
   const groups = [
     [
       { id: 'general', label: t('settings.tabGeneral'), build: buildGeneralPane },
+      {
+        id: 'appearance',
+        label: t('settings.tabAppearance'),
+        build: () => buildAppearancePane({ row: field, group: settingsGroup, segmented }),
+      },
       ...(hasMemory()
         ? [{ id: 'memory', label: t('settings.tabMemory'), build: memoryPane(opts) }]
         : []),
@@ -393,6 +330,7 @@ export function openSettings(initialTab = 'general', opts = {}) {
     pane.setAttribute('aria-labelledby', `settings-tab-${id}`);
     const tab = tabs.find((item) => item.id === id);
     pane.replaceChildren(tab ? tab.build() : document.createElement('div'));
+    pane.scrollTop = 0;
   };
   groups.forEach((group, i) => {
     if (i) {
@@ -425,7 +363,7 @@ export function openSettings(initialTab = 'general', opts = {}) {
 }
 
 export function initSettings() {
-  applyTextSize(); // restore the saved size before the transcript renders
+  initAppearance(); // in case the page's inline script couldn't (and to migrate)
   document
     .getElementById('settings-btn')
     ?.addEventListener('click', () => openSettings());

@@ -811,6 +811,16 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             )
         return _config_out()
 
+    @router.get("/mcp/{name}/secrets")
+    async def mcp_server_secrets(name: str, request: Request) -> dict[str, object]:
+        """A saved server's env and header values as stored: the editor's
+        "Show secrets", so they can be read and copied. Never in the config
+        listing; behind the same local-origin guard as a write, since a
+        rebound page could read this answer."""
+        _guard_host(request)
+        server = _stored_server(name)
+        return {"env": dict(server.env), "headers": dict(server.headers)}
+
     @router.delete("/mcp/{name}")
     async def delete_mcp_server(name: str, request: Request) -> dict[str, object]:
         _guard_write(request)

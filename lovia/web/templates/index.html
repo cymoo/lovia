@@ -23,6 +23,14 @@
         t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
       }
       document.documentElement.setAttribute('data-theme', t);
+      // Likewise Settings → Appearance's looks (js/appearance.js): one
+      // data-lv-* attribute each, set only off their default.
+      var a = JSON.parse(localStorage.getItem('lovia-appearance') || '{}') || {};
+      for (var k in a) {
+        if (/^[a-z]+$/.test(k) && /^[a-z]+$/.test(a[k]) && a[k] !== 'default') {
+          document.documentElement.setAttribute('data-lv-' + k, a[k]);
+        }
+      }
       // Likewise the dragged sidebar width (js/ui.js), so it doesn't slide
       // from the default on every load.
       var w = parseInt(localStorage.getItem('lovia-sidebar-w'), 10);

@@ -68,3 +68,37 @@ export function withOption(text, option, value) {
   }
   return JSON.stringify(doc, null, 2);
 }
+
+/** @typedef {{ env?: Record<string, string>, headers?: Record<string, string> }} Secrets */
+
+/**
+ * `text` with its one server's env and header values swapped: each value
+ * still equal to `from`'s under the same key becomes `to`'s, pretty-printed.
+ * How the editor shows the saved secrets (masked → stored) and hides them
+ * again (stored → masked); a value typed over is left as typed. Null when
+ * `text` isn't a document naming one server.
+ * @param {string} text
+ * @param {Secrets} from
+ * @param {Secrets} to
+ * @returns {string | null}
+ */
+export function swapSecrets(text, from, to) {
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const spec = soleServer(doc);
+  if (!spec) return null;
+  for (const field of /** @type {const} */ (['env', 'headers'])) {
+    const now = spec[field];
+    if (!isObject(now)) continue;
+    for (const [key, value] of Object.entries(now)) {
+      const a = from[field]?.[key];
+      const b = to[field]?.[key];
+      if (typeof a === 'string' && typeof b === 'string' && value === a) now[key] = b;
+    }
+  }
+  return JSON.stringify(doc, null, 2);
+}

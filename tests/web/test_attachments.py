@@ -32,8 +32,8 @@ PNG = bytes.fromhex("89504e470d0a1a0a") + b"\x00" * 32
 
 def _agent(root: Path, *, vision: bool) -> Agent:
     prov = ScriptedProvider([text("ok")])
-    if vision:
-        prov.supports_vision = True  # type: ignore[attr-defined]
+    # Undeclared, a provider is taken to see; False says it never does.
+    prov.supports_vision = vision  # type: ignore[attr-defined]
     return Agent(name="bot", model=prov, workspace=Workspace.local(str(root)))
 
 

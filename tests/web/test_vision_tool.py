@@ -2,9 +2,10 @@
 
 The tool lets a text-only main model delegate "look at this image" to a vision
 model, reading through the run's workspace session (same path pipeline as
-read_file/view_image). Gating: registered only when the config assigns a
-vision role, a workspace exists, and the main model can't already see images —
-a vision-capable main gets the core ``view_image`` instead.
+read_file/view_image). Gating: registered when the config assigns a vision
+role (not set to take no images) and a workspace exists; a model call offers
+it only while the chat model can't see images — one that sees gets the core
+``view_image`` instead.
 """
 
 from __future__ import annotations
@@ -113,17 +114,18 @@ def test_describe_image_outside_read_asks_when_the_policy_does(
 
 def test_resolve_vision_tool_gating(tmp_path: Path) -> None:
     ws = Workspace.local(str(tmp_path))
-    text_prov = ScriptedProvider([text("x")])  # no vision
-    vision_prov = ScriptedProvider([text("x")])
-    vision_prov.supports_vision = True  # type: ignore[attr-defined]
     profile = ModelProfile(id="eyes", model="openai:qwen-vl", api_key="sk-vision")
 
-    assert resolve_vision_tool(text_prov, ws, None) is None  # no vision role
-    assert resolve_vision_tool(text_prov, None, profile) is None  # no workspace
-    # A vision-capable main model gets view_image instead — no delegation tool.
-    assert resolve_vision_tool(vision_prov, ws, profile) is None
-    tool = resolve_vision_tool(text_prov, ws, profile)
+    assert resolve_vision_tool(ws, None) is None  # no vision role
+    assert resolve_vision_tool(None, profile) is None  # no workspace
+    # Built whatever the chat model: a call offers it only while that model
+    # can't see images (describes_images).
+    tool = resolve_vision_tool(ws, profile)
     assert tool is not None and tool.name == "describe_image"
+    assert tool.describes_images and not tool.returns_images
+    # A vision role whose model is set to take no images can't describe one.
+    blind = ModelProfile(id="eyes", model="openai:qwen", api_key="k", vision="off")
+    assert resolve_vision_tool(ws, blind) is None
 
     # A vision model on its own endpoint: the overrides thread through cleanly.
     remote = ModelProfile(
@@ -132,7 +134,7 @@ def test_resolve_vision_tool_gating(tmp_path: Path) -> None:
         base_url="https://dashscope.example/v1",
         api_key="sk-vision",
     )
-    tool2 = resolve_vision_tool(text_prov, ws, remote)
+    tool2 = resolve_vision_tool(ws, remote)
     assert tool2 is not None and tool2.name == "describe_image"
 
 
@@ -167,8 +169,7 @@ def test_resolve_vision_tool_bad_profile_degrades(
 ) -> None:
     """An unusable vision profile disables the tool instead of crashing boot."""
     ws = Workspace.local(str(tmp_path))
-    text_prov = ScriptedProvider([text("x")])
     bad = ModelProfile(id="eyes", model="no-such-vendor:qwen-vl")
     with caplog.at_level("WARNING", logger="lovia.web.builder"):
-        assert resolve_vision_tool(text_prov, ws, bad) is None
+        assert resolve_vision_tool(ws, bad) is None
     assert "describe_image disabled" in caplog.text

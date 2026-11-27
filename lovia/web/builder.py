@@ -17,7 +17,7 @@ from typing import Any, Literal, cast, get_args
 from ..agent import Agent, InstructionsFn
 from ..exceptions import UserError
 from ..plugins import Memory, Plugin, Skills, Subagents, Todo
-from ..providers import ModelSettings, Provider, provider_from_string, supports_vision
+from ..providers import ModelSettings, Provider, provider_from_string
 from ..reliability import RetryPolicy
 from ..run_context import RunContext
 from ..tools import (
@@ -199,31 +199,28 @@ def resolve_tools(
 
 
 def resolve_vision_tool(
-    provider: Provider,
     workspace: LocalWorkspace | None,
     profile: ModelProfile | None,
 ) -> Tool | None:
-    """The ``describe_image`` tool, when a distinct vision model is configured.
+    """The ``describe_image`` tool, when a vision model is configured.
 
-    Wired only when all three hold: the config assigns a vision role; the
-    agent has a local workspace to read images from; and the *main* model
-    can't see images itself. A vision-capable main gets the core
-    ``view_image`` tool from the workspace bundle instead (real pixels), so
-    the two are mutually exclusive by construction — a delegation tool there
-    would just be a redundant, slower second path.
+    Wired when the config assigns a vision role whose model takes images
+    (its ``vision`` isn't ``off``) and the agent has a local workspace to
+    read images from. Whether a model call offers it is the runner's call:
+    only while the chat model can't see images itself
+    (``Tool.describes_images``) — a model that sees gets ``view_image``.
     """
     if profile is None:
+        return None
+    if profile.vision_override() is False:
+        log.info(
+            "the vision role's model is set to take no images; describe_image disabled."
+        )
         return None
     if workspace is None:
         log.info(
             "a vision model is configured but there is no workspace; "
             "describe_image disabled."
-        )
-        return None
-    if supports_vision(provider):
-        log.info(
-            "main model is vision-capable; ignoring the vision role "
-            "(it gets view_image / inline ImageParts instead)."
         )
         return None
     try:
@@ -507,7 +504,7 @@ def build_agent(
         plugins.append(SettingsMCP(config.mcp, book, project=project_mcp))
     workspace = resolve_workspace(deployment, spec)
     tools = resolve_tools(config.search, web_search=spec.search)
-    vision_tool = resolve_vision_tool(provider, workspace, config.vision_profile())
+    vision_tool = resolve_vision_tool(workspace, config.vision_profile())
     if vision_tool is not None:
         tools.append(vision_tool)
     if spec.subagents:

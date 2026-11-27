@@ -1,17 +1,17 @@
 """Vision-as-a-tool: let a text-only main model "see" images via a VLM.
 
-When the app is configured with a dedicated vision model and the main model
-itself isn't vision-capable, the builder registers a ``describe_image`` tool.
-The main model calls it with an image's path (one the user attached, as the
-message's note names it, or one the run produced) and a question; the tool runs a
-one-shot turn on the vision model with the image inlined as an
-:class:`~lovia.ImagePart` and returns its text answer.
+When the app is configured with a dedicated vision model, the builder registers
+a ``describe_image`` tool, and a model call offers it while the main model
+can't see images (``describes_images``: its provider says so, or it refused
+them in this chat). The main model calls it with an image's path (one the
+user attached, as the message's note names it, or one the run produced) and
+a question; the tool runs a one-shot turn on the vision model with the image
+inlined as an :class:`~lovia.ImagePart` and returns its text answer.
 
 The name states the contract: the model gets a *description*, never the
 pixels — the counterpart of the core ``view_image`` tool, which returns the
-image itself and is what a vision-capable main model gets instead (the two
-are never registered together; see ``resolve_vision_tool`` in
-``lovia.web.builder``).
+image itself and is what a model that sees gets instead (a call offers one
+or the other).
 
 Same "separate ad-hoc model for a sub-task" pattern as :mod:`lovia.web.titles`.
 Paths go through the same read pipeline as ``read_file``/``view_image``: the
@@ -84,6 +84,7 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
             "- Supported: jpg, jpeg, png, gif, webp; over 3.75 MB is refused."
         ),
         permission=path_permission("read"),
+        describes_images=True,
     )
     async def describe_image(
         ctx: RunContext[Any],

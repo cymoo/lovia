@@ -178,14 +178,17 @@ async def screenshot(url: str) -> list:
     return ["页面渲染结果：", ImagePart.from_path(await capture(url))]
 ```
 
-这个标志只对工作区或 Plugin 提供的工具起作用：provider 看不了图片时
-（[`supports_vision`](providers.md#openai-provider)），这些工具不会提供给模型。
-`Agent(tools=...)` 里的工具总会提供；纯文本模型看到的是一个简短标记，代替每张图片。
+与它对应的 `@tool(describes_images=True)` 标注的是"告诉模型图里有什么"的工具（比如背后是一个视觉模型）。
+每次模型调用只提供其中一类，不管工具来自哪里：模型看得到图时提供 `returns_images` 的工具，看不到时
+提供 `describes_images` 的工具——看不到是因为 provider 声明了 `supports_vision=False`
+（见 [provider](providers.md#openai-provider)），或者它在本对话里拒收过图片。模型调用了没提供给它的工具
+也照样执行，结果里的图片会被换掉。
 
-provider 仍可能拒收发过去的图片：超过大小或像素上限、张数超限，或模型根本不收图。运行不会因此
-中断：这次模型调用会把图片换成同样的标记再发一次——先换掉上次成功调用之后新增的图，不够再全部换掉——
-并在对话里记住这个决定，之后的调用不会再被同一批图片卡住。对话记录里的图片保持不变。每个新决定都会
-发出一个 [`ImagesWithheld`](streaming.md#转移与上下文) 事件。
+provider 可能拒收发过去的图片：超过大小或像素上限、张数超限，或模型根本不收图。运行不会因此中断：
+这次模型调用会把图片换成文字标记再发一次——先换掉模型上一次回答之后新增的图，不够再全部换掉——
+并在对话里记住这个决定，之后的调用不会再被同一批图片卡住。模型不收图时，重发的那次就已经提供
+`describes_images` 的工具。对话记录里的图片保持不变。每个新决定都会发出一个
+[`ImagesWithheld`](streaming.md#转移与上下文) 事件。
 
 ## 工具审批
 

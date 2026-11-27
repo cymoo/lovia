@@ -77,6 +77,10 @@ photo = user([TextPart(text="What's in this picture?"), ImagePart(url="https://�
 result = await Runner.run(agent, [photo])
 ```
 
+An image the provider refuses (too large, or a model that takes none) doesn't
+fail the run: the call goes again with it as a text marker
+([Returning images](tools.md#returning-images)).
+
 → [Running](running.md) · [Streaming](streaming.md)
 
 ### Tools

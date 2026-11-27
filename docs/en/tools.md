@@ -209,6 +209,14 @@ not offered to a model whose provider can't see images
 `Agent(tools=...)` are always offered; a text-only model gets a short marker
 in place of each image.
 
+A provider may still refuse an image it is sent: over its size or pixel
+limit, one too many, or a model that takes none. The run goes on: the model
+call is sent again with images replaced by the same marker — first the ones
+added since the last call that succeeded, then all — and the chat remembers
+the decision, so the next calls don't trip on the same images. The
+transcript keeps them. Each new decision is announced with an
+[`ImagesWithheld`](streaming.md#transitions-and-context) event.
+
 ## Tool approval
 
 Every Tool carries a `permission`: `"allow"` (the default) runs the call,

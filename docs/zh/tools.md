@@ -182,6 +182,11 @@ async def screenshot(url: str) -> list:
 （[`supports_vision`](providers.md#openai-provider)），这些工具不会提供给模型。
 `Agent(tools=...)` 里的工具总会提供；纯文本模型看到的是一个简短标记，代替每张图片。
 
+provider 仍可能拒收发过去的图片：超过大小或像素上限、张数超限，或模型根本不收图。运行不会因此
+中断：这次模型调用会把图片换成同样的标记再发一次——先换掉上次成功调用之后新增的图，不够再全部换掉——
+并在对话里记住这个决定，之后的调用不会再被同一批图片卡住。对话记录里的图片保持不变。每个新决定都会
+发出一个 [`ImagesWithheld`](streaming.md#转移与上下文) 事件。
+
 ## 工具审批
 
 每个 Tool 都带一个 `permission`：`"allow"`（默认）直接执行，`"ask"` 交给人决定，

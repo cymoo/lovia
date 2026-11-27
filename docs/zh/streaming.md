@@ -102,6 +102,7 @@ UI 最容易写错的地方：
 | `HandoffOccurred` | `from_agent`, `to_agent` | 控制权[移交](multi-agent.md)到另一个 agent |
 | `ContextCompacting` | `active` | [上下文策略](context.md)宣布了耗时工作（摘要调用）且仍在进行（`True`），随后完成或失败（`False`） |
 | `ContextCompacted` | `session_id`, `entries_before`, `entries_after`, `notice` | [上下文策略](context.md)为本轮生成了压缩后的 view |
+| `ImagesWithheld` | `count`, `unsupported` | provider 拒收了图片，这次调用把其中 `count` 张换成文字标记后重发（`unsupported`：模型不收图，本对话之后的图片都会被换掉），见[返回图片](tools.md#返回图片) |
 
 `ContextCompacting` 总是成对出现，并在 `ContextCompacted` 或终止事件之前关闭，UI 可以据此显示
 “正在压缩”，而不是看起来卡住。很快完成的压缩两个都不发。

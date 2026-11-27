@@ -78,13 +78,22 @@ def names_image_limit(text: str) -> bool:
     return bool(_IMAGE_LIMIT.search(text)) and not _TOKENS.search(text)
 
 
+# OpenRouter's answer when no provider behind a model takes images: a 404,
+# the one 404 that is about the payload.
+_NO_ENDPOINT = re.compile(r"no endpoints found that support image input", re.I)
+
+
 def image_rejection(exc: BaseException) -> ImageRejection | None:
     """What ``exc`` says about the images its request carried, or ``None``
     when it is not a refusal about images."""
-    if not isinstance(exc, ProviderError) or exc.status_code not in _STATUSES:
+    if not isinstance(exc, ProviderError):
         return None
     body = getattr(exc, "body", None)  # set by the built-in adapters
     text = body if isinstance(body, str) and body else str(exc)
+    if exc.status_code == 404 and _NO_ENDPOINT.search(text):
+        return "unsupported"
+    if exc.status_code not in _STATUSES:
+        return None
     if not _MENTIONS_IMAGE.search(text) or _CONTEXT.search(text):
         return None  # an overflow of the context window is compaction's
     return "unsupported" if _UNSUPPORTED.search(text) else "image"

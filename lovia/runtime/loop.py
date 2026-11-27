@@ -1019,6 +1019,9 @@ class RunLoop:
                 request.last_view_id = None
                 request.overflow = True
                 request.reported_window = overflow.reported_window
+                # The tools the failed attempt sent: an image refusal may have
+                # swapped them since the first compaction.
+                request.tools = list(tools.values())
                 async for ev in self._compact(state, request, results):
                     yield ev
                 ctx_result = results.pop()

@@ -2186,7 +2186,9 @@ const _mcpNoted = new WeakMap();
 function appendMcpUnavailable(/** @type {{ servers: { name: string, error: string }[] }} */ data) {
   if (!store.bubble || !data?.servers?.length) return;
   const bubble = /** @type {HTMLElement} */ (store.bubble);
-  const existing = /** @type {HTMLElement | null} */ (bubble.querySelector('.lv-mcp-notice'));
+  const existing = /** @type {HTMLElement | null} */ (
+    bubble.querySelector('.lv-mcp-notice:not(.lv-images-notice)')
+  );
   const servers = [...(existing ? _mcpNoted.get(existing) || [] : []), ...data.servers];
   const note = existing || document.createElement('div');
   _mcpNoted.set(note, servers);

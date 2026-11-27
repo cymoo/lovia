@@ -34,6 +34,15 @@ def test_a_model_without_images_says_so(body: str) -> None:
     assert image_rejection(err(body)) == "unsupported"
 
 
+def test_openrouters_404_for_no_image_endpoint_is_no_vision() -> None:
+    body = (
+        '{"error":{"message":"No endpoints found that support image input","code":404}}'
+    )
+    assert image_rejection(err(body, 404)) == "unsupported"
+    # Any other 404 is not about the payload.
+    assert image_rejection(err("model not found: image-gen-1", 404)) is None
+
+
 @pytest.mark.parametrize(
     ("body", "status"),
     [

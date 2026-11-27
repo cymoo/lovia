@@ -30,7 +30,7 @@ from ..agent import Agent
 from ..exceptions import ToolError
 from ..messages import user
 from ..parts import ImagePart, TextPart, image_mime, sniff_image_mime
-from ..providers import Provider
+from ..providers import Provider, supports_vision
 from ..run_context import RunContext
 from ..runner import Runner
 from ..tools import Tool, tool
@@ -96,6 +96,12 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
             str, "What to ask about the image; defaults to a full description."
         ] = DEFAULT_QUESTION,
     ) -> str:
+        # A vision model whose provider says it takes no images would get the
+        # image's text marker (the runner withholds it without asking) and
+        # "describe" that.
+        # (A "vendor:model" string resolves to a provider that does.)
+        if not isinstance(vision_model, str) and not supports_vision(vision_model):
+            raise ToolError(_REFUSED.format(path=path))
         session = require_workspace(ctx)
         mime = image_mime(path)
         if mime is None:

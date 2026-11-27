@@ -532,8 +532,10 @@ Attached images are sent inline to every model:
 
 - A model that refuses them is found out at the first image of a chat: the
   reply goes on with text markers in their place, a line in the chat says
-  so, and the rest of that chat withholds them. Only `"vision": "off"`
-  written in a profile in `config.json` keeps them from being tried at all.
+  so, and the rest of that chat withholds them. The chat still keeps the
+  image (that first request did send it); only what the model receives
+  changes. Only `"vision": "off"` written in a profile in `config.json`
+  keeps images from being tried at all.
 - With a vision role assigned (Settings → Models → Role assignment), a model
   that takes no images gets the `describe_image` Tool instead — in the very
   reply that found it out. It receives text; raw image data does not enter

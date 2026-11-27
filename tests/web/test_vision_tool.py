@@ -163,6 +163,14 @@ async def test_describe_image_says_so_when_the_vision_model_refuses_it(
     # Never a description of the image's text marker.
     assert Refuses.calls == 1
 
+    # A provider that declares it takes no images is never asked at all.
+    blind = ScriptedProvider([text("a caption of a marker")])
+    blind.supports_vision = False  # type: ignore[attr-defined]
+    tool = make_describe_image_tool(blind)
+    with pytest.raises(ToolError, match="refused the image"):
+        await tool.invoke({"path": "cat.png"}, _ctx(_session(tmp_path)))
+    assert blind.calls == []
+
 
 def test_resolve_vision_tool_bad_profile_degrades(
     tmp_path: Path, caplog: pytest.LogCaptureFixture

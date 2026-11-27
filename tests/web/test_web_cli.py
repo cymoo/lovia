@@ -160,9 +160,9 @@ def test_resolve_tools_searches_by_default_and_not_when_off() -> None:
         ({"backend": "auto", "tavily_api_key": "k"}, ("tavily", {"tavily": "k"})),
         ({"backend": "tavily", "tavily_api_key": "k"}, ("tavily", {"tavily": "k"})),
         ({"tavily_api_key": "k"}, ("tavily", {"tavily": "k"})),
-        ({"backend": "auto"}, ("parallel", {})),
-        ({"backend": "ddg"}, ("parallel", {})),
-        ({"backend": "ddg", "tavily_api_key": "k"}, ("parallel", {"tavily": "k"})),
+        ({"backend": "auto"}, ("auto", {})),
+        ({"backend": "ddg"}, ("auto", {})),
+        ({"backend": "ddg", "tavily_api_key": "k"}, ("auto", {"tavily": "k"})),
     ],
 )
 def test_a_saved_search_backend_carries_over(

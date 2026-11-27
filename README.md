@@ -98,10 +98,10 @@ Open `http://127.0.0.1:8000` and add a model on first launch. New chats work in
 the directory you started from; `lovia web ~/code/app` picks another.
 
 - **It works in your folders.** It reads and edits files, runs commands, plans
-  with a todo list, searches the web (through a hosted search service —
-  Parallel by default, no key needed; Settings → Web search picks another or
-  turns it off), draws charts and tables, and hands independent work to
-  background subagents. A panel follows what runs in the
+  with a todo list, searches the web (through a hosted search service, no key
+  needed — Parallel, or Exa then Tavily when it can't be reached; Settings →
+  Web search picks one or turns it off), draws charts and tables, and hands
+  independent work to background subagents. A panel follows what runs in the
   background: each command's output, each task's progress and report.
 - **Many projects at once.** The sidebar groups chats by workspace. Each chat
   has its own folder, model and permission mode, and the folder can be on an

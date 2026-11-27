@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from datetime import date
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,7 +15,12 @@ pytest.importorskip("fastapi")
 from lovia.exceptions import ToolError  # noqa: E402
 from lovia.plugins.mcp import MCPServerStreamableHTTP, MCPToolResult  # noqa: E402
 from lovia.web.config.schema import SearchConfig  # noqa: E402
-from lovia.web.search import PRESETS, compact_results, search_tool  # noqa: E402
+from lovia.web.search import (  # noqa: E402
+    PRESETS,
+    compact_results,
+    search_tool,
+    server_config,
+)
 
 
 def _text(text: str) -> SimpleNamespace:
@@ -50,13 +56,28 @@ async def _search(search: SearchConfig, **args: Any) -> Any:
 @pytest.mark.parametrize(
     ("provider", "tool", "args"),
     [
-        ("parallel", "web_search", {"objective": "q", "search_queries": ["q"]}),
+        (
+            "parallel",
+            "web_search",
+            {
+                "objective": "q (only pages published in the past week)",
+                "search_queries": ["q"],
+            },
+        ),
         (
             "tavily",
             "tavily_search",
             {"query": "q", "max_results": 3, "time_range": "week"},
         ),
-        ("exa", "web_search_exa", {"query": "q", "objective": "q", "numResults": 3}),
+        (
+            "exa",
+            "web_search_exa",
+            {
+                "query": "q",
+                "objective": "q (only pages published in the past week)",
+                "numResults": 3,
+            },
+        ),
     ],
 )
 async def test_one_tool_shape_for_every_service(
@@ -125,13 +146,14 @@ async def test_only_a_connection_that_never_opened_is_retried(
 
         monkeypatch.setattr(MCPServerStreamableHTTP, "session", session)
 
+    one = SearchConfig(provider="parallel")
     fake_server(fail_open=1, fail_call=False)
-    assert "ok" in await _search(SearchConfig(), query="q")
+    assert "ok" in await _search(one, query="q")
     assert len(opens) == 2
     opens.clear()
     fake_server(fail_open=0, fail_call=True)
-    with pytest.raises(ToolError, match="could not be reached"):
-        await _search(SearchConfig(), query="q")
+    with pytest.raises(ToolError, match="Parallel search did not complete"):
+        await _search(one, query="q")
     assert len(opens) == 1  # never searched twice
 
 
@@ -146,7 +168,10 @@ async def test_an_unreachable_service_says_so_without_its_key(
 
     monkeypatch.setattr(MCPServerStreamableHTTP, "session", session)
     with pytest.raises(ToolError, match="Parallel search could not be reached") as err:
-        await _search(SearchConfig(keys={"parallel": "par-secret"}), query="q")
+        await _search(
+            SearchConfig(provider="parallel", keys={"parallel": "par-secret"}),
+            query="q",
+        )
     assert "par-secret" not in str(err.value) and "***" in str(err.value)
 
 
@@ -162,14 +187,104 @@ def test_json_results_become_numbered_hits_within_bounds() -> None:
     out = compact_results(json.dumps({"search_id": "s", "results": rows}), 3)
     hits = out.split("\n\n")
     assert len(hits) == 3
-    assert hits[0].startswith("1. T0\nhttps://x/0\neee")
+    assert hits[0].startswith("[1] T0\nhttps://x/0\neee")
     assert len(hits[0]) < 1_600  # one hit's excerpt is clipped
     # Tavily's shape: ``content`` for the excerpt.
     tavily = {"results": [{"title": "", "url": "https://t", "content": "c"}]}
-    assert compact_results(json.dumps(tavily), 5) == "1. (untitled)\nhttps://t\nc"
+    assert compact_results(json.dumps(tavily), 5) == "[1] (untitled)\nhttps://t\nc"
     assert compact_results(json.dumps({"results": []}), 5) == "No results."
 
 
+def test_an_excerpt_loses_its_page_s_front_matter() -> None:
+    excerpt = '---\ntitle: "T"\nurl: x.example/a\n---\n# T\n\n1. Home\n---\nend'
+    row = {"title": "T", "url": "https://x.example/a", "excerpts": [excerpt]}
+    out = compact_results(json.dumps({"results": [row]}), 5)
+    # The rule further down is the page's own.
+    assert out == "[1] T\nhttps://x.example/a\n# T\n\n1. Home\n---\nend"
+
+
+def test_dated_hits_before_the_range_are_left_out() -> None:
+    rows = [
+        {"title": "old", "url": "https://o", "publish_date": "2026-10-01"},
+        {"title": "new", "url": "https://n", "publish_date": "2026-11-26T08:00:00Z"},
+        {"title": "undated", "url": "https://u", "publish_date": None},
+    ]
+    text = json.dumps({"results": rows})
+    out = compact_results(text, 5, since=date(2026, 11, 20))
+    assert out == "[1] new\nhttps://n\n\n[2] undated\nhttps://u"
+    assert len(compact_results(text, 5).split("\n\n")) == 3  # no range, all kept
+    assert (
+        compact_results(json.dumps({"results": rows[:1]}), 5, since=date(2026, 11, 20))
+        == "No results in that time range."
+    )
+
+
+def test_exa_s_text_becomes_numbered_hits_too() -> None:
+    hit = "Title: {t}\nURL: https://{t}\nPublished: {p}\nAuthor: N/A\nHighlights:\n{b}"
+    text = "\n\n---\n\n".join(
+        [
+            hit.format(t="old", p="2026-10-01T00:00:00.000Z", b="x"),
+            hit.format(t="new", p="2026-11-27T06:02:25.000Z", b="y" * 5_000),
+            hit.format(t="undated", p="N/A", b="z\n---\nz"),
+        ]
+    )
+    out = compact_results(text, 5, since=date(2026, 11, 20))
+    new, undated = out.split("\n\n")
+    assert new.startswith("[1] new\nhttps://new\nyyy") and len(new) < 1_600
+    # A rule inside the highlights is theirs; the one between hits is not.
+    assert undated == "[2] undated\nhttps://undated\nz\n---\nz"
+
+
 def test_other_answers_pass_through_clipped() -> None:
-    assert compact_results("Title: A\nURL: https://a", 5) == "Title: A\nURL: https://a"
+    assert compact_results("plain words", 5) == "plain words"
     assert len(compact_results("x" * 50_000, 5)) == 12_000
+
+
+async def test_auto_moves_on_only_from_a_service_it_cannot_reach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened: list[str] = []
+    blocked = {"https://mcp.parallel.ai/mcp"}
+
+    @asynccontextmanager
+    async def session(self: MCPServerStreamableHTTP):  # type: ignore[no-untyped-def]
+        opened.append(self.url)
+        if self.url in blocked:
+            raise RuntimeError("Redirect to http://10.0.0.5/warn not followed")
+
+        async def call(name: str, args: dict[str, Any]) -> MCPToolResult:
+            if self.url == PRESETS["exa"].url and "refuse" in args["query"]:
+                return MCPToolResult(content=[_text("over quota")], is_error=True)
+            return MCPToolResult(content=[_text(f"answer from {name}")])
+
+        yield SimpleNamespace(call=call)
+
+    monkeypatch.setattr(MCPServerStreamableHTTP, "session", session)
+    tool = search_tool(SearchConfig())  # auto, the default
+    assert tool is not None
+    out = await tool.invoke({"query": "q"}, None)  # type: ignore[arg-type]
+    assert "answer from web_search_exa" in out
+    assert opened == [PRESETS["parallel"].url, PRESETS["exa"].url]
+    # The one that answered goes first for a while: the blocked one costs
+    # its failure once.
+    opened.clear()
+    await tool.invoke({"query": "q"}, None)  # type: ignore[arg-type]
+    assert opened == [PRESETS["exa"].url]
+    # A refusal is an answer: never asked of the next service.
+    opened.clear()
+    with pytest.raises(ToolError, match="Exa search failed"):
+        await tool.invoke({"query": "refuse"}, None)  # type: ignore[arg-type]
+    assert opened == [PRESETS["exa"].url]
+    # None reachable: each says why.
+    blocked.update(PRESETS[n].url for n in PRESETS)
+    tool = search_tool(SearchConfig())
+    assert tool is not None
+    with pytest.raises(ToolError, match="No search service could be reached") as err:
+        await tool.invoke({"query": "q"}, None)  # type: ignore[arg-type]
+    assert all(f"- {p.label}: " in str(err.value) for p in PRESETS.values())
+
+
+def test_search_goes_through_the_proxy_unless_set_to_direct() -> None:
+    assert server_config(SearchConfig(), "exa").trust_env is True
+    direct = SearchConfig(trust_env=False)
+    assert server_config(direct, "exa").trust_env is False

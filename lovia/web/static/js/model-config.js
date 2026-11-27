@@ -793,24 +793,24 @@ export function buildModelsPane() {
 
 // ---- Search pane ----------------------------------------------------------
 
-// The hosted search services (lovia/web/search.py), in the strip's order.
+// The hosted search services (lovia/web/search.py), in the order "auto"
+// asks them — the strip's order too.
 /** @type {[string, string][]} */
 const SEARCH_SERVICES = [
   ['parallel', 'Parallel'],
-  ['tavily', 'Tavily'],
   ['exa', 'Exa'],
+  ['tavily', 'Tavily'],
 ];
 
 /**
- * Settings → Web search: which service `web_search` asks — or none — and,
- * folded away, its optional key and proxy route. Picking one tests it at
- * once (a connection, no search spent), so the line under the strip says
- * whether it answers before anything is saved.
+ * Settings → Web search: which service `web_search` asks — "auto", one of
+ * them, or none — and, folded away, a service's optional key and the proxy
+ * route. A choice is saved as it is made and tested at once (a connection,
+ * no search spent); a key is saved with its own button.
  */
 export function buildSearchPane() {
   const pane = el('div', 'lv-cfg-pane');
 
-  // Drawn again after a save, from the config the save leaves.
   const draw = async () => {
     if (!cfg()) {
       try {
@@ -820,7 +820,7 @@ export function buildSearchPane() {
         return;
       }
     }
-    const c = cfg();
+    const saved = () => cfg().search;
     pane.replaceChildren();
     pane.appendChild(el('div', 'lv-cfg-pane-title', t('cfg.searchTitle')));
     const ro = readOnlyNotice();
@@ -828,20 +828,46 @@ export function buildSearchPane() {
     const form = el('div', 'lv-cfg-form');
 
     /** @type {string} */
-    let provider = c.search.provider;
-    /** @type {boolean | null} */
-    let trustEnv = c.search.trust_env ?? null;
-    /** The saved key of the picked service: { set, hint }, or none. */
-    const savedKey = () => c.search.keys[provider] || { set: false, hint: null };
+    let provider = saved().provider;
+    /** The picked service's saved key: { set, hint }, or none. */
+    const savedKey = () => saved().keys[provider] || { set: false, hint: null };
+    const single = () => SEARCH_SERVICES.some(([id]) => id === provider);
+
+    // One save at a time, in the order made; a failed one says why and puts
+    // the pane back as saved.
+    let queue = Promise.resolve();
+    /** @param {{ provider?: string, trust_env?: boolean | null, api_key?: string }} body */
+    const apply = (body) => {
+      queue = queue.then(async () => {
+        try {
+          await api.setSearch(body);
+          await loadConfig();
+          void test();
+        } catch (err) {
+          toast(String(err.message || err), { type: 'error' });
+          await loadConfig().catch(() => {});
+          void draw();
+        }
+      });
+      return queue;
+    };
 
     const desc = el('div', 'lv-cfg-hint lv-search-desc');
-    const status = el('div', 'lv-mcp-status');
+    // The status line, and under it (not in its row) why a service failed.
+    const status = el('div');
+    /** @param {string} state @param {string} label */
+    const statusLine = (state, label) => {
+      const line = el('div', `lv-mcp-status lv-mcp-status-${state}`);
+      line.append(el('span', 'lv-mcp-dot'), el('span', '', label));
+      return line;
+    };
     const describeService = () => {
       const name = SEARCH_SERVICES.find(([id]) => id === provider)?.[1];
-      desc.textContent = name
-        ? t(`search.about.${provider}`) + t('search.sentTo', { name })
-        : t('search.offHint');
-      adv.hidden = !name;
+      if (provider === 'auto') desc.textContent = t('search.about.auto');
+      else if (name) desc.textContent = t(`search.about.${provider}`) + t('search.sentTo', { name });
+      else desc.textContent = t('search.offHint');
+      adv.hidden = provider === 'off';
+      keyField.hidden = !single();
     };
 
     let tested = 0; // a slower, older answer is dropped
@@ -849,33 +875,37 @@ export function buildSearchPane() {
       const mine = ++tested;
       status.hidden = provider === 'off';
       if (status.hidden) return;
-      status.className = 'lv-mcp-status lv-mcp-status-testing';
-      status.replaceChildren(el('span', 'lv-mcp-dot'), el('span', '', t('mcp.testing')));
+      status.replaceChildren(statusLine('testing', t('mcp.testing')));
+      /** @type {{ ok: boolean, service?: string | null, skipped?: { service: string, error: string }[] }} */
       let res;
       try {
-        res = await api.testSearch(formBody());
+        res = await api.testSearch({});
       } catch (err) {
-        res = { ok: false, error: String(err.message || err) };
+        res = { ok: false, skipped: [{ service: '', error: String(err.message || err) }] };
       }
       if (mine !== tested) return;
-      status.className = `lv-mcp-status ${res.ok ? 'lv-mcp-status-ok' : 'lv-mcp-status-fail'}`;
-      status.replaceChildren(
-        el('span', 'lv-mcp-dot'),
-        el('span', '', res.ok ? t('search.ok') : t('search.fail')),
-      );
-      if (!res.ok && res.error) status.appendChild(el('div', 'lv-mcp-error', res.error));
+      const label = !res.ok
+        ? t('search.fail')
+        : provider === 'auto' && res.service
+          ? t('search.okVia', { name: res.service })
+          : t('search.ok');
+      status.replaceChildren(statusLine(res.ok ? 'ok' : 'fail', label));
+      for (const s of res.skipped || []) {
+        // Under "auto", one before the one that answers: why it was passed over.
+        const line = el('div', `lv-mcp-error${res.ok ? ' lv-mcp-error-muted' : ''}`);
+        line.textContent = provider === 'auto' && s.service ? `${s.service}: ${s.error}` : s.error;
+        status.appendChild(line);
+      }
     }
 
     const strip = segmented(
-      [...SEARCH_SERVICES, ['off', t('search.off')]],
+      [['auto', t('search.auto')], ...SEARCH_SERVICES, ['off', t('search.off')]],
       provider,
       (val) => {
         provider = val;
-        keyMode = savedKey().set ? 'keep' : 'edit';
-        keyIn.value = '';
         renderKey();
         describeService();
-        void test();
+        void apply({ provider: val });
       },
     );
     strip.setAttribute('aria-label', t('cfg.searchTitle'));
@@ -885,119 +915,82 @@ export function buildSearchPane() {
     const adv = /** @type {HTMLDetailsElement} */ (el('details', 'lv-cfg-advanced'));
     adv.appendChild(el('summary', '', t('cfg.advanced')));
 
-    /** @type {'keep' | 'edit' | 'clear'} */
-    let keyMode = savedKey().set ? 'keep' : 'edit';
+    /** Typing a key replaces the saved one; Save (or Enter) saves it. */
+    let editing = false;
     const keyIn = input('', { type: 'password', placeholder: t('search.keyNone') });
-    keyIn.addEventListener('change', () => void test());
+    const saveKey = async () => {
+      const key = keyIn.value.trim();
+      if (!key) return;
+      await apply({ provider, api_key: key });
+      editing = false;
+      keyIn.value = '';
+      renderKey();
+    };
+    keyIn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') void saveKey();
+    });
     const keyBox = el('div', 'lv-cfg-key');
     const renderKey = () => {
       keyBox.replaceChildren();
-      if (keyMode === 'keep') {
+      const key = savedKey();
+      if (key.set && !editing) {
         const row = el('div', 'lv-cfg-key-set');
         row.appendChild(el('span', 'lv-cfg-key-dot'));
-        row.appendChild(
-          el('span', 'lv-cfg-key-mask', t('cfg.apiKeySet', { hint: savedKey().hint || '' })),
-        );
+        row.appendChild(el('span', 'lv-cfg-key-mask', t('cfg.apiKeySet', { hint: key.hint || '' })));
         row.appendChild(
           ghostBtn(t('cfg.replace'), () => {
-            keyMode = 'edit';
+            editing = true;
             renderKey();
             keyIn.focus();
           }),
         );
         row.appendChild(
-          ghostBtn(t('cfg.clear'), () => {
-            keyMode = 'clear';
+          ghostBtn(t('cfg.clear'), async () => {
+            await apply({ provider, api_key: '' }); // keyless now: the test says whether it answers
             renderKey();
-            void test(); // keyless now: does it still answer?
           }),
         );
         keyBox.appendChild(row);
-      } else if (keyMode === 'clear') {
-        const row = el('div', 'lv-cfg-key-set');
-        row.appendChild(el('span', 'lv-cfg-key-mask', t('search.keyNone')));
+        return;
+      }
+      const row = el('div', 'lv-cfg-key-edit');
+      row.append(keyIn, ghostBtn(t('cfg.save'), () => void saveKey()));
+      keyBox.appendChild(row);
+      if (key.set) {
         row.appendChild(
           ghostBtn(t('cfg.keep'), () => {
-            keyMode = 'keep';
+            editing = false;
+            keyIn.value = '';
             renderKey();
-            void test();
           }),
         );
-        keyBox.appendChild(row);
-      } else {
-        keyBox.appendChild(keyIn);
-        if (savedKey().set) {
-          keyBox.appendChild(
-            ghostBtn(t('cfg.keep'), () => {
-              const typed = keyIn.value;
-              keyMode = 'keep';
-              keyIn.value = '';
-              renderKey();
-              if (typed) void test(); // the typed key was what was tested
-            }),
-          );
-        }
       }
     };
     renderKey();
-    adv.appendChild(field(t('search.key'), keyBox, t('search.keyHint')));
+    const keyField = field(t('search.key'), keyBox, t('search.keyHint'));
+    adv.appendChild(keyField);
+    // Through the proxy unless set to direct: search is always the internet.
+    const direct = saved().trust_env === false;
     adv.appendChild(
       field(
         t('cfg.proxy'),
         segmented(
           [
-            ['default', t('cfg.proxyDefault')],
-            ['off', t('cfg.proxyOff')],
             ['on', t('cfg.proxyOn')],
+            ['off', t('cfg.proxyOff')],
           ],
-          trustEnv === null ? 'default' : trustEnv ? 'on' : 'off',
-          (val) => {
-            trustEnv = val === 'default' ? null : val === 'on';
-            void test();
-          },
+          direct ? 'off' : 'on',
+          (val) => void apply({ trust_env: val === 'off' ? false : null }),
         ),
-        t('cfg.proxyHint'),
+        t('search.proxyHint'),
       ),
     );
-    adv.open = savedKey().set || trustEnv !== null;
+    adv.open = (single() && savedKey().set) || direct;
     form.appendChild(adv);
     describeService();
-
-    /** The form as the API takes it: the key only when it changes. */
-    function formBody() {
-      /** @type {{ provider: string, trust_env: boolean | null, api_key?: string }} */
-      const body = { provider, trust_env: trustEnv };
-      if (keyMode === 'clear') body.api_key = '';
-      else if (keyMode === 'edit' && keyIn.value) body.api_key = keyIn.value;
-      return body;
-    }
     void test();
 
-    const errBox = el('div', 'lv-cfg-error');
-    errBox.hidden = true;
-    const actions = el('div', 'lv-cfg-form-actions');
-    const save = el('button', 'lv-btn lv-btn-primary', t('cfg.save'));
-    save.setAttribute('type', 'button');
-    save.addEventListener('click', async () => {
-      const body = formBody();
-      save.disabled = true;
-      // Held still while it saves: the pane is redrawn from what was saved.
-      form.inert = true;
-      errBox.hidden = true;
-      try {
-        await api.setSearch(body);
-        await loadConfig();
-        toast(t('cfg.saved'));
-        void draw();
-      } catch (err) {
-        errBox.textContent = String(err.message || err);
-        errBox.hidden = false;
-        save.disabled = false;
-        form.inert = false;
-      }
-    });
-    actions.appendChild(save);
-    pane.append(form, errBox, actions);
+    pane.append(form);
   };
   void draw();
 

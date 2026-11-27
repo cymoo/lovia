@@ -49,15 +49,20 @@ the directory each chat works in, on every run, it reads:
 So a chat in another project follows that project's `AGENTS.md` and skills.
 
 Web search asks a hosted search service over MCP, picked in **Settings → Web
-search**: Parallel (the default), Tavily or Exa — each answers without an API
-key within a free allowance; with a key (under Advanced), searches run on your
-account with that service and may be billed by it — or Off.
-The page says where your searches go and tests the pick as soon as it is made,
-spending no search. The tool keeps one shape whichever service answers, and
-connects only when the model searches, so a message that doesn't search pays
-nothing for it. Exa's keyless allowance needs a direct connection; behind a
-proxy, give it a key. Any other search server can be added in Settings → MCP
-(and this one set to Off).
+search**: Auto (the default), Parallel, Exa or Tavily — each answers without
+an API key within a free allowance; with a key (under Advanced), searches run on
+your account with that service and may be billed by it — or Off. Auto asks
+Parallel, and Exa then Tavily only when the one before can't be reached (a
+network that blocks it, say); an answer, a spent allowance included, is never
+passed on to another service, and the one that answered goes first for the next
+ten minutes. Search goes through the machine's proxy, if it has one, unless
+Advanced sets it to Direct.
+A pick is saved as it is made and tested at once, spending no search; the page
+says where your searches go and, under Auto, which service answers. The tool
+keeps one shape whichever service answers, and connects only when the model
+searches, so a message that doesn't search pays nothing for it. Some proxy
+exits are refused Exa's keyless allowance; go direct or give it a key. Any other
+search server can be added in Settings → MCP (and this one set to Off).
 
 Default features can make model calls outside the main Run. Memory performs one
 digest after each completed Run and another call when a periodic dream is due;
@@ -740,7 +745,8 @@ What the page can and can't do:
 ## Settings that apply without a restart
 
 The assistant's settings live in `config.json` in the home and are
-edited in Settings. A save applies from the next run; a reply already streaming
+edited in Settings: a switch or a pick is saved as it is made, typed text with
+its own Save. A change applies from the next run; a reply already streaming
 finishes with what it started with.
 
 | Settings pane | `config.json` | Default |

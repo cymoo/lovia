@@ -35,6 +35,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..approvals import Verdict
 from ..exceptions import UserError
@@ -177,16 +178,44 @@ def describe(
         exc = inner[0]
     if isinstance(exc, UserError):
         return str(exc)
+    if cfg is not None and cfg.url and (diverted := _diverted(exc, cfg.url)):
+        return diverted
     line = _cause(exc, timeout, cfg)
     # A proxy in the way, or one skipped, shows only as a timeout or an HTTP
     # error the SDK words its own way: say which, when one applies.
     if cfg is not None and cfg.url:
+        # Named as the forms show it (MCP servers, Web search), not as the
+        # JSON key: the search form has no JSON.
         note = proxy_note(
-            cfg.url, resolve_trust_env(cfg.trust_env), switch='"trustEnv"'
+            cfg.url,
+            resolve_trust_env(cfg.trust_env),
+            switch="the System proxy setting",
         )
         if note:
             line = f"{line.rstrip('.')}. {note}"
     return line
+
+
+# mcp 2.x's words for a redirect it left unfollowed (1.x follows them).
+_UNFOLLOWED = re.compile(r"Redirect to (\S+) not followed")
+
+
+def _diverted(exc: BaseException, url: str) -> str | None:
+    """What it means that the endpoint redirected to another host: a
+    filtering proxy or gateway sending the request to its own warning or
+    block page. The SDK's own advice (try https, fix the server's proxy
+    headers) is for a misconfigured server, and misleads here."""
+    if not (match := _UNFOLLOWED.search(str(exc))):
+        return None
+    there, here = urlsplit(match.group(1)).hostname, urlsplit(url).hostname
+    if not there or there == here:
+        return None
+    return (
+        f"The network sent the request to {there}, not {here}: a proxy or "
+        "gateway that filters sites answered with its own page, so this network "
+        f"blocks {here} or asks before letting it through. Its administrator "
+        "can allow it."
+    )
 
 
 def _cause(exc: BaseException, timeout: float, cfg: MCPServerConfig | None) -> str:

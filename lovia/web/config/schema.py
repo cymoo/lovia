@@ -53,7 +53,7 @@ ANTHROPIC_FLAVOR = ProviderFlavor("anthropic", _ANTHROPIC_BASE_URL, _ANTHROPIC_H
 
 FlavorName = Literal["openai", "anthropic"]
 VisionMode = Literal["auto", "on", "off"]
-SearchProvider = Literal["parallel", "tavily", "exa", "off"]
+SearchProvider = Literal["auto", "parallel", "tavily", "exa", "off"]
 
 
 def flavor_for_model(spec: str) -> ProviderFlavor:
@@ -166,9 +166,10 @@ class SearchConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
-    provider: SearchProvider = "parallel"
+    provider: SearchProvider = "auto"
     keys: dict[str, str] = Field(default_factory=dict)
-    # Through the system proxy or not; None: as ``--trust-env`` says.
+    # False: direct. Else through the system proxy, if the machine has one:
+    # a search service is on the internet, where the proxy leads.
     trust_env: bool | None = None
 
     @model_validator(mode="before")

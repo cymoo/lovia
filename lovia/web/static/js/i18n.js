@@ -853,7 +853,7 @@ const MESSAGES = {
     'agent.gone': '这个对话原来的 Agent“{name}”已删除，现在由“{fallback}”继续',
     'cfg.readOnly': '{file} 不可写，这里的设置只能查看。要修改，请直接编辑该文件后重启 lovia web。',
     'cfg.savedNextRun': '已保存，下次运行生效',
-    'cfg.appliesNextRun': '保存后从下次运行起生效；正在进行的回复仍按原设置完成。',
+    'cfg.appliesNextRun': '开关和模式切换即保存；改动从下次运行起生效，正在进行的回复仍按原设置完成。',
     'cfg.modeReadonly': '仅可查看',
     'cfg.modeCoding': '工作区内修改',
     'cfg.modeTrusted': '完全权限',
@@ -946,9 +946,14 @@ const MESSAGES = {
     'age.y': '{n} 年',
     'cfg.searchTitle': '联网搜索',
     'search.off': '关闭',
+    'search.auto': '自动',
+    'search.about.auto':
+      '先问 Parallel，连不上时依次换 Exa、Tavily；搜索词只发给答复的那一家。额度用完不会转去别家。',
+    'search.okVia': '可用 · 由 {name} 答复',
+    'search.proxyHint': '经代理：本机设了代理就走代理，没设就直连。',
     'search.about.parallel': '免 key，匿名额度有限。',
-    'search.about.tavily': '免 key 额度按月计，同一网络的人共用，用完需填 API key。',
-    'search.about.exa': '免 key 时需直连（经代理会被拒），否则请填 API key。',
+    'search.about.tavily': '免 key 额度很少，同一网络出口的人共用，用完需填 API key。',
+    'search.about.exa': '免 key，但有些代理出口会被拒，那时请直连或填 API key。',
     'search.sentTo': '搜索词会发给 {name}。',
     'search.offHint': '模型不能搜索网页，仍能读取给定的网址。要用别的搜索服务，可在 MCP 页添加。',
     'search.ok': '可用',
@@ -1822,7 +1827,7 @@ const EN = {
   'agent.gone': 'This chat’s agent “{name}” was deleted; “{fallback}” carries on',
   'cfg.readOnly': '{file} isn\'t writable, so these settings are view-only. To change them, edit the file and restart lovia web.',
   'cfg.savedNextRun': 'Saved — applies from the next run',
-  'cfg.appliesNextRun': 'Changes apply from the next run; a reply in progress finishes with the settings it started with.',
+  'cfg.appliesNextRun': 'Switches and the mode save as you change them; changes apply from the next run, and a reply in progress finishes with the settings it started with.',
   'cfg.modeReadonly': 'View only',
   'cfg.modeCoding': 'Edit in workspace',
   'cfg.modeTrusted': 'Full access',
@@ -1915,10 +1920,16 @@ const EN = {
   'age.y': '{n}y',
   'cfg.searchTitle': 'Web search',
   'search.off': 'Off',
+  'search.auto': 'Auto',
+  'search.about.auto':
+    'Asks Parallel, and Exa then Tavily when it can’t be reached; your searches go only to the one that answers. A spent allowance is not passed on to another.',
+  'search.okVia': 'Available · answered by {name}',
+  'search.proxyHint': 'Use proxy: through this machine’s proxy if it has one, else direct.',
   'search.about.parallel': 'No key needed; the free allowance is limited.',
   'search.about.tavily':
-    'No key needed for a monthly allowance shared by everyone on your network; add an API key once it runs out.',
-  'search.about.exa': 'No key needed on a direct connection (through a proxy it is refused); otherwise add an API key.',
+    'No key needed for a small allowance shared by everyone behind the same exit; add an API key once it runs out.',
+  'search.about.exa':
+    'No key needed, but some proxy exits are refused; then go direct or add an API key.',
   // Follows search.about.* directly: the space between sentences is English's.
   'search.sentTo': ' Your searches go to {name}.',
   'search.offHint':

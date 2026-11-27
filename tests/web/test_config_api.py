@@ -390,7 +390,7 @@ def test_search_settings_rebuild_tools_and_keep_keys_per_service(served) -> None
         },
         "trust_env": True,  # left out: kept
     }
-    # "" clears the picked service's key; trust_env null is "Default".
+    # "" clears the picked service's key; trust_env null is the default.
     client.put("/api/config/search", json={"api_key": "", "trust_env": None})
     assert runtime.config.search.keys == {"tavily": "tvly-secret-99"}
     assert runtime.config.search.trust_env is None
@@ -423,7 +423,11 @@ def test_testing_a_search_service_uses_the_form_s_settings(
     res = client.post(
         "/api/config/search/test", json={"provider": "tavily", "trust_env": True}
     )
-    assert res.json() == {"ok": False, "error": "no answer within 30 s"}
+    assert res.json() == {
+        "ok": False,
+        "service": None,
+        "skipped": [{"service": "Tavily", "error": "no answer within 30 s"}],
+    }
     # Tavily has no saved key: it goes keyless, through the proxy as asked.
     url, headers, trust_env = tried[-1]
     assert "tavily" in url and headers == {"X-Tavily-Access-Mode": "keyless"}
@@ -432,22 +436,37 @@ def test_testing_a_search_service_uses_the_form_s_settings(
     answers.append(MCPStatus(ok=False, at=0, error="bad header: exa-saved"))
     res = client.post("/api/config/search/test", json={})
     assert tried[-1][1] == {"x-api-key": "exa-saved"}
-    assert res.json()["error"] == "bad header: ***"
+    assert res.json()["skipped"][0]["error"] == "bad header: ***"
     # Listing tools is not enough: the one the search calls must be there.
     answers.append(MCPStatus(ok=True, at=0, tools=("web_fetch_exa",)))
     res = client.post("/api/config/search/test", json={})
-    assert res.json() == {
-        "ok": False,
-        "error": "the service no longer offers web_search_exa",
-    }
+    assert res.json()["skipped"] == [
+        {"service": "Exa", "error": "the service no longer offers web_search_exa"}
+    ]
     answers.append(MCPStatus(ok=True, at=0, tools=("web_search_exa", "web_fetch_exa")))
     assert client.post("/api/config/search/test", json={}).json() == {
         "ok": True,
-        "error": None,
+        "service": "Exa",
+        "skipped": [],
     }
     # Off: nothing to reach, nothing tried.
     assert client.post("/api/config/search/test", json={"provider": "off"}).json()["ok"]
     assert len(tried) == 4
+    # Auto: in a search's order, saying which answers and why those before
+    # it did not — through the proxy unless set to direct.
+    answers.append(MCPStatus(ok=False, at=0, error="blocked"))
+    answers.append(MCPStatus(ok=True, at=0, tools=("web_search_exa",)))
+    res = client.post("/api/config/search/test", json={"provider": "auto"})
+    assert res.json() == {
+        "ok": True,
+        "service": "Exa",
+        "skipped": [{"service": "Parallel", "error": "blocked"}],
+    }
+    assert [t[0] for t in tried[-2:]] == [
+        "https://mcp.parallel.ai/mcp",
+        "https://mcp.exa.ai/mcp",
+    ]
+    assert tried[-1][2] is True
 
 
 # --------------------------------------------------------------- skills -

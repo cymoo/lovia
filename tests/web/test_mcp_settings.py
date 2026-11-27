@@ -138,7 +138,25 @@ def test_a_failed_connection_says_whether_a_proxy_was_in_the_way(
     assert "skipped the proxy proxy.corp:8080" in describe(TimeoutError(), 5, off)
     said = describe(RuntimeError("Server returned an error response"), 5, on)
     assert said.startswith("RuntimeError: Server returned an error response.")
-    assert 'turn "trustEnv" off' in said
+    assert "turn the System proxy setting off" in said
+
+
+def test_a_redirect_to_another_host_is_a_filtering_proxy() -> None:
+    cfg = MCPServerConfig(name="search", url="https://mcp.parallel.ai/mcp")
+    # mcp 2.x, behind a TLS-inspecting proxy that sends blocked sites to its
+    # own warning page.
+    warned = RuntimeError(
+        "Redirect to http://10.0.0.5:8080/proxycontrolwarn/x.html not followed: "
+        "it would downgrade this HTTPS endpoint to plain HTTP."
+    )
+    said = describe(warned, 5, cfg)
+    assert said.startswith(
+        "The network sent the request to 10.0.0.5, not mcp.parallel.ai"
+    )
+    assert "downgrade" not in said
+    # A redirect within the server's own host keeps the SDK's words.
+    own = RuntimeError("Redirect to http://mcp.parallel.ai/mcp/ not followed: …")
+    assert describe(own, 5, cfg).startswith("RuntimeError: Redirect to")
 
 
 def test_secrets_go_out_masked_and_come_back_as_they_were() -> None:

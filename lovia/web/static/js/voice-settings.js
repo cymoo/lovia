@@ -104,6 +104,7 @@ export function buildVoicePane() {
           ghostBtn(t('cfg.clear'), () => {
             keyMode = 'clear';
             renderKey();
+            syncSave();
           }),
         );
         keyBox.appendChild(row);
@@ -114,6 +115,7 @@ export function buildVoicePane() {
           ghostBtn(t('cfg.keep'), () => {
             keyMode = 'keep';
             renderKey();
+            syncSave();
           }),
         );
         keyBox.appendChild(row);
@@ -172,6 +174,64 @@ export function buildVoicePane() {
       );
     }
 
+    /** Saves ``body``; the pane is drawn again from what was saved. */
+    /**
+     * Saves ``body``, then draws the pane again from what was saved. A failed
+     * save leaves the form as typed, to correct and retry — ``revert`` puts
+     * back a pick that saves itself.
+     * @param {Record<string, string | null>} body
+     * @param {string} [done] a toast on success
+     * @param {() => void} [revert]
+     */
+    const apply = async (body, done = '', revert) => {
+      // Held still while it saves: the redraw would drop newer edits.
+      form.inert = true;
+      try {
+        await api.setVoice(body);
+        await loadConfig();
+      } catch (err) {
+        toast(String(err.message || err), { type: 'error' });
+        form.inert = false;
+        revert?.();
+        syncSave();
+        return;
+      }
+      if (done) toast(done);
+      await render();
+    };
+
+    // The typed fields — a custom endpoint's address and key, the model —
+    // have a Save; the two lists save as they are picked.
+    const save = el('button', 'lv-btn lv-btn-sm lv-btn-primary', t('cfg.save'));
+    save.setAttribute('type', 'button');
+    const dirty = () =>
+      (where.value === CUSTOM &&
+        (stored !== CUSTOM ||
+          baseUrl.value.trim() !== (voice.base_url ?? '') ||
+          keyMode === 'clear' ||
+          (keyMode === 'edit' && Boolean(keyIn.value)))) ||
+      model.value.trim() !== (voice.model ?? '');
+    const syncSave = () => {
+      save.hidden = where.value === OFF;
+      save.toggleAttribute('disabled', !c.writable || !dirty());
+    };
+    save.addEventListener('click', () => {
+      /** @type {Record<string, string | null>} */
+      const body = { model: model.value.trim() || null };
+      if (where.value === CUSTOM) {
+        body.connection = null;
+        body.base_url = baseUrl.value.trim() || null;
+        if (keyMode === 'clear') body.api_key = '';
+        else if (keyMode === 'edit' && keyIn.value) body.api_key = keyIn.value;
+      }
+      save.toggleAttribute('disabled', true);
+      void apply(body, t('cfg.saved'));
+    });
+    const saveRow = el('div', 'lv-cfg-inline-actions');
+    saveRow.appendChild(save);
+    modelField.after(saveRow);
+    for (const node of [baseUrl, keyIn, model]) node.addEventListener('input', syncSave);
+
     const sync = () => {
       const mode = where.value;
       const custom = mode === CUSTOM;
@@ -181,50 +241,41 @@ export function buildVoicePane() {
       const url = custom ? baseUrl.value.trim() : lender ? lender.base_url || c.defaults.openai_base_url : '';
       sentTo.hidden = mode === OFF;
       sentTo.textContent = url ? t('voice.sentTo', { host: hostOf(url) }) : t('voice.sentSomewhere');
+      syncSave();
       void suggest();
     };
-    where.addEventListener('change', sync);
+    where.addEventListener('change', () => {
+      const mode = where.value;
+      // A custom endpoint waits for its address: Save sends it.
+      if (mode === CUSTOM) return sync();
+      // Off keeps the model and language for the next time it is turned on;
+      // a borrowed connection takes the model typed for it.
+      void apply(
+        mode === OFF
+          ? { connection: null, base_url: null, api_key: '' }
+          : { connection: mode, base_url: null, model: model.value.trim() || null },
+        '',
+        () => {
+          where.value = stored;
+          sync();
+        },
+      );
+    });
+    language.addEventListener('change', async () => {
+      try {
+        await api.setVoice({ language: language.value || null });
+        await loadConfig();
+      } catch (err) {
+        toast(String(err.message || err), { type: 'error' });
+        language.value = cfg().voice.language ?? OFF;
+      }
+    });
     baseUrl.addEventListener('input', sync);
     sync();
 
-    const errBox = el('div', 'lv-cfg-error');
-    errBox.hidden = true;
-    const actions = el('div', 'lv-cfg-form-actions');
-    const save = el('button', 'lv-btn lv-btn-primary', t('cfg.save'));
-    save.setAttribute('type', 'button');
-    save.addEventListener('click', async () => {
-      const mode = where.value;
-      /** @type {Record<string, string | null>} */
-      const body = { model: model.value.trim() || null, language: language.value || null };
-      if (mode === CUSTOM) {
-        body.connection = null;
-        body.base_url = baseUrl.value.trim() || null;
-        if (keyMode === 'clear') body.api_key = '';
-        else if (keyMode === 'edit' && keyIn.value) body.api_key = keyIn.value;
-      } else {
-        // Off keeps the model and language for the next time it is turned on.
-        body.connection = mode === OFF ? null : mode;
-        body.base_url = null;
-        if (mode === OFF) body.api_key = '';
-      }
-      save.disabled = true;
-      errBox.hidden = true;
-      try {
-        await api.setVoice(body);
-        await loadConfig();
-        toast(t('cfg.saved'));
-        await render();
-      } catch (err) {
-        errBox.textContent = String(err.message || err);
-        errBox.hidden = false;
-      } finally {
-        save.disabled = false;
-      }
-    });
-    actions.appendChild(save);
-    // In the form, as the Models page's connection test is, not after Save.
+    // In the form, as the Models page's connection test is.
     if (voice.enabled) form.appendChild(trial());
-    pane.append(form, errBox, actions);
+    pane.append(form);
   }
 
   void render();

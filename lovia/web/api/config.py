@@ -53,7 +53,7 @@ from ..config.skills import scan_skills_status
 from ..errors import WebError
 from ..mcp import CONNECT_TIMEOUT, MCPStatus, probe
 from ..project_mcp import ProjectServer, read_project_servers
-from ..search import PRESETS, redact, server_config
+from ..search import OPEN_TIMEOUT, PRESETS, redact, server_config, services
 from ..workspaces import WorkspaceRef
 from .deps import RouterDeps
 from .routing import GuardedRoute
@@ -121,7 +121,7 @@ class RolesIn(BaseModel):
 class SearchIn(BaseModel):
     """Search updates; only the fields present change. ``api_key`` is the
     picked service's and follows the keep/clear convention; ``trust_env``
-    null is "Default"."""
+    false is direct, null or true through the system proxy."""
 
     provider: SearchProvider | None = None
     api_key: str | None = None
@@ -566,7 +566,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             search.provider = body.provider
         if "trust_env" in sent:
             search.trust_env = body.trust_env
-        if body.api_key is not None and search.provider != "off":
+        # A key is one service's: none for "auto" or "off".
+        if body.api_key is not None and search.provider in PRESETS:
             keys = dict(search.keys)
             # A pasted key brings its newline: in a header, httpx refuses it —
             # quoting the whole value in its error, which reaches the model.
@@ -586,26 +587,34 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
     @router.put("/search")
     async def update_search(body: SearchIn, request: Request) -> dict[str, object]:
         _guard_write(request)
-        await _apply(_copy(search=_search_as(body).model_dump()))
+        # Names no chat model: before one is configured, this saves for later.
+        await _apply(_copy(search=_search_as(body).model_dump()), settings_only=True)
         return {"config": _config_out()}
 
     @router.post("/search/test")
     async def test_search(body: SearchTestIn, request: Request) -> dict[str, object]:
-        """Connect to the service as the form has it, list its tools, close:
-        whether search would work, without spending a search."""
+        """Connect to the services as the form has them, in the order a
+        search asks them, list their tools, close: which one would answer
+        (``service``), and why each before it could not (``skipped``) —
+        without spending a search."""
         _guard_host(request)
         search = _search_as(body)
-        cfg = server_config(search)
-        if cfg is None:
-            return {"ok": True, "error": None}
-        status = await probe(cfg, timeout=CONNECT_TIMEOUT)
-        if not status.ok:
-            return {"ok": False, "error": redact(status.error or "", search)}
-        # Listing tools is not enough: the search calls one by name.
-        tool = PRESETS[search.provider].tool
-        if tool not in status.tools:
-            return {"ok": False, "error": f"the service no longer offers {tool}"}
-        return {"ok": True, "error": None}
+        skipped: list[dict[str, str]] = []
+        for name in services(search):
+            preset = PRESETS[name]
+            # As long as a search gives it to open.
+            status = await probe(server_config(search, name), timeout=OPEN_TIMEOUT)
+            # Listing tools is not enough: the search calls one by name.
+            if status.ok and preset.tool in status.tools:
+                return {"ok": True, "service": preset.label, "skipped": skipped}
+            error = (
+                f"the service no longer offers {preset.tool}"
+                if status.ok
+                else redact(status.error or "", search)
+            )
+            skipped.append({"service": preset.label, "error": error})
+        # Off asks no one, and fails no one.
+        return {"ok": not skipped, "service": None, "skipped": skipped}
 
     @router.put("/voice")
     async def update_voice(body: VoiceIn, request: Request) -> dict[str, object]:

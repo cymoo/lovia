@@ -2128,6 +2128,10 @@ const ERROR_HINTS = [
  */
 function humanizeError(message, code) {
   if (code && ERROR_CODE_HINTS[code]) return ERROR_CODE_HINTS[code];
+  // A tool's failure is in its own words, already meant to be read; the
+  // patterns below are about the model provider ("API key" in a search
+  // service's refusal is not the model's credentials).
+  if (code === 'tool_error') return null;
   const msg = String(message ?? '');
   for (const [re, hint] of ERROR_HINTS) {
     if (re.test(msg)) return hint;

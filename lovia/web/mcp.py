@@ -35,6 +35,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..approvals import Verdict
 from ..exceptions import UserError
@@ -130,7 +131,7 @@ def server_for(cfg: MCPServerConfig) -> MCPServer:
 
 
 @asynccontextmanager
-async def _deadline(seconds: float) -> AsyncIterator[None]:
+async def deadline(seconds: float) -> AsyncIterator[None]:
     """``asyncio.timeout`` where there is one. Never ``wait_for``, which runs
     the body in another task: the transport an open enters must be left by
     the task that entered it, or anyio refuses to close it."""
@@ -162,7 +163,7 @@ async def connect(
     cfg: MCPServerConfig, timeout: float = CONNECT_TIMEOUT
 ) -> MCPConnection:
     """Open ``cfg`` and list its tools, within ``timeout`` seconds."""
-    async with _deadline(timeout):
+    async with deadline(timeout):
         return await server_for(cfg).open()
 
 
@@ -177,16 +178,46 @@ def describe(
         exc = inner[0]
     if isinstance(exc, UserError):
         return str(exc)
+    if cfg is not None and cfg.url and (diverted := _diverted(exc, cfg.url)):
+        return diverted
     line = _cause(exc, timeout, cfg)
     # A proxy in the way, or one skipped, shows only as a timeout or an HTTP
     # error the SDK words its own way: say which, when one applies.
     if cfg is not None and cfg.url:
+        # Named as the forms show it (MCP servers, Web search), not as the
+        # JSON key: the search form has no JSON.
         note = proxy_note(
-            cfg.url, resolve_trust_env(cfg.trust_env), switch='"trustEnv"'
+            cfg.url,
+            resolve_trust_env(cfg.trust_env),
+            switch="the System proxy setting",
         )
         if note:
             line = f"{line.rstrip('.')}. {note}"
     return line
+
+
+# mcp 2.x's words for a redirect it left unfollowed (1.x follows them).
+_UNFOLLOWED = re.compile(r"Redirect to (\S+) not followed")
+
+
+def _diverted(exc: BaseException, url: str) -> str | None:
+    """What it likely means that the endpoint redirected to another host: a
+    filtering proxy or gateway sending the request to its own warning or
+    block page — or, less often, a server that moved. The SDK's own advice
+    (try https, fix the server's proxy headers) is for a misconfigured
+    server, and misleads here."""
+    if not (match := _UNFOLLOWED.search(str(exc))):
+        return None
+    there, here = urlsplit(match.group(1)).hostname, urlsplit(url).hostname
+    if not there or there == here:
+        return None
+    return (
+        f"The request to {here} was redirected to {there}, and not followed. "
+        "Most likely a proxy or gateway that filters sites answered with its "
+        f"own page: this network blocks {here}, or asks before letting it "
+        "through, and its administrator can allow it. If the service has "
+        "moved instead, use its new address."
+    )
 
 
 def _cause(exc: BaseException, timeout: float, cfg: MCPServerConfig | None) -> str:

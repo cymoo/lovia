@@ -329,12 +329,14 @@ rewrites its key in the JSON, and writing the key by hand works the same:
   button: its outcome, when, and the tools it listed. Testing runs the
   server's command now; saving tests the servers just saved. This is kept
   in memory, so a restart starts every row at "not connected yet".
-- **Secrets stay on the server.** `env` and `headers` values come back
-  masked (`ghp…a1b2`). In the editor, a masked value left as it is keeps
-  what is saved, an emptied one is removed, a new one replaces it; a
-  masked value that matches nothing saved is refused. `command`, `args`
-  and `url` are shown as written, so a token belongs in `env` or `headers`,
-  not in an argument or the URL's query.
+- **Secrets stay hidden until asked for.** `env` and `headers` values come
+  back masked (`ghp…a1b2`). In the editor, a masked value left as it is
+  keeps what is saved, an emptied one is removed, a new one replaces it; a
+  masked value that matches nothing saved is refused. **Show secrets** puts
+  the saved values in the editor to read or copy (fetched only then, from a
+  local origin or with the token), and **Hide secrets** masks them again.
+  `command`, `args` and `url` are shown as written, so a token belongs in
+  `env` or `headers`, not in an argument or the URL's query.
 
 MCP support comes with the `web` extra. Servers are saved in `config.json` as `mcp`.
 Background subagent tasks don't get MCP tools: no one is there to approve
@@ -751,7 +753,7 @@ finishes with what it started with.
 
 | Settings pane | `config.json` | Default |
 | --- | --- | --- |
-| **Models** → a model's advanced fields | `models[].max_tokens` | The provider's |
+| **Models** → a model's advanced fields | `models[].max_tokens` | 16,384 for the Anthropic format; the OpenAI-compatible format sends none, so the provider decides |
 | **Assistant** → Custom instructions | `assistant.instructions` | Empty: a generic prompt; set, they take its place. The chat's [project instructions](#project-instructions) follow either way |
 | **Assistant** → Permission mode for new chats | `assistant.mode` | `coding` — see [modes](workspace.md#modes) and [below](#permission-mode-per-chat) |
 | **Assistant** → Commands that run without asking (shown for Edit in workspace) | `assistant.auto_allow` | `read-only`, `dev-tools`: the [command bundles](workspace.md#modes) coding mode runs without asking (`ls`, `git status`, …; `pytest`, `ruff`, …); an empty list asks for every command no rule allows |
@@ -765,6 +767,11 @@ finishes with what it started with.
 
 When `config.json` isn't writable (a read-only mount, say), the server still
 starts and Settings shows these as view-only.
+
+**General**'s language, Enter key, notifications and sound, and **Appearance**
+(theme, accent, background tone, message text size and font, chat width)
+belong to the browser: they are kept in its local storage, not in
+`config.json`.
 
 ## Workspaces
 

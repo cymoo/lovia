@@ -596,6 +596,11 @@ export const api = {
   /** @param {string} name */
   deleteMcpServer: (name) =>
     request(`/api/config/mcp/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(_json),
+  // A saved server's env and header values as stored, unmasked — asked for
+  // only when someone chooses to see them: { env, headers }.
+  /** @param {string} name */
+  getMcpSecrets: (name) =>
+    request(`/api/config/mcp/${encodeURIComponent(name)}/secrets`).then(_json),
   // The MCP servers of a chat's project: { project, local, error, servers:
   // [{ name, spec, state, error }] } — the ones its .mcp.json names and
   // whether each is on there — and global: [{ name, spec, enabled, on,

@@ -8,6 +8,7 @@ import {
   cfg,
   el,
   field,
+  formEnd,
   ghostBtn,
   input,
   loadConfig,
@@ -81,7 +82,11 @@ export function buildVoicePane() {
       options.splice(1, 0, [voice.connection, voice.connection]);
     }
     const where = select(options, stored);
-    form.appendChild(field(t('voice.connection'), where));
+    const whereField = field(t('voice.connection'), where);
+    // Under the pick: where a recording goes once it is on.
+    const sentTo = el('div', 'lv-cfg-hint');
+    whereField.appendChild(sentTo);
+    form.appendChild(whereField);
 
     const baseUrl = input(voice.base_url ?? '', { mono: true, placeholder: 'https://api.openai.com/v1' });
     const baseField = field(t('voice.address'), baseUrl, t('voice.addressHint'));
@@ -143,9 +148,6 @@ export function buildVoicePane() {
     const languageField = field(t('voice.language'), language, t('voice.languageHint'));
     form.appendChild(languageField);
 
-    const sentTo = el('div', 'lv-cfg-hint');
-    form.appendChild(sentTo);
-
     // The models the borrowed connection lists, for the model field's
     // suggestions. Asked once per connection; an endpoint that lists none
     // just leaves the field free-form.
@@ -201,9 +203,10 @@ export function buildVoicePane() {
     };
 
     // The typed fields — a custom endpoint's address and key, the model —
-    // have a Save; the two lists save as they are picked.
-    const save = el('button', 'lv-btn lv-btn-sm lv-btn-primary', t('cfg.save'));
+    // have a Save, at the foot; the two lists save as they are picked.
+    const save = el('button', 'lv-btn lv-btn-primary', t('cfg.save'));
     save.setAttribute('type', 'button');
+    const actions = el('div', 'lv-cfg-form-actions');
     const dirty = () =>
       (where.value === CUSTOM &&
         (stored !== CUSTOM ||
@@ -212,7 +215,7 @@ export function buildVoicePane() {
           (keyMode === 'edit' && Boolean(keyIn.value)))) ||
       model.value.trim() !== (voice.model ?? '');
     const syncSave = () => {
-      save.hidden = where.value === OFF;
+      actions.hidden = where.value === OFF;
       save.toggleAttribute('disabled', !c.writable || !dirty());
     };
     save.addEventListener('click', () => {
@@ -227,9 +230,6 @@ export function buildVoicePane() {
       save.toggleAttribute('disabled', true);
       void apply(body, t('cfg.saved'));
     });
-    const saveRow = el('div', 'lv-cfg-inline-actions');
-    saveRow.appendChild(save);
-    modelField.after(saveRow);
     for (const node of [baseUrl, keyIn, model]) node.addEventListener('input', syncSave);
 
     const sync = () => {
@@ -239,8 +239,12 @@ export function buildVoicePane() {
       modelField.hidden = languageField.hidden = mode === OFF;
       const lender = c.models.find((m) => m.id === mode);
       const url = custom ? baseUrl.value.trim() : lender ? lender.base_url || c.defaults.openai_base_url : '';
-      sentTo.hidden = mode === OFF;
-      sentTo.textContent = url ? t('voice.sentTo', { host: hostOf(url) }) : t('voice.sentSomewhere');
+      sentTo.textContent =
+        mode === OFF
+          ? t('voice.offHint')
+          : url
+            ? t('voice.sentTo', { host: hostOf(url) })
+            : t('voice.sentSomewhere');
       syncSave();
       void suggest();
     };
@@ -273,9 +277,11 @@ export function buildVoicePane() {
     baseUrl.addEventListener('input', sync);
     sync();
 
-    // In the form, as the Models page's connection test is.
-    if (voice.enabled) form.appendChild(trial());
-    pane.append(form);
+    // The foot, as the Models form's: a sentence to try on the left (once
+    // a connection is saved), Save on the right. Off has neither.
+    if (voice.enabled) actions.appendChild(trial());
+    actions.appendChild(formEnd(save));
+    pane.append(form, actions);
   }
 
   void render();

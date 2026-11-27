@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { optionsOf, soleServer, withOption } from '../../../lovia/web/static/js/mcp-options.js';
+import { optionsOf, soleServer, swapSecrets, withOption } from '../../../lovia/web/static/js/mcp-options.js';
 
 const stdio = { command: 'npx', args: ['-y', 'server'] };
 const http = { type: 'http', url: 'https://x.dev/mcp' };
@@ -57,4 +57,22 @@ test('a control rewrites its key; the default removes it', () => {
 test('nothing to rewrite: not JSON, or not one server', () => {
   assert.equal(withOption('{ "gh": ', 'defer', true), null);
   assert.equal(withOption(JSON.stringify({ a: stdio, b: stdio }), 'defer', true), null);
+});
+
+test('secrets swap only where a value is still the one shown', () => {
+  const masked = { env: { TOKEN: 'ghp…a1b2', KEEP: 'x…y' }, headers: {} };
+  const real = { env: { TOKEN: 'ghp_real_a1b2', KEEP: 'xx_real_y' }, headers: {} };
+  const text = JSON.stringify({ mcpServers: { gh: { ...stdio, env: { TOKEN: 'ghp…a1b2', KEEP: 'typed over' } } } });
+  const shown = JSON.parse(swapSecrets(text, masked, real) ?? '');
+  assert.deepEqual(shown.mcpServers.gh.env, { TOKEN: 'ghp_real_a1b2', KEEP: 'typed over' });
+  // Hidden again: the stored value goes back to its mask.
+  const hidden = JSON.parse(swapSecrets(JSON.stringify(shown), real, masked) ?? '');
+  assert.deepEqual(hidden.mcpServers.gh.env, { TOKEN: 'ghp…a1b2', KEEP: 'typed over' });
+  // A url's headers swap the same way; a key the server never had is left.
+  const web = JSON.stringify({ web: { ...http, headers: { Authorization: 'Bea…1234', New: 'n' } } });
+  const out = JSON.parse(
+    swapSecrets(web, { headers: { Authorization: 'Bea…1234' } }, { headers: { Authorization: 'Bearer 1234' } }) ?? '',
+  );
+  assert.deepEqual(out.web.headers, { Authorization: 'Bearer 1234', New: 'n' });
+  assert.equal(swapSecrets('{ "gh": ', masked, real), null);
 });

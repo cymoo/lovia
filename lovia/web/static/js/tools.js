@@ -56,7 +56,6 @@ const PATH_TOOLS = new Set(['read_file', 'write_file', 'edit_file']);
 // poll, and the kill.
 export const STALE_TOOLS = new Set(['shell', 'read_process_output', 'kill_process']);
 const RESULT_HL_MAX = 200_000; // chars — hljs over megabyte dumps janks the tab
-const RESULT_EXPANDABLE_LINES = 12; // roughly what the capped height shows
 const ARGS_KEEP_MAX = 256 * 1024;
 
 /** @type {WeakMap<HTMLElement, ToolState>} */
@@ -585,7 +584,7 @@ function offerBackground(node, result) {
  * Settle a card with its call's result — the one renderer behind both the
  * live tool_result event and history replay: content (highlighted or
  * linkified), error styling, the image strip, UI components, and the hover
- * actions (copy, expand when clipped). Idempotent across repeated updates.
+ * copy action. Idempotent across repeated updates.
  * @param {HTMLElement} node
  * @param {unknown} result
  * @param {boolean} isError
@@ -654,15 +653,6 @@ export function setToolResult(node, result, isError, images, live = false) {
   }
   actions.replaceChildren(); // idempotent across repeated result updates
 
-  if (text.length > 1500 || text.split('\n').length > RESULT_EXPANDABLE_LINES) {
-    const expand = toolActionBtn('maximize-2', t('tool.expand'));
-    expand.classList.add('lv-tool-expand');
-    expand.addEventListener('click', () => {
-      const on = pre.classList.toggle('lv-expanded');
-      expand.title = on ? t('tool.collapse') : t('tool.expand');
-    });
-    actions.append(expand);
-  }
   const copy = toolActionBtn('copy', t('tool.copyResult'));
   copy.addEventListener('click', async () => {
     if (await copyToClipboard(text)) {

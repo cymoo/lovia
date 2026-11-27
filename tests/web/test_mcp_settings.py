@@ -275,6 +275,38 @@ def test_add_edit_toggle_delete_keep_secrets_out_of_the_page(served, tmp_path) -
     )
 
 
+def test_secrets_are_shown_only_when_asked_and_only_to_a_local_origin(served) -> None:
+    client, _, _ = served
+    doc = {
+        "mcpServers": {
+            "stub": _stub(),
+            "web": {
+                "url": "https://a/mcp",
+                "headers": {"Authorization": "Bearer " + TOKEN},
+            },
+        }
+    }
+    assert client.post("/api/config/mcp", json={"document": doc}).status_code == 201
+
+    assert client.get("/api/config/mcp/stub/secrets").json() == {
+        "env": {"TOKEN": TOKEN},
+        "headers": {},
+    }
+    assert client.get("/api/config/mcp/web/secrets").json()["headers"] == {
+        "Authorization": "Bearer " + TOKEN
+    }
+    # A page rebound to this server's address must not read them.
+    rebound = client.get(
+        "/api/config/mcp/stub/secrets", headers={"host": "evil.example"}
+    )
+    assert (rebound.status_code, rebound.json()["detail"]["code"]) == (
+        403,
+        "local_origin_required",
+    )
+    missing = client.get("/api/config/mcp/nope/secrets")
+    assert missing.status_code == 404
+
+
 def test_a_bad_document_is_refused_with_why(served) -> None:
     client, runtime, _ = served
     res = client.post(

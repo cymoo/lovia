@@ -2,7 +2,7 @@
 import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { draftWorkspaceMode } from './workspace-mode.js';
-import { chatModelInfo, chatModelSeesImages, draftChatModel } from './model-config.js';
+import { cfg, chatModelInfo, chatModelSeesImages, draftChatModel } from './model-config.js';
 import { draftWorkspaceRoot, ensureLinked, scopeRoot, workspaceName } from './workspaces.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
@@ -20,7 +20,7 @@ import { taskName } from './background-items.js';
 import { splitAttachmentNote } from './attachment-note.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
-import { enterToSend, followupsEnabled, openSettings } from './settings.js';
+import { enterToSend, openSettings } from './settings.js';
 import { readFollowups, writeFollowups, dropFollowups } from './followup-cache.js';
 import {
   cloneTemplate,
@@ -3532,13 +3532,22 @@ function tailSig(entries) {
 }
 
 /**
+ * Whether follow-up chips are wanted: the server makes them, and — where this
+ * page reads the server's settings — Settings → Assistant hasn't turned them
+ * off (the server would answer none then, and cached ones are stale).
+ */
+function followupsOn() {
+  return store.canSuggest && cfg()?.assistant?.followups !== false;
+}
+
+/**
  * Repaint cached follow-up chips for the current session if they still match
  * its tail. Silent on every miss (no cache, stale signature, or feature off),
  * which shows nothing — exactly the pre-cache behaviour.
  * @param {any[]} entries The session's transcript, as just loaded.
  */
 function maybeRestoreFollowups(entries) {
-  if (!store.canSuggest || !followupsEnabled()) return;
+  if (!followupsOn()) return;
   const sig = tailSig(entries);
   if (!sig) return;
   const items = readFollowups(store.sessionId, sig);
@@ -3592,9 +3601,8 @@ function renderFollowups(items) {
  * @param {string} [replyText] The reply just produced, for the cache signature.
  */
 async function fetchFollowups(sessionId, replyText = '') {
-  // Capability (does this server produce them) AND preference (does this user
-  // want them). Checked before the fetch, so opting out spends nothing.
-  if (!store.canSuggest || !followupsEnabled() || !sessionId) return;
+  // Checked before the fetch, so turning them off spends nothing.
+  if (!followupsOn() || !sessionId) return;
   clearFollowups();
   const epoch = store.chatEpoch;
   const controller = new AbortController();

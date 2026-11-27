@@ -35,12 +35,19 @@ _MENTIONS_IMAGE = re.compile(r"image|multi-?modal|vision", re.I)
 # answer is remembered for the chat, so a vague one must not land here — nor
 # one about a format ("Image format is not supported", "does not support
 # image/gif"), which is about this image.
+# The statement must be unqualified: what follows the noun is at most "for
+# this model" and then the sentence ends — "image URLs", "image input format
+# GIF" rule out one form of image, not all.
+_ENDS = (
+    r"(?=\s*(?:(?:for|by|in|with|on) (?:this|the) (?:model|endpoint|deployment))?"
+    r"\s*(?:[.,;:!)\]\"'`]|$))"
+)
 _UNSUPPORTED = re.compile(
     r"does(?: not|n'?t) support (?:the )?(?:images?|vision|multi-?modal)"
-    r"(?: (?:input|inputs|content|messages?))?(?![\w/-]| (?:format|type|of|with|larger))"
-    r"|(?:image (?:input|content)s?|images|vision|multi-?modal (?:input|content)s?)"
-    r" (?:is|are) not supported"
-    r"|not a multi-?modal model"
+    r"(?: (?:input|inputs|content|messages?))?"
+    + _ENDS
+    + r"|(?:image (?:input|content)s?|images|vision|multi-?modal (?:input|content)s?)"
+    r" (?:is|are) not supported" + _ENDS + r"|not a multi-?modal model"
     r"|unknown variant [`'\"]?image_url"
     r"|image_url[\w\s.,'`\"]{0,40}only supported by certain models",
     re.I,

@@ -426,3 +426,23 @@ async def test_no_images_remembers_the_model_not_an_earlier_tries_exclusions() -
     scratch: dict[str, Any] = {}
     call.remember(scratch)
     assert scratch["images"] == {"blind": ["k"], "withheld": []}
+
+
+async def test_a_blind_custom_provider_does_not_blind_another() -> None:
+    # Neither has a base_url or a model: their names tell them apart.
+    class Bare(Gate):
+        base_url = None
+        model = None
+
+    blind = Bare(lambda imgs: NO_IMAGES if imgs else None)
+    blind.name = "text-only"
+    sees = Bare(lambda imgs: None)
+    sees.name = "vision"
+    session = InMemorySession()
+    await run(
+        Agent(name="a", model=blind), ask(png("A")), session=session, session_id="s"
+    )
+    await run(
+        Agent(name="a", model=sees), ask(png("B")), session=session, session_id="s"
+    )
+    assert [len(s) for s in sees.sent] == [2]

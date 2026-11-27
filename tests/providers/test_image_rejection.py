@@ -47,6 +47,8 @@ def test_a_model_without_images_says_so(body: str) -> None:
         ("Image format is not supported", 400),
         ("This model does not support image/gif", 400),
         ("This model does not support image format GIF", 400),
+        ("This endpoint does not support image URLs", 400),
+        ("This model does not support image input format GIF", 400),
     ],
 )
 def test_a_problem_with_these_images_is_not_a_fact_about_the_model(

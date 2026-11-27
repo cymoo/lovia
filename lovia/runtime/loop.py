@@ -918,7 +918,10 @@ class RunLoop:
             state.context_state,
             state.transcript,
             head=state.system_head_len,
-            model=window_key(provider, model),
+            # The provider's name too: two custom providers may share the
+            # endpoint-and-model key (no base_url, no model).
+            model=f"{getattr(provider, 'name', type(provider).__name__)}\x00"
+            + window_key(provider, model),
             tool_images=sends_tool_images(provider),
         )
         request = CompactionRequest(
@@ -1045,12 +1048,13 @@ class RunLoop:
                 )
                 if not count:
                     raise
+                # Not the body: an endpoint may echo the refused image in it.
                 logger.warning(
-                    "images.withheld: provider refused %s; sending the call again "
-                    "without %d image(s) (%s)",
+                    "images.withheld: provider refused %s (HTTP %s); sending the "
+                    "call again without %d image(s)",
                     "images" if kind == "unsupported" else "an image",
+                    refusal.status_code,
                     count,
-                    refusal,
                 )
                 yield await self._emit(
                     state,

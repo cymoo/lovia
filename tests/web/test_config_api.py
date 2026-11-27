@@ -715,6 +715,12 @@ def test_the_system_proxy_setting_routes_every_client_left_to_it(
     assert app.state.deps.agents["lovia"].model._trust_env is False
     client.put("/api/config/proxy", json={"trust_env": True})
     assert app.state.deps.agents["lovia"].model._trust_env is True
+    # A separate aux model follows it too: rebuilt on the new route.
+    _add_model(client, id="aux")
+    assert client.put("/api/config/roles", json={"aux": "aux"}).status_code == 200
+    assert app.state.deps.title_model._trust_env is True
+    client.put("/api/config/proxy", json={"trust_env": False})
+    assert app.state.deps.title_model._trust_env is False
     # Null: back to how lovia was started.
     client.put("/api/config/proxy", json={"trust_env": None})
     assert runtime.config.trust_env is None

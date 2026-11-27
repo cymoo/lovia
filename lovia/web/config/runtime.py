@@ -119,7 +119,8 @@ class ConfigRuntime:
     def _route(self, config: WebConfig) -> None:
         """``config``'s System proxy, for every client whose own setting is
         the default: each reads ``LOVIA_HTTP_TRUST_ENV`` as it is built — a
-        provider, an MCP connection — or as it sends, as ``web_fetch`` does."""
+        provider, an MCP connection — or as it sends, as ``web_fetch`` does.
+        Process-wide, as that variable is: one lovia web per process."""
         value = (
             self._launch_trust_env
             if config.trust_env is None
@@ -387,7 +388,13 @@ class ConfigRuntime:
             # first build that serves one: the boot had none to build.
             stale_aux: object = aux_model
             first = bool(self.serveable(previous)) and aux_model is not None
-            if first or config.aux_profile() != previous.aux_profile():
+            # The System proxy too: an aux model that follows it was built
+            # on the old route.
+            if (
+                first
+                or config.aux_profile() != previous.aux_profile()
+                or config.trust_env != previous.trust_env
+            ):
                 old_aux = deps.followup_model
                 stale_aux = old_aux if old_aux is not aux_model else None
                 deps.title_model = aux_model

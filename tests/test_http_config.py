@@ -199,7 +199,25 @@ def test_an_unusable_proxy_is_skipped_not_fatal(
 ) -> None:
     no_proxy_env.setenv("HTTPS_PROXY", "ftp://proxy.corp:21")
     assert _route_of(client_options()) is None
-    assert "not using the https proxy proxy.corp:21" in caplog.text
+    assert "not using the proxy proxy.corp:21: httpx has no ftp" in caplog.text
+    # Nor does a failure's hint blame the proxy that was never used.
+    assert proxy_note("https://api.openai.com/v1", True) is None
+    # A malformed port is skipped, not raised while saying so.
+    no_proxy_env.setenv("HTTPS_PROXY", "http://proxy.corp:port")
+    assert _route_of(client_options()) is None
+    assert "not using the proxy proxy.corp: a malformed address" in caplog.text
+
+
+def test_a_port_named_in_no_proxy_is_kept(no_proxy_env: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    no_proxy_env.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
+    no_proxy_env.setenv("NO_PROXY", "api.corp.example:8443")
+    route = _route_of(client_options())
+    pick, (direct, proxied) = route._pick, route._every  # type: ignore[union-attr]
+    assert pick(httpx.URL("https://api.corp.example:8443/v1")) is direct
+    assert pick(httpx.URL("https://api.corp.example/v1")) is proxied
+    assert proxy_note("https://api.corp.example:8443/v1", True) is None
 
 
 # ----------------------------------------------------------- proxy_note -

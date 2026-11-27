@@ -195,16 +195,47 @@ def _proxies() -> dict[str, str]:
     proxies = {}
     for scheme in ("http", "https"):
         if proxy := found.get(scheme) or found.get("all"):
-            proxies[scheme] = proxy if "://" in proxy else f"http://{proxy}"
+            proxy = proxy if "://" in proxy else f"http://{proxy}"
+            if _usable(proxy):
+                proxies[scheme] = proxy
     return proxies
 
 
+def _usable(proxy: str) -> bool:
+    """Whether httpx can send through ``proxy``. One it can't — a malformed
+    port, SOCKS4 (Windows' default SOCKS), SOCKS5 without ``socksio`` — is
+    left out, once said: requests then go direct, and a failure's hint does
+    not blame it."""
+    try:
+        parts = urlsplit(proxy)
+        parts.port  # noqa: B018 — raises on a malformed port
+    except ValueError:
+        return _skip(proxy, "a malformed address")
+    if parts.scheme in ("http", "https"):
+        return True
+    if parts.scheme in ("socks5", "socks5h"):
+        import importlib.util
+
+        if importlib.util.find_spec("socksio") is not None:
+            return True
+        return _skip(proxy, "SOCKS needs the socksio package")
+    return _skip(proxy, f"httpx has no {parts.scheme} proxies")
+
+
+@functools.cache
+def _skip(proxy: str, why: str) -> bool:
+    logger.warning("not using the proxy %s: %s", _proxy_address(proxy), why)
+    return False
+
+
 @functools.lru_cache(maxsize=1024)
-def _bypassed(host: str) -> bool:
+def _bypassed(host: str, port: int | None = None) -> bool:
     """Whether ``host`` goes direct: loopback always, as a browser does, else
-    as the bypass list says (by name: macOS's matching would miss a port).
-    Cached: some Pythons look the name up in DNS to decide, which would
-    stall the loop on every request — so a changed list needs a restart."""
+    as the bypass list says. By name, and by ``host:port`` too, which only
+    ``NO_PROXY`` entries name (macOS's matching would miss a name with a
+    port). Cached: some Pythons look the name up in DNS to decide, which
+    would stall the loop on every request — so a changed list needs a
+    restart."""
     name = host.strip("[]").lower()
     if name == "localhost" or name.endswith(".localhost"):
         return True
@@ -214,7 +245,8 @@ def _bypassed(host: str) -> bool:
     except ValueError:
         pass
     try:
-        return bool(urllib.request.proxy_bypass(name))
+        bypass = urllib.request.proxy_bypass
+        return bool(bypass(name) or (port and bypass(f"{name}:{port}")))
     except Exception:  # noqa: BLE001 — an unreadable list bypasses nothing
         return False
 
@@ -222,7 +254,7 @@ def _bypassed(host: str) -> bool:
 def _proxy_for(url: str) -> str | None:
     """The proxy a request to ``url`` goes through with proxies on."""
     parts = urlsplit(url)
-    if not parts.hostname or _bypassed(parts.hostname):
+    if not parts.hostname or _bypassed(parts.hostname, parts.port):
         return None
     return _proxies().get(parts.scheme)
 
@@ -237,17 +269,14 @@ def _route(lib: Any, verify: ssl.SSLContext | bool, sync: bool) -> Any:
     for scheme, proxy in _proxies().items():
         try:
             via[scheme] = make(verify=verify, trust_env=False, proxy=proxy)
-        except Exception as exc:  # noqa: BLE001 — say why, and go direct
-            # A SOCKS proxy without socksio, a scheme httpx has no support for.
-            logger.warning(
-                "not using the %s proxy %s: %s", scheme, _proxy_address(proxy), exc
-            )
+        except Exception as exc:  # noqa: BLE001 — what _usable missed: go direct
+            _skip(proxy, str(exc))
     if not via:
         return None
     direct = make(verify=verify, trust_env=False)
 
     def pick(url: Any) -> Any:
-        if _bypassed(url.host):
+        if _bypassed(url.host, url.port):
             return direct
         return via.get(url.scheme, direct)
 
@@ -291,4 +320,8 @@ def _proxy_address(proxy: str) -> str:
     """``host:port`` of a proxy URL — never its credentials."""
     parts = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
     host = parts.hostname or "?"
-    return f"{host}:{parts.port}" if parts.port else host
+    try:
+        port = parts.port
+    except ValueError:  # malformed: the name alone
+        return host
+    return f"{host}:{port}" if port else host

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from lovia.providers._windows import clear_endpoint_cache
@@ -35,5 +37,14 @@ def _isolate_system_proxy(monkeypatch: pytest.MonkeyPatch):
         urllib.request, "proxy_bypass", urllib.request.proxy_bypass_environment
     )
     http_config._bypassed.cache_clear()
+    http_config._skip.cache_clear()
+    # A web test's runtime writes the System proxy into the environment,
+    # past monkeypatch: put back what was there.
+    switch = os.environ.get("LOVIA_HTTP_TRUST_ENV")
     yield
+    if switch is None:
+        os.environ.pop("LOVIA_HTTP_TRUST_ENV", None)
+    else:
+        os.environ["LOVIA_HTTP_TRUST_ENV"] = switch
     http_config._bypassed.cache_clear()
+    http_config._skip.cache_clear()

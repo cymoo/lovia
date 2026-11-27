@@ -12,6 +12,7 @@ from .. import events
 from ..exceptions import ContextOverflowError
 from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import StructuredOutput, response_format_for
+from ..providers._images import image_rejection
 from ..providers.base import ModelSettings, Provider
 from ..reliability import CancelToken, RetryPolicy
 from .run_state import ModelTurnResult
@@ -293,7 +294,14 @@ async def stream_with_retries(
             # never emits an orphan reset.
             if produced_any:
                 pending_reset = _StreamReset(visible=produced_visible)
-            if retry is None or attempt >= max_attempts or not retry.retry_on(exc):
+            if (
+                retry is None
+                or attempt >= max_attempts
+                or not retry.retry_on(exc)
+                # The same images would be refused again: the run loop
+                # withholds them first (runtime/images.py).
+                or image_rejection(exc) is not None
+            ):
                 raise
             delay = retry.backoff_delay(attempt)
             logger.warning(

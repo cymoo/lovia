@@ -52,11 +52,13 @@ from ..agent import Agent
 from ..approvals import ApprovalChannel
 from ..checkpointer import CheckpointOptions, RunSnapshot
 from ..context import CompactionRequest, Compaction, ContextPolicy, ContextResult
+from ..context.state import window_key
 from ..exceptions import (
     BudgetExceeded,
     ContextOverflowError,
     MaxTurnsExceeded,
     OutputValidationError,
+    ProviderError,
     RunCancelled,
     RunSuspended,
     UserError,
@@ -88,12 +90,14 @@ from ..output import (
     parse_structured_output,
     resolve_structured_output,
 )
+from ..providers._images import image_rejection
 from ..providers.base import (
     Provider,
     context_window,
     discover_context_window,
     supports_vision,
 )
+from .images import ImageCall
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
@@ -728,6 +732,7 @@ class RunLoop:
             run_ctx=run_ctx,
             active=active,
             run_start=run_start,
+            image_mark=run_start,
             system_head_len=system_head_len,
             turns=snapshot.turns if snapshot is not None else 0,
             extra_instructions=extra_instructions,
@@ -901,7 +906,9 @@ class RunLoop:
         never modified by compaction. When the provider reports a context
         overflow before any output reached the consumer, the policy gets one
         chance to produce a more aggressive view and the call is retried; a
-        second overflow — or one after partial output — propagates.
+        second overflow — or one after partial output — propagates. When it
+        refuses the images in the request, the call is sent again with fewer
+        of them, at most twice (``runtime/images.py``).
         """
         provider = state.active.provider
         request = CompactionRequest(
@@ -941,81 +948,121 @@ class RunLoop:
                 state, self._compacted_event(state, view, ctx_result, reactive=False)
             )
         view = await self._augment_view(state, view)
+        # Images the chat already withholds, and those this call will if the
+        # provider refuses some (runtime/images.py). Applied to every view
+        # this call builds, so a re-compaction after an overflow can't send
+        # back an image a refusal took out.
+        images = ImageCall(
+            state.context_state,
+            state.transcript,
+            head=state.system_head_len,
+            mark=state.image_mark,
+            model=window_key(provider, request.model),
+            tool_images=supports_vision(provider),
+        )
 
-        forwarded = False
-        try:
-            async for ev in self._call_model(state, provider, view, turn, tracer):
-                # A retry notice is no output: re-running the turn won't repeat it.
-                if not isinstance(ev, events.ModelRetrying):
-                    forwarded = True
-                yield ev
-            return
-        except ContextOverflowError as overflow:
-            if forwarded:
-                # Partial output already reached the consumer; retrying the
-                # turn would stream it again, so surface the overflow instead.
+        overflowed = False
+        while True:
+            sent = images.apply(view)
+            forwarded = False
+            try:
+                async for ev in self._call_model(state, provider, sent, turn, tracer):
+                    # A retry notice is no output: re-running the turn won't repeat it.
+                    if not isinstance(ev, events.ModelRetrying):
+                        forwarded = True
+                    yield ev
+            except ContextOverflowError as overflow:
+                if forwarded:
+                    # Partial output already reached the consumer; retrying the
+                    # turn would stream it again, so surface the overflow instead.
+                    logger.warning(
+                        "context.overflow: provider raised after partial output "
+                        "already streamed; cannot retry this turn (%s)",
+                        overflow,
+                    )
+                    raise
+                if overflowed:
+                    raise  # the policy had its one more aggressive try
+                overflowed = True
                 logger.warning(
-                    "context.overflow: provider raised after partial output "
-                    "already streamed; cannot retry this turn (%s)",
+                    "context.overflow: provider raised; rebuilding a more "
+                    "aggressive view (%s)",
                     overflow,
                 )
-                raise
-            logger.warning(
-                "context.overflow: provider raised; rebuilding a more "
-                "aggressive view (%s)",
-                overflow,
-            )
-            # This turn's first compact() already calibrated against
-            # ``last_input_tokens``, and that count describes the *previous*
-            # turn's view — pairing it with the estimate of the larger view
-            # that just overflowed would drag the calibration ratio down
-            # exactly when the estimate must stay conservative.
-            failed_tokens = ctx_result.tokens_after
-            request.last_input_tokens = None
-            request.last_view_id = None
-            request.overflow = True
-            request.reported_window = overflow.reported_window
-            async for ev in self._compact(state, request, results):
-                yield ev
-            ctx_result = results.pop()
-            turn.context_window = ctx_result.window  # now with what it learned
-            # Retry only when the rebuilt view is meaningfully smaller than
-            # the one that just failed (both numbers come from the same
-            # estimator, so the comparison is scale-free). A near-identical
-            # prompt is doomed to the same 400 — surface the overflow instead
-            # of paying for it. Any real shrink still gets its one retry:
-            # vetoing it would turn a possible recovery into a certain death.
-            shrunk = (
-                ctx_result.tokens_after is None
-                or failed_tokens is None
-                or ctx_result.tokens_after < failed_tokens * _RETRY_SHRINK_FACTOR
-            )
-            if not ctx_result.compacted or not shrunk:
-                logger.error(
-                    "context.overflow: policy could not shrink the prompt "
-                    "(est. %s -> %s tokens); surfacing ContextOverflowError",
-                    failed_tokens,
-                    ctx_result.tokens_after,
+                # This turn's first compact() already calibrated against
+                # ``last_input_tokens``, and that count describes the *previous*
+                # turn's view — pairing it with the estimate of the larger view
+                # that just overflowed would drag the calibration ratio down
+                # exactly when the estimate must stay conservative.
+                failed_tokens = ctx_result.tokens_after
+                request.last_input_tokens = None
+                request.last_view_id = None
+                request.overflow = True
+                request.reported_window = overflow.reported_window
+                async for ev in self._compact(state, request, results):
+                    yield ev
+                ctx_result = results.pop()
+                turn.context_window = ctx_result.window  # now with what it learned
+                # Retry only when the rebuilt view is meaningfully smaller than
+                # the one that just failed (both numbers come from the same
+                # estimator, so the comparison is scale-free). A near-identical
+                # prompt is doomed to the same 400 — surface the overflow instead
+                # of paying for it. Any real shrink still gets its one retry:
+                # vetoing it would turn a possible recovery into a certain death.
+                shrunk = (
+                    ctx_result.tokens_after is None
+                    or failed_tokens is None
+                    or ctx_result.tokens_after < failed_tokens * _RETRY_SHRINK_FACTOR
                 )
-                # Neutral on purpose: this branch also serves a no-op policy
-                # and custom stage chains, so it can't claim what is left.
-                overflow.hint = overflow.hint or (
-                    "The context policy could not shrink the prompt below the "
-                    "model's context window. If the latest message is large "
-                    "(pasted content, attachments), shorten it; otherwise "
-                    "start a new chat or branch from an earlier turn."
+                if not ctx_result.compacted or not shrunk:
+                    logger.error(
+                        "context.overflow: policy could not shrink the prompt "
+                        "(est. %s -> %s tokens); surfacing ContextOverflowError",
+                        failed_tokens,
+                        ctx_result.tokens_after,
+                    )
+                    # Neutral on purpose: this branch also serves a no-op policy
+                    # and custom stage chains, so it can't claim what is left.
+                    overflow.hint = overflow.hint or (
+                        "The context policy could not shrink the prompt below the "
+                        "model's context window. If the latest message is large "
+                        "(pasted content, attachments), shorten it; otherwise "
+                        "start a new chat or branch from an earlier turn."
+                    )
+                    raise
+                view = await self._build_view(state, ctx_result)
+                yield await self._emit(
+                    state, self._compacted_event(state, view, ctx_result, reactive=True)
                 )
-                raise
-            view = await self._build_view(state, ctx_result)
-
-        yield await self._emit(
-            state, self._compacted_event(state, view, ctx_result, reactive=True)
-        )
-        view = await self._augment_view(state, view)
-        turn.assistant = None
-        turn.turn_entries = []
-        async for ev in self._call_model(state, provider, view, turn, tracer):
-            yield ev
+                view = await self._augment_view(state, view)
+            except ProviderError as refusal:
+                kind = image_rejection(refusal)
+                # Retried only before any output, as an overflow is, and only
+                # while there is an image left to take out.
+                count = (
+                    0 if kind is None or forwarded else images.withhold_more(sent, kind)
+                )
+                if not count:
+                    raise
+                logger.warning(
+                    "images.withheld: provider refused %s; sending the call again "
+                    "without %d image(s) (%s)",
+                    "images" if kind == "unsupported" else "an image",
+                    count,
+                    refusal,
+                )
+                yield await self._emit(
+                    state,
+                    events.ImagesWithheld(
+                        count=count, unsupported=kind == "unsupported"
+                    ),
+                )
+            else:
+                images.remember(state.context_state)
+                state.image_mark = len(request.entries)
+                return
+            turn.assistant = None
+            turn.turn_entries = []
 
     async def _compact(
         self, state: RunState, request: CompactionRequest, into: list[ContextResult]

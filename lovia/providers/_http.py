@@ -14,6 +14,7 @@ import httpx
 
 from ..exceptions import ContextOverflowError, ProviderError
 from ..http_config import proxy_note, resolve_trust_env
+from ._images import names_image_limit
 
 # What a proxy answers when it cannot reach (or will not relay to) the host.
 _PROXY_STATUSES = frozenset({407, 502, 504})
@@ -59,7 +60,10 @@ async def raise_for_provider_status(
 
     body = await response.aread()
     text = body.decode(errors="replace")
-    if is_context_overflow(response.status_code, text):
+    # An image too large (or too many) can read like an oversized prompt;
+    # compaction cannot shrink it, so it stays a plain refusal for the
+    # runner's image recovery (``_images.image_rejection``).
+    if is_context_overflow(response.status_code, text) and not names_image_limit(text):
         raise ContextOverflowError(
             f"{label}: prompt exceeds the model's context window: {text}",
             reported_window=window_from_body(text) if window_from_body else None,

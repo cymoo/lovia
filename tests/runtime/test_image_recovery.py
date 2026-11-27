@@ -21,6 +21,7 @@ from lovia.transcript import (
     InputEntry,
     TextDelta,
     ToolCallDelta,
+    ToolCallEntry,
     ToolResultEntry,
     TranscriptEntry,
 )
@@ -46,7 +47,10 @@ def images_in(entries: list[TranscriptEntry]) -> list[ImagePart]:
 
 
 def refusal(body: str, status: int = 400) -> ProviderError:
-    return ProviderError(f"HTTP {status}: {body}", status_code=status, body=body)
+    # As the built-in adapters raise it: a 4xx is not worth retrying as is.
+    return ProviderError(
+        f"HTTP {status}: {body}", status_code=status, body=body, retryable=False
+    )
 
 
 class Gate:
@@ -206,7 +210,7 @@ async def test_a_tool_image_keeps_its_path_and_gets_a_marker_in_place() -> None:
         output="shot.png\n[image: image/png, 6 B]",
         parts=[TextPart("shot.png"), png("S")],
     )
-    call = ImageCall({}, [result], head=0, mark=0, model="k", tool_images=True)
+    call = ImageCall({}, [result], head=0, model="k")
     assert call.withhold_more([result], "image") == 1
     view = call.apply([result])
     _, messages = _to_anthropic_messages(view, include_images=True)
@@ -221,15 +225,66 @@ async def test_a_reshaped_history_does_not_withhold_another_image() -> None:
     # A remembered position applies only while its image is still there.
     a, b = png("A"), png("B")
     entries: list[TranscriptEntry] = [InputEntry(role="user", content=[a])]
-    call = ImageCall({}, entries, head=0, mark=0, model="k", tool_images=True)
+    call = ImageCall({}, entries, head=0, model="k")
     call.withhold_more(entries, "image")
     scratch: dict[str, Any] = {}
     call.remember(scratch)
     assert scratch["images"]["withheld"]
+    # Remembered, it is applied before the context policy sees the entries.
+    again = ImageCall(scratch, entries, head=0, model="k")
+    assert again.entries[0] is not entries[0]
+    assert not any(isinstance(p, ImagePart) for p in again.entries[0].content)
 
     edited: list[TranscriptEntry] = [InputEntry(role="user", content=[b])]
-    later = ImageCall(scratch, edited, head=0, mark=1, model="k", tool_images=True)
-    assert later.apply(edited) is edited
+    later = ImageCall(scratch, edited, head=0, model="k")
+    assert later.entries == edited and later.entries[0] is edited[0]
+
+
+async def test_images_before_the_models_last_answer_were_accepted() -> None:
+    # Read from the transcript, so a resumed run knows it too: the user's
+    # image went out with the call that answered; the screenshot after it is
+    # the new one.
+    from lovia.transcript import AssistantTextEntry
+
+    entries: list[TranscriptEntry] = [
+        InputEntry(role="user", content=[TextPart("look"), png("A")]),
+        ToolCallEntry(call_id="c1", name="shot", arguments="{}"),
+        ToolResultEntry(call_id="c1", output="", parts=[png("S")]),
+    ]
+    call = ImageCall({}, entries, head=0, model="k")
+    assert call.withhold_more(entries, "image") == 1
+    view = call.apply(entries)
+    assert isinstance(view[0].content[1], ImagePart)
+    assert isinstance(view[2].parts[0], TextPart)
+    assert AssistantTextEntry  # the other kind of model output counts alike
+
+
+async def test_the_same_image_object_twice_is_two_images() -> None:
+    # A tool returning a cached ImagePart: the copy the model already took
+    # stays, the new occurrence goes.
+    shared = png("X")
+    entries: list[TranscriptEntry] = [
+        InputEntry(role="user", content=[shared]),
+        ToolCallEntry(call_id="c1", name="again", arguments="{}"),
+        ToolResultEntry(call_id="c1", output="", parts=[shared]),
+    ]
+    call = ImageCall({}, entries, head=0, model="k")
+    assert call.withhold_more(entries, "image") == 1
+    view = call.apply(entries)
+    assert view[0].content[0] is shared
+    assert isinstance(view[2].parts[0], TextPart)
+
+
+async def test_a_model_without_vision_is_remembered_but_not_its_images() -> None:
+    # Another model of the chat (a switch, a handoff) still gets them.
+    entries: list[TranscriptEntry] = [InputEntry(role="user", content=[png("A")])]
+    call = ImageCall({}, entries, head=0, model="blind")
+    assert call.withhold_more(entries, "unsupported") == 1
+    scratch: dict[str, Any] = {}
+    call.remember(scratch)
+    assert scratch["images"] == {"blind": ["blind"], "withheld": []}
+    other = ImageCall(scratch, entries, head=0, model="sees")
+    assert other.entries[0] is entries[0]
 
 
 async def test_an_overflow_after_an_image_refusal_keeps_the_image_out() -> None:
@@ -308,3 +363,38 @@ async def test_a_retry_policy_never_resends_the_refused_images() -> None:
     result = await Runner.run(Agent(name="a", model=gate), ask(png("A")), retry=retry)
     assert result.output == "ok"
     assert [len(s) for s in gate.sent] == [1, 0]
+
+    # A request with no image is the retry policy's as before, whatever its
+    # refusal says about vision.
+    flaky = Gate(lambda imgs: None, script=[refusal("try a vision model")])
+    result = await Runner.run(Agent(name="a", model=flaky), "hi", retry=retry)
+    assert result.output == "ok" and len(flaky.sent) == 2
+
+
+async def test_a_provider_that_does_not_declare_vision_gets_tool_images_recovered() -> (
+    None
+):
+    @tool
+    async def shot() -> list[Any]:
+        """Take a screenshot."""
+        return [TextPart("shot.png"), png("S")]
+
+    class Undeclared(Gate):
+        pass
+
+    gate = Undeclared(
+        lambda imgs: PIXELS if imgs else None,
+        script=[
+            [
+                ToolCallDelta(index=0, call_id="c1", name="shot", arguments="{}"),
+                FinishDelta(reason="tool_calls"),
+            ]
+        ],
+    )
+    del Gate.supports_vision  # an adapter that says nothing of vision
+    try:
+        result, seen = await run(Agent(name="a", model=gate, tools=[shot]), "go")
+    finally:
+        Gate.supports_vision = True  # type: ignore[attr-defined]
+    assert result.output == "ok"
+    assert withheld(seen) == [(1, False)]

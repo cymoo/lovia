@@ -60,10 +60,14 @@ def test_image_part_data_requires_mime() -> None:
 
 def test_image_part_from_path_infers_mime(tmp_path) -> None:
     img = tmp_path / "pic.PNG"  # upper-case suffix exercises .lower()
-    img.write_bytes(b"\x89PNG\r\n")
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
     p = ImagePart.from_path(img)
     assert p.mime_type == "image/png"
-    assert base64.b64decode(p.data) == b"\x89PNG\r\n"  # type: ignore[arg-type]
+    assert base64.b64decode(p.data) == b"\x89PNG\r\n\x1a\n"  # type: ignore[arg-type]
+    page = tmp_path / "shot.png"  # an error page saved as .png
+    page.write_bytes(b"<html>")
+    with pytest.raises(ValueError, match="not a PNG"):
+        ImagePart.from_path(page)
 
 
 @pytest.mark.parametrize(

@@ -167,11 +167,6 @@ class RunState:
     # never mistakes a user-supplied leading ``system`` input entry (reachable
     # under a systemless agent) for it. Re-derived at bootstrap; not persisted.
     system_head_len: int = 0
-    # How far into the transcript this run's last successful model call
-    # reached: the images before it were accepted, so an image refusal is
-    # blamed on those after it first (runtime/images.py). Starts at
-    # ``run_start``; not persisted.
-    image_mark: int = 0
 
     @property
     def agent(self) -> Agent[Any]:

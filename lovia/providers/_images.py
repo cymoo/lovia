@@ -32,15 +32,23 @@ _STATUSES = frozenset({400, 413, 422})
 _MENTIONS_IMAGE = re.compile(r"image|multi-?modal|vision", re.I)
 
 # "The model takes no images", as endpoints say it. Narrow on purpose: this
-# answer is remembered for the chat, so a vague one must not land here.
+# answer is remembered for the chat, so a vague one must not land here — nor
+# one about a format ("Image format is not supported", "does not support
+# image/gif"), which is about this image.
 _UNSUPPORTED = re.compile(
-    r"does(?: not|n'?t) support (?:the )?(?:image|vision|multi-?modal)"
-    r"|(?:image|vision|multi-?modal)[\w\s/-]{0,30}(?:is|are) not supported"
+    r"does(?: not|n'?t) support (?:the )?(?:images?|vision|multi-?modal)"
+    r"(?: (?:input|inputs|content|messages?))?(?![\w/-])"
+    r"|(?:image (?:input|content)s?|images|vision|multi-?modal (?:input|content)s?)"
+    r" (?:is|are) not supported"
     r"|not a multi-?modal model"
     r"|unknown variant [`'\"]?image_url"
     r"|image_url[\w\s.,'`\"]{0,40}only supported by certain models",
     re.I,
 )
+
+# What makes a refusal a context overflow whatever it says of images: "the
+# combined text and image tokens exceed the context window" is compacted.
+_TOKENS = re.compile(r"token|context", re.I)
 
 # An image refused for its size or number. Read before the context-overflow
 # needles: "request too large" with these words is about an image, and
@@ -54,8 +62,9 @@ _IMAGE_LIMIT = re.compile(
 
 
 def names_image_limit(text: str) -> bool:
-    """Whether an error body blames an image's size or the number of images."""
-    return bool(_IMAGE_LIMIT.search(text))
+    """Whether an error body blames an image's size or the number of images —
+    and not the prompt's tokens or the context window."""
+    return bool(_IMAGE_LIMIT.search(text)) and not _TOKENS.search(text)
 
 
 def image_rejection(exc: BaseException) -> ImageRejection | None:

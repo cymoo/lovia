@@ -76,6 +76,9 @@ photo = user([TextPart(text="图里有什么？"), ImagePart(url="https://…/ca
 result = await Runner.run(agent, [photo])
 ```
 
+provider 拒收图片（太大，或模型不收图）时运行不会失败：这次调用会把它换成文字标记再发一次
+（见[返回图片](tools.md#返回图片)）。
+
 → [运行 Agent](running.md) · [流式输出](streaming.md)
 
 ### 工具

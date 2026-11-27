@@ -55,7 +55,7 @@ def image_rejection(exc: BaseException) -> Literal["unsupported", "image"] | Non
 
 **与上下文超限的优先级。** `_http.raise_for_provider_status`（`providers/_http.py:62`）先判超限，`request too large` 这类正文会被当成超限。正文同时有图片和限额证据（`pixel`、`dimension`、`too many image`、`exceed`、`size` 等与图片同现）时，不判为超限，留给图片恢复；笼统的 413 和 token 超限维持现状。408 不参与（它是可重试的网络错误）。
 
-**通用重试放过它。** `stream_model_turn` 的通用重试（`runtime/model_turn.py:296`）遇到 `image_rejection(exc)` 非空时直接抛出，和 `ContextOverflowError` 一样，避免自定义 `retry_on` 先把原图重发一遍。
+**通用重试放过它。** `stream_model_turn` 的通用重试（`runtime/model_turn.py:296`）遇到带图请求的 `image_rejection(exc)` 时直接抛出，和 `ContextOverflowError` 一样，避免自定义 `retry_on` 先把原图重发一遍；不带图的请求照旧由重试策略决定。正文同时提到 token 或上下文窗口时，仍按上下文超限处理（「图文 token 合计超出上下文窗口」应当压缩）。
 
 ### 2. 降级：在发给模型的视图里原位替换
 
@@ -64,7 +64,7 @@ def image_rejection(exc: BaseException) -> Literal["unsupported", "image"] | Non
 - 用户消息：`InputEntry.content` 列表里换，文字、顺序、其他图片都保留。
 - 工具结果：`ToolResultEntry.parts` 里换，`output` 不动。只删图片不行：`view_image` 返回 `[路径, 图片]`（`workspace/tools.py:300`），Anthropic 在 `parts` 非空时用 `parts` 编码 `tool_result.content`（`anthropic.py:721`），删掉图片后只剩路径，占位就丢了。
 
-替换发生在视图构建的最后一步（压缩、插件注入之后，`loop.py:938` 一带）。每次构建视图都重新应用，所以同一次调用里因上下文超限重新压缩时，刚去掉的图不会被送回去。
+已记住的决定在交给上下文策略之前就应用到条目上，所以策略的估算、摘要和随后的校准看到的都是实际发出的内容。这次调用里新作的决定应用在视图构建的最后一步（压缩、插件注入之后），每次构建视图都重新应用，所以同一次调用里因上下文超限重新压缩时，刚去掉的图不会被送回去；这样的调用不参与 token 校准（策略估算的是带图的视图）。
 
 ### 3. 单次模型调用内的恢复
 
@@ -76,7 +76,7 @@ def image_rejection(exc: BaseException) -> Literal["unsupported", "image"] | Non
 | `"image"` | 只去掉「新增」图片；没有新增图片，或新增就是全部时，去掉全部 | 上一步还剩图时，去掉全部 |
 
 - **前提**：这次调用还没有任何输出流给调用方（与超限恢复相同）；视图里确实有图。去掉后没有图可去时，直接抛出原错误。
-- **新增图片**：transcript 中位于「本次运行最后一次成功模型调用」之后的条目里的图，以及映射不回 transcript 的图（插件注入）。运行开始时这个位置是 `run_start`（本次输入的起点），每次调用成功后推进到那次请求的条目数。所以常见情形「用户先前传过设计稿，现在一张新截图超限」只会去掉新截图。
+- **新增图片**：transcript 中位于模型最后一次输出（助手文字、工具调用、推理）之后的条目里的图，以及映射不回 transcript 的图（插件注入）。那次输出之前的图都随那次成功调用发出过。这个位置直接从 transcript 读出，所以从检查点恢复的运行也知道。常见情形「用户先前传过设计稿，现在一张新截图超限」只会去掉新截图。
 - 每次重试都会少发至少一张图，所以一次调用最多两次图片重试。
 - 重试复用已构建的视图，不重新压缩、不重新执行工具。上下文超限的一次恢复照旧，两种恢复可在同一次调用里先后发生。
 - 重试之前发出 `ImagesWithheld` 事件（第 5 节）。
@@ -90,11 +90,11 @@ def image_rejection(exc: BaseException) -> Literal["unsupported", "image"] | Non
             "withheld": [[12, 1, "3f2a…"], [15, 0, "9c0d…"]]}}
 ```
 
-- **`blind`**：明确不收图的「端点 + 模型」（沿用 `context/state.py:309` 的 `window_key`）。之后对这个模型的请求从一开始就去掉全部图片。只由 `"unsupported"` 写入。
+- **`blind`**：明确不收图的「端点 + 模型」（沿用 `context/state.py:309` 的 `window_key`）。之后对这个模型的请求从一开始就去掉全部图片。只由 `"unsupported"` 写入，而且只记模型、不记位置：对话换了模型（切换、handoff）后，那些图照样发给新模型。说图片格式的报错（`Image format is not supported`、`does not support image/gif`）属于 `"image"`。
 - **`withheld`**：恢复成功那次被去掉的历史图片位置：`[条目序号, part 序号, 指纹]`。条目序号相对于去掉系统提示后的 transcript（即 Session 条目的序号），在 append-only 的 Session 里稳定；指纹由图片数据的长度和首尾片段（URL 图片用 URL）算出，用来确认那个位置上还是同一张图。撤回、编辑消息或 handoff 让位置错开时，指纹对不上就不生效。
 - **只在恢复后的那次调用成功时写入。** 重试仍失败时不写，运行照原样报错。
 - **不建「坏图名单」。** 内容哈希会把好图永久屏蔽：端点最多收 20 张图时，第 21 张让请求被拒，它本身没有问题；记录的是位置，用户之后单独重新发同一张图，它是新位置上的新图，照样能看。URL 图片也不必定义身份。
-- 映射不回 transcript 的图（插件注入）只在当次调用里去掉，不写入。
+- 映射不回 transcript 的图（插件注入）只在当次调用里去掉，不写入。映射按「条目 + part 序号」，同一个 `ImagePart` 对象出现两次就是两张图。
 - 不记录「模型能看图」的正面证据：默认就当能看（PR 2）；一次 HTTP 成功也不能证明网关真的把像素交给了模型。
 
 ### 5. `ImagesWithheld` 事件

@@ -43,6 +43,9 @@ def test_a_model_without_images_says_so(body: str) -> None:
         ("Could not process image", 400),
         ("Invalid image data", 422),
         ("Request too large: image payload", 413),
+        # A format is about this image, not the model.
+        ("Image format is not supported", 400),
+        ("This model does not support image/gif", 400),
     ],
 )
 def test_a_problem_with_these_images_is_not_a_fact_about_the_model(
@@ -82,6 +85,11 @@ async def test_an_image_too_large_is_not_taken_for_a_context_overflow() -> None:
 
     image = await status(413, "Request too large: image exceeds the maximum size")
     assert type(image) is ProviderError and image_rejection(image) == "image"
-    # A plain oversized prompt still takes the overflow path.
+    # A plain oversized prompt still takes the overflow path, and so does one
+    # that names the context window, images or not.
     plain = await status(413, "Request too large for model")
     assert isinstance(plain, ContextOverflowError)
+    both = await status(
+        400, "The combined text and image tokens exceed the model's context window"
+    )
+    assert isinstance(both, ContextOverflowError)

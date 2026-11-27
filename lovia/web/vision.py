@@ -25,6 +25,7 @@ import base64
 import logging
 from typing import Annotated, Any
 
+from .. import events
 from ..agent import Agent
 from ..exceptions import ToolError
 from ..messages import user
@@ -41,6 +42,11 @@ from ..workspace.tools import (
 )
 
 log = logging.getLogger(__name__)
+
+_REFUSED = (
+    "The vision model refused the image {path} (too large, an unsupported "
+    "format, or a model that takes no images); it could not be described."
+)
 
 # The tool's name: stored in transcripts, and how a rebuilt agent finds it.
 DESCRIBE_IMAGE = "describe_image"
@@ -116,11 +122,24 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
         image = ImagePart(
             data=base64.b64encode(file.data).decode("ascii"), mime_type=sniffed
         )
+        # A vision model that refuses the image would otherwise "describe"
+        # its text marker (the runner withholds a refused image and goes on):
+        # stop at the first sign of that and say so instead.
+        handle = Runner.stream(viewer, [user([TextPart(question), image])])
+        refused = False
         try:
-            result = await Runner.run(viewer, [user([TextPart(question), image])])
+            async for ev in handle:
+                if isinstance(ev, events.ImagesWithheld) and not refused:
+                    refused = True
+                    handle.cancel("the vision model refused the image")
+            result = await handle.result()
         except Exception as exc:
+            if refused:
+                raise ToolError(_REFUSED.format(path=file.path)) from exc
             log.warning("describe_image failed for %s: %s", file.path, exc)
             raise ToolError(f"Could not analyze the image ({exc}).") from exc
+        if refused:  # pragma: no cover - a cancelled run raises above
+            raise ToolError(_REFUSED.format(path=file.path))
         return result.output if isinstance(result.output, str) else str(result.output)
 
     return describe_image

@@ -136,6 +136,32 @@ def test_resolve_vision_tool_gating(tmp_path: Path) -> None:
     assert tool2 is not None and tool2.name == "describe_image"
 
 
+@pytest.mark.asyncio
+async def test_describe_image_says_so_when_the_vision_model_refuses_it(
+    tmp_path: Path,
+) -> None:
+    from lovia.exceptions import ProviderError
+
+    class Refuses:
+        name = "refuses"
+        model = "m"
+        supports_vision = True
+        calls = 0
+
+        async def stream(self, entries, **kwargs):
+            Refuses.calls += 1
+            body = "image exceeds 8000 pixels"
+            raise ProviderError(body, status_code=400, body=body)
+            yield  # pragma: no cover
+
+    (tmp_path / "cat.png").write_bytes(PNG)
+    tool = make_describe_image_tool(Refuses())  # type: ignore[arg-type]
+    with pytest.raises(ToolError, match="refused the image"):
+        await tool.invoke({"path": "cat.png"}, _ctx(_session(tmp_path)))
+    # Never a description of the image's text marker.
+    assert Refuses.calls == 1
+
+
 def test_resolve_vision_tool_bad_profile_degrades(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

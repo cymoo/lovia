@@ -57,11 +57,15 @@ class ImagePart:
     ) -> "ImagePart":
         """Load an image from disk and embed it as base64."""
         p = Path(path)
+        if mime_type is None and image_mime(p) is None:
+            raise ValueError(f"Cannot infer mime_type for {p.suffix!r}")
         raw = p.read_bytes()
         if mime_type is None:
-            mime_type = sniff_image_mime(raw) or image_mime(p)
+            # The bytes decide, as on every path to a model: an HTML page
+            # saved as .png would be refused by the provider.
+            mime_type = sniff_image_mime(raw)
             if mime_type is None:
-                raise ValueError(f"Cannot infer mime_type for {p.suffix!r}")
+                raise ValueError(f"{p.name!r} is not a PNG, JPEG, GIF or WebP image")
         data = base64.b64encode(raw).decode("ascii")
         return cls(data=data, mime_type=mime_type)
 

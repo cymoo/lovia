@@ -93,6 +93,7 @@ from ..output import (
 from ..providers._images import image_rejection
 from ..providers.base import (
     Provider,
+    VisionCapable,
     context_window,
     discover_context_window,
     supports_vision,
@@ -732,7 +733,6 @@ class RunLoop:
             run_ctx=run_ctx,
             active=active,
             run_start=run_start,
-            image_mark=run_start,
             system_head_len=system_head_len,
             turns=snapshot.turns if snapshot is not None else 0,
             extra_instructions=extra_instructions,
@@ -911,6 +911,21 @@ class RunLoop:
         of them, at most twice (``runtime/images.py``).
         """
         provider = state.active.provider
+        model = getattr(provider, "model", None)
+        # The images the chat withholds from this model (runtime/images.py),
+        # applied before the policy sees the entries, so it estimates what is
+        # sent; and those this call withholds if the provider refuses some.
+        images = ImageCall(
+            state.context_state,
+            state.transcript,
+            head=state.system_head_len,
+            model=window_key(provider, model),
+            # An adapter that knows the model can't see sends a tool result's
+            # text only; one that doesn't say may send its images.
+            tool_images=(
+                not isinstance(provider, VisionCapable) or supports_vision(provider)
+            ),
+        )
         request = CompactionRequest(
             # A shallow snapshot, not the live list: the policy contract says
             # read-only, but handing out the real transcript would let one
@@ -919,9 +934,9 @@ class RunLoop:
             # only the list is defensive. The transcript cannot grow between
             # here and the overflow re-compact below (both happen before this
             # turn's entries are appended), so the snapshot stays current.
-            entries=list(state.transcript),
+            entries=list(images.entries),
             provider=provider,
-            model=getattr(provider, "model", None),
+            model=model,
             # The same tool set _call_model serializes into the request, so
             # the policy can count the schema payload it will actually pay for.
             tools=list(state.active.tools_by_name.values()),
@@ -942,27 +957,18 @@ class RunLoop:
             yield ev
         ctx_result = results.pop()
         turn.context_window = ctx_result.window
-        view = await self._build_view(state, ctx_result)
+        view = await self._build_view(state, ctx_result, images.entries)
         if ctx_result.compacted:
             yield await self._emit(
                 state, self._compacted_event(state, view, ctx_result, reactive=False)
             )
         view = await self._augment_view(state, view)
-        # Images the chat already withholds, and those this call will if the
-        # provider refuses some (runtime/images.py). Applied to every view
-        # this call builds, so a re-compaction after an overflow can't send
-        # back an image a refusal took out.
-        images = ImageCall(
-            state.context_state,
-            state.transcript,
-            head=state.system_head_len,
-            mark=state.image_mark,
-            model=window_key(provider, request.model),
-            tool_images=supports_vision(provider),
-        )
 
         overflowed = False
         while True:
+            # What this call withholds after a refusal, applied to every view
+            # it builds: a re-compaction after an overflow can't send back an
+            # image a refusal took out.
             sent = images.apply(view)
             forwarded = False
             try:
@@ -1030,7 +1036,7 @@ class RunLoop:
                         "start a new chat or branch from an earlier turn."
                     )
                     raise
-                view = await self._build_view(state, ctx_result)
+                view = await self._build_view(state, ctx_result, images.entries)
                 yield await self._emit(
                     state, self._compacted_event(state, view, ctx_result, reactive=True)
                 )
@@ -1040,7 +1046,7 @@ class RunLoop:
                 # Retried only before any output, as an overflow is, and only
                 # while there is an image left to take out.
                 count = (
-                    0 if kind is None or forwarded else images.withhold_more(sent, kind)
+                    0 if kind is None or forwarded else images.withhold_more(view, kind)
                 )
                 if not count:
                     raise
@@ -1058,8 +1064,11 @@ class RunLoop:
                     ),
                 )
             else:
+                if images.changed:
+                    # The policy estimated the view with those images in it:
+                    # this call's count must not calibrate that estimate.
+                    state.calibration_view = None
                 images.remember(state.context_state)
-                state.image_mark = len(request.entries)
                 return
             turn.assistant = None
             turn.turn_entries = []
@@ -1865,17 +1874,20 @@ class RunLoop:
         )
 
     async def _build_view(
-        self, state: RunState, result: ContextResult
+        self, state: RunState, result: ContextResult, base: list[TranscriptEntry]
     ) -> list[TranscriptEntry]:
         """Return the per-call view to send to the provider.
 
-        Compaction is view-only: ``state.transcript`` is never mutated. When the
-        policy dropped the leading system message(s) (e.g. it summarized the
-        head), re-prepend the system entries already stored at the head of the
-        transcript so provider adapters still see them.
+        Compaction is view-only: ``state.transcript`` is never mutated. ``base``
+        is what the policy was given — the transcript with the images the chat
+        withholds already marked (runtime/images.py) — and the view when the
+        policy changed nothing. When the policy dropped the leading system
+        message(s) (e.g. it summarized the head), re-prepend the system entries
+        already stored at the head of the transcript so provider adapters still
+        see them.
         """
         if not result.changed:
-            return state.transcript
+            return base
         view = result.entries
         if leading_system_count(view):
             return view

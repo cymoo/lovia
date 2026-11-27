@@ -13,6 +13,7 @@ from ..exceptions import ContextOverflowError
 from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import StructuredOutput, response_format_for
 from ..providers._images import image_rejection
+from .images import image_parts
 from ..providers.base import ModelSettings, Provider
 from ..reliability import CancelToken, RetryPolicy
 from .run_state import ModelTurnResult
@@ -225,6 +226,11 @@ def assemble_turn_entries(
     return out
 
 
+def _carries_images(entries: list[TranscriptEntry]) -> bool:
+    """Whether a request has an image in it: a message's or a tool result's."""
+    return any(image_parts(e) for e in entries)
+
+
 async def stream_with_retries(
     provider: Provider,
     input_entries: list[TranscriptEntry],
@@ -300,7 +306,7 @@ async def stream_with_retries(
                 or not retry.retry_on(exc)
                 # The same images would be refused again: the run loop
                 # withholds them first (runtime/images.py).
-                or image_rejection(exc) is not None
+                or (image_rejection(exc) is not None and _carries_images(input_entries))
             ):
                 raise
             delay = retry.backoff_delay(attempt)

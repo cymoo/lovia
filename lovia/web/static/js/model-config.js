@@ -903,6 +903,9 @@ export function buildSearchPane() {
       provider,
       (val) => {
         provider = val;
+        // A key half typed was the last service's: never this one's.
+        editing = false;
+        keyIn.value = '';
         renderKey();
         describeService();
         void apply({ provider: val });

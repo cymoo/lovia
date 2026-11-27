@@ -151,8 +151,9 @@ def test_a_redirect_to_another_host_is_a_filtering_proxy() -> None:
     )
     said = describe(warned, 5, cfg)
     assert said.startswith(
-        "The network sent the request to 10.0.0.5, not mcp.parallel.ai"
+        "The request to mcp.parallel.ai was redirected to 10.0.0.5, and not followed."
     )
+    assert "filters sites" in said
     assert "downgrade" not in said
     # A redirect within the server's own host keeps the SDK's words.
     own = RuntimeError("Redirect to http://mcp.parallel.ai/mcp/ not followed: …")

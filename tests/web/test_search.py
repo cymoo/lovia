@@ -23,6 +23,10 @@ from lovia.web.search import (  # noqa: E402
 )
 
 
+# What a fake server lists: one tool, as the search opens it.
+name_listed = SimpleNamespace(name="search__tool")
+
+
 def _text(text: str) -> SimpleNamespace:
     return SimpleNamespace(type="text", text=text)
 
@@ -41,7 +45,7 @@ def server(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             )
             return fake.answers.pop(0)
 
-        yield SimpleNamespace(call=call)
+        yield SimpleNamespace(call=call, tools=lambda: [name_listed])
 
     monkeypatch.setattr(MCPServerStreamableHTTP, "session", session)
     return fake
@@ -142,7 +146,7 @@ async def test_only_a_connection_that_never_opened_is_retried(
                     raise ConnectionResetError()  # the reply lost, the search run
                 return MCPToolResult(content=[_text("ok")])
 
-            yield SimpleNamespace(call=call)
+            yield SimpleNamespace(call=call, tools=lambda: [name_listed])
 
         monkeypatch.setattr(MCPServerStreamableHTTP, "session", session)
 
@@ -257,7 +261,7 @@ async def test_auto_moves_on_only_from_a_service_it_cannot_reach(
                 return MCPToolResult(content=[_text("over quota")], is_error=True)
             return MCPToolResult(content=[_text(f"answer from {name}")])
 
-        yield SimpleNamespace(call=call)
+        yield SimpleNamespace(call=call, tools=lambda: [name_listed])
 
     monkeypatch.setattr(MCPServerStreamableHTTP, "session", session)
     tool = search_tool(SearchConfig())  # auto, the default
@@ -288,3 +292,50 @@ def test_search_goes_through_the_proxy_unless_set_to_direct() -> None:
     assert server_config(SearchConfig(), "exa").trust_env is True
     direct = SearchConfig(trust_env=False)
     assert server_config(direct, "exa").trust_env is False
+
+
+async def test_auto_passes_over_a_hanging_service_or_one_without_its_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from lovia.web import search as search_mod
+
+    monkeypatch.setattr(search_mod, "_OPEN_TIMEOUT", 0.05)
+    clock = [1_000.0]
+    monkeypatch.setattr(search_mod, "_clock", lambda: clock[0])
+    opened: list[str] = []
+    hang = {PRESETS["parallel"].url}
+    toolless = {PRESETS["exa"].url}
+
+    @asynccontextmanager
+    async def session(self: MCPServerStreamableHTTP):  # type: ignore[no-untyped-def]
+        opened.append(self.url)
+        if self.url in hang:
+            await asyncio.sleep(10)  # accepts, and never finishes opening
+
+        async def call(name: str, args: dict[str, Any]) -> MCPToolResult:
+            return MCPToolResult(content=[_text(f"answer from {name}")])
+
+        listed = [] if self.url in toolless else [name_listed]
+        yield SimpleNamespace(call=call, tools=lambda: listed)
+
+    monkeypatch.setattr(MCPServerStreamableHTTP, "session", session)
+    tool = search_tool(SearchConfig())
+    assert tool is not None
+    # Room for the two after the first to open, on top of the search's own.
+    assert tool.timeout == 60 + 2 * 0.05
+    out = await tool.invoke({"query": "q"}, None)  # type: ignore[arg-type]
+    assert "answer from tavily_search" in out
+    assert opened == [PRESETS[n].url for n in ("parallel", "exa", "tavily")]
+    # Tavily answers first while remembered; answering does not renew it ...
+    opened.clear()
+    clock[0] += 500
+    await tool.invoke({"query": "q"}, None)  # type: ignore[arg-type]
+    assert opened == [PRESETS["tavily"].url]
+    # ... so once its time is up, Parallel is asked again.
+    hang.clear()
+    opened.clear()
+    clock[0] += 200
+    assert "answer from web_search" in await tool.invoke({"query": "q"}, None)  # type: ignore[arg-type]
+    assert opened == [PRESETS["parallel"].url]

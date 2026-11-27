@@ -23,6 +23,7 @@ import json
 import re
 import time
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from typing import Annotated, Any, Literal
@@ -32,7 +33,7 @@ from ..plugins.mcp import MCPToolResult, render_mcp_content
 from ..tools import Tool, tool
 from ..tools.fence import FENCE_NOTE, fence
 from .config.schema import MCPServerConfig, SearchConfig
-from .mcp import describe, server_for
+from .mcp import deadline, describe, server_for
 
 # Per hit, and in all: hosted search answers run long (Parallel's excerpts
 # reach 25k characters a call), and every one of them is the model's to read.
@@ -54,6 +55,10 @@ AUTO_ORDER = ("parallel", "exa", "tavily")
 # before it could not be reached: a blocked service costs its failure once,
 # not every search — and is tried again after a while (a laptop moves).
 _REMEMBER = 600.0
+# How long a service has to open a connection and list its tools: one that
+# hangs (a network dropping its packets) must leave time for the next.
+_OPEN_TIMEOUT = 15.0
+_clock = time.monotonic  # what ``_REMEMBER`` counts on
 _NETWORK_HINT = (
     "A network problem, not a bad query; Settings → Web search shows whether "
     "the service answers."
@@ -170,7 +175,7 @@ def search_tool(search: SearchConfig) -> Tool | None:
             # One service picked: a connection that fails to open is tried
             # once more — a hosted service drops the odd one.
             return names * 2
-        now = time.monotonic()
+        now = _clock()
         first = [n for n in names if remembered.get(n, 0.0) > now]
         return first + [n for n in names if n not in first]
 
@@ -179,13 +184,22 @@ def search_tool(search: SearchConfig) -> Tool | None:
         for name in order():
             preset, sent = PRESETS[name], False
             try:
-                async with servers[name].session() as conn:
+                async with AsyncExitStack() as stack:
+                    async with deadline(_OPEN_TIMEOUT):
+                        conn = await stack.enter_async_context(servers[name].session())
+                    # Listed with only its search tool: none means it is gone.
+                    if not conn.tools():
+                        unreached[preset.label] = (
+                            f"the service no longer offers {preset.tool}"
+                        )
+                        continue
                     sent = True
                     result = await conn.call(
                         preset.tool, preset.args(query, n, time_range)
                     )
             except Exception as exc:
-                why = redact(describe(exc, cfg=configs[name]), search)
+                why = describe(exc, _OPEN_TIMEOUT, configs[name])
+                why = redact(why, search)
                 # Never the search itself, here or elsewhere: a lost reply
                 # may have run, and billed, it already.
                 if sent:
@@ -195,9 +209,13 @@ def search_tool(search: SearchConfig) -> Tool | None:
                     ) from exc
                 unreached[preset.label] = why
                 continue
-            remembered.clear()
-            if name != names[0]:
-                remembered[name] = time.monotonic() + _REMEMBER
+            if name == names[0]:
+                remembered.clear()
+            elif unreached:
+                # Only when the ones before it were just tried: answering
+                # from first place renews nothing, so they get tried again.
+                remembered.clear()
+                remembered[name] = _clock() + _REMEMBER
             return _refused(preset, result)
         if len(unreached) == 1:
             ((label, why),) = unreached.items()
@@ -209,11 +227,12 @@ def search_tool(search: SearchConfig) -> Tool | None:
         raise ToolError(message, hint=_NETWORK_HINT)
 
     # No tool-level retries (``ask`` has its own); the timeout bounds a server
-    # that accepts the connection and never answers.
+    # that accepts the connection and never answers — with time for each
+    # service after the first to open.
     @tool(
         name="web_search",
         retries=0,
-        timeout=60,
+        timeout=60 + _OPEN_TIMEOUT * (len(order()) - 1),
         description=(
             "Search the web; returns the top results — title, url and an "
             "excerpt each.\n"

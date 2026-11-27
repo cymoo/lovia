@@ -176,6 +176,8 @@ export function buildVoicePane() {
 
     /** Saves ``body``; the pane is drawn again from what was saved. */
     const apply = async (body, done = '') => {
+      // Held still while it saves: the redraw would drop newer edits.
+      form.inert = true;
       try {
         await api.setVoice(body);
         await loadConfig();

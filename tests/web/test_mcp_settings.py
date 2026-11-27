@@ -133,8 +133,9 @@ def test_a_failed_connection_says_whether_a_proxy_was_in_the_way(
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
     monkeypatch.setenv("NO_PROXY", "")
     monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
-    off = MCPServerConfig(name="gw", url="https://mcp.corp.example/mcp")
-    on = off.model_copy(update={"trust_env": True})
+    # Unset, it goes through the proxy, as Settings → General does by default.
+    on = MCPServerConfig(name="gw", url="https://mcp.corp.example/mcp")
+    off = on.model_copy(update={"trust_env": False})
     assert "skipped the proxy proxy.corp:8080" in describe(TimeoutError(), 5, off)
     said = describe(RuntimeError("Server returned an error response"), 5, on)
     assert said.startswith("RuntimeError: Server returned an error response.")

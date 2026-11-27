@@ -133,6 +133,13 @@ class SearchTestIn(SearchIn):
     saved ones, ``api_key`` null the saved key."""
 
 
+class ProxyIn(BaseModel):
+    """Settings → General's System proxy: true through the machine's proxy,
+    false direct, null as lovia was started."""
+
+    trust_env: bool | None
+
+
 class VoiceIn(BaseModel):
     """Voice input updates; only the fields present change, and an explicit
     null clears — except ``api_key``, which follows the keep/clear
@@ -408,6 +415,12 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             "mcp": _mcp_out(),
             "assistant": _assistant_out(),
             "permissions": _permissions_out(),
+            # What a setting left at its default gets: the saved choice, or
+            # how lovia was started.
+            "proxy": {
+                "trust_env": cfg.trust_env,
+                "launch": runtime.launch_trust_env,
+            },
             "voice": {
                 **cfg.voice.model_dump(exclude={"api_key"}),
                 "api_key": _mask(cfg.voice.api_key),
@@ -615,6 +628,14 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             skipped.append({"service": preset.label, "error": error})
         # Off asks no one, and fails no one.
         return {"ok": not skipped, "service": None, "skipped": skipped}
+
+    @router.put("/proxy")
+    async def update_proxy(body: ProxyIn, request: Request) -> dict[str, object]:
+        _guard_write(request)
+        # The models it routes are rebuilt with it; before one is
+        # configured, it is saved for later.
+        await _apply(_copy(trust_env=body.trust_env), settings_only=True)
+        return {"config": _config_out()}
 
     @router.put("/voice")
     async def update_voice(body: VoiceIn, request: Request) -> dict[str, object]:

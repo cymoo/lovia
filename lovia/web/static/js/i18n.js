@@ -817,7 +817,9 @@ const MESSAGES = {
     'cfg.proxyDefault': '跟随全局',
     'cfg.proxyOff': '直连',
     'cfg.proxyOn': '经代理',
-    'cfg.proxyHint': '跟随全局：默认直连，启动时加了 --trust-env 才经代理。',
+    'cfg.proxyHint': '跟随全局：按 设置 → 通用 → 系统代理。',
+    'settings.proxyHint':
+      '经代理：按本机的代理设置走，代理的绕过列表里的地址和本机地址直连；本机没设代理就是直连。模型、MCP 服务器、联网搜索可各自另设。',
     'cfg.extraBody': '额外请求参数',
     'cfg.extraBodyHint':
       '原样合并进发给该端点的每个请求（如 reasoning_effort、thinking、vLLM 的 chat_template_kwargs）；null 表示删除该字段。按端点自己的写法填，不做转换',
@@ -950,7 +952,6 @@ const MESSAGES = {
     'search.about.auto':
       '先问 Parallel，连不上时依次换 Exa、Tavily；搜索词只发给答复的那一家。额度用完不会转去别家。',
     'search.okVia': '可用 · 由 {name} 答复',
-    'search.proxyHint': '经代理：本机设了代理就走代理，没设就直连。',
     'search.about.parallel': '免 key，匿名额度有限。',
     'search.about.tavily': '免 key 额度很少，同一网络出口的人共用，用完需填 API key。',
     'search.about.exa': '免 key，但有些代理出口会被拒，那时请直连或填 API key。',
@@ -1789,7 +1790,9 @@ const EN = {
   'cfg.proxyDefault': 'Default',
   'cfg.proxyOff': 'Direct',
   'cfg.proxyOn': 'Use proxy',
-  'cfg.proxyHint': 'Default: direct, unless lovia started with --trust-env.',
+  'cfg.proxyHint': 'Default: as Settings → General → System proxy says.',
+  'settings.proxyHint':
+    'Use proxy: as this machine’s proxy settings say — addresses in its bypass list, and this machine, go direct; with no proxy set, everything does. Models, MCP servers and web search can each set their own.',
   'cfg.extraBody': 'Extra request fields',
   'cfg.extraBodyHint':
     "Merged verbatim into every request to this endpoint (reasoning_effort, thinking, vLLM's chat_template_kwargs…); null removes a field. Written in the endpoint's own dialect — nothing is translated",
@@ -1924,7 +1927,6 @@ const EN = {
   'search.about.auto':
     'Asks Parallel, and Exa then Tavily when it can’t be reached; your searches go only to the one that answers. A spent allowance is not passed on to another.',
   'search.okVia': 'Available · answered by {name}',
-  'search.proxyHint': 'Use proxy: through this machine’s proxy if it has one, else direct.',
   'search.about.parallel': 'No key needed; the free allowance is limited.',
   'search.about.tavily':
     'No key needed for a small allowance shared by everyone behind the same exit; add an API key once it runs out.',

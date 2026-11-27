@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...agent import Agent
 from ...exceptions import UserError
+from ...http_config import resolve_trust_env
 from ...plugins import Memory
 from ...providers import Provider, provider_from_string
 from ...providers._windows import clear_endpoint_cache
@@ -46,6 +47,8 @@ log = logging.getLogger("lovia.web.config")
 
 # How long a retired provider may wait for its last run to finish before we
 # give up and leak it (never close a client under a marathon run).
+# The switch every client reads (lovia.http_config.resolve_trust_env).
+_TRUST_ENV = "LOVIA_HTTP_TRUST_ENV"
 _RETIRE_TIMEOUT = 600.0
 _RETIRE_POLL = 5.0
 
@@ -102,12 +105,31 @@ class ConfigRuntime:
         # id: its provider and vision tool, built on first use and kept
         # until the configuration changes.
         self._chat_models: dict[str, tuple[Provider, Tool | None]] = {}
+        # The System proxy as lovia was started, for a config that sets none.
+        self._launch_trust_env = os.environ.get(_TRUST_ENV)
+        self.launch_trust_env = resolve_trust_env(None)
+        self._route(self.config)
 
     # ------------------------------------------------------------- state -
 
     @property
     def config(self) -> WebConfig:
         return self.loaded.config
+
+    def _route(self, config: WebConfig) -> None:
+        """``config``'s System proxy, for every client whose own setting is
+        the default: each reads ``LOVIA_HTTP_TRUST_ENV`` as it is built — a
+        provider, an MCP connection — or as it sends, as ``web_fetch`` does.
+        Process-wide, as that variable is: one lovia web per process."""
+        value = (
+            self._launch_trust_env
+            if config.trust_env is None
+            else ("1" if config.trust_env else "0")
+        )
+        if value is None:
+            os.environ.pop(_TRUST_ENV, None)
+        else:
+            os.environ[_TRUST_ENV] = value
 
     @property
     def writable(self) -> bool:
@@ -338,12 +360,20 @@ class ConfigRuntime:
                     save_config(config, self.loaded.path)
                     self.loaded.exists = True
                 self.loaded.config = config
+                self._route(config)
                 return
-            agents, aux_model = self.build(config)
+            # The new System proxy before the build, whose clients read it;
+            # back to the old one if the build or the save fails.
+            self._route(config)
+            try:
+                agents, aux_model = self.build(config)
+                if persist:
+                    save_config(config, self.loaded.path)
+                    self.loaded.exists = True
+            except BaseException:
+                self._route(self.config)
+                raise
             previous = self.config
-            if persist:
-                save_config(config, self.loaded.path)
-                self.loaded.exists = True
             self.loaded.config = config
             deps = self._deps
             if deps is None:  # not bound yet (boot builds its own agents)
@@ -358,7 +388,13 @@ class ConfigRuntime:
             # first build that serves one: the boot had none to build.
             stale_aux: object = aux_model
             first = bool(self.serveable(previous)) and aux_model is not None
-            if first or config.aux_profile() != previous.aux_profile():
+            # The System proxy too: an aux model that follows it was built
+            # on the old route.
+            if (
+                first
+                or config.aux_profile() != previous.aux_profile()
+                or config.trust_env != previous.trust_env
+            ):
                 old_aux = deps.followup_model
                 stale_aux = old_aux if old_aux is not aux_model else None
                 deps.title_model = aux_model

@@ -98,7 +98,13 @@ async def test_streamable_http_modern_client(
     assert clients[0].is_closed
 
 
+def _routed(client: Any) -> bool:
+    """Whether ``client`` sends through the machine's proxy (lovia's route)."""
+    return any(type(t).__name__ == "AsyncRoute" for t in client._mounts.values())
+
+
 async def test_streamable_http_legacy_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
     calls: list[tuple[str, dict[str, str] | None]] = []
     clients: list[Any] = []
     headers = {"Authorization": "Bearer example", "User-Agent": "lovia-example"}
@@ -127,7 +133,7 @@ async def test_streamable_http_legacy_client(monkeypatch: pytest.MonkeyPatch) ->
     async with factory() as result:
         assert result is streams
     assert calls == [("https://mcp.example.com/mcp", headers)]
-    assert clients[0].trust_env is True
+    assert _routed(clients[0])
     assert clients[0].headers["Authorization"] == "Bearer example"
     await clients[0].aclose()
 
@@ -164,7 +170,9 @@ def test_streamable_http_never_builds_a_client_on_ambient_settings(
 def test_streamable_http_trust_env_follows_the_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "1")
+    # On unless turned off: through the machine's proxy, where it has one.
+    monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
     built: list[Any] = []
 
     def legacy(url: str, **kwargs: Any) -> None:
@@ -182,7 +190,7 @@ def test_streamable_http_trust_env_follows_the_environment(
         )._make_transport()
     on()
     off()
-    assert [c.trust_env for c in built] == [True, False]
+    assert [_routed(c) for c in built] == [True, False]
 
 
 # --------------------------------------------------------------------------- #

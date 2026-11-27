@@ -1216,9 +1216,8 @@ def test_the_agent_carries_its_run_posture(
 
 
 def test_parser_reliability_flags() -> None:
-    args = cli.build_parser().parse_args(["--provider-timeout", "90", "--trust-env"])
+    args = cli.build_parser().parse_args(["--provider-timeout", "90"])
     assert args.provider_timeout == 90.0
-    assert args.trust_env is True
 
 
 # ------------------------------------------------- config-driven launch -
@@ -1509,7 +1508,7 @@ def test_main_gives_the_agent_its_retry_and_context_policy(
     assert captured["max_turns"] == 7
 
 
-def test_main_provider_timeout_and_trust_env_set_env(
+def test_main_provider_timeout_sets_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -1517,12 +1516,10 @@ def test_main_provider_timeout_and_trust_env_set_env(
     # setenv (not delenv) so monkeypatch restores/removes them on teardown even
     # though main() mutates os.environ directly.
     monkeypatch.setenv("LOVIA_PROVIDER_TIMEOUT", "60")
-    monkeypatch.setenv("LOVIA_HTTP_TRUST_ENV", "")
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
-    rc = cli.main(["--provider-timeout", "150", "--trust-env"])
+    rc = cli.main(["--provider-timeout", "150"])
     assert rc == 0
     assert os.environ["LOVIA_PROVIDER_TIMEOUT"] == "150.0"
-    assert os.environ["LOVIA_HTTP_TRUST_ENV"] == "1"
 
 
 def test_main_rejects_bad_provider_timeout(
@@ -1799,3 +1796,23 @@ def test_main_lets_chats_pick_a_mode(
     captured.clear()
     assert cli.main(["--no-workspace"]) == 0
     assert captured["workspaces"] is None
+
+
+def test_main_check_probes_on_the_saved_system_proxy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
+) -> None:
+    from lovia.web.config import ValidationOutcome
+
+    monkeypatch.chdir(tmp_path)
+    # Settings → General saved Direct; the model leaves its own unset.
+    write_config(trust_env=False)  # type: ignore[arg-type]
+    seen: list[object] = []
+
+    def probe(conn: object, transport: object = None) -> tuple[object, str]:
+        seen.append(getattr(conn, "trust_env"))
+        return ValidationOutcome.OK, "HTTP 200"
+
+    monkeypatch.setattr("lovia.web.config.check.validate_connection", probe)
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    assert cli.main(["--check"]) == 0
+    assert seen == [False]  # routed as it is when served

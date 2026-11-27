@@ -474,7 +474,7 @@ def test_testing_a_search_service_uses_the_form_s_settings(
         "https://mcp.parallel.ai/mcp",
         "https://mcp.exa.ai/mcp",
     ]
-    assert tried[-1][2] is True
+    assert tried[-1][2] is None  # as Settings → General says
 
 
 # --------------------------------------------------------------- skills -
@@ -673,14 +673,15 @@ def test_a_model_keeps_its_proxy_setting_and_tests_with_the_form_s(
 ) -> None:
     client, runtime, _app = served
     monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
-    _add_model(client, id="out", trust_env=True)
+    _add_model(client, id="out", trust_env=False)
     _add_model(client, id="in")
     listed = {m["id"]: m for m in client.get("/api/config").json()["models"]}
-    assert (listed["out"]["trust_env"], listed["in"]["trust_env"]) == (True, None)
-    # A chat on it gets a provider that goes through the proxy, as it says.
+    assert (listed["out"]["trust_env"], listed["in"]["trust_env"]) == (False, None)
+    # A chat on it gets a provider routed as it says; unset, through the
+    # proxy, as Settings → General does by default.
     lovia = client.app.state.deps.agents["lovia"]
-    assert runtime.on_model(lovia, "in").model._trust_env is False
-    assert runtime.on_model(lovia, "out").model._trust_env is True
+    assert runtime.on_model(lovia, "in").model._trust_env is True
+    assert runtime.on_model(lovia, "out").model._trust_env is False
 
     seen: list[object] = []
 
@@ -690,9 +691,51 @@ def test_a_model_keeps_its_proxy_setting_and_tests_with_the_form_s(
 
     monkeypatch.setattr("lovia.web.api.config.validate_connection", fake_validate)
     # The form's choice, its "Default" (null) included; left out, the stored one.
-    for sent in ({"trust_env": False}, {"trust_env": None}, {}):
+    for sent in ({"trust_env": True}, {"trust_env": None}, {}):
         client.post("/api/config/test", json={"profile_id": "out", **sent})
-    assert seen == [False, None, True]
+    assert seen == [True, None, False]
+
+
+def test_the_system_proxy_setting_routes_every_client_left_to_it(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, runtime, app = served
+    # setenv/delenv first: monkeypatch then undoes what the runtime writes.
+    monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
+    _add_model(client)  # its own proxy setting left unset
+    assert client.get("/api/config").json()["proxy"] == {
+        "trust_env": None,
+        "launch": runtime.launch_trust_env,
+    }
+    res = client.put("/api/config/proxy", json={"trust_env": False})
+    assert res.status_code == 200, res.text
+    assert res.json()["config"]["proxy"]["trust_env"] is False
+    # Read by every client as it is built: the served model is rebuilt on it.
+    assert os.environ["LOVIA_HTTP_TRUST_ENV"] == "0"
+    assert app.state.deps.agents["lovia"].model._trust_env is False
+    client.put("/api/config/proxy", json={"trust_env": True})
+    assert app.state.deps.agents["lovia"].model._trust_env is True
+    # A separate aux model follows it too: rebuilt on the new route.
+    _add_model(client, id="aux")
+    assert client.put("/api/config/roles", json={"aux": "aux"}).status_code == 200
+    assert app.state.deps.title_model._trust_env is True
+    client.put("/api/config/proxy", json={"trust_env": False})
+    assert app.state.deps.title_model._trust_env is False
+    # Null: back to how lovia was started.
+    client.put("/api/config/proxy", json={"trust_env": None})
+    assert runtime.config.trust_env is None
+    assert os.environ.get("LOVIA_HTTP_TRUST_ENV") == runtime._launch_trust_env
+
+
+def test_the_system_proxy_saves_before_a_model_is_configured(
+    served, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, runtime, _app = served
+    monkeypatch.delenv("LOVIA_HTTP_TRUST_ENV", raising=False)
+    res = client.put("/api/config/proxy", json={"trust_env": False})
+    assert res.status_code == 200, res.text
+    assert runtime.config.trust_env is False
+    assert os.environ["LOVIA_HTTP_TRUST_ENV"] == "0"
 
 
 def test_voice_on_a_borrowed_model_takes_its_proxy_route(

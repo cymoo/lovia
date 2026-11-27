@@ -11,7 +11,7 @@ import enum
 
 import httpx
 
-from ...http_config import client_options, proxy_note
+from ...http_config import client_options, proxy_note, resolve_trust_env
 from ...providers import Provider, provider_from_string
 from ...providers._windows import window_from_models_payload
 from ...providers.base import context_window as provider_context_window
@@ -43,20 +43,19 @@ def validate_connection(
     there, so setup need not ask for a number the endpoint knows.
     """
     assert conn.base_url is not None and conn.flavor is not None
-    options = client_options(conn.trust_env)
+    options = client_options(conn.trust_env, sync=True, transport=transport)
+    proxied = resolve_trust_env(conn.trust_env)
     url = f"{conn.base_url}/models"
     # A failure's hint names the setting that decided the route.
     named = {} if conn.trust_env is None else {"switch": MODEL_PROXY_SWITCH}
 
     def noted(detail: str, failed: str) -> str:
         # ``failed``: where the request ended up, redirects followed.
-        note = proxy_note(failed, options["trust_env"], **named)
+        note = proxy_note(failed, proxied, **named)
         return f"{detail.rstrip('.')}. {note}" if note else detail
 
     try:
-        with httpx.Client(
-            timeout=timeout, transport=transport, follow_redirects=True, **options
-        ) as client:
+        with httpx.Client(timeout=timeout, follow_redirects=True, **options) as client:
             response = client.get(url, headers=conn.flavor.auth_headers(conn.api_key))
     except httpx.TransportError as exc:
         try:
@@ -74,7 +73,7 @@ def validate_connection(
         return ValidationOutcome.OK, f"HTTP {response.status_code}"
     detail = f"HTTP {response.status_code}"
     # A gateway status through a proxy may be the proxy's own answer.
-    if options["trust_env"] and response.status_code in (407, 502, 504):
+    if proxied and response.status_code in (407, 502, 504):
         detail = noted(detail, str(response.url))
     return ValidationOutcome.UNVERIFIABLE, detail
 

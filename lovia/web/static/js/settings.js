@@ -10,7 +10,8 @@ import { t, languages, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
 import { icon } from './icons.js';
-import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
+import { api } from './api.js';
+import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane, cfg, loadConfig } from './model-config.js';
 import { buildAssistantPane } from './assistant-config.js';
 import { mcpPane } from './mcp-config.js';
 import { buildVoicePane } from './voice-settings.js';
@@ -283,7 +284,44 @@ function buildGeneralPane() {
     });
     panel.appendChild(field(t('settings.followups'), followups));
   }
+
+  // The server's System proxy: config.json, so only where Settings edits it.
+  if (store.canConfigure) panel.appendChild(proxyField());
   return panel;
+}
+
+/** Settings → General → System proxy: saved as it is picked. */
+function proxyField() {
+  const wrap = document.createElement('div');
+  const draw = () => {
+    const c = cfg();
+    if (!c) return;
+    const on = c.proxy.trust_env ?? c.proxy.launch;
+    const ctl = segmented(
+      [
+        ['on', t('cfg.proxyOn')],
+        ['off', t('cfg.proxyOff')],
+      ],
+      on ? 'on' : 'off',
+      async (val) => {
+        try {
+          await api.setProxy({ trust_env: val === 'on' });
+          await loadConfig();
+        } catch (err) {
+          toast(String(err.message || err), { type: 'error' });
+          await loadConfig().catch(() => {});
+          draw(); // back to what is saved
+        }
+      },
+    );
+    if (!c.writable) {
+      for (const radio of ctl.querySelectorAll('input')) radio.disabled = true;
+    }
+    wrap.replaceChildren(field(t('cfg.proxy'), ctl, t('settings.proxyHint')));
+  };
+  if (cfg()) draw();
+  else loadConfig().then(draw, () => {});
+  return wrap;
 }
 
 // ---- Dialog shell ---------------------------------------------------------

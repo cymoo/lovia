@@ -91,10 +91,9 @@ class OpenAIEmbedder:
         timeout: Request timeout in seconds. Defaults to the
             ``LOVIA_PROVIDER_TIMEOUT`` environment variable, else 60.
         default_headers: Extra headers merged into every request.
-        trust_env: Whether the embedder-created HTTP client should honor proxy
-            and certificate environment variables. Defaults to
-            ``LOVIA_HTTP_TRUST_ENV``, else ``False`` (same rationale as the
-            chat providers).
+        trust_env: Whether the embedder-created HTTP client goes through the
+            machine's proxy (its bypass list kept). Defaults to
+            ``LOVIA_HTTP_TRUST_ENV``, else on (as the chat providers).
         batch_size: Max texts per request. Kept conservative because
             compatible endpoints commonly cap batches far below OpenAI's.
     """

@@ -5,8 +5,8 @@ Most MCP clients write servers as ``{"mcpServers": {name: {...}}}``: a
 what the editor takes — the whole document, or just the object inside it —
 and what it shows when a server is edited. Two keys are lovia's own (the
 form sets them, see ``mcp-config.js``): a url's ``trustEnv`` (true / false)
-sends it through the system proxy or not, whatever ``--trust-env`` says for
-the rest; ``defer`` (true) puts only its tools' names in the prompt, their
+sends it through the system proxy or not, whatever Settings → General says
+for the rest; ``defer`` (true) puts only its tools' names in the prompt, their
 definitions behind ``search_mcp_tools``.
 
 ``env`` and ``headers`` values are secrets as often as not (API tokens), so

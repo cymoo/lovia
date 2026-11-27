@@ -208,7 +208,7 @@ def _usable(proxy: str) -> bool:
     not blame it."""
     try:
         parts = urlsplit(proxy)
-        parts.port  # noqa: B018 — raises on a malformed port
+        parts.port  # noqa: B018 — raises on a malformed port (or IPv6 bracket)
     except ValueError:
         return _skip(proxy, "a malformed address")
     if parts.scheme in ("http", "https"):
@@ -318,8 +318,11 @@ def _route_class(lib: Any, sync: bool) -> Any:
 
 def _proxy_address(proxy: str) -> str:
     """``host:port`` of a proxy URL — never its credentials."""
-    parts = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
-    host = parts.hostname or "?"
+    try:
+        parts = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+        host = parts.hostname or "?"
+    except ValueError:  # beyond parsing: say nothing of it
+        return "?"
     try:
         port = parts.port
     except ValueError:  # malformed: the name alone

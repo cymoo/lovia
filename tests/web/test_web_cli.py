@@ -1796,3 +1796,23 @@ def test_main_lets_chats_pick_a_mode(
     captured.clear()
     assert cli.main(["--no-workspace"]) == 0
     assert captured["workspaces"] is None
+
+
+def test_main_check_probes_on_the_saved_system_proxy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
+) -> None:
+    from lovia.web.config import ValidationOutcome
+
+    monkeypatch.chdir(tmp_path)
+    # Settings → General saved Direct; the model leaves its own unset.
+    write_config(trust_env=False)  # type: ignore[arg-type]
+    seen: list[object] = []
+
+    def probe(conn: object, transport: object = None) -> tuple[object, str]:
+        seen.append(getattr(conn, "trust_env"))
+        return ValidationOutcome.OK, "HTTP 200"
+
+    monkeypatch.setattr("lovia.web.config.check.validate_connection", probe)
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    assert cli.main(["--check"]) == 0
+    assert seen == [False]  # routed as it is when served

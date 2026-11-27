@@ -607,9 +607,11 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             if args.check:
                 # Read-only diagnosis: report, probe, exit — never serves.
                 loaded = webconfig.load_active(home)
-                return webconfig.run_check(
-                    _connection(loaded.config), version=__version__, path=loaded.path
-                )
+                conn = _connection(loaded.config)
+                if conn.trust_env is None:
+                    # Routed as it is when served: by Settings → General.
+                    conn.trust_env = loaded.config.trust_env
+                return webconfig.run_check(conn, version=__version__, path=loaded.path)
             general = Deployment(home=home).general_workspace()
             built_app = default_app(
                 home=home,

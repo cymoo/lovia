@@ -206,6 +206,9 @@ def test_an_unusable_proxy_is_skipped_not_fatal(
     no_proxy_env.setenv("HTTPS_PROXY", "http://proxy.corp:port")
     assert _route_of(client_options()) is None
     assert "not using the proxy proxy.corp: a malformed address" in caplog.text
+    no_proxy_env.setenv("HTTPS_PROXY", "http://[::1")
+    assert _route_of(client_options()) is None
+    assert "not using the proxy ?: a malformed address" in caplog.text
 
 
 def test_a_port_named_in_no_proxy_is_kept(no_proxy_env: pytest.MonkeyPatch) -> None:

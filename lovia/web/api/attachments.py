@@ -33,6 +33,7 @@ from ..attachments import (
 )
 from ..errors import WebError
 from ..media import is_preview_image, model_image_mime, preview_image_mime
+from ...parts import sniff_image_mime
 from ...workspace import WorkspaceLimits
 from ...workspace.tools import VIEW_IMAGE_MAX_BYTES
 from ...workspace.workspace import WorkspaceSessionBinding
@@ -155,6 +156,19 @@ def build_attachments_router(deps: RouterDeps) -> APIRouter:
                     raise WebError(413, "file_too_large", "file too large")
             if not data:
                 raise WebError(422, "invalid_request", "empty file")
+            if (
+                files_config(picked) is None
+                and model_image_mime(name)
+                and sniff_image_mime(bytes(data[:16])) is None
+            ):
+                # Without a workspace only an inlined image reaches the model:
+                # bytes that are no image a provider takes would be a path the
+                # agent has no way to open.
+                raise WebError(
+                    415,
+                    "unsupported_file_type",
+                    f"{name!r} is not a PNG, JPEG, GIF or WebP image",
+                )
         finally:
             await file.close()
 

@@ -37,6 +37,7 @@ from typing import Any
 
 from ..parts import ContentPart, ImagePart, TextPart, project_parts
 from ..providers._images import ImageRejection
+from ..providers.base import VisionCapable, supports_vision
 from ..transcript import (
     AssistantTextEntry,
     InputEntry,
@@ -74,6 +75,23 @@ def image_parts(entry: TranscriptEntry) -> list[tuple[int, ImagePart]]:
     else:
         return []
     return [(i, p) for i, p in enumerate(parts) if isinstance(p, ImagePart)]
+
+
+def sends_tool_images(provider: object) -> bool:
+    """Whether ``provider`` puts a tool result's images on the wire: an adapter
+    that knows its model can't see sends the result's text only; one that
+    doesn't say may send them."""
+    return not isinstance(provider, VisionCapable) or supports_vision(provider)
+
+
+def wire_images(entries: list[TranscriptEntry], *, tool_images: bool) -> bool:
+    """Whether a request of ``entries`` puts an image on the wire: a
+    message's, or a tool result's where the adapter sends those."""
+    return any(
+        image_parts(e)
+        for e in entries
+        if tool_images or not isinstance(e, ToolResultEntry)
+    )
 
 
 def _without(entry: TranscriptEntry, drop: set[int]) -> TranscriptEntry:
@@ -154,7 +172,7 @@ class ImageCall:
         # The transcript with what the chat remembers applied, and where
         # each image left in it sits — by (entry, part index), as the entries
         # reach the view by reference; an image object may appear twice.
-        blind_now = model in self._blind
+        blind_now = self._blind_now = model in self._blind
         self.entries: list[TranscriptEntry] = list(transcript)
         self._where: dict[tuple[int, int], tuple[_Key, int]] = {}
         for at, entry in enumerate(transcript):
@@ -182,12 +200,15 @@ class ImageCall:
         if self._unsupported:
             return True
         found = self._where.get((id(entry), index))
-        return self._drop_unplaced if found is None else found[0] in self._drop
+        if found is None:  # an injected entry's image: never to a blind model
+            return self._drop_unplaced or self._blind_now
+        return found[0] in self._drop
 
     def apply(self, view: list[TranscriptEntry]) -> list[TranscriptEntry]:
         """``view`` with the images this call withholds turned into their
-        marker; the same list when there is none."""
-        if not self.changed:
+        marker — and any an injected entry brings to a model that takes
+        none; the same list when there is none."""
+        if not (self.changed or self._blind_now):
             return view
         out: list[TranscriptEntry] | None = None
         for n, entry in enumerate(view):
@@ -239,8 +260,11 @@ class ImageCall:
         if not self.changed:
             return
         if self._unsupported:
-            self._blind.add(self._model)  # every image of this model, from now on
-        self._remembered |= self._drop
+            # Only the model: the images an earlier try of this call took out
+            # were not why it failed, and another model may take them.
+            self._blind.add(self._model)
+        else:
+            self._remembered |= self._drop
         scratch[SCRATCH_KEY] = {
             "blind": sorted(self._blind),
             "withheld": [list(k) for k in sorted(self._remembered)],

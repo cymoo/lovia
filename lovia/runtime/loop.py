@@ -93,12 +93,11 @@ from ..output import (
 from ..providers._images import image_rejection
 from ..providers.base import (
     Provider,
-    VisionCapable,
     context_window,
     discover_context_window,
     supports_vision,
 )
-from .images import ImageCall
+from .images import ImageCall, sends_tool_images
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
@@ -920,11 +919,7 @@ class RunLoop:
             state.transcript,
             head=state.system_head_len,
             model=window_key(provider, model),
-            # An adapter that knows the model can't see sends a tool result's
-            # text only; one that doesn't say may send its images.
-            tool_images=(
-                not isinstance(provider, VisionCapable) or supports_vision(provider)
-            ),
+            tool_images=sends_tool_images(provider),
         )
         request = CompactionRequest(
             # A shallow snapshot, not the live list: the policy contract says

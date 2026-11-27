@@ -37,7 +37,7 @@ _MENTIONS_IMAGE = re.compile(r"image|multi-?modal|vision", re.I)
 # image/gif"), which is about this image.
 _UNSUPPORTED = re.compile(
     r"does(?: not|n'?t) support (?:the )?(?:images?|vision|multi-?modal)"
-    r"(?: (?:input|inputs|content|messages?))?(?![\w/-])"
+    r"(?: (?:input|inputs|content|messages?))?(?![\w/-]| (?:format|type|of|with|larger))"
     r"|(?:image (?:input|content)s?|images|vision|multi-?modal (?:input|content)s?)"
     r" (?:is|are) not supported"
     r"|not a multi-?modal model"
@@ -47,8 +47,12 @@ _UNSUPPORTED = re.compile(
 )
 
 # What makes a refusal a context overflow whatever it says of images: "the
-# combined text and image tokens exceed the context window" is compacted.
+# combined text and image tokens exceed the context window" is compacted —
+# and never taken for an image refusal, whatever status it comes with.
 _TOKENS = re.compile(r"token|context", re.I)
+_CONTEXT = re.compile(
+    r"context (?:window|length|limit|size)|maximum context|prompt is too long", re.I
+)
 
 # An image refused for its size or number. Read before the context-overflow
 # needles: "request too large" with these words is about an image, and
@@ -74,8 +78,8 @@ def image_rejection(exc: BaseException) -> ImageRejection | None:
         return None
     body = getattr(exc, "body", None)  # set by the built-in adapters
     text = body if isinstance(body, str) and body else str(exc)
-    if not _MENTIONS_IMAGE.search(text):
-        return None
+    if not _MENTIONS_IMAGE.search(text) or _CONTEXT.search(text):
+        return None  # an overflow of the context window is compaction's
     return "unsupported" if _UNSUPPORTED.search(text) else "image"
 
 

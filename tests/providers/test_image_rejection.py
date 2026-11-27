@@ -46,6 +46,7 @@ def test_a_model_without_images_says_so(body: str) -> None:
         # A format is about this image, not the model.
         ("Image format is not supported", 400),
         ("This model does not support image/gif", 400),
+        ("This model does not support image format GIF", 400),
     ],
 )
 def test_a_problem_with_these_images_is_not_a_fact_about_the_model(
@@ -58,6 +59,8 @@ def test_a_problem_with_these_images_is_not_a_fact_about_the_model(
     "exc",
     [
         err("prompt is too long"),  # no image in it
+        # An overflow, whatever status an endpoint answers it with.
+        err("text and image tokens exceed the model's context window", 422),
         err("rate limited on image requests", 429),
         err("image service unavailable", 503),
         ProviderError("image exceeds 5 MB"),  # no status: not an HTTP refusal

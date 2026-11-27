@@ -398,3 +398,31 @@ async def test_a_provider_that_does_not_declare_vision_gets_tool_images_recovere
         Gate.supports_vision = True  # type: ignore[attr-defined]
     assert result.output == "ok"
     assert withheld(seen) == [(1, False)]
+
+
+async def test_an_injected_image_never_reaches_a_model_known_blind() -> None:
+    entries: list[TranscriptEntry] = [InputEntry(role="user", content=[TextPart("hi")])]
+    injected = InputEntry(role="user", content=[png("I")])
+    call = ImageCall(
+        {"images": {"blind": ["k"], "withheld": []}}, entries, head=0, model="k"
+    )
+    view = call.apply([*entries, injected])
+    assert not any(isinstance(p, ImagePart) for p in view[-1].content)
+
+
+async def test_no_images_remembers_the_model_not_an_earlier_tries_exclusions() -> None:
+    # First a vague refusal (the new image goes), then "takes no images":
+    # only the model is the fact; the new image may suit another model.
+    from lovia.transcript import AssistantTextEntry
+
+    entries: list[TranscriptEntry] = [
+        InputEntry(role="user", content=[png("A")]),
+        AssistantTextEntry(content="seen"),
+        InputEntry(role="user", content=[png("B")]),
+    ]
+    call = ImageCall({}, entries, head=0, model="k")
+    assert call.withhold_more(entries, "image") == 1
+    assert call.withhold_more(entries, "unsupported") == 1
+    scratch: dict[str, Any] = {}
+    call.remember(scratch)
+    assert scratch["images"] == {"blind": ["k"], "withheld": []}

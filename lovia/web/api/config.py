@@ -141,6 +141,12 @@ class ProxyIn(BaseModel):
     trust_env: bool | None
 
 
+class KeepAwakeIn(BaseModel):
+    """Settings → General's Keep awake."""
+
+    on: bool
+
+
 class VoiceIn(BaseModel):
     """Voice input updates; only the fields present change, and an explicit
     null clears — except ``api_key``, which follows the keep/clear
@@ -425,6 +431,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                 "trust_env": cfg.trust_env,
                 "launch": runtime.launch_trust_env,
             },
+            # ``supported``: whether the switch does anything here.
+            "keep_awake": {"on": cfg.keep_awake, "supported": runtime.keeps_awake},
             "voice": {
                 **cfg.voice.model_dump(exclude={"api_key"}),
                 "api_key": _mask(cfg.voice.api_key),
@@ -639,6 +647,15 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         # The models it routes are rebuilt with it; before one is
         # configured, it is saved for later.
         await _apply(_copy(trust_env=body.trust_env), settings_only=True)
+        return {"config": _config_out()}
+
+    @router.put("/keep-awake")
+    async def update_keep_awake(
+        body: KeepAwakeIn, request: Request
+    ) -> dict[str, object]:
+        _guard_write(request)
+        # Read live by the app's lifespan: nothing to rebuild.
+        await _apply(_copy(keep_awake=body.on), settings_only=True)
         return {"config": _config_out()}
 
     @router.put("/voice")

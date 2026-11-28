@@ -8,7 +8,9 @@ a home directory — and takes the same handful of switches the CLI does, plus
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import asyncio
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -19,8 +21,9 @@ from ..exceptions import UserError
 from ..tools import HumanChannel
 from ..tracing import Tracer
 from ..workspace import WorkspaceMode
+from . import awake
 from . import config as webconfig
-from .app import Lifespan, create_app
+from .app import Lifespan, _around, create_app
 from .builder import Customize, Deployment
 from .run_deps import RunDepsFn
 from .store import ChatStore
@@ -32,6 +35,36 @@ from .workspaces import WorkspaceSwitch
 # resumes the run. Someone watching answers within a minute; anyone else
 # answers whenever.
 SUSPEND_AFTER = 60
+
+
+def _keep_awake(runtime: webconfig.ConfigRuntime) -> Lifespan:
+    """Settings → General's Keep awake, as a lifespan around the app's own:
+    while it is on and a run is working, the machine doesn't sleep on idle.
+    A run that waits on a person (an approval, a question) is not working —
+    whoever walked away from it should find the machine asleep."""
+
+    def working(app: FastAPI) -> bool:
+        deps = app.state.deps
+        return any(
+            ctrl.status == "running"
+            and ctrl.pending_approval is None
+            and (deps.questions is None or deps.questions.pending(sid) is None)
+            for sid, ctrl in deps.supervisor
+        )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        task = asyncio.create_task(
+            awake.keep_awake(lambda: runtime.config.keep_awake and working(app))
+        )
+        try:
+            yield
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    return lifespan
 
 
 def default_app(
@@ -124,6 +157,10 @@ def default_app(
             agents, aux_model = runtime.build()
         except ValueError as exc:
             raise UserError(str(exc)) from exc
+    if awake.supported():
+        runtime.keeps_awake = True
+        mine = _keep_awake(runtime)
+        lifespan = mine if lifespan is None else _around(lifespan, mine)
     return create_app(
         agents,
         title=title,

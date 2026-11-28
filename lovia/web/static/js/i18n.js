@@ -841,8 +841,10 @@ const MESSAGES = {
     'cfg.proxyOff': '直连',
     'cfg.proxyOn': '经代理',
     'cfg.proxyHint': '跟随全局：按 设置 → 通用 → 系统代理。',
-    'settings.proxyHint':
-      '经代理：按本机的代理设置走，代理的绕过列表里的地址和本机地址直连；本机没设代理就是直连。模型、MCP 服务器、联网搜索可各自另设。',
+    'settings.keepAwake': '运行时保持唤醒',
+    'settings.keepAwakeHint':
+      '任务进行中，这台电脑不会自动休眠；等你批准或回答时除外。合上盖子仍会休眠。',
+    'settings.proxyHint': '联网请求是否走本机的代理设置',
     'cfg.extraBody': '额外请求参数',
     'cfg.extraBodyHint':
       '原样合并进发给该端点的每个请求（如 reasoning_effort、thinking、vLLM 的 chat_template_kwargs）；null 表示删除该字段。按端点自己的写法填，不做转换',
@@ -1841,8 +1843,10 @@ const EN = {
   'cfg.proxyOff': 'Direct',
   'cfg.proxyOn': 'Use proxy',
   'cfg.proxyHint': 'Default: as Settings → General → System proxy says.',
-  'settings.proxyHint':
-    'Use proxy: as this machine’s proxy settings say — addresses in its bypass list, and this machine, go direct; with no proxy set, everything does. Models, MCP servers and web search can each set their own.',
+  'settings.keepAwake': 'Keep awake while working',
+  'settings.keepAwakeHint':
+    "This computer won't sleep on its own while a task is running, except one waiting on you. Closing the lid still puts it to sleep.",
+  'settings.proxyHint': "Whether requests go through this machine's proxy settings",
   'cfg.extraBody': 'Extra request fields',
   'cfg.extraBodyHint':
     "Merged verbatim into every request to this endpoint (reasoning_effort, thinking, vLLM's chat_template_kwargs…); null removes a field. Written in the endpoint's own dialect — nothing is translated",

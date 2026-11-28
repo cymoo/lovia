@@ -222,7 +222,7 @@ function buildGeneralPane() {
   return panel;
 }
 
-/** Settings → General → System proxy: saved as it is picked. */
+/** Settings → General's server rows — System proxy, Keep awake: saved as picked. */
 function proxyField() {
   const wrap = settingsGroup();
   const draw = () => {
@@ -250,6 +250,23 @@ function proxyField() {
       for (const radio of ctl.querySelectorAll('input')) radio.disabled = true;
     }
     wrap.replaceChildren(field(t('cfg.proxy'), ctl, t('settings.proxyHint')));
+    // Keep awake, first: only where the server's machine can be kept from
+    // sleeping.
+    if (c.keep_awake?.supported) {
+      const sw = toggle(c.keep_awake.on, async (on, set) => {
+        try {
+          await api.setKeepAwake({ on });
+        } catch (err) {
+          toast(String(err.message || err), { type: 'error' });
+          set(!on);
+          return;
+        }
+        await loadConfig().catch(() => {}); // saved either way
+
+      });
+      if (!c.writable) sw.disabled = true;
+      wrap.prepend(field(t('settings.keepAwake'), sw, t('settings.keepAwakeHint')));
+    }
   };
   if (cfg()) draw();
   else loadConfig().then(draw, () => {});

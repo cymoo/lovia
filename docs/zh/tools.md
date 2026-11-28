@@ -167,20 +167,21 @@ async def top_customers(n: int = 10) -> list[dict]: ...
 ### 返回图片
 
 工具返回内容片段（content part）时，不经渲染器，原样交给模型：可以是一个 `ImagePart`，也可以是
-字符串和片段混合的列表。这类工具要标注 `@tool(returns_images=True)`：
+字符串和片段混合的列表：
 
 ```python
 from lovia import ImagePart, tool
 
-@tool(returns_images=True)
+@tool
 async def screenshot(url: str) -> list:
     """截取页面。"""
     return ["页面渲染结果：", ImagePart.from_path(await capture(url))]
 ```
 
-这个标志只对工作区或 Plugin 提供的工具起作用：provider 看不了图片时
-（[`supports_vision`](providers.md#openai-provider)），这些工具不会提供给模型。
-`Agent(tools=...)` 里的工具总会提供；不收图的模型在每张图片的位置看到一行说明文字。
+不需要再做别的：不收图的模型（[`supports_vision`](providers.md#openai-provider)）
+在每张图片的位置看到一行说明文字。`@tool(returns_images=True)` 是可选的，只对工作区或
+Plugin 提供的工具起作用：标注后，这个工具不再提供给不收图的模型，省掉一次看不到结果的调用。
+`Agent(tools=...)` 里的工具总会提供。
 
 ## 工具审批
 

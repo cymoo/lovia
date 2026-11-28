@@ -96,7 +96,7 @@ async def test_describe_image_size_cap_is_actionable(
     (tmp_path / "big.png").write_bytes(b"x" * 64)
     monkeypatch.setattr(vision, "VIEW_IMAGE_MAX_BYTES", 10)
     tool = make_describe_image_tool(ScriptedProvider([text("x")]))
-    with pytest.raises(ToolError, match="sips -Z 1568"):
+    with pytest.raises(ToolError, match="make a smaller copy"):
         await tool.invoke({"path": "big.png"}, _ctx(_session(tmp_path)))
 
 

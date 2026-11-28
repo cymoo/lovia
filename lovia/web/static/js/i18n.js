@@ -178,7 +178,7 @@ const MESSAGES = {
     'chat.thoughtDone': '已思考',
     'activity.thought': '思考',
     'chat.cancelled': '_已取消。_',
-    'chat.sendToContinue': '发一条消息，它就会接着运行。',
+    'chat.sendToContinue': '运行已中断，发送消息可从中断处继续。',
     'chat.runStopped': '运行中断了。',
     'chat.retrying': '模型服务暂时出错，正在重试（{n}/{max}）…',
     'chat.mcpUnavailable': 'MCP 服务器没有连上：{names}。这次回复用不了它们的工具。',
@@ -223,6 +223,8 @@ const MESSAGES = {
     'err.timeout': '请求超时——服务商可能响应较慢，重试通常有效。',
     'err.network': '无法连接服务器——请确认 lovia 仍在运行。',
     'err.providerNetwork': 'lovia 连不上模型服务——请检查 base URL、网络和代理设置。',
+    'err.imagesRefused':
+      '模型拒收了这条带图片的请求。它若不支持看图，请在模型设置里把视觉能力改为「不支持」；若是图片过大，请回退到添加图片之前。',
     // ---- plan (todo list)
     'plan.label': '计划',
     'plan.show': '展开计划',
@@ -1177,7 +1179,7 @@ const EN = {
   'chat.thoughtDone': 'Thought',
   'activity.thought': 'Thought',
   'chat.cancelled': '_Cancelled._',
-  'chat.sendToContinue': 'Send a message and it carries on.',
+  'chat.sendToContinue': 'The run was interrupted. Send a message to continue where it stopped.',
   'chat.runStopped': 'The run stopped.',
   'chat.retrying': 'The model provider hit a snag — retrying ({n}/{max})…',
   'chat.mcpUnavailable': 'Couldn’t connect to MCP: {names}. This reply goes on without their tools.',
@@ -1224,6 +1226,8 @@ const EN = {
   'err.network': 'Can’t reach the server — check that lovia is still running.',
   'err.providerNetwork':
     'lovia can’t reach the model provider — check the base URL, network and proxy settings.',
+  'err.imagesRefused':
+    'The model refused this request, which carried images. If it takes none, set its Vision capability to “Not supported” in the model settings; if an image is too large, rewind to before it was added.',
   'plan.label': 'Plan',
   'plan.show': 'Show plan',
   'plan.hide': 'Hide plan',

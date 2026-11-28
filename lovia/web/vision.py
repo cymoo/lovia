@@ -35,6 +35,7 @@ from ..runner import Runner
 from ..tools import Tool, tool
 from ..workspace.errors import FileTooLargeError
 from ..workspace.tools import (
+    DOWNSCALE_HINT,
     VIEW_IMAGE_MAX_BYTES,
     path_permission,
     require_workspace,
@@ -99,14 +100,7 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
         try:
             file = await session.read_bytes(path, max_bytes=VIEW_IMAGE_MAX_BYTES)
         except FileTooLargeError as exc:
-            raise ToolError(
-                str(exc),
-                hint=(
-                    "Downscale it first via the shell, e.g. `sips -Z 1568 "
-                    f"{path}` (macOS) or `magick {path} -resize 1568x1568 "
-                    f"{path}`, then try again."
-                ),
-            ) from exc
+            raise ToolError(str(exc), hint=DOWNSCALE_HINT) from exc
         # Sent as the type its bytes are: a provider refuses a mismatch.
         sniffed = sniff_image_mime(file.data)
         if sniffed is None:

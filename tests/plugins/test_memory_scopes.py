@@ -326,6 +326,24 @@ async def test_replaces_moves_a_fact_between_layers(tmp_path) -> None:
     assert await _notes(mem, "/p") == []
 
 
+async def test_a_failed_move_leaves_the_old_note_in_place(
+    tmp_path, monkeypatch
+) -> None:
+    # The destination is saved first: if that fails, nothing was removed.
+    mem = _scoped(tmp_path)
+    await mem.remember("uses uv")
+
+    async def boom(facts: list[str]) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mem._tier("/p").notes, "save", boom)
+    with pytest.raises(Exception, match="disk full"):
+        await _remember(
+            mem, "/p", fact="uses uv here", about="project", replaces="uses uv"
+        )
+    assert await _notes(mem) == ["uses uv"]
+
+
 async def test_each_layer_is_held_to_its_own_budget(tmp_path) -> None:
     mem = _scoped(tmp_path, notes_budget=40)
     await mem.remember("the user lives in Lisbon")

@@ -581,6 +581,25 @@ async def test_remember_tool_refuses_when_notes_are_full(tmp_path) -> None:
     assert _bare(await mem._user.notes.load()) == ["the user lives in Porto"]
 
 
+async def test_a_refused_write_leaves_no_trace_in_the_store(tmp_path) -> None:
+    # A store may hand out the very list it keeps; "nothing saved" must hold.
+    class CachingNotes:
+        def __init__(self) -> None:
+            self.facts = ["[2026-01] the user lives in Lisbon"]
+
+        async def load(self) -> list[str]:
+            return self.facts
+
+        async def save(self, facts: list[str]) -> None:
+            self.facts = facts
+
+    notes = CachingNotes()
+    mem = Memory(tmp_path / "mem", notes=notes, index=None, notes_budget=40)
+    out = await _remember_via_run(mem, fact="the user keeps two cats")
+    assert "full" in out
+    assert notes.facts == ["[2026-01] the user lives in Lisbon"]
+
+
 async def test_over_budget_notes_can_still_shrink(tmp_path) -> None:
     # Hand-edited past the budget: a replacement that doesn't grow the list
     # goes through, so the model is never locked out of making room.

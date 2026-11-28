@@ -873,7 +873,9 @@ class Memory:
             return "duplicate"
         old = _normalize_fact(replaces)
         async with _locked(tiers):
-            lists = [await t.notes.load() for t in tiers]
+            # Copies: a refused write must leave no trace, and a store may
+            # hand out the very list it keeps.
+            lists = [list(await t.notes.load()) for t in tiers]
             target = tiers.index(into)
             before = len(_format_facts(lists[target]))
             dirty: set[int] = set()
@@ -891,7 +893,9 @@ class Memory:
             after = len(_format_facts(lists[target]))
             if budgeted and after > max(self.notes_budget, before):
                 return "full"
-            for i in sorted(dirty):
+            # The new fact lands before the old note leaves its tier: a save
+            # that fails in between leaves a duplicate, never a loss.
+            for i in sorted(dirty, key=lambda i: i != target):
                 await tiers[i].notes.save(lists[i])
         return "replaced" if old else "added"
 

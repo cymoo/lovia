@@ -12,8 +12,6 @@ import {
   runReconnect,
   sendText,
   setDraft,
-  showWaitingCard,
-  showLastError,
 } from './chat.js';
 import {
   initSessions,
@@ -122,10 +120,7 @@ async function loadAgents() {
 }
 
 // ---- Cross-module events ------------------------------------------------
-store.on('render-history', (entries) => renderHistory(entries));
-// The card a suspended run waits on, drawn under the history just rendered.
-store.on('waiting-card', (call) => showWaitingCard(call));
-store.on('last-error', (error) => showLastError(error));
+store.on('render-history', (entries, tail) => renderHistory(entries, tail));
 
 store.on('reset-chat-view', resetChatForNewSession);
 

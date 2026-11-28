@@ -530,6 +530,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | **助手** → 生成追问建议 | `assistant.followups` | 开启 |
 | **语音输入** | `voice`（`connection`，或 `base_url` 加 `api_key`；`model`；`language`） | 关闭，见[语音输入](#语音输入) |
 | **通用** → 系统代理 | `trust_env` | 按启动时：经本机代理，绕过列表里的主机和本机地址直连；`LOVIA_HTTP_TRUST_ENV=0` 时直连。管所有自身设置（模型、MCP 服务器、联网搜索）为“跟随全局”的请求，包括 `web_fetch` |
+| **通用** → 运行时保持唤醒（macOS、Windows） | `keep_awake` | 关闭。开启后，任务进行中电脑不会自动休眠，等你批准或回答时除外；合上盖子仍会休眠 |
 | —（只在文件里，重启后生效） | `assistant.max_turns` / `assistant.max_retries` | `200` / `5` |
 
 `config.json` 不可写时（比如只读挂载），服务照常启动，设置页里这些设置只能查看。

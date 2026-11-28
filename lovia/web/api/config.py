@@ -46,6 +46,7 @@ from ..config.schema import (
     is_global_dir,
     slugify,
 )
+from .. import awake
 from ..auth import is_local_name
 from ..config.mcp import parse_servers, restore_secrets, spec_of
 from ..config.schema import MCPServerConfig
@@ -139,6 +140,12 @@ class ProxyIn(BaseModel):
     false direct, null as lovia was started."""
 
     trust_env: bool | None
+
+
+class KeepAwakeIn(BaseModel):
+    """Settings → General's Keep awake."""
+
+    on: bool
 
 
 class VoiceIn(BaseModel):
@@ -425,6 +432,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                 "trust_env": cfg.trust_env,
                 "launch": runtime.launch_trust_env,
             },
+            # ``supported``: whether this machine's sleep can be held off.
+            "keep_awake": {"on": cfg.keep_awake, "supported": awake.supported()},
             "voice": {
                 **cfg.voice.model_dump(exclude={"api_key"}),
                 "api_key": _mask(cfg.voice.api_key),
@@ -639,6 +648,15 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
         # The models it routes are rebuilt with it; before one is
         # configured, it is saved for later.
         await _apply(_copy(trust_env=body.trust_env), settings_only=True)
+        return {"config": _config_out()}
+
+    @router.put("/keep-awake")
+    async def update_keep_awake(
+        body: KeepAwakeIn, request: Request
+    ) -> dict[str, object]:
+        _guard_write(request)
+        # Read live by the app's lifespan: nothing to rebuild.
+        await _apply(_copy(keep_awake=body.on), settings_only=True)
         return {"config": _config_out()}
 
     @router.put("/voice")

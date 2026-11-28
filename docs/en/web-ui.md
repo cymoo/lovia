@@ -764,6 +764,7 @@ finishes with what it started with.
 | **Assistant** → Suggest follow-up questions | `assistant.followups` | On |
 | **Voice input** | `voice` (`connection` or `base_url` + `api_key`, `model`, `language`) | Off — see [Voice input](#voice-input) |
 | **General** → System proxy | `trust_env` | As lovia was started: through the machine's proxy, its bypass list and this machine direct, unless `LOVIA_HTTP_TRUST_ENV=0`. Covers every request whose own setting (a model's, an MCP server's, web search's) is Default — `web_fetch` included |
+| **General** → Keep awake while working (macOS, Windows) | `keep_awake` | Off. On: the computer won't sleep on its own while a task is running, except one waiting on you; closing the lid still puts it to sleep |
 | — (the file only; restart to apply) | `assistant.max_turns` / `assistant.max_retries` | `200` / `5` |
 
 When `config.json` isn't writable (a read-only mount, say), the server still

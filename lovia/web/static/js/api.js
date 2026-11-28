@@ -641,6 +641,12 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
+  setKeepAwake: (body) =>
+    request('/api/config/keep-awake', {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
   // Voice input's settings. `api_key`: null keeps, '' clears.
   setVoice: (body) =>
     request('/api/config/voice', {

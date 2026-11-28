@@ -434,6 +434,9 @@ class WebConfig(BaseModel):
     # bypass list kept) or direct, for every request whose own setting is
     # the default. None: as lovia was started (LOVIA_HTTP_TRUST_ENV, else on).
     trust_env: bool | None = None
+    # Settings → General's Keep awake: no idle sleep while a run is working
+    # (:mod:`lovia.web.awake`).
+    keep_awake: bool = False
 
     @model_validator(mode="after")
     def _check_references(self) -> "WebConfig":

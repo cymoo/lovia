@@ -807,6 +807,10 @@ class ChatStore:
 
         self._attachments = _beside(attachments_dir, "attachments")
         self._process_logs = _beside(process_logs_dir, "process-logs")
+        #: The metadata database's file; None for ``:memory:``.
+        self.path: Path | None = (
+            None if str(meta_path) == ":memory:" else Path(meta_path)
+        )
         self._owner = _owner_tag(meta_path)
         # ``wal`` covers only the metadata store owned here; a caller-supplied
         # Session/Checkpointer configures its own (see ChatStore.sqlite, which

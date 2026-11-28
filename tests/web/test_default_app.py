@@ -35,7 +35,10 @@ def test_a_fresh_home_serves_the_setup_screen(tmp_path: Path) -> None:
         assert info["configured"] is False and info["agents"] == []
         assert info["features"]["settings"] is True
         # Settings, the chat history and memory all live in the home.
-        assert c.get("/api/config").json()["scope"]["label"].endswith("config.json")
+        scope = c.get("/api/config").json()["scope"]
+        assert scope["label"].endswith("config.json")
+        assert scope["history"].endswith("lovia.db")
+        assert scope["memory"].endswith("memory")
     assert (home / "lovia.db").is_file()
     assert "*" in (home / ".gitignore").read_text().splitlines()
 

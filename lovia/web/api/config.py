@@ -50,6 +50,7 @@ from ..auth import is_local_name
 from ..config.mcp import parse_servers, restore_secrets, spec_of
 from ..config.schema import MCPServerConfig
 from ..config.skills import scan_skills_status
+from ..config.storage import display_path
 from ..errors import WebError
 from ..mcp import CONNECT_TIMEOUT, MCPStatus, probe
 from ..project_mcp import ProjectServer, read_project_servers
@@ -369,6 +370,7 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
 
     def _config_out() -> dict[str, object]:
         cfg = runtime.config
+        history = runtime.store.path
         return {
             "configured": runtime.configured,
             "missing": ConfigRuntime.serveable(cfg),
@@ -376,6 +378,9 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
             "scope": {
                 "label": runtime.loaded.label,
                 "exists": runtime.loaded.exists,
+                # Where the rest is kept, for About to say.
+                "history": display_path(history) if history else None,
+                "memory": display_path(runtime.deployment.home / "memory"),
             },
             "defaults": {
                 "openai_base_url": OPENAI_FLAVOR.default_base_url,

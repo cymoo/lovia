@@ -228,11 +228,12 @@ def assemble_turn_entries(
 
 # The statuses a provider refuses a request's content with.
 _REFUSAL_STATUSES = frozenset({400, 413, 422})
+# The web UI knows this hint by its first sentence (chat.js IMAGES_REFUSED),
+# to say it in the reader's language.
 _IMAGES_HINT = (
-    "This request carried images. If the model takes no image input, say so "
-    "(supports_vision=False; in lovia web, the model's Vision switch under "
-    "Settings → Models). If an image is too large, or there are too many, go "
-    "back to before it was added."
+    "This request carried images. If the model takes none, set "
+    "supports_vision=False (lovia web: Settings → Models). If an image is too "
+    "large, or there are too many, go back to before it was added."
 )
 
 

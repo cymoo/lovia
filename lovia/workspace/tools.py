@@ -255,10 +255,15 @@ async def read_file(
 
 # Anthropic's documented per-image limit — the strictest current provider —
 # is 5 MB of base64, which is 3.75 MB of image. Deliberately not a
-# policy/config knob: the cap is UX (fewer wire 400s), not a safety valve —
-# an over-limit image that slips through is withheld by the run loop when
-# the provider refuses it (runtime/images.py).
+# policy/config knob: the cap is UX (fewer wire 400s), not a safety valve.
 VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024 * 3 // 4
+# What to do about an image over the cap. Names no path (the error already
+# does) and writes a copy: the original may be the user's own file.
+DOWNSCALE_HINT = (
+    "Where there is a shell, make a smaller copy and view that, e.g. "
+    "`sips -Z 1568 in.jpg --out small.jpg` (macOS) or "
+    "`magick in.jpg -resize 1568x1568 small.jpg`."
+)
 
 
 @tool(
@@ -267,10 +272,7 @@ VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024 * 3 // 4
         "Look at an image file: the image itself is returned for you to see.\n"
         "- path is workspace-relative (e.g. 'shots/app.png') or absolute.\n"
         "- Supported: jpg, jpeg, png, gif, webp.\n"
-        "- Images over 3.75 MB are refused; where there is a shell, downscale "
-        "first with it, e.g. "
-        "`sips -Z 1568 img.png` (macOS) or `magick img.png -resize 1568x1568 "
-        "img.png`."
+        "- Images over 3.75 MB are refused; view a smaller copy instead."
     ),
     permission=path_permission("read"),
     returns_images=True,
@@ -289,14 +291,7 @@ async def view_image(
     try:
         file = await session.read_bytes(path, max_bytes=VIEW_IMAGE_MAX_BYTES)
     except FileTooLargeError as exc:
-        raise ToolError(
-            str(exc),
-            hint=(
-                "Where there is a shell, downscale it first, e.g. `sips -Z 1568 "
-                f"{path}` (macOS) or `magick {path} -resize 1568x1568 {path}`, "
-                "then view the smaller file."
-            ),
-        ) from exc
+        raise ToolError(str(exc), hint=DOWNSCALE_HINT) from exc
     # Sent as the type its bytes are: a provider refuses a mismatch.
     mime = sniff_image_mime(file.data)
     if mime is None:

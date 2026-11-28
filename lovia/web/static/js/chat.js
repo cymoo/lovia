@@ -2004,7 +2004,11 @@ function appendContextCompacted(target, data) {
 }
 
 // The error codes a person fixes in the model settings, not by waiting.
-const SETTINGS_FIXABLE = new Set(['provider_auth', 'network']);
+const SETTINGS_FIXABLE = new Set(['provider_auth', 'network', 'images_refused']);
+// lovia's own hint on a refused request that carried images, by its first
+// sentence (runtime/model_turn.py): shown as `images_refused`, a code of this
+// page's, so it is said in the reader's language.
+const IMAGES_REFUSED = /^This request carried images/;
 /** The code of the run's last `error` event, for the continue row's offer. */
 let _lastErrorCode = '';
 
@@ -2109,6 +2113,7 @@ const ERROR_CODE_HINTS = {
   // The server's `network` is lovia → provider; err.network (below) is the
   // browser → lovia leg.
   network: t('err.providerNetwork'),
+  images_refused: t('err.imagesRefused'),
 };
 /** @type {Array<[RegExp, string]>} */
 const ERROR_HINTS = [
@@ -2128,10 +2133,6 @@ const ERROR_HINTS = [
  */
 function humanizeError(message, code) {
   if (code && ERROR_CODE_HINTS[code]) return ERROR_CODE_HINTS[code];
-  // A tool's failure is in its own words, already meant to be read; the
-  // patterns below are about the model provider ("API key" in a search
-  // service's refusal is not the model's credentials).
-  if (code === 'tool_error') return null;
   const msg = String(message ?? '');
   for (const [re, hint] of ERROR_HINTS) {
     if (re.test(msg)) return hint;
@@ -3387,11 +3388,14 @@ async function applyEvent({ event, data }) {
       break;
 
     case 'error': {
+      // A tool's failure is on its card (the `tool_result` that follows):
+      // the run goes on, and a notice would say the same words twice.
+      if (data.code === 'tool_error') break;
       // `message` can arrive empty (older servers didn't fall back for
       // message-less exceptions); the class name in `type` beats a bare ⚠️.
       const message = data.message || data.type;
-      _lastErrorCode = data.code ?? '';
-      appendErrorNotice(data.hint ? `${message} — ${data.hint}` : message, data.code);
+      _lastErrorCode = IMAGES_REFUSED.test(data.hint ?? '') ? 'images_refused' : (data.code ?? '');
+      appendErrorNotice(data.hint ? `${message} — ${data.hint}` : message, _lastErrorCode);
       break;
     }
 

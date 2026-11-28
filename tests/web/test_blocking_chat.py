@@ -49,9 +49,15 @@ def _user_texts(entries) -> list[str]:
     ]
 
 
-async def test_blocking_turn_holds_the_chat() -> None:
+async def test_blocking_turn_holds_the_chat(monkeypatch) -> None:
     """A stream for the chat joins the blocking turn's run instead of starting
     a second one; another blocking turn is refused."""
+    from lovia.steering import Mailbox
+    from lovia.web import supervisor as sup_mod
+
+    # The run's mailbox, held here to see the stream's message arrive.
+    mailbox = Mailbox()
+    monkeypatch.setattr(sup_mod, "Mailbox", lambda: mailbox)
     release = asyncio.Event()
     provider = ScriptedProvider([call("block", {}, call_id="c1"), text("both done")])
     agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
@@ -66,7 +72,13 @@ async def test_blocking_turn_holds_the_chat() -> None:
         stream, lines = _spawn(
             ac, "/api/chat/stream", json={"message": "also", "session_id": "s1"}
         )
-        await asyncio.sleep(0.1)  # attached; its message queued in the mailbox
+        # Attached once its message is in the mailbox. Waited for, not slept
+        # on: a slow runner takes its time.
+        for _ in range(500):
+            if mailbox:
+                break
+            await asyncio.sleep(0.01)
+        assert mailbox
         release.set()
         res = await asyncio.wait_for(turn, timeout=5)
         await asyncio.wait_for(stream, timeout=5)

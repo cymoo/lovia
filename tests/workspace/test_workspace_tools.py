@@ -664,8 +664,11 @@ async def test_view_image_size_cap_refusal_is_actionable(
     (tmp_path / "big.png").write_bytes(b"x" * 64)
     monkeypatch.setattr(workspace_tools, "VIEW_IMAGE_MAX_BYTES", 10)
 
-    with pytest.raises(ToolError, match="sips -Z 1568"):
+    with pytest.raises(ToolError) as caught:
         await view_image.invoke({"path": "big.png"}, _ctx(session))
+    # The path is said once, and the commands write a copy, not over the file.
+    assert str(caught.value).count("big.png") == 1
+    assert "--out small.jpg" in (caught.value.hint or "")
 
 
 @pytest.mark.asyncio

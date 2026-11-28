@@ -2352,44 +2352,30 @@ body.lv-view-open #files-btn {
 }
 
 /* ---- Activity group (activity.js) ---------------------------------------------
-   A run of steps folded under one summary. Folded, it is a line of metadata
-   in the prose column — no chrome competing with the answer. Opened, it
-   becomes the card, with the steps as a timeline inside. */
+   A run of steps folded under one summary: a line of metadata in the prose
+   column, no chrome competing with the answer. Opening it moves nothing —
+   the line stays where it is and the steps appear under it as a timeline. */
 .lv-activity {
   margin: 10px 0;
-  background: var(--lv-surface);
-  border: 1px solid var(--lv-border);
-  border-radius: var(--lv-radius);
   font-size: 13.5px;
-  overflow: hidden;
-  transition: border-color var(--lv-t-fast);
-}
-[data-theme="dark"] .lv-activity {
-  background: var(--lv-surface-2);
-}
-.lv-activity[open]:hover {
-  border-color: var(--lv-border-strong);
 }
 .lv-activity > summary {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 8px 14px;
+  padding: 8px 0;
   min-height: 36px;
   cursor: pointer;
   list-style: none;
   user-select: none;
   color: var(--lv-muted);
-  transition: background var(--lv-t-fast);
+  transition: color var(--lv-t-fast);
 }
 .lv-activity > summary::-webkit-details-marker {
   display: none;
 }
 .lv-activity > summary:hover {
-  background: var(--lv-surface-2);
-}
-[data-theme="dark"] .lv-activity > summary:hover {
-  background: var(--lv-surface-3);
+  color: var(--lv-ink-2);
 }
 /* The summary is plain text; its one glyph is the alert a failed step raises. */
 .lv-activity-icon {
@@ -2400,9 +2386,10 @@ body.lv-view-open #files-btn {
 .lv-activity:has(.lv-tool.lv-error) .lv-activity-icon {
   display: inline-flex;
 }
+/* The chevron follows the words, not the far edge of the column. */
 .lv-activity-label,
 .lv-activity-now {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2419,23 +2406,6 @@ body.lv-view-open #files-btn {
 }
 .lv-turn.lv-streaming .lv-bubble > .lv-activity:not([open], :has(~ .lv-body)) .lv-activity-now {
   display: block;
-}
-/* Folded: no chrome, text aligned with the prose. After the card and hover
-   rules above (the themed ones included), which it must override. */
-.lv-activity:not([open]) {
-  background: transparent;
-  border-color: transparent;
-}
-.lv-activity:not([open]) > summary {
-  padding-left: 0;
-}
-.lv-activity:not([open]) > summary:hover {
-  background: transparent;
-  color: var(--lv-ink-2);
-}
-/* The chevron follows the words, not the far edge of the column. */
-.lv-activity:not([open]) :is(.lv-activity-label, .lv-activity-now) {
-  flex: 0 1 auto;
 }
 /* Still working: the reply is streaming and a step hasn't settled. */
 .lv-turn.lv-streaming .lv-activity:has([data-status="running"], [data-status="awaiting"], .lv-reasoning:not(.lv-done)) :is(.lv-activity-label, .lv-activity-now)::before {
@@ -2454,11 +2424,10 @@ body.lv-view-open #files-btn {
    step (keyed on the public `data-status`, so deployer tool views get it
    free), no hairlines between rows. A step's details indent past the rail. */
 .lv-activity-steps {
-  --lv-rail-x: 20px;
-  --lv-step-indent: 36px;
+  --lv-rail-x: 4px;
+  --lv-step-indent: 22px;
   position: relative;
-  padding: 4px 0;
-  border-top: 1px solid var(--lv-border);
+  padding-bottom: 4px;
 }
 .lv-activity-steps::before {
   content: "";
@@ -2480,7 +2449,12 @@ body.lv-view-open #files-btn {
 }
 .lv-activity > .lv-activity-steps > :is(.lv-reasoning, .lv-tool) > summary {
   min-height: 32px;
-  padding: 6px 14px 6px var(--lv-step-indent);
+  padding: 6px 0 6px var(--lv-step-indent);
+}
+/* No card around the rows for a hover fill to stay inside. */
+.lv-activity > .lv-activity-steps > :is(.lv-reasoning, .lv-tool) > summary:hover {
+  background: transparent;
+  color: var(--lv-ink);
 }
 /* A thinking row reads like the tool rows beside it, not as a section label. */
 .lv-activity > .lv-activity-steps > .lv-reasoning > summary {
@@ -2497,7 +2471,6 @@ body.lv-view-open #files-btn {
 }
 .lv-activity-steps > * > :not(summary) {
   margin-left: var(--lv-step-indent);
-  margin-right: 14px;
 }
 .lv-activity-steps > :is(.lv-reasoning, .lv-tool)::before {
   content: "";
@@ -2527,6 +2500,22 @@ body.lv-view-open #files-btn {
 }
 .lv-activity-steps > .lv-reasoning:not(.lv-done)[open] .lv-reasoning-label::after {
   display: none; /* the dot already spins */
+}
+/* Lone thinking, opened with its group (activity.js): the group's line already
+   names it, so its own row, dot and rail would only say it twice. A lone tool
+   keeps its row: its actions live there. */
+.lv-activity-steps:has(> .lv-reasoning:only-child[open])::before,
+.lv-activity-steps > .lv-reasoning:only-child[open]::before,
+.lv-activity > .lv-activity-steps > .lv-reasoning:only-child[open] > summary {
+  display: none;
+}
+.lv-activity-steps > .lv-reasoning:only-child[open] > :not(summary) {
+  margin-left: 0;
+}
+/* Thinking under its row, or under the group's line: no card to rule off. */
+.lv-activity-steps > .lv-reasoning > .lv-reasoning-content {
+  padding: 2px 0 8px;
+  border-top: 0;
 }
 
 /* ---- Reasoning -------------------------------------------------------------- */

@@ -10,7 +10,8 @@
 //
 // A group is never opened or closed for the user: while its run works, the
 // folded line names the latest step (styles.css swaps it for the digest), so
-// progress shows without the layout jumping.
+// progress shows without the layout jumping. Opened, the line stays where it
+// is and the steps appear under it.
 
 import { t } from './i18n.js';
 import { icon } from './icons.js';
@@ -74,6 +75,12 @@ function makeGroup(open = false) {
   const steps = document.createElement('div');
   steps.className = 'lv-activity-steps';
   group.append(summary, steps);
+  // A lone step opens with its group: one click to its content, not two. On
+  // the click, before the group opens, so the step's own row never shows.
+  summary.addEventListener('click', () => {
+    const only = steps.children.length === 1 ? steps.firstElementChild : null;
+    if (!group.open && only instanceof HTMLDetailsElement) only.open = true;
+  });
   return group;
 }
 

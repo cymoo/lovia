@@ -106,6 +106,9 @@ async def test_a_message_continues_a_run_cut_off_by_an_outage() -> None:
         assert detail["waiting"]["kind"] == "message"
         assert detail["waiting"]["reason"] == "error"
         assert "gateway" in detail["waiting"]["error"]
+        # The code its error frame carried; a run to continue is no last_error.
+        assert detail["waiting"]["code"] == "provider_error"
+        assert detail["last_error"] is None
 
         evs = await _stream(
             ac, "/api/chat/stream", json={"message": "继续", "session_id": "s1"}

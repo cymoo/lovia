@@ -2008,7 +2008,7 @@ const SETTINGS_FIXABLE = new Set(['provider_auth', 'network', 'images_refused'])
 // lovia's own hint on a refused request that carried images, by its first
 // sentence (runtime/model_turn.py): shown as `images_refused`, a code of this
 // page's, so it is said in the reader's language.
-const IMAGES_REFUSED = /^This request carried images/;
+const IMAGES_REFUSED = /(^|hint: )This request carried images/;
 /** The code of the run's last `error` event, for the continue row's offer. */
 let _lastErrorCode = '';
 
@@ -2064,7 +2064,7 @@ function restorePrompt(message) {
  * The chat's run stopped at a limit or on a failure (the session's `waiting`
  * of kind "message"): say so under the history just rendered, and that the
  * next message continues it.
- * @param {{ reason?: string, error?: string | null }} waiting
+ * @param {{ reason?: string, error?: string | null, code?: string | null }} waiting
  */
 function showInterrupted(waiting) {
   if (store.streaming) return;
@@ -2079,9 +2079,21 @@ function showInterrupted(waiting) {
     store.turnNode?.classList.remove('lv-streaming');
   }
   const reason = waiting.reason ?? '';
-  _lastErrorCode = reason === 'max_turns' || reason === 'budget' ? reason : '';
+  // The stored text is the exception's own, its hint folded in.
+  _lastErrorCode = IMAGES_REFUSED.test(waiting.error ?? '')
+    ? 'images_refused'
+    : waiting.code || (reason === 'max_turns' || reason === 'budget' ? reason : '');
   appendErrorNotice(waiting.error || t('chat.runStopped'), _lastErrorCode);
   appendContinueRow({ quiet: true });
+}
+
+/**
+ * The chat's last run failed for good (the session's `last_error`): the
+ * notice its `error` frame drew, under the history just rendered.
+ * @param {{ message: string, code?: string | null }} error
+ */
+export function showLastError(error) {
+  showInterrupted({ reason: 'error', error: error.message, code: error.code });
 }
 
 // ---- Screen-reader announcements ----------------------------------------
@@ -3729,6 +3741,7 @@ async function recoverDroppedStream(sessionId) {
   // What the run stopped to wait on (a card, or a message after a limit or
   // a failure), as a chat load shows it.
   if (data.waiting) store.emit('waiting-card', data.waiting);
+  if (data.last_error) store.emit('last-error', data.last_error);
   // The run settled server-side while we were away; its chips (if any) were
   // cached by whichever client saw it finish — repaint them if the tail matches.
   maybeRestoreFollowups(data.entries || []);

@@ -156,7 +156,17 @@ async def _session_view(
                 # Cut off by a limit or a failure: no reconnect; the person's
                 # next message continues it.
                 error = (snapshot.error or {}).get("message")
-                return view, None, {"kind": "message", "reason": reason, "error": error}
+                last = (await store.latest_runs([session_id])).get(session_id)
+                return (
+                    view,
+                    None,
+                    {
+                        "kind": "message",
+                        "reason": reason,
+                        "error": error,
+                        "code": last.error_code if last else None,
+                    },
+                )
             return view, candidate, None
         # Stale pointer — clean it up so a reload doesn't offer a dead reconnect.
         await store.clear_active_run_id(session_id)
@@ -169,6 +179,21 @@ async def _session_view(
         None,
         None,
     )
+
+
+async def _last_error(deps: RouterDeps, session_id: str) -> JsonObject | None:
+    """The error of the chat's last run, when it failed for good (no
+    checkpoint is kept to say so) and what it left is still the chat's tail."""
+    last = (await deps.store.latest_runs([session_id])).get(session_id)
+    if last is None or last.status != "failed" or not last.error:
+        return None
+    # Run records outlive a rewind: one that cut the run away took its error
+    # too. A record is named after its run's first leg, whose segment a later
+    # leg always follows.
+    segments = await deps.session.segments(session_id)
+    if not any(seg.run_id == last.id for seg in segments):
+        return None
+    return {"message": last.error, "code": last.error_code}
 
 
 def build_sessions_router(deps: RouterDeps) -> APIRouter:
@@ -361,6 +386,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             entries=entries,
             active_run_id=active_run_id,
             waiting=waiting,
+            last_error=await _last_error(deps, session_id)
+            if active_run_id is None and waiting is None
+            else None,
             pinned=meta.pinned if meta else False,
             archived=meta.archived if meta else False,
             parent_id=meta.parent_id if meta else None,

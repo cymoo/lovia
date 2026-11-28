@@ -62,7 +62,7 @@ from .api.serialization import (
     view_messages,
 )
 from .components import UI_DATA_SINK
-from .errors import WebError
+from .errors import WebError, run_error_code
 from .schemas import MessageOut
 from .sse import (
     ApprovalAsked,
@@ -1293,6 +1293,12 @@ class RunController:
             error = None if status in ("completed", "waiting") else final_error
             self.final_status = status
             self.final_error = error
+            # The code the run's `error` frame carried, for a chat opened later.
+            error_code = (
+                run_error_code(self.final_exception)
+                if status in ("failed", "interrupted") and self.final_exception
+                else None
+            )
             try:
                 # A waiting record was written above, before the eviction; a
                 # second write here would drop what was queued for it since.
@@ -1301,6 +1307,7 @@ class RunController:
                         record_id,
                         status=status,
                         error=error,
+                        error_code=error_code,
                         usage=usage_dict(
                             self.usage,
                             last_input_tokens=self.last_input_tokens,

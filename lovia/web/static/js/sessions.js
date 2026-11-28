@@ -416,6 +416,7 @@ async function refreshTranscript() {
     store.emit('render-history', data.entries || []);
     if (data.active_run_id) store.emit('reconnect', id);
     else if (data.waiting) store.emit('waiting-card', data.waiting);
+    if (data.last_error) store.emit('last-error', data.last_error);
   } catch { /* transient — the next event or a manual switch repaints */ }
 }
 
@@ -1298,6 +1299,9 @@ export async function switchSession(id) {
       // Its run is suspended on a card: show the card; answering it resumes
       // the run (opening the chat must not).
       store.emit('waiting-card', data.waiting);
+    } else if (data.last_error) {
+      // Its last run failed for good: say why, as the live page did.
+      store.emit('last-error', data.last_error);
     } else {
       // Settled history — repaint cached follow-up chips if they still fit the
       // tail. Skipped while a run is live: its own completion produces fresh ones.

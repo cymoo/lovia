@@ -3,13 +3,18 @@ from its run record: a chat opened afterwards says what the live page said."""
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("fastapi")
 
+import lovia.web  # noqa: E402
 from lovia import Agent  # noqa: E402
 from lovia.exceptions import ProviderError  # noqa: E402
 from lovia.reliability import RetryPolicy  # noqa: E402
+from lovia.runtime.model_turn import _IMAGES_HINT  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 from ..scripted_provider import text  # noqa: E402
@@ -59,6 +64,35 @@ async def test_a_reopened_chat_says_why_its_last_run_failed() -> None:
         assert [e for e, _ in evs][-1] == "done"
         detail = (await ac.get("/api/sessions/s1")).json()
         assert detail["last_error"] is None
+
+
+async def test_a_refused_image_is_known_again_from_the_stored_error() -> None:
+    """The page tells lovia's image hint by its first sentence (chat.js
+    IMAGES_REFUSED) to say it in the reader's language: live in the frame's
+    ``hint``, and afterwards in the record's text, where the hint is folded
+    into the message."""
+    source = (Path(lovia.web.__file__).parent / "static/js/chat.js").read_text("utf-8")
+    found = re.search(r"const IMAGES_REFUSED = /(.+)/;", source)
+    assert found is not None
+    images_refused = re.compile(found.group(1))
+
+    refused = ProviderError("HTTP 400: invalid content", hint=_IMAGES_HINT)
+    refused.status_code, refused.retryable = 400, False
+    store = ChatStore.in_memory()
+    agent = Agent(name="bot", model=_Flaky([refused]))
+    app = _app(agent, store=store, retry=RetryPolicy(max_attempts=1))
+    async with _client(app) as ac:
+        evs = await _stream(
+            ac, "/api/chat/stream", json={"message": "look", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1", gone=True)
+        (frame,) = [d for e, d in evs if e == "error"]
+        last = (await ac.get("/api/sessions/s1")).json()["last_error"]
+    assert images_refused.search(frame["hint"])
+    assert last["code"] == "provider_error"
+    assert images_refused.search(last["message"])
+    # Not any mention of the sentence: a provider quoting it is not the hint.
+    assert not images_refused.search("HTTP 400: 'This request carried images' no")
 
 
 async def test_a_rewind_past_the_failed_run_takes_its_error() -> None:

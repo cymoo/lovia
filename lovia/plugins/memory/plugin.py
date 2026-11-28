@@ -120,6 +120,15 @@ def _normalize_fact(fact: str) -> str:
     return " ".join(fact.split())
 
 
+def _unbullet(text: str) -> str:
+    """A note as a model may paste it from its prompt, minus the ``- ``.
+
+    Left on, the bullet defeats the exact and keyed matches and leaves only
+    the substring one, which can pick a shorter, unrelated note.
+    """
+    return _normalize_fact(text).removeprefix("- ").lstrip()
+
+
 def _strip_date(fact: str) -> str:
     """The fact without its ``[YYYY-MM]`` prefix (if any)."""
     return _DATE_PREFIX.sub("", fact)
@@ -534,7 +543,8 @@ _WRITTEN_REPLY: dict[_Written, str] = {
     "duplicate": "Already in your notes — nothing to add.",
     "no_match": (
         "No note matches `replaces` — nothing changed. Pass the old note's "
-        "full text, or leave `replaces` empty to add a new note."
+        "full text, or leave `replaces` empty to add a new note. Your notes "
+        "now hold:"
     ),
     "full": (
         "Your notes are full — nothing saved. Make room first: pass the note "
@@ -869,9 +879,10 @@ class Memory:
         list is how room gets made, so it passes.
         """
         tiers = list(among or [into])
-        if not _fact_key(fact):
+        fact, old = _unbullet(fact), _unbullet(replaces)
+        key = _fact_key(fact)
+        if not key:
             return "duplicate"
-        old = _normalize_fact(replaces)
         async with _locked(tiers):
             # Copies: a refused write must leave no trace, and a store may
             # hand out the very list it keeps.
@@ -885,6 +896,14 @@ class Memory:
                     return "no_match"
                 del lists[hit[0]][hit[1]]
                 dirty.add(hit[0])
+                # A replacement lands where it was asked to: a copy another
+                # tier holds moves here, or the fact would stay behind there
+                # while the note it replaces is gone from this one.
+                for i, facts in enumerate(lists):
+                    kept = [f for f in facts if _fact_key(f) != key]
+                    if i != target and len(kept) != len(facts):
+                        lists[i] = kept
+                        dirty.add(i)
             elsewhere = [f for i, fs in enumerate(lists) if i != target for f in fs]
             if _merge_new(lists[target], [fact], elsewhere):
                 dirty.add(target)
@@ -901,7 +920,7 @@ class Memory:
 
     async def _drop(self, fact: str, tiers: Sequence[_Tier]) -> bool:
         """Remove the best match for ``fact`` from whichever tier holds it."""
-        norm = _normalize_fact(fact)
+        norm = _unbullet(fact)
         if not norm:
             return False
         async with _locked(tiers):
@@ -1031,15 +1050,18 @@ class Memory:
             # The date is the tool's to set: a model echoing a stamp it saw
             # in its notes would label today's fact as old.
             written = await plugin._write(
-                _strip_date(_normalize_fact(fact)),
+                _strip_date(_unbullet(fact)),
                 into,
                 replaces=replaces,
                 among=tiers,
                 budgeted=True,
             )
             reply = _WRITTEN_REPLY[written]
+            # The notes in the prompt are a snapshot; these are live.
             if written == "full":
                 reply += "\n\n" + await plugin._render_tier(into, scope is not None)
+            elif written == "no_match":
+                reply += "\n\n" + await plugin._render(scope)
             return reply
 
         if scope is None:

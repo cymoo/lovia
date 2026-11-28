@@ -326,6 +326,20 @@ async def test_replaces_moves_a_fact_between_layers(tmp_path) -> None:
     assert await _notes(mem, "/p") == []
 
 
+async def test_a_replacement_lands_in_the_layer_it_was_asked_for(tmp_path) -> None:
+    # The project already says it; the user now says it of themselves. The
+    # project's copy moves up, or other projects would see neither note.
+    mem = _scoped(tmp_path)
+    await mem.remember("prefers pip")
+    await mem.remember("prefers uv", scope="/p")
+    out = await _remember(
+        mem, "/p", fact="prefers uv", about="user", replaces="prefers pip"
+    )
+    assert "Replaced" in out
+    assert await _notes(mem) == ["prefers uv"]
+    assert await _notes(mem, "/p") == []
+
+
 async def test_a_failed_move_leaves_the_old_note_in_place(
     tmp_path, monkeypatch
 ) -> None:

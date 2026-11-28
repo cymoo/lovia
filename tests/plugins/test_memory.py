@@ -562,8 +562,28 @@ async def test_remember_tool_reports_an_unmatched_replaces(tmp_path) -> None:
     mem = Memory(tmp_path / "mem", index=None)
     await mem.remember("likes jazz")
     out = await _remember_via_run(mem, fact="uses uv", replaces="uses conda")
-    assert "No note matches" in out
+    # The prompt's notes are a snapshot; the reply shows the live ones.
+    assert "No note matches" in out and "likes jazz" in out
     assert _bare(await mem._user.notes.load()) == ["likes jazz"]
+
+
+async def test_a_note_pasted_with_its_bullet_matches_in_full(tmp_path) -> None:
+    # Copied from the prompt as "- [date] text": the bullet must not push
+    # the match down to substring, where the shorter note would win.
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem.replace_notes("- [2026-01] likes tea\n- [2026-01] likes tea after lunch")
+    out = await _remember_via_run(
+        mem,
+        fact="- likes coffee after lunch",
+        replaces="- [2026-01] likes tea after lunch",
+    )
+    assert "Replaced" in out
+    assert _bare(await mem._user.notes.load()) == [
+        "likes tea",
+        "likes coffee after lunch",
+    ]
+    assert await mem.forget("- [2026-01] likes tea")
+    assert _bare(await mem._user.notes.load()) == ["likes coffee after lunch"]
 
 
 async def test_remember_tool_refuses_when_notes_are_full(tmp_path) -> None:

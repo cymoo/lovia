@@ -27,7 +27,7 @@ from pydantic import Field
 
 from ..approvals import Verdict, merge_verdicts
 from ..exceptions import ToolError
-from ..parts import ContentPart, ImagePart, TextPart, image_mime
+from ..parts import ContentPart, ImagePart, TextPart, image_mime, sniff_image_mime
 from ..run_context import RunContext
 from ..tools.base import PermissionFn, tool
 from ..transcript import InputEntry, TranscriptEntry
@@ -254,10 +254,11 @@ async def read_file(
 
 
 # Anthropic's documented per-image limit — the strictest current provider —
-# measured in decoded bytes. Deliberately not a policy/config knob: the cap
-# is UX (fewer wire 400s), not a safety valve — an over-limit image that
-# slips through surfaces a provider error the agent loop recovers from.
-VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+# is 5 MB of base64, which is 3.75 MB of image. Deliberately not a
+# policy/config knob: the cap is UX (fewer wire 400s), not a safety valve —
+# an over-limit image that slips through is withheld by the run loop when
+# the provider refuses it (runtime/images.py).
+VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024 * 3 // 4
 
 
 @tool(
@@ -266,7 +267,7 @@ VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024
         "Look at an image file: the image itself is returned for you to see.\n"
         "- path is workspace-relative (e.g. 'shots/app.png') or absolute.\n"
         "- Supported: jpg, jpeg, png, gif, webp.\n"
-        "- Images over 5 MB are refused; where there is a shell, downscale "
+        "- Images over 3.75 MB are refused; where there is a shell, downscale "
         "first with it, e.g. "
         "`sips -Z 1568 img.png` (macOS) or `magick img.png -resize 1568x1568 "
         "img.png`."
@@ -296,6 +297,13 @@ async def view_image(
                 "then view the smaller file."
             ),
         ) from exc
+    # Sent as the type its bytes are: a provider refuses a mismatch.
+    mime = sniff_image_mime(file.data)
+    if mime is None:
+        raise ToolError(
+            f"Not a supported image: {path!r} is not PNG, JPEG, GIF or WebP inside",
+            hint="Convert it first where there is a shell, e.g. `magick in out.png`.",
+        )
     data = base64.b64encode(file.data).decode("ascii")
     return [TextPart(file.path), ImagePart(data=data, mime_type=mime)]
 

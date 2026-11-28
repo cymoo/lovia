@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 from ..agent import Agent
 from ..exceptions import UserError
 from ..messages import Message, user
-from ..parts import ContentPart, ImagePart, TextPart
+from ..parts import ContentPart, ImagePart, TextPart, sniff_image_mime
 from ..providers import supports_vision
 from ..workspace import (
     RemoteWorkspace,
@@ -48,6 +48,7 @@ from ..workspace import (
     WorkspaceLimits,
 )
 from ..workspace.protocol import WorkspaceSession
+from ..workspace.tools import VIEW_IMAGE_MAX_BYTES
 from .errors import WebError
 from .media import model_image_mime
 from .schemas import Attachment, ChatRequest
@@ -248,7 +249,8 @@ async def user_content(
         except WorkspaceError as exc:
             raise WebError.from_exc(502, "workspace_unreachable", exc) from exc
     limits = cfg.limits if cfg is not None else WorkspaceLimits()
-    max_bytes = limits.max_file_read_bytes
+    # An image larger than a provider takes is attached by path only.
+    max_bytes = min(limits.max_file_read_bytes, VIEW_IMAGE_MAX_BYTES)
     try:
         for att in attachments:
             image: bytes | None = None
@@ -280,9 +282,13 @@ async def user_content(
             else:
                 continue
             named.append(where)
-            mime = model_image_mime(where) if can_see else None
-            if mime is None or image is None or len(image) > max_bytes:
+            # Inline only what a provider takes: an image type by its bytes
+            # (a mislabeled one is refused), within the per-image cap.
+            if not can_see or image is None or len(image) > max_bytes:
                 continue  # still attached by path: the note names it
+            mime = sniff_image_mime(image)
+            if mime is None:
+                continue
             parts.append(
                 ImagePart(data=base64.b64encode(image).decode("ascii"), mime_type=mime)
             )

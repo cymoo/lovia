@@ -97,6 +97,16 @@ def test_counter_cache_keyed_by_provider_identity():
     assert pipeline._counter_for(p2) is not c1  # distinct object -> rebuild
 
 
+def test_a_model_that_takes_no_images_is_budgeted_for_the_text_it_gets():
+    # It is sent a line of text per image (transcript.without_images): a few
+    # attachments must not look like thousands of tokens and force a compaction.
+    pipeline = Compaction(context_window=1_000)
+    sees, blind = FakeProviderWithWindow(), FakeProviderWithWindow()
+    blind.supports_vision = False
+    assert pipeline._counter_for(sees).image_tokens == pipeline.image_tokens
+    assert pipeline._counter_for(blind).image_tokens < 20
+
+
 async def test_under_trigger_no_compaction_and_no_quality_loss():
     """Below the trigger nothing is touched — even old tool results."""
     summarizer = FakeSummarizer()

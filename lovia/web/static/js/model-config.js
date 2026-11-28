@@ -641,15 +641,17 @@ export function buildModelsPane() {
       field(t('cfg.maxTokens'), maxTokensIn),
     );
     adv.body.appendChild(limits);
-    // Two answers: a model sees unless told it doesn't (a stored "auto" is
-    // "on" — the server reads them alike).
-    let vision = stored?.vision === 'off' ? 'off' : 'on';
+    // Two answers: a model sees unless told it doesn't. "Supported" is saved
+    // as "auto" — nothing said to the provider — so a third-party provider
+    // whose factory takes no supports_vision keeps working (a stored "on"
+    // reads the same).
+    let vision = stored?.vision === 'off' ? 'off' : 'auto';
     adv.body.appendChild(
       field(
         t('cfg.vision'),
         segmented(
           [
-            ['on', t('cfg.visionOn')],
+            ['auto', t('cfg.visionOn')],
             ['off', t('cfg.visionOff')],
           ],
           vision,

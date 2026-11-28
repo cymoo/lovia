@@ -368,8 +368,9 @@ agent = Agent(
 ### Memory
 
 Always-in-prompt **notes** (facts the user stated or confirmed, pinned per
-session so they never bust the cache) plus a searchable **archive**. A
-periodic **dream** pass merges duplicates and prunes stale notes.
+session so they never bust the cache) plus a searchable **archive**. The
+agent is the notes' only writer: a note that supersedes another replaces
+it, and a full list makes room before it grows.
 
 ```python
 from lovia import Agent, Memory, OpenAIEmbedder

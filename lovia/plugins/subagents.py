@@ -322,8 +322,8 @@ class Subagents:
 
     name: str = "subagents"
 
-    # Strong refs to detached children so they survive run teardown (the same
-    # idiom as Memory's background curation tasks). Object-level on purpose:
+    # Strong refs to detached children so they survive run teardown: the event
+    # loop holds tasks only weakly. Object-level on purpose:
     # the per-run registry dies with the run, detached work must not.
     _detached: set[asyncio.Task[None]] = field(
         default_factory=set, init=False, repr=False

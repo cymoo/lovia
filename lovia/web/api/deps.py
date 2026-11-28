@@ -262,8 +262,8 @@ class RouterDeps:
         folders no chat claims, starts the schedule poller, the process
         watcher and the ``ask_human`` bridge. On exit: winds down live
         runs cooperatively (leaving resumable checkpoints), closes chat
-        workspaces with their background processes, ends ``/api/events``
-        streams, and gives memory curation a bounded window to land.
+        workspaces with their background processes, and ends ``/api/events``
+        streams.
 
         :func:`~lovia.web.create_app` enters it for you. An app mounting
         :func:`~lovia.web.build_api_router` passes it straight to FastAPI —
@@ -273,7 +273,6 @@ class RouterDeps:
                 yield
         """
         from ..scheduler import Scheduler
-        from .memory import memory_plugin
 
         await self.store.sweep_stale_runs()
         await self._sweep_folders()
@@ -313,13 +312,6 @@ class RouterDeps:
                 await self.workspace_switch.aclose()
             if self._bus is not None:
                 self._bus.close()
-            # Agents usually share one Memory: drain each once.
-            plugins = {
-                id(p): p for a in self.agents.values() if (p := memory_plugin(a))
-            }
-            for plugin in plugins.values():
-                with suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(plugin.drain(), timeout=15.0)
 
     async def _sweep_folders(self) -> None:
         await self.store.sweep_attachments()

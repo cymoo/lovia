@@ -60,8 +60,8 @@ The contract:
   `ctx.cancel_token`.
 
 [Plugins](plugins.md) can contribute their own `AgentHooks`, dispatched
-alongside the agent's — how [Memory](memory.md) triggers its run-end
-curation.
+alongside the agent's — how [Memory](memory.md) indexes each run when it
+ends.
 
 ## Tracing
 

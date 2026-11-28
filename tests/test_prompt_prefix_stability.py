@@ -151,7 +151,7 @@ async def _drive(root: Path) -> _Recording:
             str(root / "ws"), command_rules=(CommandRule("sleep", "allow"),)
         ),
         plugins=[
-            Memory(root / "memory", auto_curate=False),
+            Memory(root / "memory"),
             Todo(remind_every=1),  # fires on most calls: the tail must vary
             Skills(root / "skills"),
             MCP(stub("calc", defer=False), stub("stub", defer=True)),

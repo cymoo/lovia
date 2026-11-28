@@ -1,13 +1,11 @@
 """Tests for Memory's scopes: a user layer everywhere, one layer per scope key.
 
-Network-free like ``test_memory.py``: the scripted provider drives runs, and
-the digest side-query is monkeypatched. ``scope=None`` behavior is covered by
-``test_memory.py`` itself, which must pass unchanged.
+Network-free like ``test_memory.py``: the scripted provider drives runs.
+``scope=None`` behavior is covered by ``test_memory.py`` itself.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,15 +13,14 @@ from typing import Any
 
 import pytest
 
-from lovia import Agent, InMemorySession, Runner
+from lovia import Agent, InMemorySession, Runner, tool
 from lovia.exceptions import UserError
-from lovia.plugins.memory import plugin as plugin_mod
 from lovia.plugins.memory.index import KeywordIndex
 from lovia.plugins.memory.plugin import (
+    FileNotesStore,
     Memory,
     _best_match,
     _scope_dirname,
-    _ScopedRunDigest,
     _strip_date,
 )
 from lovia.workspace import Workspace
@@ -39,7 +36,6 @@ def _bare(facts: list[str]) -> list[str]:
 
 def _scoped(root: Path, **kwargs: Any) -> Memory:
     """A Memory whose scope key is the run's deps (``None`` = no scope)."""
-    kwargs.setdefault("auto_curate", False)
     return Memory(root, scope=lambda ctx: ctx.deps, **kwargs)
 
 
@@ -70,7 +66,7 @@ def test_scope_rejects_custom_stores(tmp_path) -> None:
         Memory(
             tmp_path,
             scope=lambda ctx: "k",
-            notes=plugin_mod.FileNotesStore(tmp_path / "n.md"),
+            notes=FileNotesStore(tmp_path / "n.md"),
         )
     with pytest.raises(UserError, match="index="):
         Memory(tmp_path, scope=lambda ctx: "k", index=KeywordIndex(":memory:"))
@@ -146,7 +142,7 @@ async def test_embedder_gives_every_layer_its_own_vectors(tmp_path) -> None:
 
 async def test_unscoped_run_is_exactly_a_plain_memory(tmp_path) -> None:
     plain = Memory(tmp_path / "plain")
-    scoped = _scoped(tmp_path / "scoped", auto_curate=True)
+    scoped = _scoped(tmp_path / "scoped")
     for mem in (plain, scoped):
         await mem.remember("prefers tabs")
     a = await plain.setup(_ctx(None))
@@ -186,8 +182,8 @@ async def test_about_parameter_only_in_a_scoped_run(tmp_path) -> None:
     scoped = next(
         t for t in (await mem.setup(_ctx("/srv/app"))).tools if t.name == "remember"
     )
-    assert set(plain.parameters["properties"]) == {"fact"}
-    assert set(scoped.parameters["properties"]) == {"fact", "about"}
+    assert set(plain.parameters["properties"]) == {"fact", "replaces"}
+    assert set(scoped.parameters["properties"]) == {"fact", "about", "replaces"}
     assert scoped.parameters["properties"]["about"]["enum"] == ["user", "project"]
     assert set(scoped.parameters["required"]) == {"fact", "about"}
 
@@ -201,7 +197,7 @@ async def test_scope_is_resolved_at_setup_with_the_workspace_open(tmp_path) -> N
         seen.append(ctx.workspace)
         return "/srv/app"
 
-    mem = Memory(tmp_path / "mem", scope=scope, auto_curate=False)
+    mem = Memory(tmp_path / "mem", scope=scope)
     agent = Agent(
         name="a",
         model=ScriptedProvider([text("hi")]),
@@ -281,11 +277,10 @@ async def test_public_forget_stays_in_the_named_layer(tmp_path) -> None:
 async def test_recall_searches_only_its_own_scope(tmp_path) -> None:
     mem = _scoped(tmp_path, expand_query=False, summarize_recall=False)
     for key, words in (("/a", "zebra migration"), ("/b", "zebra outage")):
-        await mem._curate(
-            None,
+        await mem._archive(
+            mem._tier(key),
             _msgs(("user", f"let's talk about the {words}"), ("assistant", "sure")),
             _ctx(key, run_id=key),
-            mem._tier(key),
         )
 
     async def recall(key: str | None) -> str:
@@ -299,114 +294,88 @@ async def test_recall_searches_only_its_own_scope(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# End-of-run curation
+# Writes across the two layers, and the end of a run
 # ---------------------------------------------------------------------------
 
 
-def _fake_scoped_digest(digest: _ScopedRunDigest, seen: list[tuple[str, str]]):
-    async def fake(entries, current_notes, model, scope_name):
-        seen.append((current_notes, scope_name))
-        return digest
-
-    return fake
-
-
-async def test_digest_splits_facts_and_archives_in_the_scope(
-    tmp_path, monkeypatch
-) -> None:
-    mem = _scoped(tmp_path, auto_curate=True, expand_query=False)
-    await mem.remember("prefers spaces")
-    await mem.remember("deploys from main", scope="/srv/app")
-    digest = _ScopedRunDigest(
-        facts=["prefers tabs"],
-        scope_facts=["deploys from release branches"],
-        stale=["prefers spaces", "deploys from main"],
-        summary="Switched to tabs and release-branch deploys.",
-    )
-    seen: list[tuple[str, str]] = []
-    monkeypatch.setattr(plugin_mod, "_scoped_digest", _fake_scoped_digest(digest, seen))
-    agent = Agent(name="a", model=ScriptedProvider([text("ok")]), plugins=[mem])
-    await Runner.run(
-        agent, "tabs from now on; deploy from release branches", deps="/srv/app"
-    )
-
-    assert await _notes(mem) == ["prefers tabs"]
-    assert await _notes(mem, "/srv/app") == ["deploys from release branches"]
-    # The digest saw both layers, labeled, and the scope's name.
-    current, name = seen[0]
-    assert name == "project"
-    assert "### About the user\n- [" in current and "prefers spaces" in current
-    assert "### About this project\n- [" in current and "deploys from main" in current
-    # The summary went to the scope's archive, not the user's.
-    scope_hits = await mem._tier("/srv/app").index.search("release", 5)  # type: ignore[union-attr]
-    assert any(h.doc.meta.get("kind") == "summary" for h in scope_hits)
-    assert await mem._user.index.search("release", 5) == []  # type: ignore[union-attr]
+async def _remember(mem: Memory, key: str, **args: str) -> str:
+    """Call the scoped `remember` tool once; return what it answered."""
+    inst = await mem.setup(_ctx(key))
+    tool = next(t for t in inst.tools if t.name == "remember")
+    return str(await tool.invoke(args, _ctx(key)))
 
 
-async def test_digest_never_duplicates_a_fact_across_layers(tmp_path) -> None:
+async def test_remember_tool_never_duplicates_a_fact_across_layers(tmp_path) -> None:
     mem = _scoped(tmp_path)
     await mem.remember("prefers tabs")
-    await mem.remember("uses uv", scope="/p")
-    digest = _ScopedRunDigest(facts=["uses uv"], scope_facts=["Prefers tabs"])
-    assert await mem._apply_digest(digest, mem._tier("/p")) == (0, 0)
-    # Moving a fact between layers is stale + new, and still lands.
-    move = _ScopedRunDigest(facts=["uses uv"], stale=["uses uv"])
-    assert await mem._apply_digest(move, mem._tier("/p")) == (1, 1)
-    assert await _notes(mem) == ["prefers tabs", "uses uv"]
+    out = await _remember(mem, "/p", fact="Prefers tabs", about="project")
+    assert "Already in your notes" in out
     assert await _notes(mem, "/p") == []
 
 
-async def test_unscoped_run_uses_the_unscoped_digest(tmp_path, monkeypatch) -> None:
-    mem = _scoped(tmp_path, auto_curate=True)
-    calls: list[str] = []
-
-    async def plain(entries, current_notes, model):
-        calls.append("plain")
-        return plugin_mod._RunDigest(facts=["prefers tabs"])
-
-    async def scoped(entries, current_notes, model, scope_name):
-        calls.append("scoped")
-        return _ScopedRunDigest()
-
-    monkeypatch.setattr(plugin_mod, "_digest", plain)
-    monkeypatch.setattr(plugin_mod, "_scoped_digest", scoped)
-    agent = Agent(name="a", model=ScriptedProvider([text("ok")]), plugins=[mem])
-    await Runner.run(agent, "hi", deps=None)
-    assert calls == ["plain"]
-    assert await _notes(mem) == ["prefers tabs"]
+async def test_replaces_moves_a_fact_between_layers(tmp_path) -> None:
+    # A note filed under the project turns out to be about the person: the
+    # old one leaves its layer as the new one lands in the other.
+    mem = _scoped(tmp_path)
+    await mem.remember("uses uv", scope="/p")
+    out = await _remember(
+        mem, "/p", fact="uses uv everywhere", about="user", replaces="uses uv"
+    )
+    assert "Replaced" in out
+    assert await _notes(mem) == ["uses uv everywhere"]
+    assert await _notes(mem, "/p") == []
 
 
-async def test_each_layer_dreams_on_its_own_marker(tmp_path, monkeypatch) -> None:
-    async def fake_dream(body, max_chars, model):
-        return ["[2026-01] tidied"]
-
-    monkeypatch.setattr(plugin_mod, "_dream", fake_dream)
-    mem = _scoped(tmp_path, model="test-model")
-    await mem.remember("a")
-    await mem.remember("b", scope="/srv/app")
-    assert mem.dreamed_at() is None and mem.dreamed_at(scope="/srv/app") is None
-    assert await mem.dream(scope="/srv/app") == (1, 1)
-    assert mem.dreamed_at() is None
-    assert mem.dreamed_at(scope="/srv/app") is not None
-    assert await _notes(mem) == ["a"]
-    scope_dir = _scope_dir(tmp_path, "/srv/app")
-    assert (scope_dir / "MEMORY.md.bak").exists()
-    assert not (tmp_path / "MEMORY.md.bak").exists()
+async def test_a_replacement_lands_in_the_layer_it_was_asked_for(tmp_path) -> None:
+    # The project already says it; the user now says it of themselves. The
+    # project's copy moves up, or other projects would see neither note.
+    mem = _scoped(tmp_path)
+    await mem.remember("prefers pip")
+    await mem.remember("prefers uv", scope="/p")
+    out = await _remember(
+        mem, "/p", fact="prefers uv", about="user", replaces="prefers pip"
+    )
+    assert "Replaced" in out
+    assert await _notes(mem) == ["prefers uv"]
+    assert await _notes(mem, "/p") == []
 
 
-async def test_over_budget_scope_dreams_after_its_run(tmp_path, monkeypatch) -> None:
-    dreamed: list[str] = []
+async def test_a_failed_move_leaves_the_old_note_in_place(
+    tmp_path, monkeypatch
+) -> None:
+    # The destination is saved first: if that fails, nothing was removed.
+    mem = _scoped(tmp_path)
+    await mem.remember("uses uv")
 
-    async def fake_dream(body, max_chars, model):
-        dreamed.append(body)
-        return ["[2026-01] tidied"]
+    async def boom(facts: list[str]) -> None:
+        raise OSError("disk full")
 
-    monkeypatch.setattr(plugin_mod, "_dream", fake_dream)
+    monkeypatch.setattr(mem._tier("/p").notes, "save", boom)
+    with pytest.raises(Exception, match="disk full"):
+        await _remember(
+            mem, "/p", fact="uses uv here", about="project", replaces="uses uv"
+        )
+    assert await _notes(mem) == ["uses uv"]
+
+
+async def test_each_layer_is_held_to_its_own_budget(tmp_path) -> None:
     mem = _scoped(tmp_path, notes_budget=40)
-    await mem.remember("a project fact long enough to overflow the budget", scope="/p")
-    await mem._curate(None, [], _ctx("/p"), mem._tier("/p"))
-    assert len(dreamed) == 1 and "overflow" in dreamed[0]
-    assert await _notes(mem, "/p") == ["tidied"]
+    await mem.remember("the user lives in Lisbon")
+    out = await _remember(mem, "/p", fact="the user keeps two cats", about="user")
+    # Refused, showing the layer that is full — the user's, not the project's.
+    assert "full" in out and "USER NOTES [" in out and "Lisbon" in out
+    out = await _remember(mem, "/p", fact="deploys run on Fridays", about="project")
+    assert "Remembered" in out
+    assert await _notes(mem, "/p") == ["deploys run on Fridays"]
+
+
+async def test_a_scoped_run_is_indexed_in_its_scope(tmp_path) -> None:
+    mem = _scoped(tmp_path)
+    agent = Agent(name="a", model=ScriptedProvider([text("ok")]), plugins=[mem])
+    await Runner.run(agent, "deploy from release branches", deps="/srv/app")
+    (hit,) = await mem._tier("/srv/app").index.search("release", 5)  # type: ignore[union-attr]
+    assert hit.doc.text == "USER: deploy from release branches\nASSISTANT: ok"
+    assert await mem._user.index.search("release", 5) == []  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -460,12 +429,10 @@ async def test_clear_scope_removes_notes_and_archive(tmp_path) -> None:
     mem = _scoped(tmp_path, expand_query=False, summarize_recall=False)
     await mem.remember("prefers tabs")
     await mem.remember("uses uv", scope="/p")
-    tier = mem._tier("/p")
-    await mem._curate(
-        None,
+    await mem._archive(
+        mem._tier("/p"),
         _msgs(("user", "the zebra plan"), ("assistant", "ok")),
         _ctx("/p"),
-        tier,
     )
     inst = await mem.setup(_ctx("/p"))  # a run that started before the clear
     recall = next(t for t in inst.tools if t.name == "recall")
@@ -485,42 +452,25 @@ async def test_clear_scope_removes_notes_and_archive(tmp_path) -> None:
     assert meta == {"key": "/p"}
 
 
-async def test_clear_scope_while_curation_awaits_the_digest(
-    tmp_path, monkeypatch
-) -> None:
-    # The run's archive write comes after the digest's model call; a clear
-    # landing in between must not leave that write on the deleted stores.
-    mem = _scoped(
-        tmp_path,
-        auto_curate=True,
-        curate_in_background=True,
-        expand_query=False,
-        summarize_recall=False,
+async def test_a_run_ending_after_a_clear_lands_in_the_fresh_stores(tmp_path) -> None:
+    # The run set up before the clear; its archive write must not go to the
+    # index object whose file the clear deleted.
+    mem = _scoped(tmp_path)
+    await mem._archive(
+        mem._tier("/p"),
+        _msgs(("user", "the zebra plan"), ("assistant", "ok")),
+        _ctx("/p"),
     )
-    release = asyncio.Event()
-    paused = asyncio.Event()
 
-    async def slow_digest(entries, current_notes, model, scope_name):
-        if not release.is_set():
-            paused.set()
-            await release.wait()
-        return _ScopedRunDigest(summary="The quokka migration plan.")
+    @tool
+    async def clear_now() -> str:
+        """Clear the project mid-run."""
+        await mem.clear_scope("/p")
+        return "cleared"
 
-    monkeypatch.setattr(plugin_mod, "_scoped_digest", slow_digest)
-    agent = Agent(
-        name="a", model=ScriptedProvider([text("ok"), text("ok")]), plugins=[mem]
-    )
-    release.set()
-    await Runner.run(agent, "the zebra plan", deps="/p")  # archives once
-    await mem.drain()
-    release.clear()
-
+    provider = ScriptedProvider([call("clear_now", {}, call_id="c1"), text("ok")])
+    agent = Agent(name="a", model=provider, tools=[clear_now], plugins=[mem])
     await Runner.run(agent, "the quokka plan", deps="/p")
-    await paused.wait()  # curation is parked in the digest call
-    await mem.clear_scope("/p")
-    release.set()
-    await mem.drain()
 
-    hits = await mem._tier("/p").index.search("quokka", 5)  # type: ignore[union-attr]
-    assert {h.doc.meta["kind"] for h in hits} == {"message", "summary"}
+    assert len(await mem._tier("/p").index.search("quokka", 5)) == 1  # type: ignore[union-attr]
     assert await mem._tier("/p").index.search("zebra", 5) == []  # type: ignore[union-attr]

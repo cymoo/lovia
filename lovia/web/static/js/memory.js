@@ -19,12 +19,11 @@ import { api } from './api.js';
 import { store } from './store.js';
 import { confirmDialog, segmented } from './ui.js';
 import { toast } from './toast.js';
-import { icon } from './icons.js';
 import { scopeRoot, workspaceChoices, workspaceName, workspacesOn } from './workspaces.js';
 
 /**
- * @typedef {{ content: string, budget: number, dreamed_at: number | null, scope_key?: string | null }} Notes
- * @typedef {{ where: import('./api.js').MemoryLayer, saved: string, draft: string, budget: number, dreamedAt: number | null }} LayerState
+ * @typedef {{ content: string, budget: number, scope_key?: string | null }} Notes
+ * @typedef {{ where: import('./api.js').MemoryLayer, saved: string, draft: string, budget: number }} LayerState
  * @typedef {{ layer: 'user' | 'project', root: string | undefined }} Pick
  * @typedef {{ root: string | undefined, name: string }} Project
  */
@@ -49,7 +48,6 @@ const layerState = (where, data) => ({
   saved: data.content,
   draft: data.content,
   budget: data.budget,
-  dreamedAt: data.dreamed_at,
 });
 
 /**
@@ -109,7 +107,6 @@ function buildPane(agent, pick, layers, projects) {
       <span class="lv-memory-meter"></span>
       <div class="lv-memory-actions">
         <button type="button" class="lv-btn lv-btn-ghost lv-memory-clear">${t('memory.clear')}</button>
-        <button type="button" class="lv-btn lv-btn-ghost lv-memory-dream">${icon('sparkles', { size: 14 })} ${t('memory.dream')}</button>
         <button type="button" class="lv-btn lv-btn-primary lv-memory-save">${t('dialog.save')}</button>
       </div>
     </div>`;
@@ -119,7 +116,6 @@ function buildPane(agent, pick, layers, projects) {
   const meter = $('.lv-memory-meter');
   const editor = /** @type {HTMLTextAreaElement} */ ($('.lv-memory-editor'));
   const clearBtn = /** @type {HTMLButtonElement} */ ($('.lv-memory-clear'));
-  const dreamBtn = /** @type {HTMLButtonElement} */ ($('.lv-memory-dream'));
   const saveBtn = /** @type {HTMLButtonElement} */ ($('.lv-memory-save'));
 
   scopeRow.hidden = !projects.length; // only "About me"
@@ -154,7 +150,6 @@ function buildPane(agent, pick, layers, projects) {
   const dirty = () => [...layers.values()].some((s) => s.draft !== s.saved);
   const syncButtons = () => {
     editor.disabled = busy || !active;
-    dreamBtn.disabled = busy || !active;
     clearBtn.disabled = busy || !active;
     saveBtn.disabled = busy || !dirty();
     projectSel.disabled = busy;
@@ -164,15 +159,13 @@ function buildPane(agent, pick, layers, projects) {
   const syncMeter = () => {
     meter.classList.remove('lv-warn');
     if (!active) return;
-    const { budget, dreamedAt } = active;
+    const { budget } = active;
     const used = editor.value.length;
     const dropped = droppedLines(editor.value);
     const bits = [
       t('memory.chars', { used: used.toLocaleString(), budget: budget.toLocaleString() }),
     ];
     if (dropped) bits.push(t('memory.dropped', { n: dropped }));
-    if (dreamedAt)
-      bits.push(t('memory.dreamedAt', { when: new Date(dreamedAt * 1000).toLocaleDateString() }));
     meter.textContent = bits.join(' · ');
     meter.classList.toggle('lv-warn', dropped > 0 || used > budget);
   };
@@ -248,25 +241,6 @@ function buildPane(agent, pick, layers, projects) {
     }
   }
 
-  // The dream pass rewrites the whole list server-side (the previous body
-  // lands in MEMORY.md.bak); the editor refreshes to the tidied result.
-  async function dreamNow() {
-    const state = /** @type {LayerState} */ (active);
-    setBusy(true);
-    meter.textContent = t('memory.dreaming');
-    try {
-      const data = await api.dreamMemory(state.where);
-      Object.assign(state, layerState(state.where, data));
-      editor.value = data.content;
-      toast(t('toast.memoryDreamed', { before: data.before, after: data.after }));
-    } catch (err) {
-      toast(err.message || t('memory.dreamFailed'), { type: 'error' });
-    } finally {
-      setBusy(false);
-      syncMeter();
-    }
-  }
-
   // Notes and archive both: the archive is what recall searches, and the
   // user has no other way to reach it.
   async function clearProject() {
@@ -303,7 +277,6 @@ function buildPane(agent, pick, layers, projects) {
     }
   });
   saveBtn.addEventListener('click', save);
-  dreamBtn.addEventListener('click', dreamNow);
   clearBtn.addEventListener('click', clearProject);
 
   void show();

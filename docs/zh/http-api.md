@@ -203,8 +203,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/workspaces/dirs?path=` | 输入目录时的补全：按输入的写法返回子目录路径（保留 `~`），只限可添加的范围。带上 `&host=`（远程位置键的前半段，如 `ssh://box`）时列出的是那台主机上的目录；主机不在允许范围内或连不上时返回空列表 |
 | `POST /api/sessions/associate` | `{session_ids, root}` → `{associated, root}`：把还没有目录的旧对话（`workspace_root: null`）关联到一个目录，关联后不能再改；单个对话也可以用 `PATCH /api/sessions/{id}` 的 `workspace_root`。对话里正有运行在另一个目录进行（比如定时任务在 Agent 自己的目录里跑）时，返回 `run_active`，等它结束后再关联 |
 | `GET /api/skills?agent=` | 一次 run 能看到的技能 → `[{name, description}]`，顺序同提示词索引：先按 run 的方式构造 agent（包括[工作区切换](web-ui.md#工作区)的项目钩子），再取每个 `Skills` 插件的 catalog，过滤和同名优先级照常生效。已有对话用 `?session=`，即将在某目录打开的草稿用 `?root=` |
-| `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget, dreamed_at}`） |
-| `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
+| `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget}`） |
 | `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `PUT /api/config/assistant` · `PUT /api/config/voice` · `POST /api/config/test` · `POST /api/config/mcp` · `PUT`/`DELETE /api/config/mcp/{name}` · `PUT /api/config/mcp/{name}/enabled` · `GET /api/config/mcp/{name}/secrets` · `GET`/`PUT /api/config/project/mcp` · `POST /api/config/mcp/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 的[模型配置](web-ui.md#模型配置与切换)、[Skill 目录](web-ui.md#skills)、[MCP 服务器](web-ui.md#mcp-服务器)与[助手的设置](web-ui.md#助手)——仅当 `/api/info` 报告 `features.settings` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；MCP 的 `env` 和 `headers` 值读取时打码，原样发回的打码值保留已存的值；`…/secrets` 返回单个服务器未打码的值（设置里的“显示密钥”），需本机访问或带令牌。写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
 
 `POST /api/chat` 和 `/api/chat/stream` 的请求体为 `{message, session_id?, agent?, attachments?, context?}`，

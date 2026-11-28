@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from typing import Any, Callable, Literal, Union, cast
 
 from .types import JsonObject
-from .parts import ContentPart, FilePart, ImagePart, TextPart, text_of
+from .parts import ContentPart, FilePart, ImagePart, TextPart, project_parts, text_of
 from .messages import AssistantTurn, Message, ToolCall, Usage
 
 # ---------------------------------------------------------------------------
@@ -574,6 +574,52 @@ def split_system(
     return entries[:n], entries[n:]
 
 
+# What stands where an image was, for a model that takes none. It says so in
+# as many words: a bare size marker invites the model to guess the picture.
+IMAGE_NOT_SHOWN = "[image not shown: this model takes no image input]"
+
+
+def has_images(entries: Sequence[TranscriptEntry]) -> bool:
+    """Whether a request of ``entries`` would carry an image."""
+    return any(isinstance(p, ImagePart) for e in entries for p in _parts_of(e) or ())
+
+
+def without_images(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
+    """``entries`` as a model that takes no images is sent them: every image,
+    in a user message or a tool result, replaced by :data:`IMAGE_NOT_SHOWN`.
+
+    View-only, like compaction: the entries themselves keep their images, so
+    a later call to a model that sees gets them. The same list when there is
+    no image; the same output for the same entries, so the prompt prefix
+    stays stable.
+    """
+    out: list[TranscriptEntry] | None = None
+    for n, entry in enumerate(entries):
+        parts = _parts_of(entry)
+        if not parts or not any(isinstance(p, ImagePart) for p in parts):
+            continue
+        shown: list[ContentPart] = [
+            TextPart(IMAGE_NOT_SHOWN) if isinstance(p, ImagePart) else p for p in parts
+        ]
+        if out is None:
+            out = list(entries)
+        if isinstance(entry, ToolResultEntry):
+            # ``output`` is the projection of ``parts``: keep the two in step.
+            out[n] = replace(entry, parts=shown, output=project_parts(shown))
+        elif isinstance(entry, InputEntry):
+            out[n] = replace(entry, content=shown)
+    return entries if out is None else out
+
+
+def _parts_of(entry: TranscriptEntry) -> list[ContentPart] | None:
+    """The content parts ``entry`` sends, when it has any."""
+    if isinstance(entry, InputEntry):
+        return entry.content if isinstance(entry.content, list) else None
+    if isinstance(entry, ToolResultEntry):
+        return entry.parts
+    return None
+
+
 def safe_window(
     entries: list[TranscriptEntry],
     *,
@@ -738,10 +784,12 @@ __all__ = [
     "entries_to_messages",
     "entry_from_dict",
     "entry_to_dict",
+    "has_images",
     "input_to_entries",
     "leading_system_count",
     "safe_window",
     "split_system",
     "to_json_safe",
     "drop_dangling_tool_calls",
+    "without_images",
 ]

@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from ..types import JsonObject
 from .. import events
-from ..exceptions import ContextOverflowError
+from ..exceptions import ContextOverflowError, ProviderError
 from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import StructuredOutput, response_format_for
-from ..providers.base import ModelSettings, Provider
+from ..providers.base import ModelSettings, Provider, supports_vision
 from ..reliability import CancelToken, RetryPolicy
 from .run_state import ModelTurnResult
 from .utils import truncate_repr
@@ -28,6 +28,8 @@ from ..transcript import (
     ToolCallDelta,
     ToolCallEntry,
     TranscriptEntry,
+    has_images,
+    without_images,
     UsageDelta,
 )
 
@@ -224,6 +226,32 @@ def assemble_turn_entries(
     return out
 
 
+# The statuses a provider refuses a request's content with.
+_REFUSAL_STATUSES = frozenset({400, 413, 422})
+_IMAGES_HINT = (
+    "This request carried images. If the model takes no image input, say so "
+    "(supports_vision=False; in lovia web, the model's Vision switch under "
+    "Settings → Models). If an image is too large, or there are too many, go "
+    "back to before it was added."
+)
+
+
+def _hint_images(exc: BaseException, sent: list[TranscriptEntry]) -> None:
+    """Point a refused request that carried images at what the caller can do.
+
+    Judged by what was sent, never by the provider's wording: endpoints
+    phrase an image refusal every which way, and a wrong guess from the text
+    would be worse than a hint that says "if".
+    """
+    if (
+        isinstance(exc, ProviderError)
+        and exc.status_code in _REFUSAL_STATUSES
+        and exc.hint is None
+        and has_images(sent)
+    ):
+        exc.hint = _IMAGES_HINT
+
+
 async def stream_with_retries(
     provider: Provider,
     input_entries: list[TranscriptEntry],
@@ -256,6 +284,11 @@ async def stream_with_retries(
     # will follow; flushed once at the start of that next attempt so each
     # real restart emits exactly one reset.
     pending_reset: _StreamReset | None = None
+    # The one place "this model takes no images" is enforced, whatever the
+    # provider and wherever the image came from (a message, a tool result,
+    # an injected entry): the transcript keeps it, the request doesn't.
+    if not supports_vision(provider):
+        input_entries = without_images(input_entries)
     attempt = 0
     while True:
         attempt += 1
@@ -294,6 +327,7 @@ async def stream_with_retries(
             if produced_any:
                 pending_reset = _StreamReset(visible=produced_visible)
             if retry is None or attempt >= max_attempts or not retry.retry_on(exc):
+                _hint_images(exc, input_entries)
                 raise
             delay = retry.backoff_delay(attempt)
             logger.warning(

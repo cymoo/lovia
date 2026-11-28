@@ -184,9 +184,8 @@ single MCP session are unsupported; give each concurrent worker its own.
   most 5 MB (about 3.7 MB of image), and whose bytes are a jpeg, png, gif or
   webp is handed over as an [`ImagePart`](tools.md#returning-images) — under
   the type its bytes are, whatever the server labelled it — in order with
-  the result's text. Any other image, and every image for a model without
-  vision, is a size-stamped placeholder, and so is what the session stores
-  of it: no base64. Such a result is content
+  the result's text. Any other image is a size-stamped placeholder, and so is
+  what the session stores of it: no base64. Such a result is content
   parts, which no renderer formats. A server with a custom `result_renderer`
   is the exception: its renderer still gets the raw `MCPToolResult` and
   returns text. A result flagged `isError` is text too.

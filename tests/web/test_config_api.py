@@ -95,17 +95,17 @@ def test_unconfigured_boot_reports_and_blocks_chat(served) -> None:
 
 
 def test_each_model_says_whether_it_sees_images(served) -> None:
-    # Resolved for the composer's attach button: ``on``/``off`` as set,
-    # ``auto`` by the provider (a gateway it can't vouch for sees none; the
-    # official OpenAI host does).
+    # Resolved for the composer's attach button: a model sees unless its
+    # ``vision`` is ``off`` — whatever its host (``auto`` is what a config
+    # written before there were two answers holds).
     client, _runtime, _app = served
     _add_model(client, name="Gateway")
     _add_model(client, name="Eyes", vision="on")
-    _add_model(client, name="Official", model="gpt-5.5", base_url=None)
+    _add_model(client, name="Blind", vision="off")
     seen = {
         m["name"]: m["sees_images"] for m in client.get("/api/config").json()["models"]
     }
-    assert seen == {"Gateway": False, "Eyes": True, "Official": True}
+    assert seen == {"Gateway": True, "Eyes": True, "Blind": False}
 
 
 def test_first_model_brings_the_agent_up(served, tmp_path: Path) -> None:

@@ -14,8 +14,9 @@ attachments into a run's input or a steer:
   (:func:`~lovia.web.workspaces.attachment_policy`). A chat on a remote host
   works with a copy the host keeps in a temp folder of its account's own,
   outside the workspace too (:func:`stage_on_host`), and the note names that.
-* Images also go **inline** as :class:`~lovia.ImagePart` when the model can
-  see them (:func:`~lovia.providers.supports_vision`).
+* Images also go **inline** as :class:`~lovia.ImagePart`, whatever the model:
+  the chat keeps them, and the runner puts a line of text in their place for
+  a model that takes none — so a chat switched to one that sees shows it them.
 * A workspace file attached from the Files panel (by ``path``) is referenced
   where it is. That path is never trusted: it is looked up through a readonly
   view of the chat's workspace (:func:`~lovia.web.workspaces.open_view`) and
@@ -213,8 +214,8 @@ async def user_content(
     untouched. Otherwise returns the text, any inlined images, and a note
     naming every attachment.
 
-    An agent without a workspace has no file tools: it gets its images —
-    inline when its model sees them — and nothing else.
+    An agent without a workspace has no file tools: it gets its images,
+    inline, and nothing else.
 
     A workspace that can't be reached at all (a remote host that is down) is
     a 502, not a message sent without what it was shown.
@@ -224,7 +225,6 @@ async def user_content(
         return message
     cfg = files_config(agent)
 
-    can_see = sees_images(agent)
     parts: list[ContentPart] = []
     if message.strip():
         parts.append(TextPart(message))
@@ -272,7 +272,7 @@ async def user_content(
                 where = (
                     str(file) if host_folder is None else f"{host_folder}/{file.name}"
                 )
-                if can_see and model_image_mime(file.name):
+                if model_image_mime(file.name):
                     image = await _read_local(file, max_bytes)
             elif session is not None:
                 found = await _linked(att, session, max_bytes)
@@ -284,7 +284,7 @@ async def user_content(
             named.append(where)
             # Inline only what a provider takes: an image type by its bytes
             # (a mislabeled one is refused), within the per-image cap.
-            if not can_see or image is None or len(image) > max_bytes:
+            if image is None or len(image) > max_bytes:
                 continue  # still attached by path: the note names it
             mime = sniff_image_mime(image)
             if mime is None:

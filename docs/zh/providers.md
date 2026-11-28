@@ -64,10 +64,13 @@ supports_vision=None, extra_body=None)`
 拒绝这个字段。所以回放默认按端点决定：`api.deepseek.com` 开启，官方 API 关闭，其他兼容端点开启。
 `replay_reasoning=` 可以强制指定行为。只会回放由这个 provider 产出的 entry。
 
-**图片**：`supports_vision=` 声明模型是否接受图片输入。默认（`None`）只在官方 API 上认为支持，
-因为兼容端点背后的模型无法从名字判断。`OPENAI_BASE_URL` 后面是视觉模型时，传 `True`。
-lovia 通过 `lovia.providers.supports_vision(provider)` 读取这个标志（没有这个标志的 provider
-视为不支持）：Web UI 只在它为真时把附件图片直接发给模型，否则只给模型文件路径。
+**图片**：`supports_vision=` 声明模型是否接受图片输入。默认当作接受——从端点和模型名都判断不出
+哪些模型不收图——所以不收图的模型传 `False`。lovia 通过
+`lovia.providers.supports_vision(provider)` 读取这个标志（没有这个标志的 provider 视为接受）。
+对不收图的模型，runner 在每张图片的位置发送
+`[image not shown: this model takes no image input]`，用户消息和工具结果都一样；对话记录里的
+图片保持不变，之后换成能看图的模型就能看到。带图片的请求被拒（HTTP 400、413 或 422）时，
+报错会附上相应提示：不重试，也不从 provider 的报错措辞里猜原因。
 
 ## Anthropic Provider
 
@@ -79,8 +82,7 @@ supports_vision=None, extra_body=None)`
 未显式传入时，凭证和端点来自环境变量：`ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`
 （默认 `https://api.anthropic.com/v1`）。Messages API 每次请求都需要 `max_tokens`，
 所以当 `settings.max_tokens` 未设置时，适配器会发送 `default_max_tokens`
-（16,384，对齐默认上下文策略的输出预留）。`supports_vision=` 的用法同[上文](#openai-provider)：
-官方端点上默认为真，`ANTHROPIC_BASE_URL` 后面默认为假。
+（16,384，对齐默认上下文策略的输出预留）。`supports_vision=` 的用法同[上文](#openai-provider)。
 
 **Extended thinking**：按 Anthropic API 的方式通过 provider options 开启：
 

@@ -203,6 +203,7 @@ async def test_view_image_filtered_for_text_only_models(tmp_path) -> None:
     provider = ScriptedProvider(
         [call("view_image", {"path": "s.png"}, call_id="v"), text("done")]
     )
+    provider.supports_vision = False  # type: ignore[attr-defined]
     agent = Agent(
         name="t",
         model=provider,
@@ -224,6 +225,7 @@ async def test_view_image_gating_logged_once_per_model(tmp_path, caplog) -> None
 
     class NamedScripted(ScriptedProvider):
         model = "textonly-model"
+        supports_vision = False
 
     provider = NamedScripted([text("one"), text("two")])
     agent = Agent(

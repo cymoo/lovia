@@ -11,15 +11,20 @@ from __future__ import annotations
 import pytest
 
 from lovia import Agent, Runner, tool
+from lovia.exceptions import ProviderError
 from lovia.messages import Usage
+from lovia.parts import ImagePart, TextPart
 from lovia.runtime.model_turn import (
     _ToolCallSlot,
     assemble_turn_entries,
     stream_with_retries,
 )
 from lovia.transcript import (
+    IMAGE_NOT_SHOWN,
     AssistantTextEntry,
     FinishDelta,
+    InputEntry,
+    has_images,
     ReasoningEntry,
     TextDelta,
     ToolCallDelta,
@@ -334,3 +339,71 @@ async def test_retryable_truncation_resets_and_recovers() -> None:
     tool_deltas = [d for d in deltas if isinstance(d, ToolCallDelta)]
     assert tool_deltas[-1].arguments == '{"path":"r.md","content":"ok"}'
     assert any(isinstance(d, FinishDelta) and d.reason == "tool_calls" for d in deltas)
+
+
+# --- images: a model that takes none, and a refused request that carried some ---
+
+
+class _Records:
+    """Records what each call was sent; fails with ``error`` when given one."""
+
+    name = "records"
+
+    def __init__(self, *, sees: bool | None = None, error: Exception | None = None):
+        if sees is not None:
+            self.supports_vision = sees
+        self.error = error
+        self.sent: list[list] = []
+
+    async def stream(self, entries, *, tools=None, response_format=None, settings=None):
+        self.sent.append(entries)
+        if self.error is not None:
+            raise self.error
+        yield TextDelta(text="ok")
+        yield FinishDelta(reason="stop")
+
+
+def _with_image() -> list:
+    image = ImagePart(data="YQ==", mime_type="image/png")
+    return [InputEntry(role="user", content=[TextPart("what is this?"), image])]
+
+
+async def _drain(provider, entries) -> None:
+    async for _ in stream_with_retries(
+        provider, entries, tools=None, response_format=None, settings=None, retry=None
+    ):
+        pass
+
+
+async def test_a_model_that_takes_no_images_is_sent_none() -> None:
+    entries = _with_image()
+    blind, sees, silent = _Records(sees=False), _Records(sees=True), _Records()
+    for provider in (blind, sees, silent):
+        await _drain(provider, entries)
+
+    assert not has_images(blind.sent[0])
+    assert blind.sent[0][0].content[1] == TextPart(IMAGE_NOT_SHOWN)
+    # A provider that says nothing sees, and the transcript keeps the image
+    # for the next model either way.
+    assert sees.sent[0] is entries and silent.sent[0] is entries
+    assert has_images(entries)
+
+
+async def test_a_refused_request_that_carried_images_says_what_to_do() -> None:
+    def refusal() -> ProviderError:
+        return ProviderError("HTTP 400: nope", status_code=400)
+
+    with pytest.raises(ProviderError) as carried:
+        await _drain(_Records(error=refusal()), _with_image())
+    assert "supports_vision=False" in (carried.value.hint or "")
+
+    # Not when no image went out — to a model told it takes none, or in a
+    # request that had none — nor for a failure that is no refusal.
+    for provider, entries in (
+        (_Records(sees=False, error=refusal()), _with_image()),
+        (_Records(error=refusal()), [InputEntry(role="user", content="hi")]),
+        (_Records(error=ProviderError("HTTP 500", status_code=500)), _with_image()),
+    ):
+        with pytest.raises(ProviderError) as plain:
+            await _drain(provider, entries)
+        assert plain.value.hint is None

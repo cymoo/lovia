@@ -110,11 +110,9 @@ class AnthropicProvider:
         # dialect is request shape only — the API-key requirement and the
         # /models probe follow the real host.
         official_dialect: bool | None = None,
-        # Whether this deployment's model accepts image inputs. ``None``
-        # (default) resolves to the official-host heuristic below: an
-        # ``ANTHROPIC_BASE_URL`` pointing at a compatible gateway may front a
-        # text-only model, so only the real Anthropic host is assumed
-        # multimodal. Pass True/False to declare it explicitly.
+        # Whether this deployment's model accepts image inputs. Models see
+        # unless told otherwise: pass False for a gateway fronting a
+        # text-only model.
         supports_vision: bool | None = None,
         # Fields merged verbatim into every request body — what this endpoint
         # always needs (``output_config.effort``, ``thinking``,
@@ -194,14 +192,10 @@ class AnthropicProvider:
     def supports_vision(self) -> bool:
         """True when the endpoint's model accepts image inputs.
 
-        Every current Claude model is multimodal, so this defaults to True on
-        the official Anthropic host; a compatible gateway
-        (``ANTHROPIC_BASE_URL``) may front a text-only model, so it defaults to
-        False there. Override via the constructor parameter.
+        True unless the constructor said ``False`` (a compatible gateway
+        fronting a text-only model).
         """
-        if self._supports_vision is not None:
-            return self._supports_vision
-        return self._on_official_host()
+        return self._supports_vision is not False
 
     def _on_official_host(self) -> bool:
         """The endpoint literally is the official API (auth requirements)."""
@@ -264,7 +258,6 @@ class AnthropicProvider:
             entries,
             reasoning_provider=self.name,
             replay_thinking=replay_thinking,
-            include_images=self.supports_vision,
         )
         if cache_system:
             # Breakpoints at each stability boundary: tools and system below,
@@ -677,7 +670,6 @@ def _to_anthropic_messages(
     *,
     reasoning_provider: str = "anthropic",
     replay_thinking: bool = True,
-    include_images: bool = False,
 ) -> tuple[list[JsonObject] | None, list[JsonObject]]:
     """Translate transcript entries into Anthropic's API shape.
 
@@ -689,9 +681,8 @@ def _to_anthropic_messages(
     replayed, and only when ``replay_thinking`` is set — the adapter turns it
     off when the current request would be rejected for containing them.
 
-    ``include_images`` controls whether a tool result's ``parts`` are encoded
-    as content blocks inside ``tool_result``; when off (a text-only endpoint)
-    the result's textual projection (``output``) goes on the wire instead.
+    A tool result's ``parts`` are encoded as content blocks inside
+    ``tool_result``; one without parts sends its ``output``.
     """
     system_parts: list[str] = []
     out: list[JsonObject] = []
@@ -721,7 +712,7 @@ def _to_anthropic_messages(
         if isinstance(entry, ToolResultEntry):
             flush_assistant()
             content: str | list[JsonObject] = entry.output
-            if include_images and entry.parts:
+            if entry.parts:
                 # ``tool_result`` content accepts text and image blocks only;
                 # a FilePart degrades to its ``project_parts`` marker — the
                 # same text a text-only endpoint sees in ``output`` — rather

@@ -142,12 +142,15 @@ async def test_vision_inlines_a_workspace_image_and_notes_its_path(
     assert rel in _texts(parts)  # path still noted so tools can reach it
 
 
-async def test_non_vision_references_path_without_inlining(tmp_path: Path) -> None:
+async def test_non_vision_chat_keeps_the_image_too(tmp_path: Path) -> None:
+    # The chat keeps the image whatever its model: the runner puts a line of
+    # text in its place for one that takes none, and a model the chat is
+    # switched to later is shown it.
     folder = _folder(tmp_path, ("cat.png", PNG))
     agent = _agent(tmp_path / "ws", vision=False)
     req = ChatRequest(message="what is this", attachments=[_upload("cat.png")])
     parts = (await build_user_input(req, agent, folder))[0].content
-    assert not any(isinstance(p, ImagePart) for p in parts)  # NOT inlined
+    assert sum(isinstance(p, ImagePart) for p in parts) == 1
     assert str(folder.resolve() / "cat.png") in _texts(parts)
 
 

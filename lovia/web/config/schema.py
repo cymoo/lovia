@@ -65,7 +65,9 @@ def flavor_for_model(spec: str) -> ProviderFlavor:
 
 
 # Maps a profile's vision mode onto ``provider_from_string(supports_vision=)``:
-# ``auto`` defers to the provider's own capability table.
+# ``auto`` (what a config written before the switch had two answers holds)
+# leaves it to the provider, which sees unless told otherwise — so only
+# ``off`` changes anything.
 VISION_OVERRIDES: dict[str, bool | None] = {"auto": None, "on": True, "off": False}
 
 # Request fields the runtime composes from the conversation; a profile's

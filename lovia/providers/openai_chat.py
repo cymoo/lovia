@@ -130,7 +130,6 @@ def entries_to_openai_messages(
     *,
     reasoning_provider: str = "openai-chat",
     include_reasoning: bool = True,
-    include_images: bool = False,
 ) -> list[JsonObject]:
     """Serialize transcript entries to OpenAI Chat messages.
 
@@ -138,9 +137,8 @@ def entries_to_openai_messages(
     replayed as ``reasoning_content`` — endpoints disagree on the field (see
     ``_REASONING_REPLAY_DEFAULTS``).
 
-    ``include_images`` controls whether tool-result image parts reach the
-    wire. The ``tool`` role is text-only in this API, so the images of a
-    turn's results ride **one synthetic user message appended after that
+    The ``tool`` role is text-only in this API, so the images of a turn's
+    results ride **one synthetic user message appended after that
     turn's tool messages** (the only placement the protocol allows — nothing
     may interleave an assistant ``tool_calls`` message and its tool
     replies), each labeled with its ``call_id``. The synthetic message is a
@@ -208,7 +206,7 @@ def entries_to_openai_messages(
             content = entry.output
             images = (
                 [p for p in entry.parts if isinstance(p, ImagePart)]
-                if include_images and entry.parts
+                if entry.parts
                 else []
             )
             if images:
@@ -270,10 +268,10 @@ class OpenAIChatProvider:
             and the ``/models`` probe follow the real host, so a keyless
             gateway keeps working with ``official_dialect=True``.
         supports_vision: Whether this deployment's model accepts image inputs.
-            ``None`` (default) assumes vision only on the official OpenAI host —
-            compatible endpoints vary and it can't be inferred from the model
-            id. Pass True/False to declare it; the web CLI passes a model
-            profile's ``vision`` setting here.
+            Models see unless told otherwise: pass ``False`` for one that
+            takes none, and the runner sends it a line of text in each
+            image's place. The web CLI passes a model profile's ``vision``
+            setting here.
         extra_body: Fields merged verbatim into every request body — what
             this *endpoint* always needs (vLLM's ``chat_template_kwargs``, a
             ``reasoning_effort``, a gateway's ``service_tier``). The
@@ -340,14 +338,10 @@ class OpenAIChatProvider:
     def supports_vision(self) -> bool:
         """True when the endpoint's model accepts image inputs (``image_url`` parts).
 
-        Vision support varies wildly across OpenAI-compatible endpoints and
-        cannot be inferred from the model id, so this defaults to True only for
-        the official OpenAI host and False elsewhere. Override via the
-        constructor parameter (the web CLI sets it from a profile's ``vision``).
+        True unless the constructor said ``False``: most models see, and
+        neither the host nor the model id says which don't.
         """
-        if self._supports_vision is not None:
-            return self._supports_vision
-        return self._on_official_host()
+        return self._supports_vision is not False
 
     def _on_official_host(self) -> bool:
         """The endpoint literally is the official API (auth requirements)."""
@@ -415,7 +409,6 @@ class OpenAIChatProvider:
                 entries,
                 reasoning_provider=self.name,
                 include_reasoning=self._should_replay_reasoning(),
-                include_images=self.supports_vision,
             ),
             "stream": stream,
         }

@@ -206,8 +206,8 @@ async def screenshot(url: str) -> list:
 The flag only matters for tools a workspace or Plugin contributes: they are
 not offered to a model whose provider can't see images
 ([`supports_vision`](providers.md#the-openai-provider)). Tools in
-`Agent(tools=...)` are always offered; a text-only model gets a short marker
-in place of each image.
+`Agent(tools=...)` are always offered; a model that takes no images gets a
+line of text saying so in place of each one.
 
 ## Tool approval
 

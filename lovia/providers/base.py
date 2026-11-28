@@ -203,13 +203,11 @@ class VisionCapable(Protocol):
 def supports_vision(provider: object) -> bool:
     """Whether ``provider``'s model accepts image content parts.
 
-    A capability probe in the same optional-protocol style as
-    :func:`context_window`: a provider that doesn't advertise the flag (no
-    ``supports_vision`` member) is treated as text-only. Serving layers use
-    this to choose between sending an image inline as an
-    :class:`~lovia.ImagePart` and degrading to a plain path reference, so a
-    conservative answer never hard-fails a run — it just skips inlining.
+    Models see unless their provider says otherwise: one that doesn't
+    advertise the flag (no ``supports_vision`` member) is taken to accept
+    images. ``False`` means never send one — the runner then puts a line of
+    text in each image's place (:func:`~lovia.transcript.without_images`).
     """
     if isinstance(provider, VisionCapable):
         return bool(provider.supports_vision)
-    return False
+    return True

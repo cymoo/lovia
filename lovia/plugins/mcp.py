@@ -73,12 +73,12 @@ from ..types import JsonObject
 from ..exceptions import MCPError, ToolError, UserError
 from ..http_config import client_options
 from ..parts import (
-    IMAGE_MIME_BY_SUFFIX,
     ContentPart,
     ImagePart,
     TextPart,
     coerce_parts,
     project_parts,
+    sniff_image_mime,
 )
 from ..run_context import RunContext
 from ..tools.base import (
@@ -122,6 +122,35 @@ class MCPToolResult:
 
     def __str__(self) -> str:
         return render_mcp_content(self.content, is_error=self.is_error)
+
+    def model_dump(self, mode: str = "python") -> dict[str, Any]:
+        """The result as a transcript stores it (``ToolResultEntry.raw``,
+        through :func:`~lovia.transcript.to_json_safe`): each block's binary
+        payload — an image's or audio's ``data``, a resource's ``blob`` —
+        replaced by the placeholder the model read, so a session never keeps
+        the base64 of a screenshot that was not sent. The object itself, as
+        hooks and a custom renderer see it, is untouched."""
+        blocks: list[Any] = []
+        for block in self.content:
+            data = _plain(block, mode)
+            if isinstance(data, dict):
+                if "data" in data:
+                    data["data"] = _render_block(block)
+                resource = data.get("resource")
+                if isinstance(resource, dict) and "blob" in resource:
+                    resource["blob"] = _render_block(block)
+            blocks.append(data)
+        return {"content": blocks, "is_error": self.is_error}
+
+
+def _plain(obj: Any, mode: str) -> Any:
+    """An MCP model (or a duck-typed stand-in) as plain data."""
+    dump = getattr(obj, "model_dump", None)
+    if callable(dump):
+        return dump(mode=mode)
+    if hasattr(obj, "__dict__"):
+        return {k: _plain(v, mode) for k, v in vars(obj).items()}
+    return obj
 
 
 def _field(obj: Any, name: str, legacy: str, default: Any = None) -> Any:
@@ -193,24 +222,23 @@ def render_mcp_content(content: list[Any], *, is_error: bool = False) -> str:
 # The strictest per-image limit Anthropic documents, counted on the base64
 # string as providers count it (about 3.7 MB of image).
 _MAX_IMAGE_BASE64 = 5 * 1024 * 1024
-_IMAGE_MIMES = frozenset(IMAGE_MIME_BY_SUFFIX.values())
 
 
-def _sendable_image(mime: Any, data: Any) -> bool:
-    """Whether a provider would take this image block as it is.
+def _sendable_image(data: Any) -> str | None:
+    """The type to send this image block's ``data`` as, or ``None`` when a
+    provider would not take it.
 
-    A server's ``data`` is checked, not trusted: one bad image on the wire
-    fails the whole request, where a placeholder costs nothing.
+    A server's ``data`` is checked, not trusted: a refused image costs the
+    model call a retry without it. The type is what the bytes are, not the
+    server's label — a provider refuses a JPEG sent as ``image/png``.
     """
-    if mime not in _IMAGE_MIMES or not isinstance(data, str) or not data:
-        return False
-    if len(data) > _MAX_IMAGE_BASE64:
-        return False
+    if not isinstance(data, str) or not data or len(data) > _MAX_IMAGE_BASE64:
+        return None
     try:
-        base64.b64decode(data, validate=True)
+        raw = base64.b64decode(data, validate=True)
     except ValueError:  # binascii.Error: line-wrapped, a data: URL, ...
-        return False
-    return True
+        return None
+    return sniff_image_mime(raw[:16])
 
 
 def _image_parts(content: list[Any]) -> list[ContentPart] | None:
@@ -225,9 +253,9 @@ def _image_parts(content: list[Any]) -> list[ContentPart] | None:
     seen = False
     for block in content:
         if getattr(block, "type", None) == "image":
-            mime = _field(block, "mime_type", "mimeType")
             data = getattr(block, "data", None)
-            if _sendable_image(mime, data):
+            mime = _sendable_image(data)
+            if mime is not None:
                 parts.append(ImagePart(data=data, mime_type=mime))
                 seen = True
                 continue

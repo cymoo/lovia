@@ -16,7 +16,7 @@ are never registered together; see ``resolve_vision_tool`` in
 Same "separate ad-hoc model for a sub-task" pattern as :mod:`lovia.web.titles`.
 Paths go through the same read pipeline as ``read_file``/``view_image``: the
 workspace session enforces the path ACL (``read_outside`` honored), the
-approval predicate resolves the ask side, and the shared 5 MB cap applies.
+approval predicate resolves the ask side, and the shared 3.75 MB cap applies.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from typing import Annotated, Any
 from ..agent import Agent
 from ..exceptions import ToolError
 from ..messages import user
-from ..parts import ImagePart, TextPart, image_mime
+from ..parts import ImagePart, TextPart, image_mime, sniff_image_mime
 from ..providers import Provider
 from ..run_context import RunContext
 from ..runner import Runner
@@ -75,7 +75,7 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
             "to an image you cannot otherwise see.\n"
             "- path is workspace-relative or absolute; outside paths may need "
             "approval or be denied by policy.\n"
-            "- Supported: jpg, jpeg, png, gif, webp; over 5 MB is refused."
+            "- Supported: jpg, jpeg, png, gif, webp; over 3.75 MB is refused."
         ),
         permission=path_permission("read"),
     )
@@ -107,8 +107,14 @@ def make_describe_image_tool(vision_model: str | Provider) -> Tool:
                     f"{path}`, then try again."
                 ),
             ) from exc
+        # Sent as the type its bytes are: a provider refuses a mismatch.
+        sniffed = sniff_image_mime(file.data)
+        if sniffed is None:
+            raise ToolError(
+                f"Not a supported image: {path!r} is not PNG, JPEG, GIF or WebP inside"
+            )
         image = ImagePart(
-            data=base64.b64encode(file.data).decode("ascii"), mime_type=mime
+            data=base64.b64encode(file.data).decode("ascii"), mime_type=sniffed
         )
         try:
             result = await Runner.run(viewer, [user([TextPart(question), image])])

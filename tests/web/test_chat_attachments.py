@@ -359,6 +359,12 @@ def test_an_agent_without_a_workspace_takes_images_only(tmp_path: Path) -> None:
 
         big = PNG + b"\0" * WorkspaceLimits().max_file_read_bytes
         assert _upload(c, _sid(), "big.png", big).status_code == 413
+        # So would bytes that are no image a provider takes, named .png.
+        page = _upload(c, _sid(), "shot.png", b"<html>error</html>")
+        assert (page.status_code, page.json()["detail"]["code"]) == (
+            415,
+            "unsupported_file_type",
+        )
 
 
 def test_a_vendor_model_string_is_resolved_for_vision(

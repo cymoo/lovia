@@ -246,9 +246,18 @@ async def test_view_image_offered_to_vision_models(tmp_path) -> None:
     class VisionScripted(ScriptedProvider):
         supports_vision = True
 
-    (tmp_path / "s.png").write_bytes(b"abc")
+    (tmp_path / "s.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    # A JPEG saved as .png goes out as what its bytes are; bytes that are no
+    # image a provider takes are refused before they reach one.
+    (tmp_path / "j.png").write_bytes(b"\xff\xd8\xff\xe0")
+    (tmp_path / "x.png").write_bytes(b"abc")
     provider = VisionScripted(
-        [call("view_image", {"path": "s.png"}, call_id="v"), text("saw it")]
+        [
+            call("view_image", {"path": "s.png"}, call_id="v"),
+            call("view_image", {"path": "j.png"}, call_id="j"),
+            call("view_image", {"path": "x.png"}, call_id="x"),
+            text("saw it"),
+        ]
     )
     agent = Agent(
         name="t",
@@ -258,9 +267,11 @@ async def test_view_image_offered_to_vision_models(tmp_path) -> None:
 
     result = await Runner.run(agent, "look at s.png")
 
-    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
-    assert entry.output == "s.png\n[image: image/png, 3 B]"
-    assert entry.parts is not None and len(entry.parts) == 2
+    png, jpeg, bad = [e for e in result.entries if isinstance(e, ToolResultEntry)]
+    assert png.output == "s.png\n[image: image/png, 8 B]"
+    assert png.parts is not None and len(png.parts) == 2
+    assert jpeg.output == "j.png\n[image: image/jpeg, 4 B]"
+    assert bad.is_error and "not PNG, JPEG, GIF or WebP" in bad.output
     assert result.output == "saw it"
 
 

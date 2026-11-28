@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import json
 import sys
@@ -214,6 +215,12 @@ def _image(mime: str, data: str) -> SimpleNamespace:
     return SimpleNamespace(type="image", mimeType=mime, data=data)
 
 
+# Base64 of a PNG's and a JPEG's first bytes: what the image sniffing reads.
+PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n\0\0\0\0").decode()  # 12 B
+BIG_PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\0" * 16).decode()  # 24 B
+JPEG = base64.b64encode(b"\xff\xd8\xff\xe0\0\0\0\0\0\0\0\0").decode()
+
+
 def _embedded_text(text: str, uri: str = "file://x") -> SimpleNamespace:
     return SimpleNamespace(
         type="resource", resource=SimpleNamespace(text=text, uri=uri)
@@ -387,14 +394,34 @@ async def _invoke_pic(content: list[SimpleNamespace], **kwargs: Any) -> Any:
 
 async def test_image_result_reaches_the_model_as_parts() -> None:
     result = await _invoke_pic(
-        [_text("before"), _image("image/png", "AAAA"), _embedded_text("after")]
+        [_text("before"), _image("image/png", PNG), _embedded_text("after")]
     )
     # Block order survives, and the runner takes this shape as content parts.
     assert coerce_parts(result) == [
         TextPart("before"),
-        ImagePart(data="AAAA", mime_type="image/png"),
+        ImagePart(data=PNG, mime_type="image/png"),
         TextPart("after"),
     ]
+
+
+async def test_an_image_goes_out_as_the_type_its_bytes_are() -> None:
+    # A JPEG labelled image/png would be refused by the provider.
+    mislabeled = await _invoke_pic([_image("image/png", JPEG)])
+    assert mislabeled == [ImagePart(data=JPEG, mime_type="image/jpeg")]
+    # Bytes that are no image a provider takes stay a placeholder.
+    assert isinstance(await _invoke_pic([_image("image/png", "AAAA")]), MCPToolResult)
+
+
+async def test_a_stored_result_keeps_no_base64() -> None:
+    from lovia.transcript import to_json_safe
+
+    svg = base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"/>').decode()
+    result = await _invoke_pic([_text("shot"), _image("image/svg+xml", svg)])
+    assert isinstance(result, MCPToolResult)
+    stored = json.dumps(to_json_safe(result))
+    assert svg not in stored and "[image: image/svg+xml, 41 B]" in stored
+    # The object itself, as hooks and renderers see it, is untouched.
+    assert result.content[1].data == svg
 
 
 async def test_image_the_model_cannot_take_stays_a_placeholder(
@@ -406,26 +433,24 @@ async def test_image_the_model_cannot_take_stays_a_placeholder(
     for bad in ("AAAA\nAAAA", "data:image/png;base64,AAAA"):
         assert isinstance(await _invoke_pic([_image("image/png", bad)]), MCPToolResult)
     # The cap counts the base64 string, as providers do.
-    monkeypatch.setattr("lovia.plugins.mcp._MAX_IMAGE_BASE64", 4)
-    assert str(await _invoke_pic([_image("image/png", "AAAAAAAA")])) == (
-        "[image: image/png, 6 B]"
+    monkeypatch.setattr("lovia.plugins.mcp._MAX_IMAGE_BASE64", len(PNG))
+    assert str(await _invoke_pic([_image("image/png", BIG_PNG)])) == (
+        "[image: image/png, 24 B]"
     )
     # Beside one that qualifies, it keeps its place as text.
-    mixed = await _invoke_pic(
-        [_image("image/png", "AAAAAAAA"), _image("image/png", "AAAA")]
-    )
+    mixed = await _invoke_pic([_image("image/png", BIG_PNG), _image("image/png", PNG)])
     assert mixed == [
-        TextPart("[image: image/png, 6 B]"),
-        ImagePart(data="AAAA", mime_type="image/png"),
+        TextPart("[image: image/png, 24 B]"),
+        ImagePart(data=PNG, mime_type="image/png"),
     ]
 
 
 async def test_image_result_stays_raw_for_a_custom_renderer_or_an_error() -> None:
-    image = [_image("image/png", "AAAA")]
+    image = [_image("image/png", PNG)]
     custom = await _invoke_pic(image, result_renderer=lambda result, ctx: "mine")
     assert isinstance(custom, MCPToolResult)
     failed = await _invoke_pic(image, is_error=True)
-    assert str(failed) == "[tool error] [image: image/png, 3 B]"
+    assert str(failed) == "[tool error] [image: image/png, 12 B]"
 
 
 async def test_embedded_text_resource_inlined() -> None:
@@ -796,7 +821,7 @@ async def test_call_honors_underlying_renderer_and_output_cap() -> None:
 
 async def test_call_passes_an_image_result_through_as_parts() -> None:
     def shot(args: dict[str, Any]) -> SimpleNamespace:
-        return _result([_text("x" * 50), _image("image/png", "AAAA")])
+        return _result([_text("x" * 50), _image("image/png", PNG)])
 
     async def call(**kwargs: Any) -> Any:
         session = FakeSession(pages=_issue_pages(), results={"get_pr": shot})
@@ -807,7 +832,7 @@ async def test_call_passes_an_image_result_through_as_parts() -> None:
 
     assert await call() == [
         TextPart("x" * 50),
-        ImagePart(data="AAAA", mime_type="image/png"),
+        ImagePart(data=PNG, mime_type="image/png"),
     ]
     # Text over the server's cap: the result degrades to the truncated text.
     capped = await call(max_output_chars=40)
@@ -906,7 +931,7 @@ async def test_stdio_round_trip_through_the_installed_sdk() -> None:
         assert await call("stub__add", {"a": 2, "b": 3}) == "5"
         assert await call("stub__fail", {}) == "[tool error] boom"
         assert await run_tool(tools["stub__pic"], {}, ctx) == [
-            ImagePart(data="AAAA", mime_type="image/png")
+            ImagePart(data=PNG, mime_type="image/png")
         ]
 
 

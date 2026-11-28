@@ -52,13 +52,11 @@ from ..agent import Agent
 from ..approvals import ApprovalChannel
 from ..checkpointer import CheckpointOptions, RunSnapshot
 from ..context import CompactionRequest, Compaction, ContextPolicy, ContextResult
-from ..context.state import window_key
 from ..exceptions import (
     BudgetExceeded,
     ContextOverflowError,
     MaxTurnsExceeded,
     OutputValidationError,
-    ProviderError,
     RunCancelled,
     RunSuspended,
     UserError,
@@ -90,14 +88,12 @@ from ..output import (
     parse_structured_output,
     resolve_structured_output,
 )
-from ..providers._images import image_rejection
 from ..providers.base import (
     Provider,
     context_window,
     discover_context_window,
     supports_vision,
 )
-from .images import ImageCall
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
@@ -135,24 +131,13 @@ _logged_once: set[tuple[object, ...]] = set()
 def _log_once(*key: object) -> bool:
     """True the first time ``key`` is seen this process.
 
-    For static per-model facts (an unreported context window) that would
-    otherwise repeat on every run.
+    For static per-model facts (an unreported context window, a tool withheld
+    from a text-only model) that would otherwise repeat on every run.
     """
     if key in _logged_once:
         return False
     _logged_once.add(key)
     return True
-
-
-def _offered(tools: dict[str, Tool], sees: bool) -> dict[str, Tool]:
-    """The tools a model call offers: one that returns images only while the
-    model sees them, one that describes them only while it doesn't. The
-    rest always — and a call to one not offered still runs."""
-    return {
-        name: t
-        for name, t in tools.items()
-        if not (t.returns_images and not sees) and not (t.describes_images and sees)
-    }
 
 
 def _carried_count(meta: dict[str, Any]) -> tuple[int | None, str | None]:
@@ -811,7 +796,9 @@ class RunLoop:
             contribute = getattr(agent.workspace, "view_injectors", None)
             if contribute is not None:
                 plugins.view_injectors.extend(contribute())
-        tools_by_name = self._collect_tools(agent, workspace_tools, plugins.tools)
+        tools_by_name = self._collect_tools(
+            agent, workspace_tools, plugins.tools, provider
+        )
         active = ActiveAgent(
             agent=agent,
             provider=provider,
@@ -914,26 +901,9 @@ class RunLoop:
         never modified by compaction. When the provider reports a context
         overflow before any output reached the consumer, the policy gets one
         chance to produce a more aggressive view and the call is retried; a
-        second overflow — or one after partial output — propagates. When it
-        refuses the images in the request, the call is sent again with fewer
-        of them, at most twice (``runtime/images.py``).
+        second overflow — or one after partial output — propagates.
         """
         provider = state.active.provider
-        model = getattr(provider, "model", None)
-        # The images the chat withholds from this model (runtime/images.py),
-        # applied before the policy sees the entries, so it estimates what is
-        # sent; and those this call withholds if the provider refuses some.
-        # What it knows of the model's sight picks the tools a call offers.
-        images = ImageCall(
-            state.context_state,
-            state.transcript,
-            head=state.system_head_len,
-            # The provider's name too: two custom providers may share the
-            # endpoint-and-model key (no base_url, no model).
-            model=f"{getattr(provider, 'name', type(provider).__name__)}\x00"
-            + window_key(provider, model),
-            sees=supports_vision(provider),
-        )
         request = CompactionRequest(
             # A shallow snapshot, not the live list: the policy contract says
             # read-only, but handing out the real transcript would let one
@@ -942,12 +912,12 @@ class RunLoop:
             # only the list is defensive. The transcript cannot grow between
             # here and the overflow re-compact below (both happen before this
             # turn's entries are appended), so the snapshot stays current.
-            entries=list(images.entries),
+            entries=list(state.transcript),
             provider=provider,
-            model=model,
+            model=getattr(provider, "model", None),
             # The same tool set _call_model serializes into the request, so
             # the policy can count the schema payload it will actually pay for.
-            tools=list(_offered(state.active.tools_by_name, images.sees).values()),
+            tools=list(state.active.tools_by_name.values()),
             last_input_tokens=state.calibration_tokens,
             last_view_id=state.calibration_view,
             overflow=False,
@@ -965,134 +935,87 @@ class RunLoop:
             yield ev
         ctx_result = results.pop()
         turn.context_window = ctx_result.window
-        view = await self._build_view(state, ctx_result, images.entries)
+        view = await self._build_view(state, ctx_result)
         if ctx_result.compacted:
             yield await self._emit(
                 state, self._compacted_event(state, view, ctx_result, reactive=False)
             )
         view = await self._augment_view(state, view)
 
-        overflowed = False
-        while True:
-            # What this call withholds after a refusal, applied to every view
-            # it builds: a re-compaction after an overflow can't send back an
-            # image a refusal took out.
-            sent = images.apply(view)
-            # Read again each try: an "unsupported" refusal just taught the
-            # call that the model can't see, so view_image goes and a
-            # describe_images tool comes in for the retry.
-            tools = _offered(state.active.tools_by_name, images.sees)
-            forwarded = False
-            try:
-                async for ev in self._call_model(
-                    state, provider, sent, tools, turn, tracer
-                ):
-                    # A retry notice is no output: re-running the turn won't repeat it.
-                    if not isinstance(ev, events.ModelRetrying):
-                        forwarded = True
-                    yield ev
-            except ContextOverflowError as overflow:
-                if forwarded:
-                    # Partial output already reached the consumer; retrying the
-                    # turn would stream it again, so surface the overflow instead.
-                    logger.warning(
-                        "context.overflow: provider raised after partial output "
-                        "already streamed; cannot retry this turn (%s)",
-                        overflow,
-                    )
-                    raise
-                if overflowed:
-                    raise  # the policy had its one more aggressive try
-                overflowed = True
+        forwarded = False
+        try:
+            async for ev in self._call_model(state, provider, view, turn, tracer):
+                # A retry notice is no output: re-running the turn won't repeat it.
+                if not isinstance(ev, events.ModelRetrying):
+                    forwarded = True
+                yield ev
+            return
+        except ContextOverflowError as overflow:
+            if forwarded:
+                # Partial output already reached the consumer; retrying the
+                # turn would stream it again, so surface the overflow instead.
                 logger.warning(
-                    "context.overflow: provider raised; rebuilding a more "
-                    "aggressive view (%s)",
+                    "context.overflow: provider raised after partial output "
+                    "already streamed; cannot retry this turn (%s)",
                     overflow,
                 )
-                # This turn's first compact() already calibrated against
-                # ``last_input_tokens``, and that count describes the *previous*
-                # turn's view — pairing it with the estimate of the larger view
-                # that just overflowed would drag the calibration ratio down
-                # exactly when the estimate must stay conservative.
-                # Unless an image refusal reshaped the attempt (fewer images,
-                # other tools): that estimate no longer measures what failed,
-                # so the shrink check can't judge — the retry goes.
-                failed_tokens = None if images.changed else ctx_result.tokens_after
-                request.last_input_tokens = None
-                request.last_view_id = None
-                request.overflow = True
-                request.reported_window = overflow.reported_window
-                # The tools the failed attempt sent: an image refusal may have
-                # swapped them since the first compaction.
-                request.tools = list(tools.values())
-                async for ev in self._compact(state, request, results):
-                    yield ev
-                ctx_result = results.pop()
-                turn.context_window = ctx_result.window  # now with what it learned
-                # Retry only when the rebuilt view is meaningfully smaller than
-                # the one that just failed (both numbers come from the same
-                # estimator, so the comparison is scale-free). A near-identical
-                # prompt is doomed to the same 400 — surface the overflow instead
-                # of paying for it. Any real shrink still gets its one retry:
-                # vetoing it would turn a possible recovery into a certain death.
-                shrunk = (
-                    ctx_result.tokens_after is None
-                    or failed_tokens is None
-                    or ctx_result.tokens_after < failed_tokens * _RETRY_SHRINK_FACTOR
+                raise
+            logger.warning(
+                "context.overflow: provider raised; rebuilding a more "
+                "aggressive view (%s)",
+                overflow,
+            )
+            # This turn's first compact() already calibrated against
+            # ``last_input_tokens``, and that count describes the *previous*
+            # turn's view — pairing it with the estimate of the larger view
+            # that just overflowed would drag the calibration ratio down
+            # exactly when the estimate must stay conservative.
+            failed_tokens = ctx_result.tokens_after
+            request.last_input_tokens = None
+            request.last_view_id = None
+            request.overflow = True
+            request.reported_window = overflow.reported_window
+            async for ev in self._compact(state, request, results):
+                yield ev
+            ctx_result = results.pop()
+            turn.context_window = ctx_result.window  # now with what it learned
+            # Retry only when the rebuilt view is meaningfully smaller than
+            # the one that just failed (both numbers come from the same
+            # estimator, so the comparison is scale-free). A near-identical
+            # prompt is doomed to the same 400 — surface the overflow instead
+            # of paying for it. Any real shrink still gets its one retry:
+            # vetoing it would turn a possible recovery into a certain death.
+            shrunk = (
+                ctx_result.tokens_after is None
+                or failed_tokens is None
+                or ctx_result.tokens_after < failed_tokens * _RETRY_SHRINK_FACTOR
+            )
+            if not ctx_result.compacted or not shrunk:
+                logger.error(
+                    "context.overflow: policy could not shrink the prompt "
+                    "(est. %s -> %s tokens); surfacing ContextOverflowError",
+                    failed_tokens,
+                    ctx_result.tokens_after,
                 )
-                if not ctx_result.compacted or not shrunk:
-                    logger.error(
-                        "context.overflow: policy could not shrink the prompt "
-                        "(est. %s -> %s tokens); surfacing ContextOverflowError",
-                        failed_tokens,
-                        ctx_result.tokens_after,
-                    )
-                    # Neutral on purpose: this branch also serves a no-op policy
-                    # and custom stage chains, so it can't claim what is left.
-                    overflow.hint = overflow.hint or (
-                        "The context policy could not shrink the prompt below the "
-                        "model's context window. If the latest message is large "
-                        "(pasted content, attachments), shorten it; otherwise "
-                        "start a new chat or branch from an earlier turn."
-                    )
-                    raise
-                view = await self._build_view(state, ctx_result, images.entries)
-                yield await self._emit(
-                    state, self._compacted_event(state, view, ctx_result, reactive=True)
+                # Neutral on purpose: this branch also serves a no-op policy
+                # and custom stage chains, so it can't claim what is left.
+                overflow.hint = overflow.hint or (
+                    "The context policy could not shrink the prompt below the "
+                    "model's context window. If the latest message is large "
+                    "(pasted content, attachments), shorten it; otherwise "
+                    "start a new chat or branch from an earlier turn."
                 )
-                view = await self._augment_view(state, view)
-            except ProviderError as refusal:
-                kind = image_rejection(refusal)
-                # Retried only before any output, as an overflow is, and only
-                # while there is an image left to take out.
-                count = (
-                    0 if kind is None or forwarded else images.withhold_more(view, kind)
-                )
-                if not count:
-                    raise
-                # Not the body: an endpoint may echo the refused image in it.
-                logger.warning(
-                    "images.withheld: provider refused %s (HTTP %s); sending the "
-                    "call again without %d image(s)",
-                    "images" if kind == "unsupported" else "an image",
-                    refusal.status_code,
-                    count,
-                )
-                yield await self._emit(
-                    state,
-                    events.ImagesWithheld(
-                        count=count, unsupported=kind == "unsupported"
-                    ),
-                )
-            else:
-                if images.changed:
-                    # The policy estimated the view with those images in it:
-                    # this call's count must not calibrate that estimate.
-                    state.calibration_view = None
-                images.remember(state.context_state)
-                return
-            turn.assistant = None
-            turn.turn_entries = []
+                raise
+            view = await self._build_view(state, ctx_result)
+
+        yield await self._emit(
+            state, self._compacted_event(state, view, ctx_result, reactive=True)
+        )
+        view = await self._augment_view(state, view)
+        turn.assistant = None
+        turn.turn_entries = []
+        async for ev in self._call_model(state, provider, view, turn, tracer):
+            yield ev
 
     async def _compact(
         self, state: RunState, request: CompactionRequest, into: list[ContextResult]
@@ -1201,7 +1124,6 @@ class RunLoop:
         state: RunState,
         provider: Provider,
         view: list[TranscriptEntry],
-        tools: dict[str, Tool],
         turn: ModelTurnResult,
         tracer: Tracer,
     ) -> AsyncIterator[events.Event]:
@@ -1212,7 +1134,7 @@ class RunLoop:
             agent=state.agent,
             provider=provider,
             input_entries=view,
-            tools_by_name=tools,
+            tools_by_name=state.active.tools_by_name,
             structured_output=state.active.structured_output,
             tracer=tracer,
             turn=state.turns,
@@ -1707,6 +1629,7 @@ class RunLoop:
         agent: Agent[Any],
         workspace_tools: list[Tool],
         plugin_tools: list[Tool] | None = None,
+        provider: Provider | None = None,
     ) -> dict[str, Tool]:
         tools: dict[str, Tool] = {}
 
@@ -1720,14 +1643,30 @@ class RunLoop:
                 )
             tools[t.name] = t
 
-        # Every tool goes in: which ones a call offers depends on whether the
-        # model sees images, which can change mid-run (_offered).
+        def ambient_ok(source: str, t: Tool) -> bool:
+            # Ambient sources (workspace/plugin bundles) skip tools whose
+            # results this model cannot see; ``agent.tools`` is the user's own
+            # explicit wiring and is never filtered — the adapters' wire
+            # degrade covers it, so the flag stays a UX hint, never a
+            # correctness gate.
+            if provider is None or not t.returns_images or supports_vision(provider):
+                return True
+            if _log_once("returns_images", t.name, getattr(provider, "model", None)):
+                logger.info(
+                    "tool %r (%s) returns images the model cannot see; not offering it",
+                    t.name,
+                    source,
+                )
+            return False
+
         for t in agent.tools:
             add_tool("agent.tools", t)
         for t in plugin_tools or []:
-            add_tool("plugin", t)
+            if ambient_ok("plugin", t):
+                add_tool("plugin", t)
         for t in workspace_tools:
-            add_tool("agent.workspace", t)
+            if ambient_ok("agent.workspace", t):
+                add_tool("agent.workspace", t)
         for h in agent.handoffs:
             handoff_obj = h if isinstance(h, Handoff) else Handoff(target=h)
             add_tool("handoff", build_handoff_tool(handoff_obj))
@@ -1879,20 +1818,17 @@ class RunLoop:
         )
 
     async def _build_view(
-        self, state: RunState, result: ContextResult, base: list[TranscriptEntry]
+        self, state: RunState, result: ContextResult
     ) -> list[TranscriptEntry]:
         """Return the per-call view to send to the provider.
 
-        Compaction is view-only: ``state.transcript`` is never mutated. ``base``
-        is what the policy was given — the transcript with the images the chat
-        withholds already marked (runtime/images.py) — and the view when the
-        policy changed nothing. When the policy dropped the leading system
-        message(s) (e.g. it summarized the head), re-prepend the system entries
-        already stored at the head of the transcript so provider adapters still
-        see them.
+        Compaction is view-only: ``state.transcript`` is never mutated. When the
+        policy dropped the leading system message(s) (e.g. it summarized the
+        head), re-prepend the system entries already stored at the head of the
+        transcript so provider adapters still see them.
         """
         if not result.changed:
-            return base
+            return state.transcript
         view = result.entries
         if leading_system_count(view):
             return view

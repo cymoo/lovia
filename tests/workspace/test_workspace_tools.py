@@ -631,7 +631,7 @@ async def test_view_image_returns_path_and_image_parts(session, tmp_path) -> Non
 
     from lovia.parts import ImagePart, TextPart
 
-    png = b"\x89PNG\r\n\x1a\n-the-bytes-decide"
+    png = b"\x89PNG-not-really-but-extension-decides"
     (tmp_path / "shot.png").write_bytes(png)
 
     parts = await view_image.invoke({"path": "shot.png"}, _ctx(session))

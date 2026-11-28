@@ -57,16 +57,11 @@ class ImagePart:
     ) -> "ImagePart":
         """Load an image from disk and embed it as base64."""
         p = Path(path)
-        if mime_type is None and image_mime(p) is None:
-            raise ValueError(f"Cannot infer mime_type for {p.suffix!r}")
-        raw = p.read_bytes()
         if mime_type is None:
-            # The bytes decide, as on every path to a model: an HTML page
-            # saved as .png would be refused by the provider.
-            mime_type = sniff_image_mime(raw)
+            mime_type = image_mime(p)
             if mime_type is None:
-                raise ValueError(f"{p.name!r} is not a PNG, JPEG, GIF or WebP image")
-        data = base64.b64encode(raw).decode("ascii")
+                raise ValueError(f"Cannot infer mime_type for {p.suffix!r}")
+        data = base64.b64encode(p.read_bytes()).decode("ascii")
         return cls(data=data, mime_type=mime_type)
 
 
@@ -170,29 +165,8 @@ def image_mime(path: str | Path) -> str | None:
     ``None`` for anything the providers do not accept as an image part —
     the shared gate for :meth:`ImagePart.from_path` and the tools that feed
     images to a model (``view_image``, the web layer's delegation tool).
-    The extension only says whether to read the file: what goes on the wire
-    is what :func:`sniff_image_mime` reads in its bytes.
     """
     return IMAGE_MIME_BY_SUFFIX.get(Path(path).suffix.lower().lstrip("."))
-
-
-def sniff_image_mime(data: bytes) -> str | None:
-    """The image format ``data`` starts with — PNG, JPEG, GIF or WebP, the
-    ones every provider takes — or ``None``.
-
-    A provider refuses an image whose bytes don't match its declared type, so
-    a JPEG saved as ``.png`` (or labelled ``image/png`` by an MCP server)
-    goes out under the type its bytes say.
-    """
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if data.startswith((b"GIF87a", b"GIF89a")):
-        return "image/gif"
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    return None
 
 
 def normalize_content(
@@ -299,6 +273,5 @@ __all__ = [
     "image_mime",
     "normalize_content",
     "project_parts",
-    "sniff_image_mime",
     "text_of",
 ]

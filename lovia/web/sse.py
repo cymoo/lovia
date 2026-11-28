@@ -139,11 +139,6 @@ class ContextCompactingData(TypedDict):
     active: bool
 
 
-class ImagesWithheldData(TypedDict):
-    count: int
-    unsupported: bool
-
-
 class ContextCompactedData(TypedDict):
     """``session_id`` plus the :class:`~lovia.events.CompactionNotice` fields."""
 
@@ -291,7 +286,6 @@ CHAT_EVENTS: dict[str, type] = {
     "retrying": RetryingData,
     "context_compacting": ContextCompactingData,
     "context_compacted": ContextCompactedData,
-    "images_withheld": ImagesWithheldData,
     "error": ErrorData,
     "refs": RefsData,
     "timing": TimingData,
@@ -601,11 +595,6 @@ def event_to_sse(ev: events.Event | LegFrame) -> dict[str, str] | None:
         )
     if isinstance(ev, events.ContextCompacting):
         return frame("context_compacting", ContextCompactingData(active=ev.active))
-    if isinstance(ev, events.ImagesWithheld):
-        return frame(
-            "images_withheld",
-            ImagesWithheldData(count=ev.count, unsupported=ev.unsupported),
-        )
     if isinstance(ev, events.ContextCompacted):
         # Forwarded whole, so a field added to CompactionNotice reaches the UI
         # without plumbing — the protocol test keeps ContextCompactedData in step.

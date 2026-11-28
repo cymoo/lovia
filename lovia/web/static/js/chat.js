@@ -2186,9 +2186,7 @@ const _mcpNoted = new WeakMap();
 function appendMcpUnavailable(/** @type {{ servers: { name: string, error: string }[] }} */ data) {
   if (!store.bubble || !data?.servers?.length) return;
   const bubble = /** @type {HTMLElement} */ (store.bubble);
-  const existing = /** @type {HTMLElement | null} */ (
-    bubble.querySelector('.lv-mcp-notice:not(.lv-images-notice)')
-  );
+  const existing = /** @type {HTMLElement | null} */ (bubble.querySelector('.lv-mcp-notice'));
   const servers = [...(existing ? _mcpNoted.get(existing) || [] : []), ...data.servers];
   const note = existing || document.createElement('div');
   _mcpNoted.set(note, servers);
@@ -2217,38 +2215,6 @@ function appendMcpUnavailable(/** @type {{ servers: { name: string, error: strin
   }
   note.appendChild(main);
   if (!existing) appendBubbleContent(store.bubble, note);
-}
-
-/**
- * The model refused images and the call went again without them: one quiet
- * line in the reply. "Takes no images" points at the vision role, which can
- * describe them — only where this page can set one and none is set.
- * @param {{ count: number, unsupported: boolean }} data
- */
-function appendImagesWithheld(data) {
-  if (!store.bubble || !data?.count) return;
-  const note = document.createElement('div');
-  note.className = 'lv-mcp-notice lv-images-notice';
-  note.setAttribute('role', 'status');
-  note.innerHTML = icon('image', { size: 15, cls: 'lv-mcp-notice-icon' });
-  const main = document.createElement('div');
-  main.className = 'lv-mcp-notice-main';
-  main.textContent = data.unsupported
-    ? t('chat.imagesUnsupported')
-    : t('chat.imagesWithheld', { n: data.count });
-  // A vision role helps only where the chat has a workspace to read from.
-  const reads = !!store.agents.find((a) => a.name === store.agent)?.workspace;
-  if (data.unsupported && reads && store.canConfigure && !cfg()?.roles?.vision) {
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'lv-btn lv-btn-ghost lv-btn-sm lv-mcp-notice-open';
-    open.textContent = t('chat.imagesVisionRole');
-    open.addEventListener('click', () => openSettings('models'));
-    main.appendChild(document.createElement('br'));
-    main.appendChild(open);
-  }
-  note.appendChild(main);
-  appendBubbleContent(store.bubble, note);
 }
 
 function cleanMarkdownForCopy(markdown) {
@@ -3418,10 +3384,6 @@ async function applyEvent({ event, data }) {
 
     case 'mcp_unavailable':
       appendMcpUnavailable(data);
-      break;
-
-    case 'images_withheld':
-      appendImagesWithheld(data);
       break;
 
     case 'error': {

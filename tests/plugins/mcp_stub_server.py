@@ -39,9 +39,7 @@ def call(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": str(args["a"] + args["b"])}]}
     if name == "fail":
         return {"content": [{"type": "text", "text": "boom"}], "isError": True}
-    # A PNG's first bytes: images go out as what their bytes are.
-    png = "iVBORw0KGgoAAAAA"
-    return {"content": [{"type": "image", "mimeType": "image/png", "data": png}]}
+    return {"content": [{"type": "image", "mimeType": "image/png", "data": "AAAA"}]}
 
 
 def handle(method: str, params: dict[str, Any]) -> dict[str, Any] | None:

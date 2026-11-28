@@ -1336,8 +1336,9 @@ function decideApproval(id, outcome, title) {
   if (!entry || entry.outcome === outcome) return;
   // What the history drew under itself is answered: a redraw asks the server
   // what waits now, so the card does not come back (nor, on a send that
-  // failed, stay away).
+  // failed, stay away) — and one already asking is from before the answer.
   _historyStale = true;
+  _viewVersion++;
   entry.outcome = outcome;
   entry.title = title ?? (ranAfter(outcome) ? '' : outcomeText(outcome));
   if (entry.card) {
@@ -1566,7 +1567,9 @@ function findQuestionNode(id) {
 /** Freeze the card into its answered/expired end state. */
 function settleQuestion(node, answer) {
   if (!node || node.classList.contains('lv-resolved')) return;
-  _historyStale = true; // as an answered approval: a redraw asks the server
+  // As an answered approval: a redraw asks the server, none uses an older answer.
+  _historyStale = true;
+  _viewVersion++;
   node.classList.add('lv-resolved');
   const head = node.querySelector('.lv-question-head');
   if (head) head.textContent = answer != null ? t('question.answered') : t('question.expired');
@@ -3609,6 +3612,8 @@ function clearFollowups() {
 function renderFollowups(items) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl || !items?.length) return;
+  // One group at a time: fresh chips may land on cached ones a redraw restored.
+  document.getElementById('followups')?.remove();
   const wrap = document.createElement('div');
   wrap.className = 'lv-followups';
   wrap.id = 'followups';

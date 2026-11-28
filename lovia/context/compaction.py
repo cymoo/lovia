@@ -54,7 +54,8 @@ from .summarizer import Summarizer
 from .tokens import TokenBudget, TokenCounter, _validate_watermark, usable_tokens
 from ..providers._windows import plausible_window
 from ..providers.base import context_window as _provider_context_window
-from ..transcript import TranscriptEntry, split_system
+from ..providers.base import supports_vision
+from ..transcript import IMAGE_NOT_SHOWN, TranscriptEntry, split_system
 
 if TYPE_CHECKING:
     from ..tools import Tool
@@ -62,6 +63,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# What an image costs a model that is sent a line of text in its place.
+_IMAGE_NOT_SHOWN_TOKENS = len(IMAGE_NOT_SHOWN) // 4 + 1
 # Calibration EMA: weight of the newest observation. Clamp bounds live next
 # to the state (:data:`~lovia.context.state.RATIO_MIN`/``RATIO_MAX``), which
 # applies them again when loading persisted scratch.
@@ -664,7 +667,12 @@ class Compaction:
         cached = self._counter
         if cached is not None and cached[0] is provider:
             return cached[1]
-        counter = TokenCounter(provider, image_tokens=self.image_tokens)
+        # A model that takes no images is sent a line of text for each
+        # (transcript.without_images): budget for that, not for the image.
+        image_tokens = (
+            self.image_tokens if supports_vision(provider) else _IMAGE_NOT_SHOWN_TOKENS
+        )
+        counter = TokenCounter(provider, image_tokens=image_tokens)
         self._counter = (provider, counter)
         return counter
 

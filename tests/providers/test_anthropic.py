@@ -12,6 +12,9 @@ import pytest
 from lovia import FilePart, ImagePart, TextPart
 from lovia.exceptions import ContextOverflowError, ProviderError, UserError
 from lovia.transcript import (
+    IMAGE_NOT_SHOWN,
+    TranscriptEntry,
+    without_images,
     FinishDelta,
     EntryCompletedDelta,
     InputEntry,
@@ -121,7 +124,7 @@ def test_tool_result_parts_encode_as_blocks_when_images_included() -> None:
         ),
     ]
 
-    _, out = _to_anthropic_messages(entries, include_images=True)
+    _, out = _to_anthropic_messages(entries)
 
     assert out[1]["content"][0] == {
         "type": "tool_result",
@@ -140,23 +143,30 @@ def test_tool_result_parts_encode_as_blocks_when_images_included() -> None:
     }
 
 
-def test_tool_result_parts_degrade_to_projection_without_images() -> None:
-    """A text-only endpoint gets the textual projection — nothing else."""
-    entries = [
+def test_tool_result_image_withheld_for_a_model_that_takes_none() -> None:
+    """What the runner hands a text-only model (``without_images``): the
+    result's other parts, and a line of text where the image was."""
+    entries: list[TranscriptEntry] = [
         ToolCallEntry(call_id="c1", name="view_image", arguments="{}"),
         ToolResultEntry(
             call_id="c1",
-            output="[image: image/png, 5 B]",
-            parts=[ImagePart(data="aGVsbG8=", mime_type="image/png")],
+            output="shot.png\n[image: image/png, 5 B]",
+            parts=[
+                TextPart("shot.png"),
+                ImagePart(data="aGVsbG8=", mime_type="image/png"),
+            ],
         ),
     ]
 
-    _, out = _to_anthropic_messages(entries, include_images=False)
+    _, out = _to_anthropic_messages(without_images(entries))
 
     assert out[1]["content"][0] == {
         "type": "tool_result",
         "tool_use_id": "c1",
-        "content": "[image: image/png, 5 B]",
+        "content": [
+            {"type": "text", "text": "shot.png"},
+            {"type": "text", "text": IMAGE_NOT_SHOWN},
+        ],
     }
 
 
@@ -175,7 +185,7 @@ def test_tool_result_file_part_degrades_to_text_marker() -> None:
         ),
     ]
 
-    _, out = _to_anthropic_messages(entries, include_images=True)
+    _, out = _to_anthropic_messages(entries)
 
     assert out[1]["content"][0]["content"] == [
         {"type": "text", "text": "[file doc.pdf: application/pdf, 3 B]"}

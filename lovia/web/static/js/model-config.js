@@ -400,7 +400,7 @@ export function buildModelsPane() {
       if (p.id === c.roles.chat) {
         name.appendChild(el('span', 'lv-badge lv-badge-default', t('cfg.default')));
       }
-      if (p.vision === 'on') {
+      if (p.vision === 'off') {
         name.appendChild(el('span', 'lv-badge lv-badge-plain', t('cfg.visionBadge')));
       }
       const host = hostOf(p.base_url);
@@ -641,14 +641,17 @@ export function buildModelsPane() {
       field(t('cfg.maxTokens'), maxTokensIn),
     );
     adv.body.appendChild(limits);
-    let vision = stored?.vision || 'auto';
+    // Two answers: a model sees unless told it doesn't. "Supported" is saved
+    // as "auto" — nothing said to the provider — so a third-party provider
+    // whose factory takes no supports_vision keeps working (a stored "on"
+    // reads the same).
+    let vision = stored?.vision === 'off' ? 'off' : 'auto';
     adv.body.appendChild(
       field(
         t('cfg.vision'),
         segmented(
           [
-            ['auto', t('cfg.visionAuto')],
-            ['on', t('cfg.visionOn')],
+            ['auto', t('cfg.visionOn')],
             ['off', t('cfg.visionOff')],
           ],
           vision,
@@ -693,8 +696,8 @@ export function buildModelsPane() {
       if (win) set.push(t('cfg.advWindow', { n: win.toLocaleString() }));
       const most = positiveInt(maxTokensIn.value);
       if (most) set.push(t('cfg.advMaxTokens', { n: most.toLocaleString() }));
-      if (vision !== 'auto') {
-        set.push(t('cfg.advPair', { k: t('cfg.vision'), v: t(vision === 'on' ? 'cfg.visionOn' : 'cfg.visionOff') }));
+      if (vision === 'off') {
+        set.push(t('cfg.advPair', { k: t('cfg.vision'), v: t('cfg.visionOff') }));
       }
       if (trustEnv !== null) set.push(t(trustEnv ? 'cfg.proxyOn' : 'cfg.proxyOff'));
       if (/[^\s{}]/.test(extras.node.querySelector('textarea')?.value || '')) set.push(t('cfg.extraBody'));
@@ -1386,7 +1389,7 @@ async function openChipMenu() {
     // The default says so: a chat on it moves when the default does.
     const notes = [
       p.id === c.roles.chat ? t('cfg.default') : null,
-      p.vision === 'on' ? t('cfg.visionBadge') : null,
+      p.vision === 'off' ? t('cfg.visionBadge') : null,
     ].filter(Boolean);
     option(profileName(p), p.id, notes.join(' · ') || undefined);
   }

@@ -160,8 +160,8 @@ async with server.session() as conn:      # 只打开一次
   base64）；资源链接变成 `[resource link: uri]` 行。
 - **图片以图片的形式交给模型。** 图片块只要 base64 合法、不超过 5 MB（约 3.7 MB 的图片），
   且字节本身是 jpeg、png、gif 或 webp，就会作为 [`ImagePart`](tools.md#返回图片) 交给模型——
-  类型以字节为准，不管服务器标的是什么——与结果里的文本保持原有顺序。其他图片，以及
-  模型不支持视觉时的所有图片，都是带大小的 placeholder，会话里存下的也只有它，没有 base64。
+  类型以字节为准，不管服务器标的是什么——与结果里的文本保持原有顺序。其他图片是带大小的
+  placeholder，会话里存下的也只有它，没有 base64。
   这样的结果是内容片段，不经过任何
   renderer。配置了自定义 `result_renderer` 的服务器是例外：它的 renderer 仍然拿到原始
   `MCPToolResult`，并返回文本。标记了 `isError` 的结果也是文本。

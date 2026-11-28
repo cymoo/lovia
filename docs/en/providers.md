@@ -77,12 +77,15 @@ on. `replay_reasoning=` forces either way. Only entries produced by this
 provider are replayed.
 
 **Images**: `supports_vision=` declares whether the model accepts image
-inputs. The default (`None`) assumes it only on the official API, since a
-compatible endpoint's model can't be judged from its name. Pass `True` for a
-vision model behind `OPENAI_BASE_URL`. lovia reads the flag through
-`lovia.providers.supports_vision(provider)` (false for a provider without
-one): the web UI sends an attached image inline only when it is true, and
-otherwise gives the model the file's path.
+inputs. Models see unless told otherwise — neither the host nor the model's
+name says which don't — so pass `False` for one that takes none. lovia reads
+the flag through `lovia.providers.supports_vision(provider)` (true for a
+provider without one). For a model that takes no images the runner sends
+`[image not shown: this model takes no image input]` in each image's place,
+in user messages and tool results alike; the transcript keeps the images, so
+a later model that sees gets them. A request that carried images and was
+refused (HTTP 400, 413 or 422) fails with a hint saying so: nothing is
+retried, and nothing is guessed from the provider's wording.
 
 ## The Anthropic provider
 
@@ -96,8 +99,7 @@ Credentials and endpoint resolve from the environment when not passed:
 `https://api.anthropic.com/v1`). The Messages API requires `max_tokens` on
 every request, so when `settings.max_tokens` is unset the adapter sends
 `default_max_tokens` (16,384 — matching the default context policy's output
-reservation). `supports_vision=` works as [above](#the-openai-provider): it
-defaults to true on the official host and false behind `ANTHROPIC_BASE_URL`.
+reservation). `supports_vision=` works as [above](#the-openai-provider).
 
 **Extended thinking**: enable it per Anthropic's API via provider options —
 

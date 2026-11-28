@@ -147,8 +147,9 @@ class Tool:
     # carry :class:`~lovia.parts.ImagePart` content. The runner uses it to
     # skip *ambient* registration (workspace/plugin bundles) for providers
     # that cannot see images; explicitly wired tools are never filtered —
-    # the adapters' wire degrade covers them — so the flag is a UX hint,
-    # never load-bearing for correctness.
+    # the runner withholds their images from such a model
+    # (``transcript.without_images``) — so the flag is a UX hint, never
+    # load-bearing for correctness.
     returns_images: bool = False
     # Set by build_handoff_tool: lets the runner recognise a handoff tool
     # *before* invoking it, so a second handoff in the same turn is rejected

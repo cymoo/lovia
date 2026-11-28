@@ -113,9 +113,9 @@ def test_describe_image_outside_read_asks_when_the_policy_does(
 
 def test_resolve_vision_tool_gating(tmp_path: Path) -> None:
     ws = Workspace.local(str(tmp_path))
-    text_prov = ScriptedProvider([text("x")])  # no vision
-    vision_prov = ScriptedProvider([text("x")])
-    vision_prov.supports_vision = True  # type: ignore[attr-defined]
+    text_prov = ScriptedProvider([text("x")])
+    text_prov.supports_vision = False  # type: ignore[attr-defined]
+    vision_prov = ScriptedProvider([text("x")])  # sees, as models do
     profile = ModelProfile(id="eyes", model="openai:qwen-vl", api_key="sk-vision")
 
     assert resolve_vision_tool(text_prov, ws, None) is None  # no vision role
@@ -142,6 +142,7 @@ def test_resolve_vision_tool_bad_profile_degrades(
     """An unusable vision profile disables the tool instead of crashing boot."""
     ws = Workspace.local(str(tmp_path))
     text_prov = ScriptedProvider([text("x")])
+    text_prov.supports_vision = False  # type: ignore[attr-defined]
     bad = ModelProfile(id="eyes", model="no-such-vendor:qwen-vl")
     with caplog.at_level("WARNING", logger="lovia.web.builder"):
         assert resolve_vision_tool(text_prov, ws, bad) is None

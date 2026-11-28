@@ -262,9 +262,8 @@ def _refuse_relative(dirs: list[str]) -> None:
 
 
 def _sees_images(profile: ModelProfile) -> bool:
-    """Whether a chat on ``profile`` takes images inline: its ``vision``
-    setting, ``auto`` answered by the provider it builds (official endpoints
-    see). An incomplete profile sees none."""
+    """Whether a chat on ``profile`` is sent images: yes unless its
+    ``vision`` is ``off``. An incomplete profile sees none."""
     try:
         conn = Connection.from_profile(profile)
         if conn.model is None:

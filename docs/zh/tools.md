@@ -180,7 +180,7 @@ async def screenshot(url: str) -> list:
 
 这个标志只对工作区或 Plugin 提供的工具起作用：provider 看不了图片时
 （[`supports_vision`](providers.md#openai-provider)），这些工具不会提供给模型。
-`Agent(tools=...)` 里的工具总会提供；纯文本模型看到的是一个简短标记，代替每张图片。
+`Agent(tools=...)` 里的工具总会提供；不收图的模型在每张图片的位置看到一行说明文字。
 
 ## 工具审批
 

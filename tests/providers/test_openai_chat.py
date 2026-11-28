@@ -13,6 +13,9 @@ import pytest
 from lovia import Agent, FilePart, ImagePart, Runner, TextPart, events
 from lovia.exceptions import ContextOverflowError, ProviderError, UserError
 from lovia.transcript import (
+    IMAGE_NOT_SHOWN,
+    TranscriptEntry,
+    without_images,
     FinishDelta,
     EntryCompletedDelta,
     InputEntry,
@@ -195,7 +198,6 @@ def test_tool_result_images_ride_one_synthetic_user_message_per_turn() -> None:
             ToolResultEntry(call_id="c2", output="b.jpg", parts=[image_b]),
             AssistantTextEntry(content="looked"),
         ],
-        include_images=True,
     )
 
     roles = [m["role"] for m in out]
@@ -225,7 +227,6 @@ def test_tool_result_images_flush_before_following_user_input() -> None:
             ToolResultEntry(call_id="c1", output="a.png", parts=[image]),
             InputEntry(role="user", content="next question"),
         ],
-        include_images=True,
     )
 
     assert [m["role"] for m in out] == ["assistant", "tool", "user"]
@@ -234,24 +235,33 @@ def test_tool_result_images_flush_before_following_user_input() -> None:
     assert merged[-1] == {"type": "text", "text": "next question"}
 
 
-def test_tool_result_images_degrade_to_projection_without_vision() -> None:
+def test_images_withheld_for_a_model_that_takes_none() -> None:
+    """What the runner hands a text-only model (``without_images``): a line
+    of text where each image was — in a tool result and in a user message —
+    and no synthetic image message."""
     image = ImagePart(data="YQ==", mime_type="image/png")
-    out = entries_to_openai_messages(
-        [
-            ToolCallEntry(call_id="c1", name="view_image", arguments="{}"),
-            ToolResultEntry(
-                call_id="c1", output="[image: image/png, 1 B]", parts=[image]
-            ),
-        ],
-        include_images=False,
-    )
+    entries: list[TranscriptEntry] = [
+        InputEntry(role="user", content=[TextPart("what is this?"), image]),
+        ToolCallEntry(call_id="c1", name="view_image", arguments="{}"),
+        ToolResultEntry(
+            call_id="c1",
+            output="a.png\n[image: image/png, 1 B]",
+            parts=[TextPart("a.png"), image],
+        ),
+    ]
 
-    assert out[1] == {
-        "role": "tool",
-        "content": "[image: image/png, 1 B]",
-        "tool_call_id": "c1",
-    }
-    assert [m["role"] for m in out] == ["assistant", "tool"]
+    sent = without_images(entries)
+    out = entries_to_openai_messages(sent)
+
+    assert [m["role"] for m in out] == ["user", "assistant", "tool"]
+    assert out[0]["content"] == [
+        {"type": "text", "text": "what is this?"},
+        {"type": "text", "text": IMAGE_NOT_SHOWN},
+    ]
+    assert out[2]["content"] == f"a.png\n{IMAGE_NOT_SHOWN}"
+    # View-only: the transcript keeps its images, for a model that sees.
+    assert entries[0].content[1] is image  # type: ignore[union-attr,index]
+    assert without_images(sent) is sent
 
 
 def test_entries_to_openai_messages_drops_orphan_reasoning() -> None:

@@ -46,7 +46,6 @@ from ..config.schema import (
     is_global_dir,
     slugify,
 )
-from .. import awake
 from ..auth import is_local_name
 from ..config.mcp import parse_servers, restore_secrets, spec_of
 from ..config.schema import MCPServerConfig
@@ -432,8 +431,8 @@ def build_config_router(runtime: ConfigRuntime, deps: RouterDeps) -> APIRouter:
                 "trust_env": cfg.trust_env,
                 "launch": runtime.launch_trust_env,
             },
-            # ``supported``: whether this machine's sleep can be held off.
-            "keep_awake": {"on": cfg.keep_awake, "supported": awake.supported()},
+            # ``supported``: whether the switch does anything here.
+            "keep_awake": {"on": cfg.keep_awake, "supported": runtime.keeps_awake},
             "voice": {
                 **cfg.voice.model_dump(exclude={"api_key"}),
                 "api_key": _mask(cfg.voice.api_key),

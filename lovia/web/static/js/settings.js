@@ -256,11 +256,13 @@ function proxyField() {
       const sw = toggle(c.keep_awake.on, async (on, set) => {
         try {
           await api.setKeepAwake({ on });
-          await loadConfig();
         } catch (err) {
           toast(String(err.message || err), { type: 'error' });
           set(!on);
+          return;
         }
+        await loadConfig().catch(() => {}); // saved either way
+
       });
       if (!c.writable) sw.disabled = true;
       wrap.prepend(field(t('settings.keepAwake'), sw, t('settings.keepAwakeHint')));

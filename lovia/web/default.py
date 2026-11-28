@@ -158,6 +158,7 @@ def default_app(
         except ValueError as exc:
             raise UserError(str(exc)) from exc
     if awake.supported():
+        runtime.keeps_awake = True
         mine = _keep_awake(runtime)
         lifespan = mine if lifespan is None else _around(lifespan, mine)
     return create_app(

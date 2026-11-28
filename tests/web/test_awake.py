@@ -9,8 +9,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from lovia.web import awake
+from lovia.web import awake, create_app
+from lovia.web.builder import Deployment
+from lovia.web.config.runtime import ConfigRuntime
+from lovia.web.config.storage import load_active
 from lovia.web.default import default_app
+from lovia.web.store import ChatStore
 
 
 class _Recorder:
@@ -93,3 +97,22 @@ def test_settings_saves_the_switch_and_says_whether_it_applies(
         assert res.status_code == 200, res.text
         assert res.json()["config"]["keep_awake"]["on"] is True
     assert '"keep_awake": true' in (tmp_path / "home" / "config.json").read_text()
+
+
+def test_the_switch_shows_only_where_something_acts_on_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(awake, "supported", lambda: True)
+    monkeypatch.setattr(awake, "_Hold", _Recorder)
+    app = default_app(home=tmp_path / "home", workspace=tmp_path)
+    with TestClient(app, base_url="http://localhost") as c:
+        assert c.get("/api/config").json()["keep_awake"]["supported"] is True
+    # An app that mounts the config API some other way installs no worker.
+    runtime = ConfigRuntime(
+        deployment=Deployment(),
+        loaded=load_active(tmp_path / "other"),
+        store=ChatStore.in_memory(),
+    )
+    bare = create_app({}, store=runtime.store, config_runtime=runtime, titles=False)
+    with TestClient(bare, base_url="http://localhost") as c:
+        assert c.get("/api/config").json()["keep_awake"]["supported"] is False

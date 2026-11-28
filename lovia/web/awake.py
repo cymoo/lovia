@@ -25,9 +25,9 @@ from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
-# Idle sleep is counted in minutes, so a hold this late (or this long after
-# the work ended) changes nothing.
-POLL_SECONDS = 15.0
+# Short, so work that starts just before the machine would have slept (a
+# scheduled run, a message from another device) is still caught.
+POLL_SECONDS = 2.0
 
 _ES_CONTINUOUS = 0x80000000
 _ES_SYSTEM_REQUIRED = 0x00000001
@@ -57,7 +57,9 @@ class _Hold:
                 import ctypes
 
                 state = _ES_CONTINUOUS | (_ES_SYSTEM_REQUIRED if on else 0)
-                ctypes.windll.kernel32.SetThreadExecutionState(state)
+                # Zero is a refusal, not an exception.
+                if not ctypes.windll.kernel32.SetThreadExecutionState(state):
+                    raise OSError("SetThreadExecutionState refused the request")
         self._on = on
 
     def _caffeinate(self, on: bool) -> None:

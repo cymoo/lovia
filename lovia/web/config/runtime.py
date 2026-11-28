@@ -108,6 +108,10 @@ class ConfigRuntime:
         # The System proxy as lovia was started, for a config that sets none.
         self._launch_trust_env = os.environ.get(_TRUST_ENV)
         self.launch_trust_env = resolve_trust_env(None)
+        # Whether anything acts on ``keep_awake`` (``default_app`` does, on a
+        # machine whose sleep can be held off); Settings shows the switch
+        # only then.
+        self.keeps_awake = False
         self._route(self.config)
 
     # ------------------------------------------------------------- state -

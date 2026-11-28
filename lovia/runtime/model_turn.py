@@ -233,7 +233,7 @@ _REFUSAL_STATUSES = frozenset({400, 413, 422})
 _IMAGES_HINT = (
     "This request carried images. If the model takes none, set "
     "supports_vision=False (lovia web: Settings → Models). If an image is too "
-    "large, go back to before it was added."
+    "large, or there are too many, go back to before it was added."
 )
 
 

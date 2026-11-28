@@ -224,7 +224,7 @@ const MESSAGES = {
     'err.network': '无法连接服务器——请确认 lovia 仍在运行。',
     'err.providerNetwork': 'lovia 连不上模型服务——请检查 base URL、网络和代理设置。',
     'err.imagesRefused':
-      '模型拒收了这条带图片的请求。它若不支持看图，请在模型设置里把视觉能力改为「不支持」；若是图片过大，请回退到添加图片之前。',
+      '模型拒收了这条带图片的请求。它若不支持看图，请在模型设置里把视觉能力改为「不支持」；若是图片过大或过多，请回退到添加图片之前。',
     // ---- plan (todo list)
     'plan.label': '计划',
     'plan.show': '展开计划',
@@ -1227,7 +1227,7 @@ const EN = {
   'err.providerNetwork':
     'lovia can’t reach the model provider — check the base URL, network and proxy settings.',
   'err.imagesRefused':
-    'The model refused this request, which carried images. If it takes none, set its Vision capability to “Not supported” in the model settings; if an image is too large, rewind to before it was added.',
+    'The model refused this request, which carried images. If it takes none, set its Vision capability to “Not supported” in the model settings; if an image is too large, or there are too many, rewind to before it was added.',
   'plan.label': 'Plan',
   'plan.show': 'Show plan',
   'plan.hide': 'Hide plan',

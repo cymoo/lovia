@@ -2501,14 +2501,15 @@ body.lv-view-open #files-btn {
 .lv-activity-steps > .lv-reasoning:not(.lv-done)[open] .lv-reasoning-label::after {
   display: none; /* the dot already spins */
 }
-/* A lone step, opened with its group (activity.js): the group's line already
-   names it, so its own row, dot and rail would only say it twice. */
-.lv-activity-steps:has(> :only-child[open])::before,
-.lv-activity-steps > :only-child[open]::before,
-.lv-activity > .lv-activity-steps > :only-child[open] > summary {
+/* Lone thinking, opened with its group (activity.js): the group's line already
+   names it, so its own row, dot and rail would only say it twice. A lone tool
+   keeps its row: its actions live there. */
+.lv-activity-steps:has(> .lv-reasoning:only-child[open])::before,
+.lv-activity-steps > .lv-reasoning:only-child[open]::before,
+.lv-activity > .lv-activity-steps > .lv-reasoning:only-child[open] > summary {
   display: none;
 }
-.lv-activity-steps > :only-child[open] > :not(summary) {
+.lv-activity-steps > .lv-reasoning:only-child[open] > :not(summary) {
   margin-left: 0;
 }
 /* Thinking under its row, or under the group's line: no card to rule off. */

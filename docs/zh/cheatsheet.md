@@ -356,7 +356,7 @@ agent = Agent(
 ### 记忆
 
 常驻提示词的 **Notes**（只记用户说过或确认过的事实，按会话固定，不破坏缓存）加可检索的
-**Archive**。定期的 **dream** 整理会合并重复、清理过期内容。
+**Archive**。Notes 只由 Agent 自己写入：新事实会替换它取代的旧记录，写满后要先腾出位置才能新增。
 
 ```python
 from lovia import Agent, Memory, OpenAIEmbedder

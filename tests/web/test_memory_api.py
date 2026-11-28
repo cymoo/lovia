@@ -31,7 +31,7 @@ from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
 
 @pytest.fixture()
 def mem(tmp_path: Path) -> Memory:
-    return Memory(tmp_path / "mem", index=None, auto_curate=False)
+    return Memory(tmp_path / "mem", index=None)
 
 
 @pytest.fixture()
@@ -83,7 +83,6 @@ def test_get_empty_notes(client: TestClient, mem: Memory) -> None:
         "content": "",
         "used": 0,
         "budget": mem.notes_budget,
-        "dreamed_at": None,
         "layer": "user",
         "scope_key": None,
     }
@@ -126,37 +125,6 @@ def test_put_normalizes_and_round_trips(
     assert wiped["content"] == "" and wiped["used"] == 0
 
 
-# ----------------------------------------------------------------- dream -
-
-
-async def test_dream_endpoint_tidies_and_reports(
-    client: TestClient, mem: Memory, monkeypatch
-) -> None:
-    async def fake_dream(body, max_chars, model):
-        return ["[2026-01] merged note"]
-
-    monkeypatch.setattr(plugin_mod, "_dream", fake_dream)
-    await mem.remember("fact one")
-    await mem.remember("fact two")
-
-    data = client.post("/api/memory/dream", params={"agent": "bot"}).json()
-    assert (data["before"], data["after"]) == (2, 1)
-    assert data["content"] == "- [2026-01] merged note"
-    assert data["used"] == len(data["content"])
-    assert data["dreamed_at"] is not None
-
-    # The editor's follow-up GET sees the tidied notes and the timestamp.
-    again = client.get("/api/memory", params={"agent": "bot"}).json()
-    assert again["content"] == data["content"]
-    assert again["dreamed_at"] == data["dreamed_at"]
-
-
-def test_dream_endpoint_404s_without_memory(client: TestClient) -> None:
-    assert (
-        client.post("/api/memory/dream", params={"agent": "plain"}).status_code == 404
-    )
-
-
 # -------------------------------------------------------------- projects -
 
 
@@ -173,7 +141,6 @@ def _scoped(tmp_path: Path) -> Memory:
     return Memory(
         tmp_path / "mem",
         index=None,
-        auto_curate=False,
         scope=chat_project,
         scope_name="project",
     )
@@ -235,23 +202,13 @@ def test_a_run_remembers_into_its_chat_project(
         own = c.get("/api/memory", params={"layer": "project"}).json()
         assert (own["content"], own["scope_key"]) == ("", _key(proj["launch"]))
 
-        # Edit and tidy a project's notes; the user's stay as they were.
+        # Edit a project's notes; the user's stay as they were.
         put = c.put(
             "/api/memory",
             params={"layer": "project", "session": sid},
             json={"content": "- [2026-01] builds with uv\n- [2026-01] CI on Actions"},
         ).json()
         assert put["scope_key"] == key and put["content"].count("\n") == 1
-
-        async def fake_dream(body, max_chars, model):
-            return ["[2026-01] uv + Actions"]
-
-        monkeypatch.setattr(plugin_mod, "_dream", fake_dream)
-        dreamed = c.post(
-            "/api/memory/dream", params={"layer": "project", "session": sid}
-        ).json()
-        assert (dreamed["before"], dreamed["after"]) == (2, 1)
-        assert dreamed["dreamed_at"] is not None
         assert c.get("/api/memory").json()["content"] == user["content"]
 
         # Clearing a project forgets it; "about me" has no clear.
@@ -428,26 +385,3 @@ async def test_a_remote_chat_keys_its_project_by_location(tmp_path: Path) -> Non
     await mem.remember("deploys with systemd", scope=key)
     (meta,) = (tmp_path / "mem" / "scopes").glob("app-*/scope.json")
     assert key in meta.read_text()
-
-
-# ------------------------------------------------------------- shutdown -
-
-
-def test_shutdown_drains_background_curation(tmp_path: Path, monkeypatch) -> None:
-    # A clean server stop must not drop the last run's curation: the digest
-    # below is still sleeping when the lifespan shutdown begins, and only the
-    # drain in create_app's lifespan gets it onto disk.
-    async def slow_digest(entries, current, model):
-        await asyncio.sleep(0.3)
-        return plugin_mod._RunDigest(facts=["survives shutdown"], summary="")
-
-    monkeypatch.setattr(plugin_mod, "_digest", slow_digest)
-    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
-    mem = Memory(tmp_path / "mem", index=None, curate_in_background=True)
-    bot = Agent(name="bot", model=ScriptedProvider([text("hi")]), plugins=[mem])
-    app = create_app({"bot": bot}, store=ChatStore.in_memory(), titles=False)
-
-    with TestClient(app) as client:  # the context manager runs the lifespan
-        assert client.post("/api/chat", json={"message": "hello"}).status_code == 200
-    body = (tmp_path / "mem" / "MEMORY.md").read_text()
-    assert body == "- [2026-01] survives shutdown"

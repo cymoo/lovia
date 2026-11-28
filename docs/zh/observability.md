@@ -54,7 +54,7 @@ agent = Agent(..., hooks=hooks)
   （见[运行中追加指令](cancellation.md#在运行中追加指令)），或触发 `ctx.cancel_token`。
 
 [插件](plugins.md)也可以贡献自己的 `AgentHooks`，和 agent 自己的 hooks 一起派发。[Memory](memory.md)
-就是这样在运行结束时触发整理。
+就是这样在运行结束时把这次运行建入索引。
 
 ## 链路追踪
 

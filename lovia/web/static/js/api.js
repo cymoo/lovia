@@ -675,11 +675,6 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify({ content }),
     }).then(_json),
-  // Runs the dream pass (merge duplicates, resolve conflicts, prune stale);
-  // returns {before, after} counts plus the fresh canonical body.
-  /** @param {MemoryLayer} [opts] */
-  dreamMemory: (opts = {}) =>
-    request(`/api/memory/dream${qs(opts)}`, { method: 'POST' }).then(_json),
   // Forgets a project — its notes and its conversation archive, for good.
   /** @param {MemoryLayer} opts */
   clearMemory: (opts) =>

@@ -1,7 +1,7 @@
 """Memory routes: view and edit an agent's hot-tier Notes from the web UI.
 
 The Memory plugin's Notes are the small, always-in-context fact list the agent
-curates for itself (``plugins/memory``). They are the user's data as much as
+keeps for itself (``plugins/memory``). They are the user's data as much as
 the agent's — "what does my assistant remember about me" — so the UI gets a
 read *and* a write: the editor loads the canonical ``- fact`` body and saves a
 replacement through :meth:`Memory.replace_notes`, which applies the same
@@ -29,11 +29,10 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ...agent import Agent
-from ...exceptions import UserError
 from ...plugins.memory import Memory
 from ..errors import WebError
 from ..run_deps import chat_project
-from ..schemas import MemoryDreamResult, MemoryNotes, MemoryUpdate
+from ..schemas import MemoryNotes, MemoryUpdate
 from ..workspaces import ChatBinding
 from .deps import RouterDeps
 from .routing import GuardedRoute
@@ -109,7 +108,6 @@ def build_memory_router(deps: RouterDeps) -> APIRouter:
             content=body,
             used=len(body),
             budget=t.plugin.notes_budget,
-            dreamed_at=t.plugin.dreamed_at(scope=t.key),
             layer="user" if t.key is None else "project",
             scope_key=t.key,
         )
@@ -141,23 +139,5 @@ def build_memory_router(deps: RouterDeps) -> APIRouter:
             )
         await t.plugin.clear_scope(t.key)
         return notes_out(t, await t.plugin.notes_body(scope=t.key))
-
-    @router.post("/api/memory/dream", response_model=MemoryDreamResult)
-    async def dream_memory(t: _Layer = Depends(target)) -> MemoryDreamResult:
-        """Run the dream pass now; returns counts plus the fresh body.
-
-        The editor's tidy-up button. The plugin's own model wins when
-        configured; otherwise the host agent's model runs the rewrite —
-        same resolution curation uses at run end.
-        """
-        plugin = t.plugin
-        try:
-            before, after = await plugin.dream(
-                model=plugin.model or t.host.model, scope=t.key
-            )
-        except UserError as exc:
-            raise WebError.from_exc(400, "invalid_request", exc) from exc
-        base = notes_out(t, await plugin.notes_body(scope=t.key))
-        return MemoryDreamResult(**base.model_dump(), before=before, after=after)
 
     return router

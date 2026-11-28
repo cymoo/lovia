@@ -59,25 +59,16 @@ class MemoryNotes(BaseModel):
 
     ``content`` is the canonical ``- fact`` per line markdown body; ``used`` is
     its length in chars against the plugin's ``budget`` (the meter the agent
-    itself sees in its prompt). ``dreamed_at`` is the epoch time of the last
-    dream pass, ``None`` before the first one. ``layer`` is which Notes these
-    are: the user's, or a project's — ``scope_key`` names it (the chat's
-    workspace key; ``None`` for the user's).
+    itself sees in its prompt). ``layer`` is which Notes these are: the
+    user's, or a project's — ``scope_key`` names it (the chat's workspace
+    key; ``None`` for the user's).
     """
 
     content: str
     used: int
     budget: int
-    dreamed_at: float | None = None
     layer: Literal["user", "project"] = "user"
     scope_key: str | None = None
-
-
-class MemoryDreamResult(MemoryNotes):
-    """A dream pass's outcome: note counts plus the fresh Notes body."""
-
-    before: int
-    after: int
 
 
 class MemoryUpdate(BaseModel):

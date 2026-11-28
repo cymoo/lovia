@@ -64,11 +64,10 @@ searches, so a message that doesn't search pays nothing for it. Some proxy
 exits are refused Exa's keyless allowance; go direct or give it a key. Any other
 search server can be added in Settings → MCP (and this one set to Off).
 
-Default features can make model calls outside the main Run. Memory performs one
-digest after each completed Run and another call when a periodic dream is due;
-titles and follow-up suggestions also use separate calls. Turn memory or
-follow-ups off in **Settings → Assistant**, or assign auxiliary work to a
-cheaper model. See [Memory](memory.md#sharp-edges) for the full cost boundary.
+Default features can make model calls outside the main Run. Titles and
+follow-up suggestions use separate calls, and so does a `recall` into past
+conversations (Memory calls a model nowhere else). Turn memory or follow-ups
+off in **Settings → Assistant**, or assign auxiliary work to a cheaper model. See [Memory](memory.md#sharp-edges) for the full cost boundary.
 
 !!! danger "Local use by default"
 

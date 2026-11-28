@@ -174,15 +174,9 @@ def resolve_memory(enabled: bool, root: str | Path) -> Memory | None:
     if path.exists() and not path.is_dir():
         raise UserError(f"memory path is not a directory: {path}")
     log.info("memory enabled at %s", path)
-    # Long-lived server: curation must not hold back each run's final event.
     # Split by project: notes about the user everywhere, the rest per chat
     # directory (the Memory page's two scopes).
-    return Memory(
-        str(path),
-        curate_in_background=True,
-        scope=chat_project,
-        scope_name="project",
-    )
+    return Memory(str(path), scope=chat_project, scope_name="project")
 
 
 def resolve_tools(

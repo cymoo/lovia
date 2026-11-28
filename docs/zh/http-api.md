@@ -300,7 +300,6 @@ API 路由抛出的错误都使用同一种响应体：
 | `retrying` | `{attempt, max_attempts, delay, message}`：模型调用遇到暂时性错误，`delay` 秒后进行第 `attempt + 1` 次尝试 |
 | `context_compacting` | `{active}`：上下文策略开始（`true`）或结束（`false`）耗时的[压缩](context.md)工作；总是成对出现，`false` 先于 `context_compacted` |
 | `context_compacted` | `{session_id, reason, reactive, summary, tokens_before, tokens_after, detail}`：[上下文压缩](context.md)通知 |
-| `images_withheld` | `{count, unsupported}`：provider 拒收了图片，这次模型调用把其中 `count` 张换成文字标记后重发（`unsupported`：模型不收图，本对话之后的图片都会被换掉）。只在直播时出现，刷新后不回放 |
 | `error` | `{type, message, code, status_code?, retryable?, hint?}`：Tool 错误，或聊天流终止前的运行错误 |
 | `refs` | `{refs}`：刚结束的 Run 中各条用户消息的 `ref`，按顺序排列；在 `done` 之前发送。未配置 checkpointer 时不发送；Run 中含有流里从未显示过的用户条目（结构化输出的修复提示）时也不发送，下次加载对话时会补上 |
 | `timing` | `{finished_at, duration}`：刚结束的 Run 在其 segment 中记录的完成时间（epoch 秒）和用时（秒），实时显示因此与刷新后一致；在 `done` 之前发送。segment 未记录用时时不发送 |

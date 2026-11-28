@@ -143,17 +143,13 @@ class Tool:
     # the request-side knob for whether the model may *emit* several calls in
     # one turn.
     parallel: bool = True
-    # What the tool is for, as far as images go — two facts the runner reads
-    # on every model call, whatever the tool's source. ``returns_images``:
-    # results may carry :class:`~lovia.parts.ImagePart` content, so it is
-    # offered only while the model sees images. ``describes_images``: it
-    # tells the model what an image shows (a vision model looking for it),
-    # so it is offered only while the model does not. A model sees images
-    # unless its provider says ``supports_vision=False`` or it refused them
-    # in this chat (``lovia/runtime/images.py``). Neither is load-bearing:
-    # a call to a tool not offered still runs, and its images are withheld.
+    # Output-side interface metadata, the dual of ``parameters``: results may
+    # carry :class:`~lovia.parts.ImagePart` content. The runner uses it to
+    # skip *ambient* registration (workspace/plugin bundles) for providers
+    # that cannot see images; explicitly wired tools are never filtered —
+    # the adapters' wire degrade covers them — so the flag is a UX hint,
+    # never load-bearing for correctness.
     returns_images: bool = False
-    describes_images: bool = False
     # Set by build_handoff_tool: lets the runner recognise a handoff tool
     # *before* invoking it, so a second handoff in the same turn is rejected
     # without firing its on_handoff side effects.
@@ -387,7 +383,6 @@ def tool(
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     parallel: bool = True,
     returns_images: bool = False,
-    describes_images: bool = False,
     strict: bool = False,
 ) -> Tool: ...
 
@@ -406,7 +401,6 @@ def tool(
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     parallel: bool = True,
     returns_images: bool = False,
-    describes_images: bool = False,
     strict: bool = False,
 ) -> Callable[[Callable[..., Any]], Tool]: ...
 
@@ -424,7 +418,6 @@ def tool(
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     parallel: bool = True,
     returns_images: bool = False,
-    describes_images: bool = False,
     strict: bool = False,
 ) -> Tool | Callable[[Callable[..., Any]], Tool]:
     """Decorate a function to turn it into a :class:`Tool`.
@@ -519,7 +512,6 @@ def tool(
             policies=tuple(policies),
             parallel=parallel,
             returns_images=returns_images,
-            describes_images=describes_images,
         )
 
     if fn is None:

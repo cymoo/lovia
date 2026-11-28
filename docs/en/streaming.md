@@ -110,7 +110,6 @@ The fine print that UIs get wrong:
 | `HandoffOccurred` | `from_agent`, `to_agent` | control [transferred](multi-agent.md) to another agent |
 | `ContextCompacting` | `active` | the [context policy](context.md) announced slow work (a summary call) and is still at it (`True`), then finished or failed (`False`) |
 | `ContextCompacted` | `session_id`, `entries_before`, `entries_after`, `notice` | the [context policy](context.md) produced a compacted view for this turn |
-| `ImagesWithheld` | `count`, `unsupported` | the provider refused images; the call is sent again with `count` of them as text markers (`unsupported`: the model takes no images, so the chat withholds all of them from now on) — see [Returning images](tools.md#returning-images) |
 
 `ContextCompacting` always comes as a pair, closed before any
 `ContextCompacted` or terminal event, so a UI can say "compacting" instead

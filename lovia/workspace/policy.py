@@ -120,7 +120,7 @@ def _path_matches(rel_path: str, pattern: str) -> bool:
 
 
 @lru_cache(maxsize=1024)
-def _canonical_pattern(pattern: str, home: str) -> str | None:
+def _canonical_pattern(pattern: str) -> str | None:
     """Expand ``~`` and canonicalize an absolute-style pattern's real prefix.
 
     ``decide_path`` compares against a *resolved* absolute path, so the
@@ -129,8 +129,7 @@ def _canonical_pattern(pattern: str, home: str) -> str | None:
     follows only components that exist, leaving glob segments (``*``, ``**``)
     untouched — ``/etc/ssl/**`` → ``/private/etc/ssl/**``. Cached because
     patterns are static and this runs per entry during list/grep. Returns
-    ``None`` when the pattern is empty or has no resolvable home. ``home`` is
-    the ``~`` it expands to — a cache key only.
+    ``None`` when the pattern is empty or has no resolvable home.
     """
     pat = pattern
     if pat.startswith("~"):
@@ -152,10 +151,7 @@ def _abs_matches(abs_posix: str, pattern: str) -> bool:
     Like the relative match, a pattern also covers everything beneath it, so
     ``"~/notes"`` grants/denies the whole subtree.
     """
-    # The home is part of the key: a ``~`` pattern cached under one HOME
-    # must not answer for another (tests swap it; so may an embedder).
-    home = os.path.expanduser("~") if pattern.startswith("~") else ""
-    pat = _canonical_pattern(pattern, home)
+    pat = _canonical_pattern(pattern)
     if pat is None:
         return False
     return _glob(abs_posix, pat) or _glob(abs_posix, pat + "/*")

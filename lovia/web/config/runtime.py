@@ -288,7 +288,7 @@ class ConfigRuntime:
             except ValueError as exc:
                 raise UserError(str(exc)) from exc
             vision = resolve_vision_tool(
-                resolve_workspace(self.deployment), config.vision_profile()
+                provider, resolve_workspace(self.deployment), config.vision_profile()
             )
             built = self._chat_models[profile.id] = (provider, vision)
         return on_model(agent, built[0], profile, built[1])

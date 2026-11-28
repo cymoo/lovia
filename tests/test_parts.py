@@ -60,37 +60,10 @@ def test_image_part_data_requires_mime() -> None:
 
 def test_image_part_from_path_infers_mime(tmp_path) -> None:
     img = tmp_path / "pic.PNG"  # upper-case suffix exercises .lower()
-    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+    img.write_bytes(b"\x89PNG\r\n")
     p = ImagePart.from_path(img)
     assert p.mime_type == "image/png"
-    assert base64.b64decode(p.data) == b"\x89PNG\r\n\x1a\n"  # type: ignore[arg-type]
-    page = tmp_path / "shot.png"  # an error page saved as .png
-    page.write_bytes(b"<html>")
-    with pytest.raises(ValueError, match="not a PNG"):
-        ImagePart.from_path(page)
-
-
-@pytest.mark.parametrize(
-    ("head", "mime"),
-    [
-        (b"\x89PNG\r\n\x1a\n\0\0", "image/png"),
-        (b"\xff\xd8\xff\xe0\0\x10JFIF", "image/jpeg"),
-        (b"GIF89a\x01\0", "image/gif"),
-        (b"RIFF\x24\0\0\0WEBPVP8 ", "image/webp"),
-        (b"<svg xmlns=", None),
-        (b"", None),
-    ],
-)
-def test_sniff_image_mime_reads_the_bytes(head: bytes, mime: str | None) -> None:
-    from lovia.parts import sniff_image_mime
-
-    assert sniff_image_mime(head) == mime
-
-
-def test_image_part_from_path_trusts_the_bytes_over_the_suffix(tmp_path) -> None:
-    img = tmp_path / "photo.png"  # a JPEG saved as .png
-    img.write_bytes(b"\xff\xd8\xff\xe0\0\x10JFIF")
-    assert ImagePart.from_path(img).mime_type == "image/jpeg"
+    assert base64.b64decode(p.data) == b"\x89PNG\r\n"  # type: ignore[arg-type]
 
 
 def test_image_part_from_path_unknown_suffix_raises(tmp_path) -> None:

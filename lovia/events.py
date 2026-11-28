@@ -404,21 +404,3 @@ class ContextCompacted(ContextEvent):
     entries_before: list[TranscriptEntry]
     entries_after: list[TranscriptEntry]
     notice: CompactionNotice
-
-
-@dataclass
-class ImagesWithheld(ContextEvent):
-    """The provider refused images, and the model call is sent again without
-    some of them: each becomes its ``[image: …]`` text marker in the view.
-
-    Emitted just before the retry, once per new decision — images withheld
-    by an earlier decision of the same chat are not announced again. The
-    transcript keeps the images. ``unsupported`` is True when the provider
-    said the model takes no images at all; then every image of this model
-    is withheld for the rest of the chat.
-    """
-
-    count: int
-    """Images withheld by this decision."""
-
-    unsupported: bool = False

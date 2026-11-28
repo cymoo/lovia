@@ -13,6 +13,7 @@ import {
   sendText,
   setDraft,
   showWaitingCard,
+  showLastError,
 } from './chat.js';
 import {
   initSessions,
@@ -124,6 +125,7 @@ async function loadAgents() {
 store.on('render-history', (entries) => renderHistory(entries));
 // The card a suspended run waits on, drawn under the history just rendered.
 store.on('waiting-card', (call) => showWaitingCard(call));
+store.on('last-error', (error) => showLastError(error));
 
 store.on('reset-chat-view', resetChatForNewSession);
 

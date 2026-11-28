@@ -554,6 +554,10 @@ class SessionDetail(BaseModel):
     # off by a limit or a failure, as ``{reason, error}`` (``reason``
     # "max_turns", "budget" or "error") — the next message continues it.
     waiting: dict[str, Any] | None = None
+    # The chat's last run, when it failed for good and nothing ran since: its
+    # error as ``{message, code}`` (``code`` a RunErrorCode, or null) — what
+    # the run's ``error`` frame said, for a page opened afterwards.
+    last_error: dict[str, Any] | None = None
     pinned: bool = False
     # Put away by the user: left out of GET /api/sessions unless asked for.
     archived: bool = False
@@ -691,6 +695,8 @@ class RunRecordInfo(BaseModel):
         "waiting",
     ]
     error: str | None = None
+    # ``error``'s RunErrorCode, when an exception ended the run.
+    error_code: str | None = None
     started_at: float
     finished_at: float | None = None
     # Token spend, when known: {input_tokens, output_tokens, total_tokens}.

@@ -141,6 +141,7 @@ def run_record(row: RunRow) -> RunRecordInfo:
         source=row.source,
         status=cast(Any, row.status),
         error=row.error,
+        error_code=row.error_code,
         started_at=row.started_at,
         finished_at=row.finished_at,
         usage=cast("dict[str, int] | None", row.usage),

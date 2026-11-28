@@ -96,7 +96,7 @@ def _ref_offset(segments: list[Segment], ref: str) -> int | None:
 # Column order shared by every ``RunRow`` SELECT (and ``from_row``).
 _RUN_COLS = (
     "id, session_id, agent, source, status, error, started_at, finished_at, "
-    "usage_json, waiting_for"
+    "usage_json, waiting_for, error_code"
 )
 
 
@@ -366,6 +366,15 @@ def _run_limits(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE chat_sessions ADD COLUMN run_limits TEXT")
 
 
+def _run_error_code(conn: sqlite3.Connection) -> None:
+    """A run's error code (0.9.309): the ``RunErrorCode`` its ``error`` frame
+    carried, beside the text — a reopened chat says a failure as the live
+    page did."""
+    present = {r[1] for r in conn.execute("PRAGMA table_info(chat_runs)")}
+    if "error_code" not in present:
+        conn.execute("ALTER TABLE chat_runs ADD COLUMN error_code TEXT")
+
+
 _MIGRATIONS: tuple[Migration, ...] = (
     _reconcile_unversioned,
     _fork_origin,
@@ -380,6 +389,7 @@ _MIGRATIONS: tuple[Migration, ...] = (
     _run_waiting,
     _attachments_id,
     _run_limits,
+    _run_error_code,
 )
 
 # What may name an attachment folder: the hex of a minted chat id. A
@@ -448,6 +458,8 @@ class LatestRun(NamedTuple):
     started_at: float
     finished_at: float | None
     error: str | None
+    error_code: str | None = None
+    id: str = ""
 
     @property
     def seconds(self) -> float | None:
@@ -717,6 +729,9 @@ class RunRow:
     # [<user entry>, ...]}``: the card it waits on and the messages it had not
     # read yet. None for any other status.
     waiting_for: JsonObject | None = None
+    # ``error``'s ``RunErrorCode`` (lovia/web/errors.py), when an exception
+    # ended the run.
+    error_code: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "RunRow":
@@ -731,6 +746,7 @@ class RunRow:
             finished_at=row[7],
             usage=json.loads(row[8]) if row[8] else None,
             waiting_for=json.loads(row[9]) if row[9] else None,
+            error_code=row[10],
         )
 
     def to_dict(self) -> JsonObject:
@@ -1926,10 +1942,10 @@ class ChatStore:
         """
         await self._write(
             f"INSERT INTO chat_runs ({_RUN_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET status = excluded.status, "
             "error = excluded.error, finished_at = excluded.finished_at, "
-            "waiting_for = excluded.waiting_for",
+            "waiting_for = excluded.waiting_for, error_code = excluded.error_code",
             (
                 row.id,
                 row.session_id,
@@ -1941,6 +1957,7 @@ class ChatStore:
                 row.finished_at,
                 json.dumps(row.usage) if row.usage is not None else None,
                 json.dumps(row.waiting_for) if row.waiting_for is not None else None,
+                row.error_code,
             ),
         )
 
@@ -1952,15 +1969,17 @@ class ChatStore:
         error: str | None = None,
         usage: dict[str, Any] | None = None,
         waiting_for: JsonObject | None = None,
+        error_code: str | None = None,
     ) -> None:
         """Finalize a run record with its terminal status/error/usage — or,
         ``waiting``, with what it waits for."""
         await self._write(
-            "UPDATE chat_runs SET status = ?, error = ?, finished_at = ?, "
-            "usage_json = ?, waiting_for = ? WHERE id = ?",
+            "UPDATE chat_runs SET status = ?, error = ?, error_code = ?, "
+            "finished_at = ?, usage_json = ?, waiting_for = ? WHERE id = ?",
             (
                 status,
                 error,
+                error_code,
                 time.time(),
                 json.dumps(usage) if usage is not None else None,
                 json.dumps(waiting_for) if waiting_for is not None else None,
@@ -2114,7 +2133,7 @@ class ChatStore:
             marks = ",".join("?" for _ in chunk)
             rows = await self._read_all(
                 "SELECT r.session_id, r.status, r.started_at, r.finished_at, "
-                "r.error FROM chat_runs r JOIN ("
+                "r.error, r.error_code, r.id FROM chat_runs r JOIN ("
                 "SELECT session_id, MAX(started_at) AS ts FROM chat_runs "
                 f"WHERE session_id IN ({marks}) GROUP BY session_id"
                 ") m ON r.session_id = m.session_id AND r.started_at = m.ts",

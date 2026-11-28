@@ -66,7 +66,12 @@ async def test_blocking_turn_holds_the_chat() -> None:
         stream, lines = _spawn(
             ac, "/api/chat/stream", json={"message": "also", "session_id": "s1"}
         )
-        await asyncio.sleep(0.1)  # attached; its message queued in the mailbox
+        # Its first frame means it attached, its message already in the
+        # mailbox. Waited for, not slept on: a slow runner takes its time.
+        for _ in range(500):
+            if lines:
+                break
+            await asyncio.sleep(0.01)
         release.set()
         res = await asyncio.wait_for(turn, timeout=5)
         await asyncio.wait_for(stream, timeout=5)

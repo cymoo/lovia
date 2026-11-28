@@ -1247,6 +1247,9 @@ export function buildAboutPane() {
         scope ? `${scope.label}${scope.exists ? '' : ` ${t('cfg.scopeUnsaved')}`}` : '.lovia/config.json',
       ),
     );
+    // Where the rest is kept, for backing it up.
+    if (scope?.history) rows.appendChild(row(t('cfg.aboutHistory'), scope.history));
+    if (scope?.memory && cfg()?.assistant.memory) rows.appendChild(row(t('cfg.aboutMemory'), scope.memory));
   }
   const link = /** @type {HTMLAnchorElement} */ (el('a', 'lv-cfg-about-link', 'github.com/cymoo/lovia'));
   link.href = 'https://github.com/cymoo/lovia';

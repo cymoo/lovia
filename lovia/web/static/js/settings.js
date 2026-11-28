@@ -204,7 +204,7 @@ function buildGeneralPane() {
         toast(t('settings.notifDenied'), { type: 'error' });
       }
     });
-    notifRow = field(t('settings.notifications'), notif);
+    notifRow = field(t('settings.notifications'), notif, t('settings.notificationsHint'));
   }
 
   // Completion sound — play a preview when switched on so it's not a mystery.
@@ -215,7 +215,7 @@ function buildGeneralPane() {
 
   panel.append(
     settingsGroup(langRow, enterRow),
-    settingsGroup(notifRow, field(t('settings.sound'), sound)),
+    settingsGroup(notifRow, field(t('settings.sound'), sound, t('settings.soundHint'))),
   );
   // The server's System proxy: config.json, so only where Settings edits it.
   if (store.canConfigure) panel.appendChild(proxyField());

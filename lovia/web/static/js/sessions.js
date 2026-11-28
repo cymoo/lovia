@@ -413,10 +413,8 @@ async function refreshTranscript() {
     tasksChanged();
     renderOrigin(data.origin);
     if (chatTitleEl) chatTitleEl.textContent = data.title || t('session.newChat');
-    store.emit('render-history', data.entries || []);
+    store.emit('render-history', data.entries || [], data);
     if (data.active_run_id) store.emit('reconnect', id);
-    else if (data.waiting) store.emit('waiting-card', data.waiting);
-    if (data.last_error) store.emit('last-error', data.last_error);
   } catch { /* transient — the next event or a manual switch repaints */ }
 }
 
@@ -1288,25 +1286,15 @@ export async function switchSession(id) {
     // workspace touches. Follow-ups then run on the agent this chat belongs to.
     store.emit('sync-agent', data.agent);
     if (chatTitleEl) chatTitleEl.textContent = data.title || t('session.newChat');
-    store.emit('render-history', data.entries || []);
+    // With what its last run left under the history: the card it is suspended
+    // on (answering it resumes the run; opening the chat must not), why it
+    // failed for good, or its cached follow-up chips.
+    store.emit('render-history', data.entries || [], data);
     // Auto-reconnect when the session has an unfinished run — a page refresh
     // mid-stream, or a run left streaming when we switched away. The SSE
     // continuation streams into a new assistant bubble appended after the
     // already-rendered checkpoint history.
-    if (data.active_run_id && !store.streaming) {
-      store.emit('reconnect', id);
-    } else if (data.waiting) {
-      // Its run is suspended on a card: show the card; answering it resumes
-      // the run (opening the chat must not).
-      store.emit('waiting-card', data.waiting);
-    } else if (data.last_error) {
-      // Its last run failed for good: say why, as the live page did.
-      store.emit('last-error', data.last_error);
-    } else {
-      // Settled history — repaint cached follow-up chips if they still fit the
-      // tail. Skipped while a run is live: its own completion produces fresh ones.
-      store.emit('maybe-followups', data.entries || []);
-    }
+    if (data.active_run_id && !store.streaming) store.emit('reconnect', id);
     // The chat is drawn (and reattached, if a run goes on): what waits for
     // its view — messages queued to send here — may act now.
     store.emit('session-loaded', id);

@@ -73,7 +73,7 @@ export const store = {
   /**
    * Subscribe to a store event.
    * @param {string} event Event name (e.g. 'agent-changed', 'render-history').
-   * @param {(data: any) => void} fn Listener, called with the emitted payload.
+   * @param {(...data: any[]) => void} fn Listener, called with the emitted payload.
    * @returns {() => void} Unsubscribe function.
    */
   on(event, fn) {
@@ -91,11 +91,11 @@ export const store = {
   /**
    * Emit a store event to every subscriber.
    * @param {string} event Event name.
-   * @param {any} [data] Payload passed to each listener.
+   * @param {...any} data Payload passed to each listener.
    */
-  emit(event, data) {
+  emit(event, ...data) {
     const arr = _listeners.get(event);
-    if (arr) arr.forEach(fn => fn(data));
+    if (arr) arr.forEach(fn => fn(...data));
   },
 
   /**

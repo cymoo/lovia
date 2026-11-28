@@ -994,7 +994,7 @@ function noteToolWaiting(id, name) {
  * limit or a failure (a notice: the next message continues it).
  * @param {{ id: string, name: string, arguments: string, reason?: string, scopes?: string[], kind?: string, error?: string | null }} call
  */
-export function showWaitingCard(call) {
+function showWaitingCard(call) {
   if (call.kind === 'message') {
     showInterrupted(call);
     return;
@@ -1334,6 +1334,10 @@ function buildScopePicker(scopes, pick) {
 function decideApproval(id, outcome, title) {
   const entry = store.approvals.get(id);
   if (!entry || entry.outcome === outcome) return;
+  // What the history drew under itself is answered: a redraw asks the server
+  // what waits now, so the card does not come back (nor, on a send that
+  // failed, stay away).
+  _historyStale = true;
   entry.outcome = outcome;
   entry.title = title ?? (ranAfter(outcome) ? '' : outcomeText(outcome));
   if (entry.card) {
@@ -1562,6 +1566,7 @@ function findQuestionNode(id) {
 /** Freeze the card into its answered/expired end state. */
 function settleQuestion(node, answer) {
   if (!node || node.classList.contains('lv-resolved')) return;
+  _historyStale = true; // as an answered approval: a redraw asks the server
   node.classList.add('lv-resolved');
   const head = node.querySelector('.lv-question-head');
   if (head) head.textContent = answer != null ? t('question.answered') : t('question.expired');
@@ -2092,7 +2097,7 @@ function showInterrupted(waiting) {
  * notice its `error` frame drew, under the history just rendered.
  * @param {{ message: string, code?: string | null }} error
  */
-export function showLastError(error) {
+function showLastError(error) {
   showInterrupted({ reason: 'error', error: error.message, code: error.code });
 }
 
@@ -2595,6 +2600,11 @@ function resumePendingResend() {
 const HISTORY_PAGE = 150; // entries per window step
 let _historyEntries = [];
 let _historyStart = 0; // index of the first rendered entry
+// What the session says sits under its history (its `waiting` or
+// `last_error`), drawn again with every window: it comes and goes stale with
+// the entries, never on its own. Null draws nothing (a snapshot, a rewind).
+/** @type {{ active_run_id?: string | null, waiting?: any, last_error?: any } | null} */
+let _historyTail = null;
 // Turns streamed live since the history loaded aren't in _historyEntries, so
 // "load earlier" refetches before it redraws; until a run starts, the copy in
 // hand is the history and a chat of thousands of entries needn't travel again.
@@ -2625,9 +2635,13 @@ function alignHistoryStart(idx) {
 /**
  * Replace the transcript with a session's history entries (paged internally).
  * @param {any[]} entries Transcript entries from the session API.
+ * @param {{ active_run_id?: string | null, waiting?: any, last_error?: any } | null} [tail]
+ *   The session detail the entries came in: what its last run left under
+ *   them is drawn too (drawHistoryTail).
  */
-export function renderHistory(entries) {
+export function renderHistory(entries, tail = null) {
   _historyEntries = Array.isArray(entries) ? entries : [];
+  _historyTail = tail;
   // A re-attach snapshot renders mid-run: the live tail keeps arriving after
   // it, so that copy is stale from the start.
   _historyStale = !!store.streaming;
@@ -2715,6 +2729,7 @@ async function loadEarlierHistory() {
       store.chatEpoch !== epoch || store.sessionId !== sessionId || _viewVersion !== version;
     if (!data || superseded) return;
     _historyEntries = Array.isArray(data.entries) ? data.entries : [];
+    _historyTail = data;
     // Still stale: a refetch right after Stop can land before the
     // interrupted run is persisted, so only a full redraw (renderHistory)
     // vouches for the copy. Clamp, too — such a refetch is shorter.
@@ -2924,6 +2939,21 @@ function renderHistoryWindow({ stickBottom }) {
   requestAnimationFrame(() => { _programmaticScroll = false; });
   updateRegenButton();
   updateEditButton();
+  drawHistoryTail();
+}
+
+/**
+ * Under the window just drawn, what the chat's last run left: the card or
+ * notice it waits on, why it failed for good, or — settled — the follow-up
+ * chips cached for this tail. Nothing while a run goes on: its own end says
+ * all of that afresh.
+ */
+function drawHistoryTail() {
+  if (!_historyTail || _historyTail.active_run_id || store.streaming) return;
+  const { waiting, last_error: lastError } = _historyTail;
+  if (waiting) showWaitingCard(waiting);
+  else if (lastError) showLastError(lastError);
+  else maybeRestoreFollowups(_historyEntries);
 }
 
 // ---- Scroll ------------------------------------------------------------
@@ -3653,7 +3683,6 @@ async function fetchFollowups(sessionId, replyText = '') {
 
 // switchSession asks us to repaint cached chips once it has settled history in
 // place (and isn't about to reconnect to a live run, which produces its own).
-store.on('maybe-followups', (entries) => maybeRestoreFollowups(entries || []));
 
 // ---- Streaming ---------------------------------------------------------
 const stopBtn = document.getElementById('stop');
@@ -3737,14 +3766,10 @@ async function recoverDroppedStream(sessionId) {
     return recoverDroppedStream(sessionId);
   }
   if (store.chatEpoch !== epoch || store.sessionId !== sessionId || store.streaming) return;
-  store.emit('render-history', data.entries || []);
-  // What the run stopped to wait on (a card, or a message after a limit or
-  // a failure), as a chat load shows it.
-  if (data.waiting) store.emit('waiting-card', data.waiting);
-  if (data.last_error) store.emit('last-error', data.last_error);
-  // The run settled server-side while we were away; its chips (if any) were
-  // cached by whichever client saw it finish — repaint them if the tail matches.
-  maybeRestoreFollowups(data.entries || []);
+  // With what the run left under it, as a chat load shows it: what it stopped
+  // to wait on, or — settled while we were away — the chips whichever client
+  // saw it finish cached.
+  store.emit('render-history', data.entries || [], data);
   _dropRecoveries = 0;
   resumePendingResend();
 }
